@@ -753,6 +753,7 @@ export interface PendingApproval {
 }
 
 export interface PendingApprovalRecord {
+  turnUserSeq?: number;
   screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;

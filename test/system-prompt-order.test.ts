@@ -1,3 +1,5 @@
+import { MAX_DOCUMENT_BYTES } from "../src/core/document-inputs.ts";
+import { recordSteerIntake } from "../src/harness/harness-shared.ts";
 import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -1029,7 +1031,9 @@ test("steered documents use the inbound security screen before writing their con
 for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
   test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();
-    const blob = await blobTransfer.put(Buffer.from(budget === "bytes" ? "x".repeat(7_999_995) : "initial"));
+    const blob = await blobTransfer.put(
+      Buffer.from(budget === "bytes" ? "x".repeat(MAX_DOCUMENT_BYTES - 5) : "initial"),
+    );
     const steerBlob = budget === "reupload" ? blob : await blobTransfer.put(Buffer.from("steered document"));
     const sandbox: Sandbox = {
       ...readSandbox(),
@@ -1072,8 +1076,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
       })),
     });
     assert.equal(result.status, "ok", result.reason);
-    if (budget === "retry") assert.equal(prepared?.documents?.length, 1);
-    else assert.deepEqual(prepared?.documents, []);
+    assert.deepEqual(prepared?.documents, []);
     if (budget === "reupload" || budget === "retry") assert.doesNotMatch(prepared?.text ?? "", /count or byte budget/);
     else assert.match(prepared?.text ?? "", /steered.txt.*count or byte budget/);
   });
@@ -1148,10 +1151,16 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
       });
       assert.equal(prepared.documents?.length, 1);
       assert.equal(activeDocuments.length, 0);
+      await recordSteerIntake(turn, {
+        text: prepared.text,
+        attachments: prepared.attachments,
+        documents: prepared.documents,
+      });
       return { reply: "", runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" } };
     }
-    assert.equal(turn.documents?.length, 1);
-    assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
+    assert.deepEqual(turn.documents, []);
+    assert.equal(turn.historyDocuments?.length, 1);
+    assert.equal(Buffer.from(turn.historyDocuments![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
     return { reply: "read after switching" };
   };
   const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });

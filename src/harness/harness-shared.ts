@@ -9,6 +9,7 @@ import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { goalWorkFromEntries, rehydrateOpenGoal } from "./goal.ts";
+import { documentRefsFor } from "./document-inputs.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
@@ -43,6 +44,7 @@ export interface SteerIntake {
   text: string;
   ts?: string;
   attachments?: HarnessTurnInput["attachments"];
+  documents?: HarnessTurnInput["documents"];
   acknowledge?: () => Promise<void>;
 }
 
@@ -57,6 +59,7 @@ export async function recordSteerIntake(
       ...(steer.ts ? { ts: steer.ts } : {}),
       steered: true,
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+      ...(documentRefsFor(steer.documents).length ? { documents: documentRefsFor(steer.documents) } : {}),
     },
     scopeLabel: turn.scopeLabel,
   });

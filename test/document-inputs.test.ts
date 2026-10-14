@@ -3,11 +3,17 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
+import {
+  documentBlocks,
+  nativeDocumentFormat,
+  withDocumentAnchors,
+  withDocumentInputs,
+} from "../src/harness/document-inputs.ts";
 import {
   documentFallbackText,
   isDocumentAttachment,
-  historicalDocumentMetas,
+  resumedDocumentMetas,
+  loadAnchoredDocuments,
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
@@ -205,10 +211,10 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
 test("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
   const { store, meta, opens } = storeFor();
   const history = [
-    { type: "user", payload: { attachments: [meta] } },
+    { seq: 0, type: "user", payload: { attachments: [meta] } },
     { type: "assistant", payload: { text: "stopped" } },
   ] as SessionEntry[];
-  const inputs = await loadDocumentInputs(store, [...historicalDocumentMetas(history), meta], () => true);
+  const inputs = await loadDocumentInputs(store, [...resumedDocumentMetas(history, 0), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
   assert.match(await documentFallbackText(inputs.documents[0]!), /QUARTZ-731/);
@@ -262,6 +268,26 @@ test("steered reuploads already in the turn do not consume another document slot
   assert.equal(opens(), 1);
 });
 
+test("resumed documents include the current upload and steers, not earlier turns", () => {
+  const { meta } = storeFor();
+  const current = { ...meta, artifactId: "current" };
+  const steer = { ...meta, artifactId: "steer" };
+  const laterSteer = { ...meta, artifactId: "later-steer" };
+  const history = [
+    { seq: 0, type: "user", payload: { attachments: [meta] } },
+    { seq: 1, type: "assistant", payload: { text: "Done" } },
+    { seq: 2, type: "user", payload: { attachments: [current] } },
+    { seq: 3, type: "user", payload: { attachments: [steer], steered: true } },
+    { seq: 4, type: "user", payload: { text: "Be concise", steered: true } },
+    { seq: 5, type: "user", payload: { text: "Resume", hidden: true, resumedFromSeq: 2 } },
+    { seq: 6, type: "user", payload: { attachments: [meta], hidden: true } },
+    { seq: 7, type: "user", payload: { text: "Resume original", resumedFromSeq: 2 } },
+    { seq: 8, type: "user", payload: { attachments: [laterSteer], steered: true } },
+  ] as SessionEntry[];
+  assert.deepEqual(resumedDocumentMetas(history), []);
+  assert.deepEqual(resumedDocumentMetas(history, 2), [current, steer, laterSteer]);
+});
+
 test("document replay follows compaction boundaries and excludes security-tainted uploads", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };
@@ -271,7 +297,8 @@ test("document replay follows compaction boundaries and excludes security-tainte
     { seq: 2, type: "system", payload: { kind: "context_summary", text: "Prior upload", throughSeq: 0 } },
     { seq: 3, type: "user", payload: { attachments: [meta], securityTainted: true } },
   ] as SessionEntry[];
-  assert.deepEqual(historicalDocumentMetas(history), [recent]);
+  assert.deepEqual(resumedDocumentMetas(history), []);
+  assert.deepEqual(resumedDocumentMetas(history, 1), [recent]);
   assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);
 });
 
@@ -444,4 +471,87 @@ test("output budgeting does not count native document base64 as text tokens", ()
     assert.equal(result.kind, "raised");
     if (result.kind === "raised") assert.ok(result.estimatedPromptTokens < 2000);
   }
+});
+
+test("anchored history documents load per original message and respect the reader's access", async () => {
+  const artifacts = new Map(
+    Array.from({ length: 12 }, (_, i) => {
+      const data = Buffer.from(`DOC-${i}`);
+      const artifact = {
+        id: `doc${i}`,
+        name: `doc${i}.txt`,
+        mimetype: "text/plain",
+        sizeBytes: data.length,
+        sha256: createHash("sha256").update(data).digest("hex"),
+        ownerScopeId: "user:owner",
+        enabled: true,
+      } as FileArtifact;
+      return [artifact.id, { artifact, data }] as const;
+    }),
+  );
+  const store = {
+    get: async (id: string) => artifacts.get(id)?.artifact,
+    open: async (id: string) => {
+      const found = artifacts.get(id)!;
+      return { artifact: found.artifact, sizeBytes: found.data.length, stream: Readable.from(found.data) };
+    },
+  } as unknown as FileArtifactStore;
+  const messages = [...artifacts.values()].map(({ artifact }) => ({
+    role: "user",
+    content: [{ type: "text", text: "see attached" }],
+    documents: [{ artifactId: artifact.id, name: artifact.name, mimeType: artifact.mimetype }],
+  }));
+  const { documents: loaded } = await loadAnchoredDocuments(store, messages, (artifact) => artifact.id !== "doc3");
+  assert.deepEqual(
+    loaded.map((document) => document.artifactId),
+    [...artifacts.keys()].filter((id) => id !== "doc3").slice(0, 10),
+    "oldest admitted documents win; the conversation keeps at most ten",
+  );
+  const fresh = [...artifacts.values()].map(({ artifact }) => ({
+    artifactId: artifact.id,
+    name: artifact.name,
+    mimetype: artifact.mimetype,
+    sizeBytes: artifact.sizeBytes,
+    direction: "in" as const,
+  }));
+  const combined = await loadAnchoredDocuments(
+    store,
+    messages.slice(0, 2),
+    (artifact) => artifact.id !== "doc3",
+    undefined,
+    fresh,
+  );
+  assert.deepEqual(combined.documents, loaded, "history and fresh uploads share one deduplicated budget");
+});
+
+test("an exhausted text budget leaves earlier anchored documents byte-identical", async () => {
+  const text = (id: string, body: string): DocumentInput => ({
+    name: `${id}.txt`,
+    mimeType: "text/plain",
+    dataBase64: Buffer.from(body).toString("base64"),
+    artifactId: id,
+  });
+  const model = { api: "anthropic-messages", provider: "anthropic", contextWindow: 8192 + 50 };
+  const user = (token: string) => ({
+    role: "user",
+    content: [
+      { type: "text", text: "see" },
+      { type: "text", text: token },
+    ],
+  });
+  const render = (tokens: string[], docs: DocumentInput[]) =>
+    withDocumentAnchors(
+      { messages: tokens.map(user) },
+      model,
+      new Map(tokens.map((token, i) => [token, [docs[i]!]])),
+      new Map(),
+    ) as Promise<{ messages: unknown[] }>;
+  const a = text("a", "A".repeat(40));
+  const b = text("b", "B".repeat(40));
+  const c = text("c", "C".repeat(40));
+  const two = await render(["t1", "t2"], [a, b]);
+  const three = await render(["u1", "u2", "u3"], [a, b, c]);
+  assert.deepEqual(three.messages.slice(0, 2), two.messages);
+  assert.match(JSON.stringify(two.messages[1]), /omitted or truncated/);
+  assert.ok(!JSON.stringify(three.messages[2]).includes("CCCC"));
 });

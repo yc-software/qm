@@ -12,9 +12,13 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
   MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENTS,
   documentText,
-  historicalDocumentMetas,
+  resumedDocumentMetas,
   isTextDocument,
+  historyDocumentMessages,
+  documentRefs,
+  loadAnchoredDocuments,
   loadDocumentInputs,
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
@@ -3079,15 +3083,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           history !== visibleHistory &&
           history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
         compactMs = Date.now() - compactStart;
-        const documentInputs = strictReadOnly
+        const documentHistory =
+          tapeRows?.serve && history === visibleHistory && tapeRows.fold
+            ? tapeRows.fold
+            : historyDocumentMessages(history);
+        const historyDocumentIds = new Set(
+          documentHistory.flatMap((message) => documentRefs(message).map((document) => document.artifactId)),
+        );
+        const resumedMetas = resumedDocumentMetas(history, partial?.userSeq ?? approvalRecord?.turnUserSeq);
+        const resumedDocumentIds = new Set(resumedMetas.map((meta) => meta.artifactId));
+        const loadedDocuments = strictReadOnly
           ? { documents: [], notices: [] }
-          : await loadDocumentInputs(
-              deps.files,
-              [...historicalDocumentMetas(history), ...inbound.metas],
-              mayReadArtifact,
-              undefined,
-              turnAbort.signal,
-            );
+          : await loadAnchoredDocuments(deps.files, documentHistory, mayReadArtifact, turnAbort.signal, [
+              ...resumedMetas,
+              ...(approvalRecord?.turnUserSeq !== undefined ? [] : inbound.metas),
+            ]);
         const screenDocuments = async (
           documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
           requestText: string,
@@ -3143,12 +3153,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
           void screenDocuments(inputs, requestText).catch(swallowAs("orchestrator: observed document screen", false));
         let documentsUnscreened = false;
-        if (enforceScreen) documentsUnscreened = await screenDocuments(documentInputs, input.text);
-        else observeDocuments(documentInputs, input.text);
+        if (enforceScreen) documentsUnscreened = await screenDocuments(loadedDocuments, input.text);
+        else observeDocuments(loadedDocuments, input.text);
+        const historyDocuments = loadedDocuments.documents.filter((document) =>
+          historyDocumentIds.has(document.artifactId ?? ""),
+        );
         let remainingDocumentBytes =
           MAX_DOCUMENT_BYTES -
-          documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
-        let remainingDocumentCount = 10 - documentInputs.documents.length;
+          loadedDocuments.documents.reduce(
+            (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
+            0,
+          );
+        let remainingDocumentCount = MAX_DOCUMENTS - loadedDocuments.documents.length;
+        const documentInputs = {
+          documents: loadedDocuments.documents.filter(
+            (document) =>
+              !historyDocumentIds.has(document.artifactId ?? "") || resumedDocumentIds.has(document.artifactId),
+          ),
+          notices: loadedDocuments.notices,
+        };
         const principalDelivered = await recentPrincipalDeliveryNote(
           deps.deliveries,
           session.threadRef,
@@ -3187,7 +3210,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           .join("\n\n");
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
         const pausedTurnUserEntry = input.approval
-          ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+          ? visibleHistory.findLast(
+              (entry) =>
+                entry.type === "user" &&
+                !isOverheardEntry(entry) &&
+                (approvalRecord?.turnUserSeq === undefined || entry.seq === approvalRecord.turnUserSeq),
+            )
           : undefined;
         const resumedFromSeq = pausedTurnUserEntry?.seq;
         const approvalReplay =
@@ -3479,6 +3507,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...(tapeRows.fold ? { fold: tapeRows.fold } : {}),
             };
           }
+          const retainedDocumentIds = continuation
+            ? new Set(
+                (selectedTape?.mode === "serve"
+                  ? (selectedTape.fold ?? foldTape(selectedTape.rows))
+                  : historyDocumentMessages(continuation.history)
+                ).flatMap((message) => documentRefs(message).map((document) => document.artifactId)),
+              )
+            : undefined;
+          const segmentHistoryDocuments = retainedDocumentIds
+            ? [
+                ...new Map(
+                  [...historyDocuments, ...documentInputs.documents]
+                    .filter((document) => retainedDocumentIds.has(document.artifactId ?? ""))
+                    .map((document) => [document.artifactId, document]),
+                ).values(),
+              ]
+            : historyDocuments;
           const emit: HarnessTurnInput["emit"] = async (entry) => {
             turnProgress++;
             const persistStart = Date.now();
@@ -3514,6 +3559,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                   payload.display = input.displayText;
                 if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
+                if (approvalReplay && payload.steered !== true) payload.resumedFromSeq = resumedFromSeq;
                 return { ...tainted, payload };
               })();
               const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
@@ -3547,7 +3593,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               emitGapWork("persist", persistStart, Date.now());
             }
           };
-          const initialDocuments = [...documentInputs.documents];
+          const initialDocuments = continuation ? [] : [...documentInputs.documents];
+          const activeDocuments = [...segmentHistoryDocuments, ...initialDocuments];
           return deps.harness.turns.runTurn({
             session,
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
@@ -3615,7 +3662,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 remainingDocumentBytes,
                 turnAbort.signal,
                 remainingDocumentCount,
-                initialDocuments,
+                activeDocuments,
               );
               let steeredUnscreened = false;
               if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
@@ -3626,6 +3673,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
               remainingDocumentCount -= steeredDocuments.documents.length;
               documentInputs.documents.push(...steeredDocuments.documents);
+              activeDocuments.push(...steeredDocuments.documents);
               const issues = inboundIssueList({
                 ...received,
                 surfaceNotes: strictReadOnly
@@ -3693,6 +3741,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
             documents: initialDocuments,
+            ...(segmentHistoryDocuments.length ? { historyDocuments: segmentHistoryDocuments } : {}),
             ...(Object.keys(requestedRuntime).length ? { runtime: requestedRuntime } : {}),
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
@@ -4338,6 +4387,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 createdAt: Date.now(),
                 reason: pa.reason,
                 request,
+                turnUserSeq: approvalRecord?.turnUserSeq ?? spine.turnUserEntrySeq,
                 blocksInput: blocks,
                 ...grantModes,
                 ...(pa.matched ? { matched: pa.matched } : {}),

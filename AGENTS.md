@@ -72,7 +72,10 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
   and all requested changes must be resolved. They supplement the correctness,
-  security, and regression review above. The `Wall of shame review` CI check fails
+  security, and regression review above. For prompt, replay, or payload-transform changes,
+  always include Token performance. Compare consecutive post-transform provider requests:
+  ordinary replay must not move, remove, or change previously rendered content; distinguish
+  deliberate compaction. The `Wall of shame review` CI check fails
   until the description's report covers every lens for the PR head: relevant lenses with
   an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
   its one-line reason as the assessment.

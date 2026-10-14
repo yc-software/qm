@@ -296,3 +296,17 @@ test("resumeStrategy continues silently only when every call is answered and the
     "retry",
   );
 });
+
+test("turnAtSeq crosses marked approval continuations but stops at independent hidden wakes", () => {
+  const entries = [
+    user("Original request", 0),
+    ent("user", { text: "Original request", hidden: true, resumedFromSeq: 0 }, 1),
+    assistant("Original answer", 2),
+    ent("user", { text: "Scheduled task", hidden: true }, 3),
+    assistant("Scheduled answer", 4),
+    ent("user", { text: "Original request", hidden: true, resumedFromSeq: 0 }, 5),
+    assistant("Approval answer", 6),
+  ];
+  assert.deepEqual(turnAtSeq(entries, 0)?.answer, { seq: 2, text: "Original answer" });
+  assert.deepEqual(turnAtSeq(entries, 3)?.answer, { seq: 4, text: "Scheduled answer" });
+});

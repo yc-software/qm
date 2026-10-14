@@ -4,6 +4,7 @@ import { Worker } from "node:worker_threads";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
+import { isUserTurnBoundary } from "./turn-resume.ts";
 import { collectBytes } from "../util/bytes.ts";
 
 export interface DocumentInput {
@@ -13,7 +14,8 @@ export interface DocumentInput {
   artifactId?: string;
 }
 
-export const MAX_DOCUMENT_BYTES = 8_000_000;
+export const MAX_DOCUMENT_BYTES = 6_000_000;
+export const MAX_DOCUMENTS = 10;
 const MAX_DOCUMENT_TEXT_CHARS = 200_000;
 const TEXT_EXTENSIONS = new Set(
   "asm bat c cc conf cpp css cxx def dic eml h hh htm html ics ifb in js json ksh list log markdown md mht mhtml mime mjs nws pl py rst s sql srt text txt vcf vtt xml ts tsx jsx sh bash zsh yml yaml toml rs go java rb php swift kt scala lua r jl perl tex cs graphql ndjson json5 dockerfile".split(
@@ -63,10 +65,15 @@ export function isTextDocument(file: Pick<DocumentInput, "name" | "mimeType">): 
   return TEXT_EXTENSIONS.has(ext) || ["csv", "tsv", "iif"].includes(ext);
 }
 
-export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
+export function resumedDocumentMetas(history: readonly SessionEntry[], userSeq?: number): AttachmentMeta[] {
+  if (userSeq === undefined) return [];
+  let inTurn = false;
   return forModelContext([...history]).flatMap((entry) => {
-    if (entry.type !== "user") return [];
-    const attachments = (entry.payload as { attachments?: AttachmentMeta[] } | null)?.attachments;
+    const payload = entry.payload as { attachments?: AttachmentMeta[]; resumedFromSeq?: number } | null;
+    if (entry.seq === userSeq || payload?.resumedFromSeq === userSeq) inTurn = true;
+    else if (isUserTurnBoundary(entry, userSeq)) inTurn = false;
+    if (entry.type !== "user" || !inTurn) return [];
+    const attachments = payload?.attachments;
     return Array.isArray(attachments)
       ? attachments.filter(
           (file) => file.direction === "in" && typeof file.name === "string" && isDocumentAttachment(file),
@@ -75,13 +82,60 @@ export function historicalDocumentMetas(history: readonly SessionEntry[]): Attac
   });
 }
 
+export interface DocumentRef {
+  artifactId: string;
+  name: string;
+  mimeType: string;
+}
+
+export function documentRefs(message: unknown): DocumentRef[] {
+  const m = message as { role?: unknown; documents?: unknown } | null;
+  if (m?.role !== "user" || !Array.isArray(m.documents)) return [];
+  return m.documents.filter(
+    (ref): ref is DocumentRef =>
+      typeof ref?.artifactId === "string" && typeof ref.name === "string" && typeof ref.mimeType === "string",
+  );
+}
+
+export function historyDocumentMessages(history: readonly SessionEntry[]): unknown[] {
+  return forModelContext([...history]).flatMap((entry) =>
+    entry.type === "user"
+      ? [{ role: "user", documents: (entry.payload as { documents?: unknown } | null)?.documents }]
+      : [],
+  );
+}
+
+export async function loadAnchoredDocuments(
+  files: FileArtifactStore,
+  messages: readonly unknown[],
+  authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
+  signal?: AbortSignal,
+  fresh: readonly AttachmentMeta[] = [],
+): Promise<{ documents: DocumentInput[]; notices: string[] }> {
+  const metas = new Map<string, AttachmentMeta>();
+  const history = messages.flatMap((message) =>
+    documentRefs(message).map((ref) => ({
+      artifactId: ref.artifactId,
+      name: ref.name,
+      mimetype: ref.mimeType,
+      sizeBytes: 0,
+      direction: "in" as const,
+    })),
+  );
+  for (const meta of [...history, ...fresh]) {
+    if (meta.artifactId && !metas.has(meta.artifactId)) metas.set(meta.artifactId, meta);
+  }
+  const loaded = await loadDocumentInputs(files, [...metas.values()].reverse(), authorize, undefined, signal);
+  return { ...loaded, documents: loaded.documents.reverse() };
+}
+
 export async function loadDocumentInputs(
   files: FileArtifactStore,
   metas: readonly AttachmentMeta[],
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
   maxBytes = MAX_DOCUMENT_BYTES,
   signal?: AbortSignal,
-  maxDocuments = 10,
+  maxDocuments = MAX_DOCUMENTS,
   existingDocuments: readonly DocumentInput[] = [],
 ): Promise<{ documents: DocumentInput[]; notices: string[] }> {
   const documents: DocumentInput[] = [];
@@ -234,12 +288,12 @@ export interface DocumentTextBudget {
   remaining: number;
 }
 
+export const DOCUMENT_TEXT_OMITTED = "[Document text omitted or truncated to fit the model context.]";
+
 export function fitDocumentText(text: string, budget: DocumentTextBudget): string {
   const length = Math.min(text.length, Math.max(0, budget.remaining));
   budget.remaining -= length;
-  return length < text.length
-    ? `${text.slice(0, length)}\n[Document text omitted or truncated to fit the model context.]`
-    : text;
+  return length < text.length ? `${text.slice(0, length)}\n${DOCUMENT_TEXT_OMITTED}` : text;
 }
 
 export async function documentsFallbackText(

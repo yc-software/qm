@@ -1,3 +1,4 @@
+import { documentRefs } from "../core/document-inputs.ts";
 import type { EntryType, ScopeId, SessionEntry } from "../types.ts";
 import type { GetEntriesOptions, NewSearchEntry, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 import { entryWithinTenure, TAPE_RENDER_VERSION } from "../sessions/session-store.ts";
@@ -148,6 +149,7 @@ function userDraft(row: TapeRecord, isTrigger: boolean): DraftEntry | null {
         ...(meta.display ? { display: meta.display } : {}),
         ...(meta.hidden ? { hidden: true } : {}),
         ...(meta.attachments?.length ? { attachments: meta.attachments } : {}),
+        ...(documentRefs(message).length ? { documents: documentRefs(message) } : {}),
         ...(isTrigger ? {} : { steered: true }),
       },
       scopeLabel: row.scopeLabel,

@@ -27,17 +27,23 @@ const { buildApp } = await import("../src/wiring.ts");
 for (const mode of ["retry", "handoff"] as const) {
   test(`a ${mode} hides its synthetic trigger but not real steer intake in entries, tape, or activity`, async () => {
     const built = buildApp(testConfig());
+    const blob = await built.blobTransfer.put(Buffer.from("CURRENT-DOCUMENT"));
     const request: TurnRequest = {
       surface: "test",
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "resume-steer-visibility" },
       text: "!work-then-boom",
       idempotencyKey: "resume-steer-visibility",
+      attachments: [{ name: "current.txt", mimetype: "text/plain", sourceId: "current-upload", ...blob }],
     };
     if (mode === "retry") await assert.rejects(built.app.turn(request), /boom/);
     let runId: string | undefined;
     exercise = async (turn) => {
       runId = turn.runId;
+      assert.deepEqual(
+        turn.documents?.map((doc) => doc.name),
+        ["current.txt"],
+      );
       if (mode === "handoff" && turn.input === request.text) {
         await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
         return {
@@ -106,3 +112,107 @@ for (const mode of ["retry", "handoff"] as const) {
     }
   });
 }
+
+for (const mode of ["retry", "approval"] as const) {
+  test(`document-bearing steers survive ${mode} after a text-only steer`, async () => {
+    const built = buildApp(testConfig());
+    const blob = await built.blobTransfer.put(Buffer.from("STEER-DOCUMENT"));
+    const request: TurnRequest = {
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: `steer-documents-${mode}` },
+      text: "Read the document I send next",
+      ...(mode === "retry" ? { idempotencyKey: "steer-documents-retry" } : {}),
+    };
+    let calls = 0;
+    exercise = async (turn) => {
+      if (calls++ === 0) {
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        const steer = await turn.prepareSteer!("Here it is", {
+          ...request,
+          attachments: [{ name: "steered.txt", mimetype: "text/plain", ...blob }],
+        });
+        await recordSteerIntake(turn, steer);
+        await recordSteerIntake(turn, { text: "Be concise" });
+        if (mode === "retry") throw new Error("interrupted after steer");
+      } else {
+        assert.deepEqual(
+          turn.documents?.map((doc) => doc.name),
+          calls === 3 ? ["steered.txt", "second.txt"] : ["steered.txt"],
+        );
+        assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "STEER-DOCUMENT");
+        if (mode === "retry" || calls === 3) return { reply: "Read it" };
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        const second = await turn.prepareSteer!("Another document", {
+          ...request,
+          attachments: [{ name: "second.txt", mimetype: "text/plain", ...blob }],
+        });
+        await recordSteerIntake(turn, second);
+        await recordSteerIntake(turn, { text: "Be concise again" });
+      }
+      return {
+        reply: "",
+        pausedOnApproval: true,
+        pendingApprovals: [{ command: `printf approved-${calls}`, reason: "test approval" }],
+      };
+    };
+    try {
+      if (mode === "retry") {
+        await assert.rejects(built.app.turn(request), /interrupted after steer/);
+        assert.equal((await built.app.turn(request)).status, "ok");
+      } else {
+        let result = await built.app.turn(request);
+        for (let i = 0; i < 2; i++) {
+          assert.equal(result.status, "pending_approval");
+          const requestId = result.pendingApprovals![0]!.requestId;
+          assert.equal((await built.app.getApproval(requestId))!.turnUserSeq, 0);
+          result = await built.app.turn({ ...request, approval: { requestId, approved: true } });
+        }
+        assert.equal(result.status, "ok");
+      }
+    } finally {
+      exercise = undefined;
+    }
+  });
+}
+
+test("mid-turn compaction does not reattach documents excluded from retained history", async () => {
+  const built = buildApp(testConfig({ maxContextTokens: 1000 }));
+  const blob = await built.blobTransfer.put(Buffer.from("COMPACTED-DOCUMENT"));
+  let calls = 0;
+  let artifactId: string | undefined;
+  exercise = async (turn) => {
+    calls++;
+    if (calls === 1) {
+      assert.equal(turn.documents?.length, 1);
+      artifactId = turn.documents![0]!.artifactId;
+      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.emit({
+        type: "assistant",
+        payload: { text: "Newer context to retain. ".repeat(1000) },
+        scopeLabel: turn.scopeLabel,
+      });
+      return { reply: "", runtimeHandoff: { context: "recent" } };
+    }
+    assert.equal(calls, 2);
+    assert.ok(turn.history.some((entry) => (entry.payload as { mode?: string }).mode === "recent"));
+    assert.ok(artifactId);
+    assert.ok(!JSON.stringify(turn.history).includes(artifactId));
+    assert.deepEqual(turn.documents ?? [], []);
+    assert.deepEqual(turn.historyDocuments ?? [], []);
+    return { reply: "Done" };
+  };
+  try {
+    const result = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "compact-during-document-turn" },
+      text: "Use this document and then reduce context",
+      attachments: [{ name: "compacted.txt", mimetype: "text/plain", ...blob }],
+    });
+    assert.equal(result.status, "ok");
+    assert.equal(calls, 2);
+  } finally {
+    exercise = undefined;
+  }
+});

@@ -46,6 +46,16 @@ function isSteerEntry(e: SessionEntry): boolean {
   return (e.payload as { steered?: unknown } | null)?.steered === true;
 }
 
+export function isUserTurnBoundary(entry: SessionEntry, userSeq: number): boolean {
+  return (
+    entry.type === "user" &&
+    !isSteerEntry(entry) &&
+    (entry.payload as { resumedFromSeq?: number } | null)?.resumedFromSeq !== userSeq &&
+    !isOverheardEntry(entry) &&
+    !isResumeNote(entryText(entry))
+  );
+}
+
 export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): RecordedTurn | null {
   const start = entries.findIndex((e) => e.seq === userSeq);
   if (start < 0) return null;
@@ -66,7 +76,7 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
       workEntries += 1;
       continue;
     }
-    if (isOverheardEntry(e) || isResumeNote(entryText(e))) continue;
+    if (!isUserTurnBoundary(e, userSeq)) continue;
     break;
   }
   return { userSeq, workEntries, ...(answer ? { answer } : {}) };

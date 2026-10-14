@@ -1,3 +1,4 @@
+import { documentRefsFor } from "./document-inputs.ts";
 import type { ScopedConfigStore, RuntimePurpose } from "../resolution/config-store.ts";
 import {
   defaultModelForHarness,
@@ -295,8 +296,38 @@ export function createHarnessRouter(
         }
         lastHarness.set(input.session.id, choice.harnessId);
         const judge = adapter.models?.judge;
+        const anchorsDocuments = adapter.profile.capabilities.has("native-tape");
+        const triggerRefs = anchorsDocuments
+          ? []
+          : documentRefsFor(
+              input.documents?.filter(
+                (current) => !input.historyDocuments?.some((earlier) => earlier.artifactId === current.artifactId),
+              ),
+            );
+        let triggerStamped = false;
         const dispatched: HarnessTurnInput = {
           ...input,
+          ...(triggerRefs.length
+            ? {
+                emit: (entry) => {
+                  const payload = entry.payload as { steered?: unknown; documents?: unknown } | null;
+                  if (triggerStamped || entry.type !== "user" || !payload || payload.steered || payload.documents)
+                    return input.emit(entry);
+                  triggerStamped = true;
+                  return input.emit({ ...entry, payload: { ...payload, documents: triggerRefs } });
+                },
+              }
+            : {}),
+          ...(anchorsDocuments || !input.historyDocuments?.length
+            ? {}
+            : {
+                documents: [
+                  ...input.historyDocuments.filter(
+                    (earlier) => !input.documents?.some((current) => current.artifactId === earlier.artifactId),
+                  ),
+                  ...(input.documents ?? []),
+                ],
+              }),
           runtime: choice,
           tools: input.runtimeControl
             ? { ...input.tools, runtime: (request, signal) => input.runtimeControl!(choice, request, signal) }

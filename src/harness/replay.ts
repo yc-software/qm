@@ -1,3 +1,4 @@
+import { documentRefs, type DocumentRef } from "../core/document-inputs.ts";
 import type { ConversationTurn, OverheardMessage, ScopeId, SessionEntry } from "../types.ts";
 import { deliveryNote } from "../core/attachments.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
@@ -100,7 +101,7 @@ type PiZeroUsage = {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
 export type PiReplayMessage =
-  | { role: "user"; content: PiTextBlock[]; timestamp: number }
+  | { role: "user"; content: PiTextBlock[]; timestamp: number; documents?: DocumentRef[] }
   | {
       role: "assistant";
       content: Array<PiTextBlock | PiToolCallBlock>;
@@ -171,7 +172,8 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
         const t = [entryText(e), typeof environment === "string" ? environment.trim() : ""]
           .filter(Boolean)
           .join("\n\n");
-        if (t) raw.push(userMsg(t, e.createdAt));
+        const documents = documentRefs({ role: "user", documents: (e.payload as { documents?: unknown }).documents });
+        if (t) raw.push({ ...userMsg(t, e.createdAt), ...(documents.length ? { documents } : {}) });
       }
     } else if (e.type === "assistant") {
       const t = entryText(e);
@@ -236,7 +238,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
   const out: PiReplayMessage[] = [];
   for (const m of raw) {
     const prev = out[out.length - 1];
-    if (prev && prev.role === "user" && m.role === "user") {
+    if (prev && prev.role === "user" && m.role === "user" && !prev.documents && !m.documents) {
       prev.content.push(...m.content);
       continue;
     }

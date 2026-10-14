@@ -146,7 +146,16 @@ for (const variant of ["text", "images", "documents", "finished during preparati
             text: `${text}\nFile available in inbox/photo.png`,
             images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
             ...(variant === "documents"
-              ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
+              ? {
+                  documents: [
+                    {
+                      name: "steered.pdf",
+                      mimeType: "application/pdf",
+                      dataBase64: documentBase64,
+                      artifactId: "steered-doc",
+                    },
+                  ],
+                }
               : {}),
           };
         };
@@ -184,6 +193,10 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         assert.ok(!JSON.stringify(requestMessages[0]).includes(documentBase64));
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
         assert.ok(!JSON.stringify(sink.tape).includes(documentBase64));
+        assert.ok(JSON.stringify(requestMessages[1]!.at(-1)).includes(documentBase64));
+        assert.deepEqual((messageRows[2]!.payload as { documents?: unknown }).documents, [
+          { artifactId: "steered-doc", name: "steered.pdf", mimeType: "application/pdf" },
+        ]);
       }
       const steeredEntry = sink.entries.find(
         (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
@@ -358,7 +371,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
       return sse(textReplyEvents("read the document"));
     }) as typeof fetch;
     try {
-      await harness.turns.runTurn(
+      const request = harness.turns.runTurn(
         turnInput(`document-budget-${route}`, sink, {
           ...(route === "personal" ? { providerKeys: { anthropic: "personal-test" } } : {}),
           documents: [
@@ -367,12 +380,15 @@ for (const route of ["gateway", "direct", "personal"] as const) {
           ],
         }),
       );
+      if (route === "gateway") {
+        await assert.rejects(request, /attachments no longer fit/);
+        assert.equal(body, "", "an oversized document request must not silently drop a document");
+        return;
+      }
+      await request;
       const blocks = JSON.parse(body).messages.at(-1).content;
-      assert.equal(
-        blocks.filter((block: { type: string }) => block.type === "document").length,
-        route === "gateway" ? 1 : 2,
-      );
-      assert.equal(Buffer.byteLength(body) < 10 * 1024 * 1024, route === "gateway");
+      assert.equal(blocks.filter((block: { type: string }) => block.type === "document").length, 2);
+      assert.ok(Buffer.byteLength(body) > 10 * 1024 * 1024);
       assert.ok(body.includes(dataBase64));
     } finally {
       globalThis.fetch = realFetch;

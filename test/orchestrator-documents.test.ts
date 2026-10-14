@@ -32,6 +32,17 @@ test("document uploads survive follow-up turns and stay isolated to their conver
   assert.equal(requests.length, 2);
   for (const recorded of requests)
     assert.match(JSON.stringify(recorded.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
+  const entries = await built.sessions.getEntries(first.sessionId!);
+  const meta = (
+    entries.find((entry) => entry.type === "user")!.payload as {
+      attachments: Array<{ artifactId: string }>;
+    }
+  ).attachments[0]!;
+  const opened = await built.files.open(meta.artifactId);
+  assert.ok(opened);
+  const chunks = [];
+  for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
+  assert.equal(Buffer.concat(chunks).toString(), "QUARTZ-731");
   const other = await built.app.turn({
     ...request,
     conversation: { kind: "dm", threadRef: "dm:U1:other" },
@@ -169,3 +180,26 @@ for (const extension of ["docx", "pdf"]) {
     assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
   });
 }
+
+test("document admission leaves encoding headroom for the gateway request limit", async () => {
+  const built = freshApp();
+  const first = await built.blobTransfer.put(Buffer.alloc(4_000_000, "a"));
+  const second = await built.blobTransfer.put(Buffer.alloc(4_000_000, "b"));
+  const result = await built.app.turn({
+    surface: "test",
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm", threadRef: "gateway-document-admission" },
+    text: "Read these documents",
+    attachments: [
+      { name: "first.txt", mimetype: "text/plain", ...first },
+      { name: "second.txt", mimetype: "text/plain", ...second },
+    ],
+  });
+  assert.equal(result.status, "ok");
+  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
+  const envelope = JSON.stringify(calls[0]!.promptEnvelope);
+  assert.match(envelope, /"documents":\[\{"name":"first.txt"/);
+  assert.doesNotMatch(envelope, /"name":"second.txt"/);
+  const entries = await built.sessions.getEntries(result.sessionId!);
+  assert.match(JSON.stringify(entries), /second.txt: document omitted from model input/);
+});

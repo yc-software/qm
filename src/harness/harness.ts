@@ -119,6 +119,7 @@ export interface HarnessTurnInput {
     request?: TurnRequest,
   ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
   documents?: DocumentInput[];
+  historyDocuments?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
   runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
   runtimeControl?: RuntimeControl;

@@ -231,3 +231,33 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
   });
 }
+
+test("harnesses without anchored replay still receive earlier conversation documents", async () => {
+  const doc = (id: string) => ({ name: `${id}.txt`, mimeType: "text/plain", dataBase64: "QQ==", artifactId: id });
+  for (const [capabilities, expected] of [
+    [[], ["earlier", "current", "fresh"]],
+    [
+      ["native-tape", "goal-enforcement"],
+      ["current", "fresh"],
+    ],
+  ] as const) {
+    const { harness, calls } = fakeAdapter(async () => ({ reply: "ok" }), true);
+    harness.profile = { ...harness.profile, capabilities: new Set(capabilities) };
+    const emitted: SessionEntry[] = [];
+    await router(harness).turns.runTurn(
+      stubTurn(emitted, {
+        documents: [doc("current"), doc("fresh")],
+        historyDocuments: [doc("earlier"), doc("current")],
+      }),
+    );
+    assert.deepEqual(
+      (emitted[0]!.payload as { documents?: Array<{ artifactId: string }> }).documents?.map((d) => d.artifactId),
+      capabilities.length ? undefined : ["fresh"],
+      "only documents first uploaded in this turn are stamped on its trigger",
+    );
+    assert.deepEqual(
+      calls[0]!.documents?.map((d) => d.artifactId),
+      expected,
+    );
+  }
+});
