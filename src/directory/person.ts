@@ -3,6 +3,7 @@ import { swallowAs } from "../util/errors.ts";
 export interface PrincipalLinkResolver {
   canonical(key: string): string | undefined;
   aliases(key: string): readonly string[];
+  refresh?(): Promise<void>;
 }
 
 let links: PrincipalLinkResolver | null = null;
@@ -27,6 +28,11 @@ export function personIds(id: string): string[] {
   if (!key) return [];
   const canonical = links?.canonical(key) ?? id.trim();
   return [canonical, ...(links?.aliases(foldPrincipalId(canonical)) ?? [])];
+}
+
+export async function resolvePersonIds(id: string): Promise<string[]> {
+  await links?.refresh?.();
+  return personIds(id);
 }
 
 export function personKey(id: string | null | undefined): string {

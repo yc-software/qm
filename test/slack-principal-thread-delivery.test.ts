@@ -10,7 +10,7 @@ test("a threaded principal delivery posts and records the DM thread", async () =
   let claimed = false;
   const delivery = {
     id: "delivery-1",
-    destination: { type: "principal", target: "U-alice", threadTs: TS },
+    destination: { type: "principal", target: "U123ALICE", threadTs: TS },
     text: "in the DM thread",
     idempotencyKey: "reach:1",
     createdAt: Date.now(),
