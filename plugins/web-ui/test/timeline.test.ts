@@ -506,8 +506,24 @@ test("trimmed phases show whole-word tails and newer phases retain absolute boun
     streamStartOffset: 101,
     activity: [{ seq: 1, type: "text_start", createdAt: 1, payload: { phase: "final_answer", streamOffset: 80 } }],
   };
-  assert.equal(streamedAnswer("ipped word here", work), "…earlier output in transcript\n\nword here");
-  assert.equal(streamedAnswer("unbroken", work), "…earlier output in transcript\n\n");
+  assert.equal(streamedAnswer("ipped word here", work), "…earlier output omitted\n\nword here");
+  assert.equal(streamedAnswer("unbroken", work), "…earlier output omitted\n\n");
   work.activity = [{ seq: 2, type: "text_start", createdAt: 2, payload: { phase: "final_answer", streamOffset: 107 } }];
   assert.equal(streamedAnswer("older New answer", work), "New answer");
+});
+
+test("recorded commentary is not repeated after its live window is trimmed", () => {
+  const work: WorkBlock = {
+    status: "working",
+    streamStartOffset: 101,
+    activity: [{ seq: 1, type: "text_start", createdAt: 1, payload: { phase: "commentary", streamOffset: 80 } }],
+  };
+  assert.equal(streamedAnswer("ipped word here", work), "…earlier output omitted\n\nword here");
+  work.activity.push({
+    seq: 2,
+    type: "text",
+    createdAt: 2,
+    payload: { text: "The whole commentary is now recorded." },
+  });
+  assert.equal(streamedAnswer("ipped word here", work), "");
 });

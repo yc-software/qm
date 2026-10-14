@@ -312,7 +312,11 @@ export function currentTextPhase(work: WorkBlock): {
 
 export function streamedAnswer(text: string, work: WorkBlock): string {
   const phase = currentTextPhase(work);
-  if (phase) return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
+  if (phase) {
+    const lastText = work.activity.findLast((entry) => entry.type === "text_start" || entry.type === "text");
+    if (phase.phase === "commentary" && lastText?.type === "text") return "";
+    return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
+  }
   return work.streamStartOffset
     ? streamTextFrom(text, 0, work.streamStartOffset)
     : streamingTextTail(text, work.activity);
@@ -322,7 +326,7 @@ export function streamTextFrom(text: string, offset: number, startOffset: number
   if (offset >= startOffset) return text.slice(offset - startOffset);
   let boundary = 0;
   while (boundary < text.length && text[boundary]!.trim()) boundary++;
-  return "…earlier output in transcript\n\n" + text.slice(boundary).trimStart();
+  return "…earlier output omitted\n\n" + text.slice(boundary).trimStart();
 }
 
 export function streamingTextTail(text: string, activity: ToolActivity[]): string {
