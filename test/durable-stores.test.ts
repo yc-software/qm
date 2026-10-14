@@ -179,16 +179,16 @@ test("the Postgres map select projects and filters inside SQL, never fetching th
   assert.equal(reads.length, 1);
   assert.match(
     reads[0]!.sql,
-    /^SELECT json - \$1::text\[\] AS json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>\$2\) = ANY\(\$3::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>\$2 ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
+    /^SELECT json - \$1::text\[\] AS json FROM select_probe WHERE id IN \(\s+SELECT id FROM select_probe WHERE lower\(json->>'owner'\) = ANY\(\$2::text\[\]\)\s+UNION\s+SELECT id FROM select_probe WHERE json->>'owner' ~ '\[\^\\x01-\\x7f\]'\) ORDER BY id$/,
   );
-  assert.deepEqual(reads[0]!.params, [["secretEnc"], "owner", ["u1", "alice@x.com"]]);
+  assert.deepEqual(reads[0]!.params, [["secretEnc"], ["u1", "alice@x.com"]]);
 
   await map.select({});
   assert.match(reads[1]!.sql, /^SELECT json - \$1::text\[\] AS json FROM select_probe ORDER BY id$/);
   assert.deepEqual(reads[1]!.params, [[]]);
   await map.select({ where: { field: "owner", anyOfFold: ["U1"] }, limit: 16, afterId: "previous" });
-  assert.match(reads[2]!.sql, /\) AND id > \$4 ORDER BY id LIMIT \$5$/);
-  assert.deepEqual(reads[2]!.params, [[], "owner", ["u1"], "previous", 16]);
+  assert.match(reads[2]!.sql, /\) AND id > \$3 ORDER BY id LIMIT \$4$/);
+  assert.deepEqual(reads[2]!.params, [[], ["u1"], "previous", 16]);
 });
 
 test("the Postgres map reads with ORDER BY id — heap order is not a contract", async () => {
