@@ -71,7 +71,6 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     if (syncing || closed) return;
     syncing = true;
     queueMicrotask(() => {
-      syncing = false;
       if (!closed) app.syncRunStream(runId, offset);
     });
   };
@@ -124,6 +123,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       res.destroy();
     } finally {
       refreshing = false;
+      syncing = false;
       sync();
     }
   };
@@ -144,15 +144,18 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       }
       const delta = event.text.slice(offset - event.offset);
       if (!delta) return;
+      syncing = false;
       send({ type: "CUSTOM", name: "delta", value: { offset, delta, startOffset } }, `text:${offset + delta.length}`);
       offset += delta.length;
     },
     () => {
+      syncing = false;
       sync();
       void refresh();
     },
   );
   const heartbeat = setInterval(() => {
+    syncing = false;
     sync();
     void refresh();
   }, HEARTBEAT_MS);
