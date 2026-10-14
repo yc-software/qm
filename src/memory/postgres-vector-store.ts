@@ -9,12 +9,12 @@ export interface MemoryVector {
   vector: number[];
 }
 
-export interface MemoryVectorMatch {
+interface MemoryVectorMatch {
   factId: string;
   score: number;
 }
 
-export interface MemoryVectorSearch {
+interface MemoryVectorSearch {
   scope: string;
   model: string;
   vector: number[];

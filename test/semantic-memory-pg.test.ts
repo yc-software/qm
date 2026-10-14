@@ -90,6 +90,10 @@ test("native cosine returns one stable ranking and excludes other scopes/models"
   const ranked = await index.search({ scope, model: "rank-model", vector: [2, 0], facts: requested(facts) });
   assert.ok(ranked.every((row) => Math.abs(row.score - 0.6) < 1e-6));
   assert.deepEqual(
+    await index.search({ scope, model: "rank-model", vector: [2, 0], facts: requested(facts), minSimilarity: 0.9 }),
+    [],
+  );
+  assert.deepEqual(
     ranked.map((row) => row.factId),
     facts.map((fact) => fact.id).sort((a, b) => Number(BigInt(a) - BigInt(b))),
   );
@@ -114,6 +118,9 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
     (await index.missing("wide-model", 256, 2, undefined, String(BigInt(facts[0]!.id) - 1n))).some(
       (row) => row.factId === facts[0]!.id,
     ),
+  );
+  assert.ok(
+    !(await index.missing("wide-model", 256, 2, undefined, facts[0]!.id)).some((row) => row.factId === facts[0]!.id),
   );
   await write(index, scope, facts, "wide-model", () => [1, 0]);
   assert.equal(
