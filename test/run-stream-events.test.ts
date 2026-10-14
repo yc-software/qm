@@ -25,7 +25,8 @@ test("text publications push exact offsets immediately, including block boundari
     [
       ["hello", 0],
       ["\n\n", 5],
-      ["wo", 7],
+      ["world", 7],
+      ["ignored", 12],
     ],
   );
   assert.deepEqual(changes, ["run", "run"]);
@@ -46,4 +47,23 @@ test("cross-process text frames stay under Postgres' payload limit and preserve 
     offset += part.text.length;
   }
   assert.equal(parts.map((part) => part.text).join(""), text);
+});
+
+test("a boundary near the cap remains complete and later deltas keep absolute offsets", () => {
+  const frames: Array<[string, number, number]> = [];
+  const stream = createTurnStream({
+    maxChars: 5,
+    onDelta: (_id, text, offset, start) => frames.push([text, offset, start]),
+  });
+  stream.publish("r", "abcd");
+  stream.publishBlockStart("r");
+  stream.publishBlockStart("r");
+  stream.publish("r", "next");
+  assert.deepEqual(frames, [
+    ["abcd", 0, 0],
+    ["\n\n", 4, 1],
+    ["next", 6, 5],
+  ]);
+  assert.equal(stream.snapshot("r"), "\nnext");
+  assert.equal(stream.startOffset("r"), 5);
 });

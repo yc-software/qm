@@ -753,7 +753,7 @@ export function createTurnMethods(
           : {}),
         startedAt: run.startedAt,
         finishedAt: run.finishedAt,
-        ...(partial ? { partial } : {}),
+        ...(partial ? { partial, partialStartOffset: deps.turnStream!.startOffset(runId) } : {}),
         ...(firstBlock
           ? { firstBlock: firstBlock.text, ...(firstBlock.closed ? { firstBlockClosed: true } : {}) }
           : {}),

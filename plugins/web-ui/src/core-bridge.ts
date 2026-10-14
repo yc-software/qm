@@ -1,8 +1,7 @@
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
-import { EventType } from "@tanstack/ai/client";
-import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
+import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { ModelMetadata } from "./pi-models.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -431,6 +430,7 @@ export interface ToolActivity {
 }
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
+  streamStartOffset?: number;
   status: WorkStatus;
   startedAt?: number;
   finishedAt?: number;
@@ -498,6 +498,7 @@ export interface RunPoll {
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
   partial?: string;
+  partialStartOffset?: number;
   alive?: boolean;
   stale?: boolean;
   replyComplete?: boolean;
@@ -1341,6 +1342,7 @@ function runPath(runId: string, suffix: string): string {
 }
 
 export interface Acc {
+  startOffset?: number;
   acc: string;
   lastProgressAt: number;
   staleSince?: number;
@@ -1411,10 +1413,7 @@ function applyRun(
   }
   setWorkStale(work, run.stale === true, notify);
   const p = typeof run.partial === "string" ? run.partial : "";
-  if (p.length > st.acc.length) {
-    st.lastProgressAt = now();
-    pushDelta(stream, partial, st, p);
-  }
+  if (p) applyStreamText(stream, partial, st, p, run.partialStartOffset ?? 0, run.partialStartOffset ?? 0);
   if (!runIsTerminal(run)) return "open";
   const res = run.result;
   const delivered = deliveredFilesFromAttachments(res?.attachments);
@@ -1573,16 +1572,6 @@ async function streamRunViaSse(
     clearTimeout(timer);
     timer = setTimeout(abort, SSE_SILENCE_MS);
   };
-  const processor = new StreamProcessor({
-    initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
-    events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
-  });
-  processor.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
-  const append = (delta: string): void => {
-    if (!delta) return;
-    st.lastProgressAt = now();
-    processor.processChunk({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: runId, delta });
-  };
   const transport = fetchServerSentEvents(withBase(runPath(runId, "/events")), {
     credentials: "same-origin",
   });
@@ -1591,7 +1580,7 @@ async function streamRunViaSse(
       received();
       if (event.type !== "CUSTOM") continue;
       if (event.name === "delta") {
-        const value = event.value as { offset?: unknown; delta?: unknown };
+        const value = event.value as { offset?: unknown; delta?: unknown; startOffset?: number };
         if (
           typeof value.offset !== "number" ||
           !Number.isSafeInteger(value.offset) ||
@@ -1599,13 +1588,10 @@ async function streamRunViaSse(
           typeof value.delta !== "string"
         )
           return "fallback";
-        if (value.offset > st.acc.length) return "fallback";
-        const delta = value.delta.slice(st.acc.length - value.offset);
-        append(delta);
+        if (value.offset > Math.max((st.startOffset ?? 0) + st.acc.length, value.startOffset ?? 0)) return "fallback";
+        applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
-        if (typeof run.partial === "string" && run.partial.length > st.acc.length)
-          append(run.partial.slice(st.acc.length));
         // Completion must carry the final result, including files and approvals.
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
@@ -1659,6 +1645,28 @@ function abortStream(stream: AssistantMessageEventStream, partial: AssistantMess
   };
   stream.push({ type: "error", reason: "aborted", error });
   stream.end(error);
+}
+
+function applyStreamText(
+  stream: AssistantMessageEventStream,
+  partial: AssistantMessage,
+  st: Acc,
+  text: string,
+  offset: number,
+  startOffset: number,
+): void {
+  const end = (st.startOffset ?? 0) + st.acc.length;
+  if (offset + text.length < end || (offset + text.length === end && startOffset <= (st.startOffset ?? 0))) return;
+  const start = Math.max(st.startOffset ?? 0, startOffset);
+  const next = offset > end ? text : st.acc + text.slice(Math.max(0, end - offset));
+  const nextStart = offset > end ? offset : (st.startOffset ?? 0);
+  const work = (partial as AssistantWork).work;
+  if (work) work.streamStartOffset = start;
+  if (start !== (st.startOffset ?? 0)) (partial as AssistantWork).streamingBaseline = "";
+  st.acc = offset > end ? "" : st.acc.slice(start - (st.startOffset ?? 0));
+  st.lastProgressAt = now();
+  pushDelta(stream, partial, st, next.slice(start - nextStart));
+  st.startOffset = start;
 }
 
 function pushDelta(stream: AssistantMessageEventStream, partial: AssistantMessage, st: Acc, next: string): void {

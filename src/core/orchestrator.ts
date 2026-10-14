@@ -3920,7 +3920,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
               if (phase && !input.surfaceTools) {
                 const streamOffset =
-                  input.runId && deps.turnStream ? (deps.turnStream.snapshot(input.runId) ?? "").length : undefined;
+                  input.runId && deps.turnStream
+                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
+                    : undefined;
                 await emit({
                   type: "text_start",
                   payload: { phase, ...(streamOffset !== undefined ? { streamOffset } : {}) },

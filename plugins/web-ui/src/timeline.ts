@@ -312,7 +312,17 @@ export function currentTextPhase(work: WorkBlock): {
 
 export function streamedAnswer(text: string, work: WorkBlock): string {
   const phase = currentTextPhase(work);
-  return phase?.phase === "final_answer" ? text.slice(phase.streamOffset) : streamingTextTail(text, work.activity);
+  if (phase) return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
+  return work.streamStartOffset
+    ? streamTextFrom(text, 0, work.streamStartOffset)
+    : streamingTextTail(text, work.activity);
+}
+
+export function streamTextFrom(text: string, offset: number, startOffset: number): string {
+  if (offset >= startOffset) return text.slice(offset - startOffset);
+  let boundary = 0;
+  while (boundary < text.length && text[boundary]!.trim()) boundary++;
+  return "…earlier output in transcript\n\n" + text.slice(boundary).trimStart();
 }
 
 export function streamingTextTail(text: string, activity: ToolActivity[]): string {

@@ -304,3 +304,24 @@ test("approval activity reaches the visible transcript before any response text"
   await completion;
   assert.ok(beforeCompletion.includes("approval-decision"), JSON.stringify(beforeCompletion));
 });
+
+test("trimmed snapshots and live deltas use absolute offsets without freezing or duplicating text", async (t) => {
+  const state = streamingFetch(t);
+  const stream = await makeRunResumeStreamFn("r", {
+    status: "running",
+    result: null,
+    partial: "ipped word",
+    partialStartOffset: 200_001,
+  })(model, {} as Context, {});
+  await flush();
+  state.send({ type: "CUSTOM", name: "delta", value: { offset: 200_011, delta: " more", startOffset: 200_003 } });
+  state.send({
+    type: "CUSTOM",
+    name: "run",
+    value: { status: "running", result: null, partial: "word more", partialStartOffset: 200_007 },
+  });
+  state.send({ type: "CUSTOM", name: "delta", value: { offset: 200_011, delta: " more!", startOffset: 200_007 } });
+  state.send({ type: "CUSTOM", name: "run", value: { status: "done", result: { status: "ok" } } });
+  assert.deepEqual((await stream.result()).content, [{ type: "text", text: "word more!" }]);
+  assert.equal(state.polls, 0);
+});
