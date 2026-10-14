@@ -85,10 +85,17 @@ test("pg directory: exact channel-id resolution has a matching expression index"
 test("pg directory: slackId round-trips through replace → get/list/resolve; a change re-writes", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([
-    { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
+    {
+      principalId: "eve@acme.com",
+      displayName: "Eve",
+      type: "internal",
+      slackId: "U9",
+      avatarUrl: "https://avatars.slack-edge.com/eve.png",
+    },
     { principalId: "U5", displayName: "Dana", type: "internal" },
   ]);
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U9");
+  assert.equal((await store.get("eve@acme.com"))?.avatarUrl, "https://avatars.slack-edge.com/eve.png");
   assert.equal((await store.get("U5"))?.slackId, undefined);
   assert.equal((await store.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
   const r = await store.resolve("Eve");
