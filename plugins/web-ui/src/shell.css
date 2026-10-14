@@ -6005,7 +6005,9 @@ a.connector-widget:focus-visible {
   font-weight: 650;
 }
 .project-member-row > .inbox-avatar,
-.project-member-result > .inbox-avatar {
+.project-member-result > .inbox-avatar,
+.permission-person > .inbox-avatar,
+.permission-row > .inbox-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;

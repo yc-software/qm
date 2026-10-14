@@ -2,7 +2,7 @@ import { html, render, nothing } from "lit";
 import { live } from "lit/directives/live.js";
 import { Building2, Globe, Lock, Search, X } from "lucide";
 import { api } from "./core-bridge";
-import { closeFormMenus, initials, menuSelect } from "./ui";
+import { avatarTpl, closeFormMenus, menuSelect } from "./ui";
 import { icon } from "./icons";
 import { scopeChip } from "./contexts";
 import { friendlyPrincipal } from "./deploy-view";
@@ -204,8 +204,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
                   selected
                     ? html`<div class="permission-invite">
                         <div class="permission-person">
-                          <span class="project-member-avatar">${initials(selected.displayName)}</span
-                          ><span class="permission-person-label"
+                          ${avatarTpl({
+                            key: selected.principalId,
+                            name: selected.displayName,
+                            avatarUrl: selected.avatarUrl,
+                          })}<span class="permission-person-label"
                             >${selected.displayName}<small>${selected.principalId}</small></span
                           >
                         </div>
@@ -313,12 +316,11 @@ export async function openDeploymentPermissions(id: string, title: string, owner
         <div class="permission-section-label">People with access</div>
         <div class="project-member-list">
           <div class="permission-row">
-            <span class="project-member-avatar" aria-hidden="true">${initials(owner.replace("personal:", ""))}</span
-            ><span class="permission-person-label"
+            ${avatarTpl({ key: owner, name: owner.replace("personal:", "") })}<span class="permission-person-label"
               >${owner.startsWith("personal:") ? friendlyPrincipal(owner.slice(9)) : scopeChip(owner)}</span
             ><span class="permission-owner">Owner</span>
           </div>
-          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row"><span class="project-member-avatar" aria-hidden="true">${initials(isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", ""))}</span><span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
+          ${grantees.filter((grant) => generalAccess() !== "org" || !isOrgGrant(grant)).map((grant) => html`<div class="permission-row">${avatarTpl({ key: grant.scope, name: isOrgGrant(grant) ? orgName() : grant.scope.replace("personal:", "") })}<span class="permission-person-label">${isOrgGrant(grant) ? orgName() : (names.get(grant.scope) ?? (grant.scope.startsWith("personal:") ? grant.scope.slice(9) : scopeChip(grant.scope)))}${names.has(grant.scope) ? html`<small>${grant.scope.replace("personal:", "")}</small>` : nothing}</span>${permissionMenu(grant.permission === "write" ? "manage" : "view", `Access for ${grant.scope}`, (value) => void change(grant.scope, value), true)}</div>`)}
         </div>
         <div class="permission-section-label permission-general-label">General access</div>
         <div class="project-member-list">
