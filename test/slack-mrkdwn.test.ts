@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   decodeSlackEntities,
-  stripMention,
   toSlackMrkdwn,
   slackSectionBlocks,
   resolveMentionsInText,
@@ -20,10 +19,8 @@ test("inlineCode clamps long text and neutralizes backticks", () => {
   assert.match(clamped, /\.\.\.`$/);
 });
 
-test("decodeSlackEntities / stripMention", () => {
+test("decodeSlackEntities", () => {
   assert.equal(decodeSlackEntities("echo a &gt; b &amp;&amp; c"), "echo a > b && c");
-  assert.equal(stripMention("<@BOT> hello", "BOT"), "hello");
-  assert.equal(stripMention("<@BOT>", "BOT"), "");
 });
 
 test("toSlackMrkdwn: bold uses single * (the screenshot bug: **x** rendered literally)", () => {

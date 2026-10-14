@@ -4,7 +4,6 @@ export { safeChunks } from "./safe-cut.ts";
 export {
   decodeSlackEntities,
   resolveMentionsInText,
-  stripMention,
   neutralizeMassMentions,
   neutralizeMentions,
   wireMentionKeys,

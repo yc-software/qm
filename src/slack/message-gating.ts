@@ -200,7 +200,7 @@ export async function dedupedRun(
 }
 
 export function isBareStop(text: string): boolean {
-  return /^stop[.!]?$/i.test(text.trim());
+  return /^(?:@\S+\s+)*stop[.!]?$/i.test(text.trim());
 }
 
 export function createInFlightThreadMap(): {

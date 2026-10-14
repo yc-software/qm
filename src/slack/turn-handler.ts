@@ -56,10 +56,10 @@ import {
   refusalDelivery,
   refusalNote,
   renderConversationView,
+  resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
-  stripMention,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
@@ -220,10 +220,10 @@ export function createTurnHandler(deps: {
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const stripped = stripMention(inc.rawText, ids.botUserId);
-    // A bare mention (e.g. "@qm" replied into a thread) is still a request: keep the tag so the agent sees it.
-    const bareMention = !stripped && Boolean(ids.botUserId) && inc.rawText.includes(`<@${ids.botUserId}>`);
-    const text = bareMention ? `@${ids.botHandle || "qm"}` : stripped;
+    const text = resolveMentions(
+      decodeSlackEntities(inc.rawText).trim(),
+      ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
+    );
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
