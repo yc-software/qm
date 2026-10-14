@@ -56,16 +56,31 @@ test("dictation checks identity, origin, allowlist and format before provider ac
   assert.equal(capability.headers.get("cache-control"), "no-store");
 });
 
-test("dictation passes OpenAI rate limits through with their retry hint", async (t) => {
+test("dictation streams audio to OpenAI and maps its limits to client errors", async (t) => {
   const actualFetch = globalThis.fetch;
+  let provider = new Response("{}", { status: 429, headers: { "retry-after": "12" } });
+  let uploaded = 0;
   t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") return actualFetch(input, init);
-    return new Response("{}", { status: 429, headers: { "retry-after": "12" } });
+    const form = await new Response(init!.body, { headers: init!.headers }).formData();
+    uploaded = (form.get("file") as File).size;
+    return provider;
   });
-  const result = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
-  assert.equal(result.status, 429);
-  assert.equal(result.headers.get("retry-after"), "12");
-  assert.equal((await result.json()).error, "provider_rate_limit");
+  const post = (body: BodyInit = "audio") => fetch(`${base}/api/dictation`, { method: "POST", headers, body });
+  const limited = await post();
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get("retry-after"), "12");
+  assert.equal((await limited.json()).error, "provider_rate_limit");
+  provider = new Response("{}", { status: 429, headers: { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" } });
+  assert.equal((await post()).headers.get("retry-after"), null);
+  provider = new Response("{}", { status: 413 });
+  assert.deepEqual(await (await post()).json(), { error: "audio_too_large" });
+  provider = new Response("{}", { status: 400 });
+  assert.equal((await post("")).status, 400);
+  provider = Response.json({ text: "long recording" });
+  const audio = new Uint8Array(30 * 1024 * 1024);
+  assert.equal((await post(audio)).status, 200);
+  assert.equal(uploaded, audio.byteLength);
 });
 
 test("dictation returns only transcript text and sanitizes provider failures", async (t) => {
@@ -90,7 +105,6 @@ test("dictation returns only transcript text and sanitizes provider failures", a
   const rejected = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
   assert.equal(rejected.status, 503);
   assert.equal((await rejected.text()).includes("secret details"), false);
-  assert.equal((await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "" })).status, 400);
 });
 
 test("disconnecting a dictation request cancels its provider request", async (t) => {
@@ -117,24 +131,6 @@ test("disconnecting a dictation request cancels its provider request", async (t)
   await started.promise;
   controller.abort();
   await Promise.all([rejected, cancelled.promise]);
-});
-
-test("chunked recordings cannot exceed the audio limit", async () => {
-  const chunk = new Uint8Array(1024 * 1024);
-  let sent = 0;
-  const body = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent++ > 25) controller.close();
-      else controller.enqueue(chunk);
-    },
-  });
-  const response = await fetch(`${base}/api/dictation`, {
-    method: "POST",
-    headers,
-    body,
-    duplex: "half",
-  } as RequestInit);
-  assert.equal(response.status, 413);
 });
 
 test("provider network failures log their cause chain", async (t) => {

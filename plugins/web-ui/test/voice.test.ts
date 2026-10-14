@@ -82,7 +82,7 @@ test("transcription sends audio with the server-selected model and returns only 
   stubFetch(t, async (url, init) => {
     if (responses.length) return responses.shift()!;
     assert.equal(url, "https://api.openai.com/v1/audio/transcriptions");
-    const form = init!.body as FormData;
+    const form = await new Response(init!.body, { headers: init!.headers }).formData();
     assert.equal(form.get("model"), "gpt-transcribe");
     const file = form.get("file") as File;
     assert.equal(file.name, "dictation.m4a");
@@ -90,7 +90,7 @@ test("transcription sends audio with the server-selected model and returns only 
     assert.equal(file.size, 3);
     return Response.json({ text: "  Test dictation.  ", internal: "ignored" });
   });
-  assert.equal(await transcribe(new Uint8Array([1, 2, 3]), "audio/mp4", caller), "Test dictation.");
+  assert.equal(await transcribe([new Uint8Array([1, 2, 3])], "audio/mp4", caller), "Test dictation.");
   responses.push(Response.json({ text: 42 }), Response.json({ text: "a".repeat(100_001) }));
-  for (let i = 0; i < 2; i++) await assert.rejects(transcribe(new Uint8Array([1]), "audio/wav", caller));
+  for (let i = 0; i < 2; i++) await assert.rejects(transcribe([new Uint8Array([1])], "audio/wav", caller));
 });

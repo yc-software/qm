@@ -6,15 +6,12 @@ import {
   createLiveVoice,
   dictationFormats,
   LIVE_MODEL,
-  MAX_DICTATION_BYTES,
   openaiKey,
   transcribe,
   voiceEnabled,
   voiceRequestAllowed,
   VoiceProviderError,
 } from "./voice.ts";
-
-const BODY_READ_TIMEOUT_MS = 300_000;
 
 function reportVoiceError(error: unknown, code: string, aborted = false): void {
   const detail = { ...(error instanceof VoiceProviderError ? error.detail : {}), aborted };
@@ -74,35 +71,27 @@ export async function handleVoiceRoute(
       user,
       org: config.org,
       apiKey: openaiKey()!,
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 300_000 : 25_000)]),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 600_000 : 25_000)]),
     };
     if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller));
-    const readTimer = setTimeout(() => req.destroy(), BODY_READ_TIMEOUT_MS);
-    let audio: Buffer;
-    try {
-      audio = await readBodyBytes(req, MAX_DICTATION_BYTES);
-    } catch (error) {
-      if (error instanceof PayloadTooLargeError) {
-        res.setHeader("connection", "close");
-        return json(res, 413, { error: "audio_too_large" });
-      }
-      if (!controller.signal.aborted) reportVoiceError(error, "dictation_upload");
-      return controller.signal.aborted ? undefined : json(res, 400, { error: "upload_failed" });
-    } finally {
-      clearTimeout(readTimer);
-    }
-    if (!audio.byteLength) return json(res, 400, { error: "empty_audio" });
-    return json(res, 200, { text: await transcribe(audio, mimeType, caller) });
+    return json(res, 200, { text: await transcribe(req, mimeType, caller) });
   } catch (error) {
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
     if (controller.signal.aborted) return;
-    if (error instanceof VoiceProviderError && error.detail.status === 429) {
-      if (typeof error.detail.retryAfter === "string") res.setHeader("retry-after", error.detail.retryAfter);
+    if (!req.readableEnded) res.setHeader("connection", "close");
+    const status = error instanceof VoiceProviderError ? error.detail.status : undefined;
+    if (status === 429) {
+      const retryAfter = Number((error as VoiceProviderError).detail.retryAfter);
+      if (Number.isInteger(retryAfter) && retryAfter >= 0)
+        res.setHeader("retry-after", String(Math.min(retryAfter, 3600)));
       return json(res, 429, {
         error: "provider_rate_limit",
         message: "OpenAI is rate limiting requests. Try again shortly.",
       });
     }
+    if (dictation && status === 413) return json(res, 413, { error: "audio_too_large" });
+    if (dictation && status === 400)
+      return json(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
     return dictation
       ? json(res, 503, {
           error: "dictation_unavailable",
