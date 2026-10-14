@@ -5,6 +5,8 @@ import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { factCandidate, factHash, recentCandidates, type MemoryCandidate, type MemoryFact } from "./facts.ts";
 import type { MemoryEmbedder } from "../model/embeddings.ts";
 
+const INDEX_WRITE_LANES = 4;
+
 export interface MemoryVector {
   scope: string;
   model: string;
@@ -33,6 +35,10 @@ export function createSemanticMemoryService(
   opts: { minSimilarity?: number; onError?: (error: unknown) => void } = {},
 ): MemoryService {
   const queue = createKeyedQueue<string>();
+  const writeLanes = createKeyedQueue<number>();
+  let nextLane = 0;
+  const writeAll = <T>(items: readonly T[], write: (item: T) => Promise<void>): Promise<void[]> =>
+    Promise.all(items.map((item) => writeLanes(nextLane++ % INDEX_WRITE_LANES, () => write(item))));
   const vectorId = ({ scope, model, hash }: Omit<MemoryVector, "vector">) => JSON.stringify([scope, model, hash]);
   const cache = new Map<string, number[]>();
   const remember = (model: string, hash: string, vector: number[]) => {
@@ -59,7 +65,7 @@ export function createSemanticMemoryService(
             remember(row.model, row.hash, row.vector);
           }
         }
-        await Promise.all(stale.map((row) => index.delete(vectorId(row))));
+        await writeAll(stale, (row) => index.delete(vectorId(row)));
       }
       const missing = [...new Set(facts.map((fact) => fact.text))].filter((text) => !vectors[factHash(text)]);
       for (let start = 0; start < missing.length; start += 64) {
@@ -75,7 +81,7 @@ export function createSemanticMemoryService(
           hash: factHash(text),
           vector: embedded[i]!,
         }));
-        await Promise.all(rows.map((row) => index.put(vectorId(row), row)));
+        await writeAll(rows, (row) => index.put(vectorId(row), row));
         for (const row of rows) {
           vectors[row.hash] = row.vector;
           remember(row.model, row.hash, row.vector);
@@ -110,12 +116,10 @@ export function createSemanticMemoryService(
       }
       const queryVector = await request;
       if (facts.some((fact) => vectors[factHash(fact.text)]?.length !== queryVector.length)) {
-        await Promise.all(
-          Object.keys(vectors).map((hash) => {
-            cache.delete(`${embedder.id} ${hash}`);
-            return index.delete(vectorId({ scope, model: embedder.id, hash }));
-          }),
-        );
+        await writeAll(Object.keys(vectors), (hash) => {
+          cache.delete(`${embedder.id} ${hash}`);
+          return index.delete(vectorId({ scope, model: embedder.id, hash }));
+        });
         throw new Error("Memory embedding dimensions changed; rebuilding the index on the next recall");
       }
       return facts
