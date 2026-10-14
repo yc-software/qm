@@ -376,6 +376,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
         text,
+        botHandle: ids.botHandle,
         threadRef,
         getInFlightRun: async (ref) =>
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??

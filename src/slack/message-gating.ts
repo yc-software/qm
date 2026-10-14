@@ -199,8 +199,11 @@ export async function dedupedRun(
   return true;
 }
 
-export function isBareStop(text: string): boolean {
-  return /^(?:@\S+\s+)*stop[.!]?$/i.test(text.trim());
+export function isBareStop(text: string, botHandle = ""): boolean {
+  const trimmed = text.trim();
+  const tag = botHandle ? `@${botHandle}` : "";
+  const rest = tag && trimmed.startsWith(tag) ? trimmed.slice(tag.length) : trimmed;
+  return /^stop[.!]?$/i.test(rest.trim());
 }
 
 export function createInFlightThreadMap(): {
@@ -220,12 +223,13 @@ export function createInFlightThreadMap(): {
 
 export async function maybeInterceptStop(opts: {
   text: string;
+  botHandle?: string;
   threadRef: string;
   getInFlightRun: (threadRef: string) => string | undefined | Promise<string | undefined>;
   signalAbort: (runId: string) => Promise<void>;
   stopConversation?: (threadRef: string) => Promise<boolean>;
 }): Promise<boolean> {
-  if (!isBareStop(opts.text)) return false;
+  if (!isBareStop(opts.text, opts.botHandle)) return false;
   if (opts.stopConversation) return opts.stopConversation(opts.threadRef);
   const runId = await opts.getInFlightRun(opts.threadRef);
   if (!runId) return false;
