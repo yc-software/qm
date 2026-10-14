@@ -780,7 +780,7 @@ a.chat-row-open {
   --session-action-hover: color-mix(in srgb, var(--session-color) 24%, var(--secondary));
   --session-action-foreground: color-mix(in srgb, var(--session-color) 68%, var(--foreground));
 }
-.session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+.session-row:is(.colored, .active, .menu-open, .selected, :hover) .session {
   width: calc(100% + 4px);
   margin-left: -4px;
   padding-left: 15px;
@@ -788,9 +788,9 @@ a.chat-row-open {
 .session-row.colored .session {
   background: color-mix(in srgb, var(--session-color) 16%, transparent);
 }
-.recent-project-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
-.archived-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session,
-.pinned-children .session-row:is(.colored, .active, .menu-open, .selected, .read-only, :hover) .session {
+.recent-project-children .session-row:is(.colored, .active, .menu-open, .selected, :hover) .session,
+.archived-children .session-row:is(.colored, .active, .menu-open, .selected, :hover) .session,
+.pinned-children .session-row:is(.colored, .active, .menu-open, .selected, :hover) .session {
   padding-left: 10px;
 }
 .session-row.colored .session:hover,
@@ -859,10 +859,6 @@ a.chat-row-open {
   opacity: 0.65;
   vertical-align: middle;
 }
-.session .ro-lock {
-  margin-right: 6px;
-  vertical-align: middle;
-}
 .badge {
   font-size: 10px;
   padding: 1px 6px;
@@ -886,14 +882,6 @@ a.chat-row-open {
   display: block;
   flex-shrink: 0;
   opacity: 0.65;
-}
-.session-row.read-only .session {
-  background: color-mix(in srgb, var(--foreground) 4%, transparent);
-}
-.session-row.read-only:hover .session,
-.session-row.read-only.active .session,
-.session-row.read-only.menu-open .session {
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
 }
 .session-row.read-only .session .title {
   color: var(--muted-foreground);

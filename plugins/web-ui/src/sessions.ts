@@ -111,7 +111,7 @@ export const sessionsState = {
   openMenuId: null as string | null,
   renamingId: null as string | null,
   openingKey: null as string | null,
-  webOnly: true,
+  webOnly: false,
   collapsedProjectScopes: new Set<string>(),
 };
 
@@ -160,9 +160,9 @@ function visibleRowOrder(): string[] {
 const WEB_ONLY_KEY = "web-ui:web-only";
 sessionsState.webOnly = ((): boolean => {
   try {
-    return localStorage.getItem(WEB_ONLY_KEY) !== "0";
+    return localStorage.getItem(WEB_ONLY_KEY) === "1";
   } catch {
-    return true;
+    return false;
   }
 })();
 
@@ -1066,10 +1066,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
         }}
       >
         <div class="title" aria-live="polite">
-          ${statusMarks(s)}${surfaceGlyph(s)}${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}<span
-            class="tl"
-            dir="auto"
-            >${titleContent}</span
+          ${statusMarks(s)}${surfaceGlyph(s)}<span class="tl" dir="auto">${titleContent}</span
           >${context ? html`<span class="row-context" ${tip(context)}>${context}</span>` : nothing}${unreadDot(s)}
         </div>
       </a>
