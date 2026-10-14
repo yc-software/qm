@@ -129,9 +129,10 @@ function memberRow(r: Record<string, unknown>): DirectoryMember {
     displayName: r.display_name as string,
     type: r.type as PrincipalType,
     ...(r.slack_id ? { slackId: r.slack_id as string } : {}),
+    ...(r.avatar_url ? { avatarUrl: r.avatar_url as string } : {}),
   };
 }
-const MEMBER_COLS = "principal_id, display_name, type, slack_id";
+const MEMBER_COLS = "principal_id, display_name, type, slack_id, avatar_url";
 function channelRow(r: Record<string, unknown>): DirectoryChannel {
   return {
     channelId: r.channel_id as string,
@@ -182,6 +183,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     {
       id: "directory/store/0004",
       statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
+    },
+    {
+      id: "directory/store/0005",
+      statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
     },
   ]);
 
@@ -275,14 +280,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       for (const m of members) if (m.principalId && m.type === "internal") byId.set(m.principalId, m);
       const internal = [...byId.values()];
 
-      const hash = hashRoster(internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}`));
+      const hash = hashRoster(
+        internal.map((m) => `${m.principalId}|${m.displayName}|${m.type}|${m.slackId ?? ""}|${m.avatarUrl ?? ""}`),
+      );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
         await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id)
-             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[])`,
+            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
+             SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
             [
               orgId,
               internal.map((m) => m.principalId),
@@ -290,6 +297,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
               internal.map((m) => normDirectoryQuery(m.displayName)),
               internal.map((m) => m.type),
               internal.map((m) => m.slackId ?? null),
+              internal.map((m) => m.avatarUrl ?? null),
             ],
           );
         }

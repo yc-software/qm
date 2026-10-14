@@ -204,7 +204,7 @@ export type VisibleCron = Cron & { scopeName?: string };
 
 export type ProjectView = Project & {
   scopeId: ScopeId;
-  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
+  members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
 };
 
 type ProjectViewMutation =

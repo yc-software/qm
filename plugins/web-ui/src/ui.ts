@@ -1,5 +1,6 @@
 import { previewFile } from "./file-open.ts";
 import { html, nothing, type TemplateResult } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import { tip } from "./tooltip.ts";
 import { Check, ChevronDown, Download, type IconNode } from "lucide";
@@ -237,6 +238,41 @@ export function initials(s: string): string {
   const parts = base.split(/[.\-_ ]+/).filter(Boolean);
   const two = parts.length >= 2 ? (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "") : base.slice(0, 2);
   return (two || "?").toUpperCase();
+}
+
+function avatarHue(key: string): number {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) % 360;
+  return hash;
+}
+
+export function avatarTpl(person: { key: string; name: string; avatarUrl?: string }): TemplateResult {
+  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
+  return html`<span
+    class="inbox-avatar"
+    style=${`--avatar-hue:${avatarHue(person.key)}`}
+    ${tip(person.name)}
+    aria-hidden="true"
+  >
+    ${initials(person.name)}
+    ${
+      photo
+        ? keyed(
+            photo,
+            html`<img
+              src=${photo}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              referrerpolicy="no-referrer"
+              @error=${(event: Event) => {
+                (event.currentTarget as HTMLImageElement).hidden = true;
+              }}
+            />`,
+          )
+        : nothing
+    }
+  </span>`;
 }
 
 export function relTime(ms: number): string {

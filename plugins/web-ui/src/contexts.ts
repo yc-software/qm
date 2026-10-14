@@ -26,7 +26,7 @@ import {
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
-import { actionSnippet, fieldSelect, formatBytes, initials, menuSelect, relTime } from "./ui";
+import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
@@ -697,10 +697,11 @@ function projectMembersSection(context: CoreContext): TemplateResult {
       <div class="project-member-list">
         ${projectPeople(context).map((principalId) => {
           const label = memberLabel(context, principalId);
-          const viaChannel = Boolean(project.members.find((member) => member.principalId === principalId)?.viaChannel);
+          const member = project.members.find((m) => m.principalId === principalId);
+          const viaChannel = Boolean(member?.viaChannel);
           return html`
             <div class="project-member-row">
-              <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
+              ${avatarTpl({ key: principalId, name: label, avatarUrl: member?.avatarUrl })}
               <span class="project-member-name" dir="auto">${label}</span>
               ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
               ${

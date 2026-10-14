@@ -63,7 +63,7 @@ interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
 }
 
 interface DirectoryPush {
-  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
+  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string; avatarUrl?: string }>;
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];

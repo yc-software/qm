@@ -10,6 +10,7 @@ export interface DirectoryMember {
   displayName: string;
   type: PrincipalType;
   slackId?: string;
+  avatarUrl?: string;
 }
 
 export interface DirectoryChannel {

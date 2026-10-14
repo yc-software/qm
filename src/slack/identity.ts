@@ -18,7 +18,7 @@ export interface SlackUser {
   is_bot?: boolean;
   real_name?: string;
   name?: string;
-  profile?: { display_name?: string; email?: string; tz?: string };
+  profile?: { display_name?: string; email?: string; tz?: string; image_72?: string };
 }
 
 export type SlackIdentityMode = "slack-id" | "email";
@@ -31,6 +31,7 @@ export interface UserCache {
 export interface CachedUser {
   actor: ActorAssertion;
   timezone?: string;
+  avatarUrl?: string;
 }
 
 export function createUserCache(opts: { ttlMs?: number; max?: number } = {}): UserCache {
