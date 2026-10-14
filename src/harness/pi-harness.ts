@@ -1953,7 +1953,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
           entry.ref.goalMeter = grindMeter;
-          entry.ref.goalRound = 0;
+          entry.ref.goalRound = turn.continueTurn ? 1 : 0;
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
           const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
           const goalNote = (() => {

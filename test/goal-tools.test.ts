@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import {
   bankGoalTurn,
   goalContinuationPrompt,
@@ -473,4 +474,18 @@ test("cancel needs an open goal", async () => {
     /No active or paused goal/,
   );
   assert.equal(ref.goal?.status, "complete");
+});
+
+test("a turn resumed mid-way cannot cancel: it is not answering a fresh message from the person", async () => {
+  const first = toolbox();
+  await first.create.execute("c1", { objective: "long haul" });
+  const resumed = nextTurn(first.ref.goal!);
+  Object.assign(
+    resumed.ref,
+    harnessToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
+    { goal: resumed.ref.goal },
+  );
+  const result = await resumed.update.execute("u1", { status: "cancel", note: "user: cancel" });
+  assert.match(textOf(result as never), /Only the user's own message can cancel/);
+  assert.equal(resumed.ref.goal?.status, "active");
 });
