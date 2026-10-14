@@ -47,9 +47,6 @@ const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0'
 const ENDPOINT_PORT = 443;
 const RESOLVE_CACHE_MS = 15_000;
 const ROTATE_AHEAD_MS = 30 * 60_000;
-const RUNTIME_PREWARM =
-  "python3 -c 'import http.server, sqlite3, json, ssl, asyncio, urllib.request' >/dev/null 2>&1 & " +
-  'node -e \'require("node:http"); require("node:https")\' >/dev/null 2>&1 & wait; true';
 
 const DEFAULT_INGRESS = (region: string): string =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -355,12 +352,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     throw lastErr;
   }
 
-  async function launchWarmBody(deploymentId: string, alwaysOn?: boolean): Promise<{ id: string; endpoint: string }> {
-    const body = await launchBody(deploymentId, alwaysOn);
-    void execRaw(body.id, body.endpoint, RUNTIME_PREWARM, 60).catch((e) => swallow("aws-deploy: runtime prewarm", e));
-    return body;
-  }
-
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
     return launchQueue(d.id, async () => {
       const stored = await store.get(d.id);
@@ -373,7 +364,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
         }
         if (alive) {
-          next = await launchWarmBody(d.id, d.alwaysOn);
+          next = await launchBody(d.id, d.alwaysOn);
           const replacement = next;
           await ensureRunning(stored.microvmId, stored.endpoint, desc).catch(() => {});
           const defer = async (
@@ -403,7 +394,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           }
         }
       }
-      const body = next ?? (await launchWarmBody(d.id, d.alwaysOn));
+      const body = next ?? (await launchBody(d.id, d.alwaysOn));
       try {
         await hydrateData(d.id, body.id, body.endpoint);
       } catch (e) {
