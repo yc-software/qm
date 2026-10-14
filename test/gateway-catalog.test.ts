@@ -128,7 +128,13 @@ test("only models present in both responses with valid chat capabilities are sel
   ]);
   f.listing(["vendor/new-model", "embed", "no-tools", "no-context", "bad-price", "bad-output"]);
   await f.catalog.refresh();
-  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model"]);
+  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model", "gateway/embed"]);
+  assert.deepEqual(
+    builtInModelCatalog()
+      .filter((m) => m.id.startsWith("gateway/"))
+      .map((m) => m.id),
+    ["gateway/vendor/new-model"],
+  );
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {
@@ -318,4 +324,23 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("gateway models send session-affinity headers on every API", async () => {
+  const f = fixture([
+    group("chat-model"),
+    group("anthropic-model", { providers: ["anthropic"] }),
+    group("openai-model", { providers: ["openai"] }),
+  ]);
+  await f.catalog.refresh();
+  const apis = new Set<string>();
+  for (const id of ["chat-model", "anthropic-model", "openai-model"]) {
+    const model = resolveModel(`gateway/${id}`)!;
+    apis.add(model.api);
+    assert.equal(
+      (model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+      true,
+    );
+  }
+  assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
 });

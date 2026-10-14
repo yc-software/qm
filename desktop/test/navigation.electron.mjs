@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, clipboard, shell } from "electron";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 async function waitFor(read) {
   for (let i = 0; i < 200; i++) {
@@ -45,6 +45,18 @@ async function waitFor(read) {
       await preview.webContents.executeJavaScript('document.querySelector("main").textContent'),
       "GET:session",
     );
+    for (const page of [main, preview]) {
+      page.show();
+      page.focus();
+      await waitFor(() => page.webContents.executeJavaScript("document.hasFocus()"));
+      const link = `${page.webContents.getURL()}?session=copy-link-test`;
+      await page.webContents.executeJavaScript(`navigator.clipboard.writeText(${JSON.stringify(link)})`, true);
+      await waitFor(async () => (await clipboard.readText()) === link);
+      assert.equal(
+        await page.webContents.executeJavaScript("navigator.clipboard.readText().then(() => false, () => true)", true),
+        true,
+      );
+    }
     assert.equal(main.webContents.getURL(), origin + "/");
     assert.equal(await preview.webContents.executeJavaScript("typeof require"), "undefined");
     assert.equal(preview.webContents.getLastWebPreferences().sandbox, true);
@@ -74,7 +86,7 @@ async function waitFor(read) {
     main.destroy();
     assert.equal(BrowserWindow.getAllWindows().length, 0);
     console.log(
-      "PASS: separate previews, cookie isolation, blob URLs, blank POST popups, sandbox, browser bridge and child cleanup",
+      "PASS: separate previews, cookie isolation, blob URLs, blank POST popups, sandbox, clipboard writes and read denial, browser bridge and child cleanup",
     );
   } finally {
     for (const window of BrowserWindow.getAllWindows()) window.destroy();

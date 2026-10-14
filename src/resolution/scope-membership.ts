@@ -1,5 +1,5 @@
 import type { Principal, ScopeId } from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, scopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -30,7 +30,12 @@ export interface ScopeMembershipDeps {
   identity?: {
     classify(externalId: string, isExternalGuest?: boolean): { type?: string; teamIds?: readonly string[] };
   };
+  teams?: { isMember(principalId: string, teamId: string): Promise<boolean> };
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+}
+
+async function teamMember(deps: ScopeMembershipDeps, principalId: string, teamId: string): Promise<boolean> {
+  return activePrincipal(deps, principalId) && (await deps.teams?.isMember(principalId, teamId)) === true;
 }
 
 function activePrincipal(deps: ScopeMembershipDeps, principalId: string): boolean {
@@ -44,6 +49,7 @@ async function currentSharedScopeMember(
   ref: string,
   principalId: string,
 ): Promise<boolean> {
+  if (actsAsScope(principalId, scopeId(kind, ref))) return true;
   if (!activePrincipal(deps, principalId)) return false;
   const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
   const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
@@ -72,6 +78,7 @@ async function sharedScopeMembership(
   ref: string,
   principalId: string,
 ): Promise<boolean | undefined> {
+  if (actsAsScope(principalId, scopeId(kind, ref))) return true;
   if (!activePrincipal(deps, principalId)) return false;
   if (kind === "group" && deps.managedGroups?.recognizes(ref)) {
     return (
@@ -192,9 +199,7 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind === "org") return deps.identity?.classify(principalId).type === "internal";
     if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") {
-      return deps.identity?.classify(principalId).teamIds?.includes(ref) === true;
-    }
+    if (kind === "team") return teamMember(deps, principalId, ref);
     if (kind === "group") return memberOfSharedScope(deps, kind, ref, principalId, targetScope);
     if (kind === "channel") {
       if (await memberOfSharedScope(deps, kind, ref, principalId, targetScope)) return true;
@@ -214,7 +219,7 @@ export function createCanWriteScope(deps: ScopeMembershipDeps): CanWriteScope {
     const { kind, ref } = parseScopeId(targetScope);
     if (kind === "org") return true;
     if (kind === "personal") return samePerson(ref, principalId);
-    if (kind === "team") return deps.identity?.classify(principalId).teamIds?.includes(ref) === true;
+    if (kind === "team") return teamMember(deps, principalId, ref);
     if (kind === "channel" || kind === "group") return currentSharedScopeMember(deps, kind, ref, principalId);
     return false;
   };
@@ -272,4 +277,8 @@ export function createManagesArtifactHome(
       );
     return false;
   };
+}
+
+export function rosterAdmits(roster: readonly string[], principalId: string, scope: ScopeId): boolean {
+  return actsAsScope(principalId, scope) || roster.includes(principalId);
 }

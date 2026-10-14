@@ -1,3 +1,4 @@
+import { likeContains } from "../persistence/like.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { DurableByteStore } from "./durable-byte-store.ts";
@@ -94,9 +95,9 @@ export function createPostgresFileArtifactStore(
     if (sharedRefs !== undefined) {
       params.push(
         sharedRefs.map((r) => r.ownerScopeId),
-        sharedRefs.map((r) => r.path),
+        sharedRefs.map((r) => r.id),
       );
-      access = `(${access} OR (enabled = TRUE AND (owner_scope_id, path) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
+      access = `(${access} OR (enabled = TRUE AND (owner_scope_id, id) IN (SELECT * FROM unnest($2::text[], $3::text[]))))`;
     }
     const filters = [access];
     if (!opts?.includeDisabled) filters.push("enabled = TRUE");
@@ -105,8 +106,8 @@ export function createPostgresFileArtifactStore(
       filters.push(`created_in_scope = $${params.length}::text`);
     }
     if (opts?.nameQuery != null) {
-      params.push(`%${opts.nameQuery.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-      filters.push(`name ILIKE $${params.length}::text`);
+      params.push(likeContains(opts.nameQuery));
+      filters.push(`name ILIKE $${params.length}::text ESCAPE '\\'`);
     }
     const visible = `SELECT * FROM file_artifacts WHERE ${filters.join(" AND ")}`;
     const documents =
@@ -208,15 +209,15 @@ export function createPostgresFileArtifactStore(
 
     listDocuments: (scopes, sharedRefs, opts) => listFiles(scopes, opts, sharedRefs),
 
-    async resolveByOwnerPaths(refs) {
+    async resolveByIds(refs) {
       if (refs.length === 0) return [];
       const owners = refs.map((r) => r.ownerScopeId as string);
-      const paths = refs.map((r) => r.path);
+      const ids = refs.map((r) => r.id);
       const rows = await q(
         `SELECT * FROM file_artifacts
            WHERE enabled = TRUE
-             AND (owner_scope_id, path) IN (SELECT * FROM unnest($1::text[], $2::text[]))`,
-        [owners, paths],
+             AND (owner_scope_id, id) IN (SELECT * FROM unnest($1::text[], $2::text[]))`,
+        [owners, ids],
       );
       return rows.map(rowToArtifact);
     },

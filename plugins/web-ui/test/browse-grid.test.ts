@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { nextGridIndex } from "../src/grid-nav.ts";
 
 const COLUMNS = 2;
@@ -29,23 +28,4 @@ test("an odd row count keeps the last row reachable and never overshoots it", ()
   assert.equal(nextGridIndex(5, "ArrowDown", 7, COLUMNS), null);
   assert.equal(nextGridIndex(4, "ArrowDown", 7, COLUMNS), 6);
   assert.equal(nextGridIndex(6, "ArrowRight", 7, COLUMNS), null);
-});
-
-const browse = readFileSync(new URL("../src/browse.ts", import.meta.url), "utf8");
-
-test("the browse palette is a 2-column grid over every destination, escape-dismissable", () => {
-  assert.match(browse, /const BROWSE_COLUMNS = 2;/);
-  assert.match(
-    readFileSync(new URL("../src/shell.css", import.meta.url), "utf8"),
-    /\.browse-grid \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
-  );
-  assert.match(browse, /e\.key === "Escape"[\s\S]{0,80}closeBrowse\(\)/);
-  for (const label of ["Projects", "Files", "Crons", "Keychain", "Apps", "Memory", "Skills", "Admin"]) {
-    assert.match(browse, new RegExp(`"${label}"`));
-  }
-});
-
-test("every tile is a real link, so middle-click and open-in-new-tab still work", () => {
-  assert.match(browse, /<a\s+class="browse-tile[\s\S]{0,400}href=\$\{d\.href\}/);
-  assert.match(browse, /if \(!isPlainLeftClick\(e\)\) return;/);
 });

@@ -42,7 +42,8 @@
       .model-chip button,
       .emoji-picker-grid button,
       .ovmenu button,
-      .dd-btn
+      .dd-btn,
+      .loadout-control button
     )
   ) {
   min-height: var(--control-height);
@@ -98,7 +99,7 @@
   input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]):not([type="color"]):not(
     :where(.admin-search input)
   ),
-:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select:not(.loadout-button),
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea,
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .dd > .dd-btn {
   min-height: var(--control-height);
@@ -119,7 +120,7 @@
 }
 
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) input:disabled,
-:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select:disabled,
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) select:not(.loadout-button):disabled,
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) textarea:disabled,
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .dd > .dd-btn:disabled {
   background: var(--subtle);
@@ -1250,7 +1251,10 @@ dialog.credential-dialog {
   line-height: 1.4;
 }
 
-:where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main .shellbar {
+:where(html body:is([data-subview="audit"], [data-subview="egress"], [data-subview="spend"]))
+  #app-view
+  #main
+  .shellbar {
   flex-wrap: wrap;
   gap: 12px 20px;
 }
@@ -2097,4 +2101,18 @@ dialog.credential-dialog {
   display: inline-block;
   max-width: 100%;
   margin-right: 12px;
+}
+
+#app-view #main .spend-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+#app-view #main .spend-custom input[type="date"] {
+  width: auto;
+}
+#app-view #main .spend-custom .hint {
+  margin: 0;
 }

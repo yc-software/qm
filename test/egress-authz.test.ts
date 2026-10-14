@@ -185,12 +185,12 @@ test("allowlist present => non-matching host is 403 not_allowlisted, matching ho
   }
 });
 
-test("NO token fails closed by default and is audited as unknown", async () => {
+test("NO token asks for proxy credentials by default and is audited as unknown", async () => {
   const { server, records } = boot();
   const port = await listen(server);
   try {
-    assert.equal(await check(port, "example.com:443"), 403);
-    assert.equal(records.at(-1)?.verdict, "not_allowlisted");
+    assert.equal(await check(port, "example.com:443"), 407);
+    assert.equal(records.at(-1)?.verdict, "denied");
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
     assert.equal(records.at(-1)?.principalId, "unknown");
   } finally {
@@ -248,7 +248,7 @@ test("IMDS + link-local + cloud metadata names are denied even tokenless / with 
       "metadata.google.internal:80",
       "metadata.google.internal",
     ]) {
-      assert.equal(await check(port, authority), 403, `tokenless ${authority}`);
+      assert.equal(await check(port, authority), 407, `tokenless ${authority}`);
       assert.equal(await check(port, authority, open), 403, `open-policy ${authority}`);
       assert.equal(records.at(-1)?.verdict, "denied");
     }

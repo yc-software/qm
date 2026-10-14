@@ -1,14 +1,17 @@
 import { createHmac, scrypt } from "node:crypto";
+import { reportFailure } from "../util/errors.ts";
 import { probeModel } from "../harness/pi-harness.ts";
-import { modelFromOverlay } from "./pi-models.ts";
-import type { ModelOverlay } from "./model-overlay.ts";
+import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
+import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
+import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
+import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
-import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { GatewayModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
-    super(message);
+  constructor(code: string, message: string, options?: ErrorOptions) {
+    super(message, options);
     this.code = code;
   }
 }
@@ -17,42 +20,39 @@ interface ModelVerificationContext {
   fingerprint: string;
   probe(signal: AbortSignal): Promise<void>;
 }
-export type ModelVerifier = (spec: ModelOverlay) => Promise<ModelVerificationContext>;
+export type ModelVerifier = (spec: RegisteredModel) => Promise<ModelVerificationContext>;
 
+const VERIFICATION_FAILURES: Record<string, string> = {
+  timeout: "Verification timed out. Try again; the model was not enabled.",
+  access_denied: "The serving credential cannot access this model. Check its provider permissions.",
+  quota_or_rate_limit: "The provider reports a quota, billing, or rate limit. Resolve it and verify again.",
+  model_unavailable: "The provider could not serve this model ID. Check the ID and credential access.",
+  unsupported_configuration: "The provider rejected this configuration. Check the template and fast-mode capability.",
+  provider_failure: "The provider did not complete the verification request. Try again or check provider status.",
+};
+
+const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FAILURES> = {
+  auth: "access_denied",
+  model_budget: "quota_or_rate_limit",
+  rate_limit: "quota_or_rate_limit",
+  not_found: "model_unavailable",
+  model_unavailable: "model_unavailable",
+  bad_request: "unsupported_configuration",
+  context_too_long: "unsupported_configuration",
+  refusal: "provider_failure",
+  transient: "provider_failure",
+  unknown: "provider_failure",
+};
+
+/** Maps a probe failure from structured signals only: ProviderTurnError.code or an abort/timeout error's name. */
 export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof ModelVerificationError) return error;
-  const text = error instanceof Error ? error.message : "";
-  if (/timeout|aborted|aborterror/i.test(text))
-    return new ModelVerificationError("timeout", "Verification timed out. Try again; the model was not enabled.");
-  if (/401|403|unauthori[sz]ed|forbidden|permission|authentication|(?:invalid|incorrect).api.key/i.test(text))
-    return new ModelVerificationError(
-      "access_denied",
-      "The serving credential cannot access this model. Check its provider permissions.",
-    );
-  if (/429|quota|rate.limit|billing|credit|resource.exhausted/i.test(text))
-    return new ModelVerificationError(
-      "quota_or_rate_limit",
-      "The provider reports a quota, billing, or rate limit. Resolve it and verify again.",
-    );
-  if (/404|not.found|does not exist|model.*unavailable/i.test(text))
-    return new ModelVerificationError(
-      "model_unavailable",
-      "The provider could not serve this model ID. Check the ID and credential access.",
-    );
-  if (/\b5\d\d\b/.test(text))
-    return new ModelVerificationError(
-      "provider_failure",
-      "The provider is temporarily unable to complete verification. Try again later.",
-    );
-  if (/400|422|unsupported|invalid.*(parameter|request)|not.supported/i.test(text))
-    return new ModelVerificationError(
-      "unsupported_configuration",
-      "The provider rejected this configuration. Check the template and fast-mode capability.",
-    );
-  return new ModelVerificationError(
-    "provider_failure",
-    "The provider did not complete the verification request. Try again or check provider status.",
-  );
+  let code = "provider_failure";
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) code = "timeout";
+  else if (error instanceof GatewayModelUnavailableError) code = "model_unavailable";
+  else if (error instanceof ProviderTurnError) code = VERIFICATION_CODES[error.code];
+  reportFailure("model verification", error);
+  return new ModelVerificationError(code, VERIFICATION_FAILURES[code]!, { cause: error });
 }
 
 export function createModelVerifier(input: {
@@ -60,13 +60,14 @@ export function createModelVerifier(input: {
   keyMaterial: string | Buffer;
   modelGateway?: ModelGatewayTransportConfig;
   probe?: typeof probeModel;
+  fetchImpl?: typeof fetch;
 }): ModelVerifier {
   const salt = createHmac("sha256", input.keyMaterial).update("qm:model-verification:credential:v2").digest();
   const credentialKeys = new Map<
-    ModelOverlay["provider"] | "gateway",
+    RegisteredModel["provider"] | "gateway",
     { material: string; derived: Promise<Buffer> }
   >();
-  function credentialKey(source: ModelOverlay["provider"] | "gateway", material: string): Promise<Buffer> {
+  function credentialKey(source: RegisteredModel["provider"] | "gateway", material: string): Promise<Buffer> {
     const cached = credentialKeys.get(source);
     if (cached?.material === material) return cached.derived;
     const derived = new Promise<Buffer>((resolve, reject) => {
@@ -82,13 +83,13 @@ export function createModelVerifier(input: {
     return derived;
   }
   return async (spec) => {
-    const model = modelFromOverlay(spec);
+    const model = isEmbeddingModel(spec) ? embeddingModelFromDefinition(spec) : modelFromOverlay(spec);
     if (!model)
       throw new ModelVerificationError(
         "invalid_template",
         "The model template is unavailable. Choose another template.",
       );
-    const gateway = input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
+    const gateway = !isEmbeddingModel(spec) && input.modelGateway?.models[spec.id] ? input.modelGateway : undefined;
     const key = gateway?.apiKey ?? (await input.credentials.resolve(spec.provider));
     if (!key)
       throw new ModelVerificationError(
@@ -114,9 +115,13 @@ export function createModelVerifier(input: {
     return {
       fingerprint,
       async probe(signal) {
+        if (isEmbeddingModel(model)) {
+          await createMemoryEmbedder(model, key, input.modelGateway, input.fetchImpl).embed(["verification"], signal);
+          return;
+        }
         const run = input.probe ?? probeModel;
         await run(model, { [spec.provider]: key }, signal, false, gateway);
-        if (spec.fastMode) await run(model, { [spec.provider]: key }, signal, true, gateway);
+        if (!isEmbeddingModel(spec) && spec.fastMode) await run(model, { [spec.provider]: key }, signal, true, gateway);
       },
     };
   };

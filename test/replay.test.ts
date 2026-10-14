@@ -533,3 +533,40 @@ test("overheard reconciliation deduplicates IDs within a batch but preserves ide
   );
   assert.deepEqual(selectOverheardToImport(incoming, new Set(picked.map((p) => p.ts))), []);
 });
+
+test("a tool_result marked interrupted replays as the interrupted placeholder, not as a real result", () => {
+  const entries: SessionEntry[] = [
+    {
+      sessionId: "s",
+      seq: 1,
+      parentSeq: null,
+      type: "user",
+      payload: { text: "run it" },
+      scopeLabel: "org:o",
+      createdAt: 1,
+    },
+    {
+      sessionId: "s",
+      seq: 2,
+      parentSeq: null,
+      type: "tool_call",
+      payload: { tool: "execute", callId: "c1", command: "make" },
+      scopeLabel: "org:o",
+      createdAt: 2,
+    },
+    {
+      sessionId: "s",
+      seq: 3,
+      parentSeq: null,
+      type: "tool_result",
+      payload: { callId: "c1", result: "[exit 143]", interrupted: true },
+      scopeLabel: "org:o",
+      createdAt: 3,
+    },
+  ];
+  const result = reconstructMessagesFromHistory(entries).find((m) => m.role === "toolResult")!;
+  assert.equal(result.role, "toolResult");
+  if (result.role !== "toolResult") return;
+  assert.equal(result.content[0]!.text, INTERRUPTED_TOOL_RESULT);
+  assert.equal(result.isError, true);
+});

@@ -50,7 +50,7 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
   await memory.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
   const personalCtx = ctxFor({ scope: personal, workspace, memory });
-  assert.deepEqual(await personalCtx.memorySearch("billing"), ["(2026-05-31) Owns the billing service"]);
+  assert.deepEqual(await personalCtx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
   assert.deepEqual(await personalCtx.memorySearch("kubernetes"), []);
 
   const channelCtx = ctxFor({ scope: channel, workspace, memory });
@@ -68,7 +68,7 @@ test("memorySearch() honors the explicit limit and never the model's scope (no s
   const limited = await ctx.memorySearch("likes", 2);
   assert.equal(limited?.length, 2);
 
-  assert.deepEqual(await ctx.memorySearch("golang"), ["(2026-05-31) likes golang"]);
+  assert.deepEqual(await ctx.memorySearch("golang"), ["#2 (2026-05-31) likes golang"]);
 });
 
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
@@ -88,25 +88,9 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   });
   assert.equal(await ctx.memorySearch("anything"), null);
   assert.equal(await ctx.memoryRead(), null);
-  assert.equal(await ctx.memoryRemember(["a fact"]), null);
-  assert.equal(await ctx.memoryRewrite("# Memory\n"), null);
-});
-
-test("memoryRemember/memoryRead/memoryRewrite hit the durable MemoryService, attributed to the actor", async () => {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-write-")));
-  const memory = createMemoryService(workspace);
-  const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
-  const ctx = ctxFor({ scope: personal, workspace, memory });
-
-  assert.equal(await ctx.memoryRemember(["Prefers terse replies"]), 1);
-  assert.equal(await ctx.memoryRemember(["Prefers terse replies"]), 0, "duplicates are dropped");
-  assert.match((await ctx.memoryRead()) ?? "", /Prefers terse replies/);
-
-  assert.equal(await ctx.memoryRewrite("# Memory\n\n- I work in PT\n"), true);
-  const body = (await ctx.memoryRead()) ?? "";
-  assert.match(body, /I work in PT/);
-  assert.doesNotMatch(body, /terse replies/, "rewrite replaces the whole notebook");
+  assert.equal(await ctx.memoryAdd(["a fact"]), null);
+  assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
+  assert.equal(await ctx.memoryDelete(["1"]), null);
 });
 
 type Emitted = { type: string; payload: any; scopeLabel: string };
@@ -158,36 +142,45 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   );
 });
 
-test("the `memory` tool remember/read/rewrite round-trip through the durable service", async () => {
+test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pi-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
-  await workspace.ensureScope(personal);
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
     emit: () => {},
     scopeLabel: personal,
   };
   const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+  const run = async (params: unknown) => textOf(await call(memoryTool, params));
 
   assert.match(
-    textOf(await call(memoryTool, { action: "remember", facts: ["Ships on Fridays"] })),
-    /Remembered 1 fact/,
+    await run({ action: "add", facts: [{ text: "Ships on Fridays" }, { text: "Owns billing" }] }),
+    /Remembered 2 facts/,
   );
-  assert.match(
-    textOf(await call(memoryTool, { action: "remember", facts: ["Ships on Fridays"] })),
-    /Already remembered/,
-  );
-  assert.match(textOf(await call(memoryTool, { action: "read" })), /Ships on Fridays/);
-  assert.match(
-    textOf(await call(memoryTool, { action: "rewrite", content: "# Memory\n\n- Renamed fact\n" })),
-    /Rewrote/,
-  );
-  assert.match(await memory.read(personal), /Renamed fact/);
+  assert.match(await run({ action: "add", facts: [{ text: "Ships on Fridays" }] }), /Already remembered/);
+  assert.match(await run({ action: "read" }), /^#1 \(\d{4}-\d\d-\d\d\) Ships on Fridays\n#2 /);
 
-  assert.match(textOf(await call(memoryTool, { action: "search", query: "" })), /\[error\]/);
-  assert.match(textOf(await call(memoryTool, { action: "remember", facts: [] })), /\[error\]/);
-  assert.match(textOf(await call(memoryTool, { action: "rewrite" })), /\[error\]/);
+  assert.match(
+    await run({
+      action: "edit",
+      facts: [
+        { id: "#1", text: "Ships on Thursdays" },
+        { id: "#9", text: "x" },
+      ],
+    }),
+    /\[error\] No fact #9 .*Nothing was changed/,
+  );
+  assert.match(await run({ action: "delete", ids: ["2", "8"] }), /\[error\] No fact #8/);
+  assert.match(await memory.read(personal), /Ships on Fridays[\s\S]*Owns billing/);
+
+  assert.match(await run({ action: "edit", facts: [{ id: "#1", text: "Ships on Thursdays" }] }), /Updated 1 fact/);
+  assert.match(await run({ action: "delete", ids: ["#2"] }), /Forgot 1 fact/);
+  assert.match(await memory.read(personal), /^- \(\d{4}-\d\d-\d\d\) Ships on Thursdays$/);
+
+  assert.match(await run({ action: "search", query: "" }), /\[error\]/);
+  assert.match(await run({ action: "add", facts: [] }), /\[error\]/);
+  assert.match(await run({ action: "edit", facts: [{ text: "no id" }] }), /\[error\]/);
 });
 
 test("a read-only wake keeps `memory` but refuses its write actions", async () => {
@@ -205,20 +198,19 @@ test("a read-only wake keeps `memory` but refuses its write actions", async () =
 
   assert.match(textOf(await call(memoryTool, { action: "search", query: "billing" })), /billing service/);
   assert.match(textOf(await call(memoryTool, { action: "read" })), /billing service/);
-  assert.match(textOf(await call(memoryTool, { action: "remember", facts: ["x"] })), /read-only wake/);
-  assert.match(textOf(await call(memoryTool, { action: "rewrite", content: "" })), /read-only wake/);
+  assert.match(textOf(await call(memoryTool, { action: "add", facts: [{ text: "x" }] })), /read-only wake/);
+  assert.match(textOf(await call(memoryTool, { action: "delete", ids: ["1"] })), /read-only wake/);
   assert.equal((await memory.read(personal)).includes("- x"), false);
 });
 
-test("the `memory` tool params expose NO scope field — the model cannot redirect the notebook", () => {
+test("the `memory` tool exposes a scope selector for authorized reads", () => {
   const memoryTool = createAgentTools({ current: null }).find((t) => t.name === "memory");
   assert.ok(memoryTool);
   const props = (memoryTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
-  assert.deepEqual(Object.keys(props).sort(), ["action", "content", "facts", "limit", "query"]);
-  assert.equal("scope" in props, false);
+  assert.deepEqual(Object.keys(props).sort(), ["action", "facts", "ids", "limit", "query", "retrySafe", "scope"]);
 });
 
-test("capture-off policy: search still works, but read/remember/rewrite are unavailable (mirrors the self-API claim)", async () => {
+test("capture-off policy: search/read work, but add/edit/delete are unavailable", async () => {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-policy-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
@@ -241,10 +233,10 @@ test("capture-off policy: search still works, but read/remember/rewrite are unav
     memoryScopeId: personal,
     memoryAccess: { read: [personal] },
   });
-  assert.deepEqual(await ctx.memorySearch("billing"), ["(2026-05-31) Owns the billing service"]);
-  assert.equal(await ctx.memoryRead(), null);
-  assert.equal(await ctx.memoryRemember(["a fact"]), null);
-  assert.equal(await ctx.memoryRewrite("# Memory\n"), null);
+  assert.deepEqual(await ctx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
+  assert.match((await ctx.memoryRead()) ?? "", /billing service/);
+  assert.equal(await ctx.memoryAdd(["a fact"]), null);
+  assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
   assert.doesNotMatch(await memory.read(personal), /a fact/);
 });
 
@@ -274,10 +266,31 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     memoryScopeId: personal,
     memoryAccess: { write: personal, read: [personal, org] },
   });
+  assert.match(
+    (await ctx.memoryRead(org)) ?? "",
+    /### org:default-org\n#1 \(2026-05-31\) deploys are frozen in December/,
+  );
+  assert.equal(await ctx.memoryRead("personal:someone-else"), null);
+  assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
+  assert.deepEqual(await ctx.memorySearch("deploys", 20, org), [
+    `[${org}] #1 (2026-05-31) deploys are frozen in December`,
+  ]);
+  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+    (t) => t.name === "memory",
+  );
+  assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
+  assert.match(textOf(await call(tool, { action: "read", scope: "personal:someone-else" })), /isn't available/);
+  assert.match(
+    textOf(await call(tool, { action: "add", scope: org, facts: [{ text: "stolen" }] })),
+    /scope is only allowed/,
+  );
+  assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["1"] })), /scope is only allowed/);
+  assert.doesNotMatch(await memory.read(org), /stolen/);
+  assert.match(await memory.read(org), /December/);
   const hits = await ctx.memorySearch("deploys");
   assert.deepEqual(hits, [
-    `[${personal}] (2026-05-31) deploys happen on Fridays`,
-    `[${org}] (2026-05-31) deploys are frozen in December`,
+    `[${personal}] #1 (2026-05-31) deploys happen on Fridays`,
+    `[${org}] #1 (2026-05-31) deploys are frozen in December`,
   ]);
 });
 
@@ -291,6 +304,6 @@ test("explicit capture uses the conversation origin rather than the notebook des
     return capture(scope, facts, at, author, metadata);
   };
   const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
-  assert.equal(await tool.memoryRemember(["synthetic fact"]), 1);
+  assert.equal(await tool.memoryAdd(["synthetic fact"]), 1);
   assert.equal(context?.conversationScopeId, "group:origin");
 });

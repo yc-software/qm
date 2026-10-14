@@ -50,7 +50,10 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
   };
 
   return {
-    recall: (scopeId, context) => read(scopeId, context?.query ?? "", context?.actorId, context?.maxChars),
+    async recall(scopeId, context) {
+      const text = (await read(scopeId, context?.query ?? "", context?.actorId, context?.maxChars)).trim();
+      return text ? [{ text, score: 0.2 }] : [];
+    },
 
     async capture(scopeId, facts, at, author, context) {
       const op = opts.write;
@@ -74,9 +77,5 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     },
 
     read: (scopeId) => read(scopeId, ""),
-
-    async replace() {
-      throw new Error("MCP memory providers do not support notebook replacement");
-    },
   };
 }

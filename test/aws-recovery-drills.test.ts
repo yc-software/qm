@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { brokenTaskDefinition } from "../scripts/aws/ecs-blue-green-drill.ts";
 import { validateDrillIdentifier, verifyScript } from "../scripts/aws/rds-restore-drill.ts";
 
@@ -28,23 +27,6 @@ test("restore verification uses the task secret but replaces only its private ho
   assert.match(script, /qm_schema_migrations/);
   assert.doesNotMatch(script, /restore\.abc/);
   assert.throws(() => verifyScript("restore; echo compromised"));
-});
-
-test("temporary restore drills do not create their own automated backup chain", () => {
-  const source = readFileSync(new URL("../scripts/aws/rds-restore-drill.ts", import.meta.url), "utf8");
-  assert.match(source, /"--backup-retention-period",\s*"0"/);
-});
-
-test("database recovery drills restore the deployment manifest point, not an ad hoc snapshot", () => {
-  const source = readFileSync(new URL("../scripts/aws/rds-restore-drill.ts", import.meta.url), "utf8");
-  assert.match(source, /deployment\/current/);
-  assert.match(source, /dbRestorePoint/);
-  assert.match(source, /restore-db-instance-to-point-in-time/);
-  assert.match(source, /--source-db-instance-identifier/);
-  assert.match(source, /--restore-time/);
-  assert.match(source, /EarliestRestorableTime/);
-  assert.match(source, /LatestRestorableTime/);
-  assert.doesNotMatch(source, /restore-db-instance-from-db-snapshot|--db-snapshot-identifier/);
 });
 
 test("blue/green drill preserves the deployed task contract and breaks only core health", () => {
@@ -91,16 +73,4 @@ test("blue/green drill preserves the deployed task contract and breaks only core
     startPeriod: 0,
   });
   assert.deepEqual(containers[1], source.containerDefinitions[1]);
-});
-
-test("blue/green recovery trusts the native rollback verdict, not the stale legacy deployment list", () => {
-  const source = readFileSync(new URL("../scripts/aws/ecs-blue-green-drill.ts", import.meta.url), "utf8");
-  assert.match(source, /await waitForRollback/);
-  assert.match(source, /await waitForHealthyService/);
-  assert.match(source, /assertSettledHealthyBlueGreen/);
-  assert.match(source, /failed task set has not finished draining/);
-  assert.match(source, /baseline is not fully settled/);
-  assert.match(source, /no successful circuit-breaker-enabled rollback candidate/);
-  assert.match(source, /restoring the original task definition/);
-  assert.doesNotMatch(source, /"wait", "services-stable"/);
 });

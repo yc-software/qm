@@ -1,3 +1,4 @@
+import type { ResumableToolCall } from "../core/turn-resume.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
 import type {
@@ -102,10 +103,13 @@ export interface HarnessTurnInput {
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
+  continueTurn?: boolean;
+  shutdown?: AbortSignal;
   input: string;
   triggerTs?: string;
   entryTs?: string;
   environment?: string;
+  timezone?: string;
   priorTurns?: ConversationTurn[];
   overheard?: OverheardEntryPayload[];
   attachments?: AttachmentMeta[];
@@ -137,6 +141,7 @@ export interface HarnessTurnInput {
   tapeRows?: TapeRecord[];
   tapeMode?: "shadow" | "serve";
   tapeFold?: unknown[];
+  resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
@@ -151,7 +156,7 @@ export interface HarnessTurnInput {
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
-  verifyGoal?: import("./goal.ts").GoalVerifier;
+  governGoal?: import("./goal.ts").GoalGovernor;
 }
 
 export interface HarnessTurnResult {

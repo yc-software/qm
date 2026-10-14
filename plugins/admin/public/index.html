@@ -5310,20 +5310,51 @@
         height: 18px;
         accent-color: var(--cta);
       }
-      #view-governance .model-runtime-fields {
+      #view-governance {
+        --foreground: var(--text);
+        --muted-foreground: var(--muted);
+        --secondary: var(--subtle);
+        --background: var(--surface);
+        --popover: var(--surface);
+        --font-12-5: 12.5px;
+        --font-13: 13px;
+        --font-14: 14px;
+        --radius-sm: 6px;
+        --chat-surface-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+      }
+      #view-governance #card-runtimes > .runtime-rows,
+      #view-governance .runtime-row {
         display: grid;
-        gap: 12px;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
+        align-items: center;
       }
-      #view-governance .model-runtime-fields label {
-        margin: 0 0 4px;
+      #view-governance .runtime-row {
+        min-height: 40px;
       }
-      #view-governance .model-runtime-fields .dd,
-      #view-governance .model-runtime-fields select {
-        width: 100%;
-        max-width: none;
+      #view-governance .runtime-label {
+        font-size: var(--section-font, 14px);
+        font-weight: 500;
       }
-      #view-governance #base-fast-mode-control {
-        margin-top: 16px;
+      #view-governance .runtime-row .loadout-control {
+        justify-self: start;
+      }
+      #view-governance .runtime-hint {
+        grid-column: 2;
+        margin: 0;
+      }
+      #view-governance .runtime-row select.loadout-button {
+        appearance: none;
+        padding-right: 26px;
+        border-radius: 8px;
+        font-weight: 500;
+      }
+      #view-governance .runtime-row select.loadout-button + svg {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
       }
       #view-governance .setting-toggle input:checked + .setting-switch {
         border-color: var(--cta);
@@ -5331,23 +5362,6 @@
       }
       #view-governance .setting-toggle input:focus-visible + .setting-switch {
         outline-color: var(--cta);
-      }
-      #view-governance #base-fast-mode-control strong,
-      #view-governance #base-fast-mode-control small {
-        font-size: 13px;
-        font-weight: 400;
-        line-height: 1.4;
-      }
-      #view-governance #base-fast-mode-control .setting-copy {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        column-gap: 8px;
-        row-gap: 0;
-      }
-      #view-governance #base-fast-mode-control small {
-        color: var(--muted);
-        margin: 0;
       }
       .model-list {
         display: flex;
@@ -6099,11 +6113,6 @@
       #view-data .memory-editor > .body {
         padding: 0;
       }
-      #view-data .memory-editor label {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 13px;
-      }
       #view-data .memory-editor textarea {
         width: 100%;
         box-sizing: border-box;
@@ -6112,17 +6121,21 @@
         line-height: 1.6;
         resize: vertical;
       }
-      #view-data .memory-editor .foot {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 12px;
-        border: 0;
-        padding: 12px 0 0;
+      #view-data .memory-editor .memory-facts {
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
-      #view-data .memory-editor .status {
-        order: -1;
-        margin-right: auto;
+      #view-data .memory-editor .memory-facts li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #e3e8ee;
+      }
+      #view-data .memory-editor .memory-facts li > span,
+      #view-data .memory-editor .memory-facts li > textarea {
+        flex: 1;
       }
       #view-data .memory-editor button.primary {
         min-height: 32px;
@@ -6538,7 +6551,7 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
-                <template data-settings-card="card-base-model"></template>
+                <template data-settings-card="card-runtimes"></template>
                 <template data-settings-card="card-webui-models"></template>
                 <template data-settings-card="card-branding"></template>
                 <template data-settings-card="card-feature-flags"></template>
@@ -6661,10 +6674,7 @@
         $("card-feature-flags").classList.remove("hidden");
 
         [
-          $("card-base-model"),
-          $("card-cron-runtime"),
-          $("card-subagent-runtime"),
-          $("card-fallback-runtime"),
+          $("card-runtimes"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
@@ -6844,11 +6854,10 @@
       for (const el of document.querySelectorAll("[data-brand-product]")) el.textContent = brandSelfLabel();
       document.title = `${brandSelfLabel()} Admin`;
       let page = 1;
+      let historyCursor = null;
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
-      let memDraft = null;
-      let memDraftScope = null;
       let cronDestinationEditId = null;
       const transcriptVisibility = { thinking: true, toolResults: true };
 
@@ -7182,8 +7191,6 @@
         route();
       }
       const signOut = async () => {
-        memDraft = null;
-        memDraftScope = null;
         await api("POST", "/api/logout");
 
         if (API_BASE) {
@@ -7264,7 +7271,7 @@
           if (st.own) p.set("own", st.own);
           if (st.cron) p.set("cron", st.cron);
           if (st.historyKind && st.historyKind !== "conversation") p.set("kind", st.historyKind);
-          if (st.page > 1) p.set("page", st.page);
+          if (st.cursor) p.set("cursor", st.cursor);
           const q = p.toString();
           const path = scopeInPath ? API_BASE + "/history/scopes/" + scopeSegment : API_BASE + "/history";
           return q ? path + "?" + q : path;
@@ -7279,7 +7286,11 @@
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
         if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
-        if (st.view === "spend" && st.range) p.set("range", st.range);
+        const spendWindow = st.view === "spend" ? governanceUI.spend.spendWindow(st) : null;
+        if (spendWindow && spendWindow.preset === null) {
+          p.set("from", spendWindow.from);
+          p.set("to", spendWindow.to);
+        } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7345,8 +7356,11 @@
           mem: p.get("mem") || null,
           phase: p.get("phase") || null,
           range: p.get("range") || null,
+          from: p.get("from") || null,
+          to: p.get("to") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
+          cursor: p.get("cursor") || null,
           container: p.get("container") || null,
           ts: p.get("ts") || null,
           decision: p.get("decision") || null,
@@ -7365,6 +7379,7 @@
         view = st.view;
         scope = st.scope;
         page = st.page || 1;
+        historyCursor = st.cursor || null;
         historyKind = st.historyKind || "conversation";
         $("app-view").classList.toggle("history-view", view === "history");
         $("app-view").classList.toggle("slack-view", view === "slack");
@@ -8050,6 +8065,7 @@
           governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "fallback-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
+          governanceUI.settings.load(r.data, scope, "memory-embedding-model");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
         if (requestedView === "customize") {
@@ -8555,6 +8571,7 @@
         "subagent-runtime": "st-subagent-runtime",
         "fallback-runtime": "st-fallback-runtime",
         "webui-models": "st-webui-models",
+        "memory-embedding-model": "st-memory-embedding-model",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
       };
@@ -8811,97 +8828,99 @@
         );
       };
 
-      document.querySelectorAll("[data-save]").forEach((btn) => {
-        btn.onclick = async () => {
-          const key = btn.dataset.save;
-          const requestedScope = scope;
-          const requestedGeneration = governanceReq;
-          let body;
-          try {
-            body = SAVE[key]();
-          } catch (err) {
-            setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
-            return;
-          }
-          if (
-            !(await governanceSaveReview(key, body)) ||
-            requestedScope !== scope ||
-            requestedGeneration !== governanceReq
-          )
-            return;
-          const saveRequest = String(++governanceSaveSeq);
+      async function saveSetting(key, btn) {
+        const requestedScope = scope;
+        const requestedGeneration = governanceReq;
+        let body;
+        try {
+          body = SAVE[key]();
+        } catch (err) {
+          setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
+          return;
+        }
+        if (
+          !(await governanceSaveReview(key, body)) ||
+          requestedScope !== scope ||
+          requestedGeneration !== governanceReq
+        )
+          return;
+        const saveRequest = String(++governanceSaveSeq);
+        if (btn) {
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
-          setStatus(SAVE_ST[key], "Saving...", "saving", true);
-          const isBranding = key === "branding";
-          const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
-          const r = await api(
-            "PUT",
-            "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
-            brandingBody,
-          );
-          if (requestedGeneration !== governanceReq) return;
-          if (requestedScope !== scope) {
-            if (btn.dataset.saveRequest === saveRequest) {
+        }
+        setStatus(SAVE_ST[key], "Saving...", "saving", true);
+        const isBranding = key === "branding";
+        const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
+        const r = await api(
+          "PUT",
+          "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
+          brandingBody,
+        );
+        if (requestedGeneration !== governanceReq) return;
+        if (requestedScope !== scope) {
+          if (!btn || btn.dataset.saveRequest === saveRequest) {
+            if (btn) {
               delete btn.dataset.saveRequest;
               btn.disabled = !btn.classList.contains("dirty");
-              setStatus(SAVE_ST[key], "", "");
+            }
+            setStatus(SAVE_ST[key], "", "");
+          }
+          return;
+        }
+        if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
+        if (r.ok) {
+          if (governanceUI.owns(key)) {
+            governanceUI.commit(key, body);
+            sectionSnapshots.set(key, JSON.stringify(body));
+            if (isBranding) {
+              savedBranding = brandingBody;
+              if (!hasGovernanceDraft()) location.reload();
+              return;
+            }
+            if (key === "soul") {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok) {
+                governanceUI.settings.refreshSoul(fresh.data);
+                sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+                if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+              } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+              return;
+            }
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok && !governanceUI.states.get(key).dirty) {
+                governanceUI.load(fresh.data, requestedScope, key);
+                sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+                governanceUI.status(key, "Saved", "ok");
+              }
             }
             return;
+          } else if (SAVE_RELOADS.has(key)) await loadScope();
+          else {
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            captureSection(key);
           }
-          if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
-          if (r.ok) {
-            if (governanceUI.owns(key)) {
-              governanceUI.commit(key, body);
-              sectionSnapshots.set(key, JSON.stringify(body));
-              if (isBranding) {
-                savedBranding = brandingBody;
-                if (!hasGovernanceDraft()) location.reload();
-                return;
-              }
-              if (key === "soul") {
-                const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok) {
-                  governanceUI.settings.refreshSoul(fresh.data);
-                  sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-                  if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-                } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-                return;
-              }
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-                const fresh = await api(
-                  "GET",
-                  "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance",
-                );
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok && !governanceUI.states.get(key).dirty) {
-                  governanceUI.load(fresh.data, requestedScope, key);
-                  sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-                  governanceUI.status(key, "Saved", "ok");
-                }
-              }
-              return;
-            } else if (SAVE_RELOADS.has(key)) await loadScope();
-            else {
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              captureSection(key);
-            }
-            setStatus(SAVE_ST[key], "Saved", "ok");
-          } else {
-            if (key === "soul" && r.status === 409) await refreshSoulConflict();
-            updateSectionDirty(key);
-            let message = r.data?.message || "Save failed.";
-            if (key === "soul" && r.status === 409) {
-              message = "SOUL changed; latest revision loaded and your draft was preserved.";
-            } else if (r.status === 403) {
-              message = "Not authorized for this scope.";
-            }
-            setStatus(SAVE_ST[key], message, "err");
+          setStatus(SAVE_ST[key], "Saved", "ok");
+        } else {
+          if (key === "soul" && r.status === 409) await refreshSoulConflict();
+          updateSectionDirty(key);
+          let message = r.data?.message || "Save failed.";
+          if (key === "soul" && r.status === 409) {
+            message = "SOUL changed; latest revision loaded and your draft was preserved.";
+          } else if (r.status === 403) {
+            message = "Not authorized for this scope.";
           }
-        };
+          setStatus(SAVE_ST[key], message, "err");
+        }
+      }
+      document.querySelectorAll("[data-save]").forEach((btn) => {
+        btn.onclick = () => saveSetting(btn.dataset.save, btn);
       });
+      governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
       $("view-governance").addEventListener("input", (e) => {
         if (!(
           e.target instanceof HTMLInputElement ||
@@ -8937,7 +8956,8 @@
           sel.dataset.ddHost ||
           sel.hasAttribute("hidden") ||
           sel.multiple ||
-          sel.size > 1
+          sel.size > 1 ||
+          sel.closest(".loadout-control")
         )
           return;
         sel.dataset.ddHost = "1";
@@ -9189,7 +9209,8 @@
 
         if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
         if (view === "history") {
-          path += `&limit=${HISTORY_PAGE_SIZE}&offset=${(page - 1) * HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          path += `&limit=${HISTORY_PAGE_SIZE}&category=${encodeURIComponent(historyCategory(historyKind))}`;
+          if (historyCursor) path += `&cursor=${encodeURIComponent(historyCursor)}`;
           if (historyKind === "cron") {
             path += `&origin=${encodeURIComponent(historyKind)}`;
             const cronSel = urlToState().cron;
@@ -9329,18 +9350,9 @@
           sparkline,
         });
       }
-      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
       function spendQuery(st) {
-        const DAY = 86400000;
-        const range = SPEND_RANGES[st.range] ? st.range : "30d";
-        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
-        const iso = (t) => new Date(t).toISOString().slice(0, 10);
-        const params = new URLSearchParams({
-          from: iso(to - SPEND_RANGES[range] * DAY),
-          to: iso(to),
-          bucket: range === "90d" ? "week" : "day",
-        });
-        return params.toString();
+        const { from, to, bucket } = governanceUI.spend.spendWindow(st);
+        return new URLSearchParams({ from, to, bucket }).toString();
       }
       function renderSpend(root, d) {
         governanceUI.spend.spend(root, d, {
@@ -9349,9 +9361,10 @@
           fmtTokens,
           shortName,
           plural,
-          range: urlToState().range || "30d",
+          window: governanceUI.spend.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
-          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
+          setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {
             const a = document.createElement("a");
             a.href =
@@ -9686,12 +9699,6 @@
           reload: () => (current() ? renderData() : Promise.resolve()),
           setCronEditing: (id) => {
             if (current()) cronDestinationEditId = id;
-          },
-          memoryDraft: () => (memDraftScope === capturedScope ? memDraft : null),
-          setMemoryDraft: (draft) => {
-            if (!current()) return;
-            memDraft = draft;
-            memDraftScope = draft === null ? null : capturedScope;
           },
         };
       }
@@ -10404,7 +10411,7 @@
           historyKind,
           historyKindMatches,
           cron: urlToState().cron,
-          pageSize: HISTORY_PAGE_SIZE,
+          cursor: historyCursor,
           scope,
           orgScope: "org:" + orgId,
           environments: environmentDir,
@@ -10425,12 +10432,6 @@
           errorStripBox,
           adminErrorCount,
           adminErrors,
-          correctPage: (next, cron) => {
-            if (next === page) return;
-            page = next;
-            const st = { view: "history", scope, session: null, page, historyKind, cron };
-            history.replaceState(st, "", stateToUrl(st));
-          },
         });
       }
 

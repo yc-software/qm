@@ -44,7 +44,7 @@ function fakeProcessSandbox() {
       processSessions: true,
     },
     async provision(): Promise<SandboxHandle> {
-      return { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+      return { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
     },
     async run(_h, command) {
       if (/get-caller-identity|auth status|print-access-token/.test(command)) {
@@ -162,6 +162,7 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
   await reg.register({
     processId: live.processId,
     scopeId: await memoryScope(),
+    sandboxId: "sandbox-1",
     kind: "build",
     command: "long build",
     ttlMs: 600_000,
@@ -181,6 +182,7 @@ test("reattach reconciles a session whose process died while core was down", asy
   await reg.register({
     processId: "00000000-0000-0000-0000-0000000000ff",
     scopeId: await memoryScope(),
+    sandboxId: "sandbox-1",
     kind: "build",
     command: "aws-sso: aws sso login",
     ttlMs: 600_000,

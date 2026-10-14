@@ -62,12 +62,9 @@ export interface DeployOrUpdateInput {
   stampEnv?: Record<string, string>;
   renameFrom?: string;
   rollbackTo?: number;
-  share?: Array<{ scope: ScopeId; permission: Permission }>;
   createdInScope?: ScopeId;
   alwaysOn?: boolean;
   embedAncestors?: string[];
-  public?: boolean;
-  defaultAudience?: { contextScopeId: ScopeId; granteeScopeIds: ScopeId[]; snapshotAt: number; force?: boolean };
 }
 
 export interface ReachOptions {
@@ -89,7 +86,7 @@ export interface DeployService {
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
-  keepAlwaysOnWarm(): Promise<number>;
+  maintainDeployments(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -249,6 +246,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
   };
 
+  const rotateDeployment = (id: string): Promise<void> =>
+    withDeployLock(id, async () => {
+      const cur = await deps.deployStore.get(id);
+      if (!cur || cur.status !== "running" || !(await deps.provider.rotationDue?.(cur))) return;
+      const v = currentVersionOf(cur);
+      if (!v) return;
+      const endpoint = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
+      await markVersionRunning(cur.id, v.version, endpoint);
+      await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
+    });
+
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
   const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
 
@@ -297,85 +305,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     return false;
   }
 
-  async function reconcileDefaultAudience(
-    d: Deployment,
-    da: NonNullable<DeployOrUpdateInput["defaultAudience"]>,
-    isCreate: boolean,
-    explicitShares?: DeployOrUpdateInput["share"],
-  ): Promise<void> {
-    if (!isCreate && !da.force && d.createdInScope && da.contextScopeId !== d.createdInScope) return;
-    const ref = deploymentRef(d.id);
-    const owner = d.createdBy;
-    const prior = isCreate ? [] : (d.defaultAudience?.granteeScopeIds ?? []);
-    const priorSet = new Set(prior);
-    const nextSet = new Set(da.granteeScopeIds);
-    const before = await grantsOn(d);
-    for (const grantee of prior) {
-      if (nextSet.has(grantee)) continue;
-      const explicit = before.filter((g) => g.granteeScopeId === grantee && g.permission !== "read");
-      await deps.acl.revoke(d.ownerScopeId, ref, grantee, owner);
-      for (const g of explicit) await deps.acl.grant(g);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: owner,
-        action: "deploy_unshare",
-        resource: ref,
-        scopeLabel: grantee,
-      });
-    }
-    for (const grantee of da.granteeScopeIds) {
-      if (priorSet.has(grantee)) continue;
-      await deps.acl.grant({
-        ownerScopeId: d.ownerScopeId,
-        ref,
-        granteeScopeId: grantee,
-        permission: "read",
-        grantedBy: owner,
-      });
-      if (!explicitShares?.some((s) => s.scope === grantee))
-        await notifyDeploymentShared(deps, d, grantee, "read", owner);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: owner,
-        action: "deploy_share",
-        resource: ref,
-        scopeLabel: grantee,
-      });
-    }
-    await deps.deployStore.setDefaultAudience(d.id, {
-      sourceScopeId: d.createdInScope ?? da.contextScopeId,
-      granteeScopeIds: da.granteeScopeIds,
-      snapshotAt: da.snapshotAt,
-    });
-  }
-
-  async function issueShares(
-    d: Deployment,
-    createdBy: string,
-    share: NonNullable<DeployOrUpdateInput["share"]>,
-  ): Promise<void> {
-    for (const s of share) {
-      const granteeScopeId = await deploymentShareScope(s.scope, s.permission, deps.canManageEmail);
-      await assertShareAllowed(d.ownerScopeId, granteeScopeId, s.permission);
-      const grant: Grant = {
-        ownerScopeId: d.ownerScopeId,
-        ref: deploymentRef(d.id),
-        granteeScopeId,
-        permission: s.permission,
-        grantedBy: createdBy,
-      };
-      await deps.acl.grant(grant);
-      await notifyDeploymentShared(deps, d, grant.granteeScopeId, grant.permission, createdBy);
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: createdBy,
-        action: "deploy_share",
-        resource: deploymentRef(d.id),
-        scopeLabel: s.scope,
-      });
-    }
-  }
-
   return {
     providerProfile: deps.provider.profile,
     assertShareAllowed,
@@ -388,7 +317,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
+      const id = randomUUID();
+      if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
+        await deps.acl.grant({
+          ownerScopeId: input.ownerScopeId,
+          ref: deploymentRef(id),
+          granteeScopeId: input.createdInScope,
+          permission: "read",
+          grantedBy: input.createdBy,
+        });
+      }
       const d = await deps.deployStore.create({
+        id,
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
         entrypoint: input.entrypoint,
@@ -604,21 +544,26 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async keepAlwaysOnWarm() {
+    async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
-        let warmed = 0;
+        let maintained = 0;
         for (const d of await deps.deployStore.list()) {
-          if (!d.alwaysOn || d.status !== "running") continue;
+          if (d.status !== "running") continue;
           try {
             const cur = await deps.deployStore.get(d.id);
-            if (!cur?.alwaysOn || cur.status !== "running") continue;
-            await liveEndpoint(cur);
-            warmed++;
+            if (!cur || cur.status !== "running") continue;
+            if (await deps.provider.rotationDue?.(cur)) {
+              await rotateDeployment(cur.id);
+              maintained++;
+            } else if (cur.alwaysOn) {
+              await liveEndpoint(cur);
+              maintained++;
+            }
           } catch (e) {
-            console.error("%s", `[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
+            console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
           }
         }
-        return warmed;
+        return maintained;
       });
       return result ?? 0;
     },
@@ -707,14 +652,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async deployOrUpdate(input) {
       const { ownerScopeId, createdBy } = input;
-      if (input.public === true && !(await externalSharingAllowed(ownerScopeId)))
-        throw new Error(EXTERNAL_APP_SHARING_OFF);
-      for (const s of input.share ?? [])
-        await assertShareAllowed(
-          ownerScopeId,
-          await deploymentShareScope(s.scope, s.permission, deps.canManageEmail),
-          s.permission,
-        );
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
 
@@ -745,18 +682,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             ...(input.env ? { env: input.env } : {}),
             ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
           });
-          if (input.defaultAudience)
-            await reconcileDefaultAudience(
-              (await deps.deployStore.get(existing.id))!,
-              input.defaultAudience,
-              false,
-              input.share,
-            );
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        if (input.public !== undefined) await this.setDeploymentPublic(existing.id, input.public, { createdBy });
-        if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
 
@@ -773,15 +701,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         );
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
-        if (input.public !== undefined) await this.setDeploymentPublic(existing.id, input.public, { createdBy });
-        if (input.share?.length) await issueShares((await deps.deployStore.get(existing.id))!, createdBy, input.share);
         return (await deps.deployStore.get(existing.id))!;
       }
 
       const files = input.files ?? [];
       const existing = input.name !== undefined ? await deps.deployStore.getByName(input.name) : null;
-      let d: Deployment;
-      let isCreate: boolean;
       if (existing) {
         if (
           existing.ownerScopeId !== ownerScopeId &&
@@ -790,7 +714,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-        d = await this.redeploy(existing.id, {
+        await this.redeploy(existing.id, {
           entrypoint,
           files,
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
@@ -798,33 +722,23 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ...(input.env ? { env: input.env } : {}),
           ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
         });
-        isCreate = false;
-      } else {
-        const entrypoint = requiredEntrypoint(input.entrypoint, existing);
-        d = await this.deploy({
-          ownerScopeId,
-          createdBy,
-          entrypoint,
-          files,
-          ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
-          ...(input.name !== undefined ? { name: input.name } : {}),
-          ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
-          ...(input.env ? { env: input.env } : {}),
-          ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
-          ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
-        });
-        isCreate = true;
+        if (input.embedAncestors !== undefined)
+          await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        return (await deps.deployStore.get(existing.id))!;
       }
-      if (input.public !== undefined) await this.setDeploymentPublic(d.id, input.public, { createdBy });
-      if (input.defaultAudience)
-        await reconcileDefaultAudience(
-          (await deps.deployStore.get(d.id))!,
-          input.defaultAudience,
-          isCreate,
-          input.share,
-        );
+      const d = await this.deploy({
+        ownerScopeId,
+        createdBy,
+        entrypoint: requiredEntrypoint(input.entrypoint, existing),
+        files,
+        ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
+        ...(input.env ? { env: input.env } : {}),
+        ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
+        ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+      });
       if (input.embedAncestors !== undefined) await this.setDeploymentEmbedAncestors(d.id, input.embedAncestors);
-      if (input.share?.length) await issueShares((await deps.deployStore.get(d.id))!, createdBy, input.share);
       return (await deps.deployStore.get(d.id))!;
     },
 

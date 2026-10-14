@@ -63,7 +63,7 @@ export function externalSlackNamespace(teamId: string, policy: ExternalSlackAcce
 }
 
 export const PRIVATE_CONTINUATION_INSTRUCTION =
-  "This Slack workspace has an external audience. Answer and run code here only with the explicitly available external-safe services. Before any personal memory, files, account, calendar, email, or confidential company service is needed, end this turn with [[continue-private: a concise description of the remaining work]]. The platform acknowledges here and automatically continues in the requesting employee's private DM with this request and its channel context. Do not ask them to repeat it or ask for an additional handoff approval. Do not use ask-agent, and do not promise a result back to this channel. Private results stay in the DM. This directive can continue only the current requester's work, never another person's.";
+  "This Slack workspace has an external audience. Answer and run code here only with the explicitly available external-safe services. Before any personal memory, files, account, calendar, email, or confidential company service is needed, end this turn with [[continue-private: a concise description of the remaining work]]. The platform acknowledges here and automatically continues in the requesting employee's private DM with this request and its channel context. Do not ask them to repeat it or ask for an additional handoff approval. Do not promise a result back to this channel. Private results stay in the DM. This directive can continue only the current requester's work, never another person's.";
 
 export function extractPrivateContinuation(text: string): { text: string; task?: string } {
   if (!/\[\[continue-private:/i.test(text)) return { text };

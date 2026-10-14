@@ -12,7 +12,7 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, reportFailureAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
@@ -25,6 +25,7 @@ import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-sha
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
+import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
@@ -159,6 +160,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
 
 const GATEWAY_AUTH_HEADERS = [
   "x-qm-app-host",
+  "x-qm-client-ip",
   "x-signature",
   "x-timestamp",
   "x-as-principal",
@@ -900,6 +902,28 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       authenticatedPermission = await app.effectiveDeploymentPermission(deployment, sub);
     }
   }
+  const isPageLoad =
+    ctx.method === "GET" &&
+    wantsHtml &&
+    (dest === undefined || dest === "document" || (dest === "iframe" && site !== "same-origin"));
+  const recordPageView = (authMode: AppViewAuthMode): void => {
+    if (!isPageLoad || !deployment || !deps.appPageViews) return;
+    const forwardedIp = fromAppHost ? req.headers["x-qm-client-ip"] : undefined;
+    const ip = typeof forwardedIp === "string" && forwardedIp ? forwardedIp : (req.socket.remoteAddress ?? null);
+    const userAgent = req.headers["user-agent"];
+    void deps.appPageViews
+      .record({
+        deploymentId: deployment.id,
+        version: deployment.appliedVersion ?? deployment.currentVersion ?? null,
+        viewer: sub ?? null,
+        authMode,
+        at: Date.now(),
+        path: safePathname,
+        ip,
+        userAgent: typeof userAgent === "string" ? userAgent : null,
+      })
+      .catch(reportFailureAs("app page view log", undefined, deployment.id));
+  };
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
       !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
@@ -921,6 +945,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       } else sendJson(res, 404, { error: "not_found" });
       return true;
     }
+    recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     res.end(
       appShellHtml({
@@ -997,6 +1022,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
     cleanUrlRedirect();
     return true;
+  }
+  if (reach.status === "ok") {
+    let authMode: AppViewAuthMode = "public";
+    if (session?.appOnly) authMode = "app_only";
+    else if (sub && (canManage || authenticatedPermission)) authMode = "signed_in";
+    recordPageView(authMode);
   }
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
     frameAncestors: embedAncestors,

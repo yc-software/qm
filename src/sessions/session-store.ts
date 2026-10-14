@@ -133,6 +133,7 @@ interface ParticipantViewPatch {
   archived?: boolean;
   pinned?: boolean;
   color?: string | null;
+  readAt?: number;
 }
 
 export interface NewSessionPin {
@@ -148,6 +149,8 @@ export interface SessionPin extends NewSessionPin {
 }
 
 type TapeKind = "message" | "context_event" | "annotation";
+
+export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
 export const TAPE_RENDER_VERSION = 1;
 
@@ -306,11 +309,11 @@ interface ListLlmRequestsOptions {
 
 export interface SessionPage {
   limit: number;
-  offset: number;
   before?: { lastActivity: number; id: string };
   category?: SessionCategory;
   origin?: SessionOriginFilter;
   cronId?: string;
+  signal?: AbortSignal;
 }
 
 export interface CronGroupSummary {
@@ -532,6 +535,7 @@ export interface DistinctScope {
 }
 
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
+  entryScopeLabel: ScopeId;
   sessionId: string;
   seq: number;
   type: EntryType;
@@ -588,7 +592,7 @@ export type TranscriptEntry = SessionEntry & { truncated?: true };
 
 const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
 const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "memoryRecall"]),
+  user: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
   thinking: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
@@ -715,7 +719,6 @@ export interface SessionStore {
   setParentSession(sessionId: string, parentSessionId: string | null): Promise<void>;
   setSpawnMeta(sessionId: string, meta: SpawnMeta): Promise<void>;
   childrenOf(parentSessionId: string): Promise<Session[]>;
-  updateStatus(sessionId: string, status: Session["status"]): Promise<void>;
   updateForkProvenance(
     sessionId: string,
     provenance: { forkedFrom: { sessionId: string; title?: string | null }; forkBoundarySeq: number },
@@ -729,6 +732,8 @@ export interface SessionStore {
   forceReleaseLease(sessionId: string): Promise<void>;
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
+  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
+  getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
@@ -737,6 +742,7 @@ export interface SessionStore {
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
 
+  appendTapeMany(lease: Lease, records: readonly NewTapeRecord[]): Promise<TapeRecord[]>;
   appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
   getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
   tapeCoverage(sessionId: string): Promise<number>;
@@ -777,18 +783,11 @@ export interface SessionStore {
 
   scopeHasSessions(scope: ScopeId): Promise<boolean>;
 
-  countPersonalConversations(scope: ScopeId, limit?: number): Promise<number>;
-
   sessionsByThreadRefs(threadRefs: readonly string[]): Promise<SessionRef[]>;
 
   distinctScopes(): Promise<DistinctScope[]>;
 
-  scopeSessionSummaries(
-    scope: ScopeId,
-    orgWide: boolean,
-    page?: SessionPage,
-    sessionIds?: string[],
-  ): Promise<SessionSummary[]>;
+  scopeSessionSummaries(scope: ScopeId, orgWide: boolean, page: SessionPage): Promise<SessionSummary[]>;
 
   lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
 

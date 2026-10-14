@@ -15,7 +15,8 @@ requests, code history, branches, or to make a small code change in a hosted rep
 ## Choose the account deliberately
 
 Use the current credential manifest to choose an account authorized for this conversation
-that fits the user's intent. Personal and shared accounts are both valid choices; neither
+that fits the user's intent. Run commands with `execute` and an explicit `sandbox_id`;
+keep that ID throughout checkout, edits, checks, and push. Personal and shared accounts are both valid choices; neither
 is an automatic fallback when the other fails. If the intended account is unclear before
 a write, ask. Do not infer permission from a login merely being present on the computer.
 
@@ -40,20 +41,10 @@ Use the native login only after an explicit authentication rejection. A TLS time
 connection reset, rate limit, or GitHub server error is not evidence of logout or
 permission expiry. Do not consume another credential grant to repair transport.
 
-For a confirmed missing or expired GitHub login:
-
-```bash
-gh auth login
-```
-
-The platform recognizes this device-flow login and runs it as a **durable process
-session** (ADR 0002): it prints the one-time code + verification URL immediately and keeps
-polling on the agent computer across turns — it does not block your turn or die at
-teardown. Give the user the code and URL, ask them to approve in the browser, then say
-"done". On the next turn, run `gh auth status` (or `gh auth login` again): the platform
-reports you're authenticated once approval completes, and the login self-expires if the
-user takes too long (just run `gh auth login` again to restart). GitLab is the same with
-`glab auth login`.
+For a confirmed missing or expired GitHub or GitLab login, follow the
+`interactive-login` skill: it runs `gh auth login` / `glab auth login` in a temporary
+home as a background job, relays the code and URL, and saves the login to the keychain
+so later commands use it through `execute.credentials`.
 
 ## Read-only work
 
@@ -116,15 +107,17 @@ Report the final URL and leave enough context for review.
 ## Wait for GitHub CI
 
 Use the bundled helper instead of a bare `gh pr checks --watch` or a handwritten
-shell loop. It is one blocking watcher process, not repeated agent turns:
+shell loop. Use the absolute directory reported by the skill read in place of
+`<skill dir>`. It is one blocking watcher process, not repeated agent turns:
 
 ```bash
-node skills/github-gitlab/scripts/watch-ci.mjs --repo OWNER/REPO --pr NUMBER --head REVIEWED_HEAD_SHA
+node "<skill dir>/scripts/watch-ci.mjs" --repo OWNER/REPO --pr NUMBER --head REVIEWED_HEAD_SHA
 ```
 
 Capture the full head SHA from `gh pr view NUMBER --repo OWNER/REPO --json headRefOid`
 before review. Use that same SHA for the watcher and the final merge gate. Start the
-watcher with the background-process tool and subscribe to its completion. Keep one
+watcher with `execute` using the selected `sandbox_id` and `background:true`, then
+subscribe with `background` action `watch` and its returned `process_id`. Keep one
 watcher per PR. Set the process lifetime longer than the helper's 30-minute deadline;
 use `--timeout-ms` for a different bounded deadline. Use only credentials authorized
 for that background process; a live foreground grant does not authorize background work.

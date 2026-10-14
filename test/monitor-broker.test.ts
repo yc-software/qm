@@ -20,8 +20,10 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm test",
+    purpose: "Run regression tests",
     ttlMs: 60_000,
   });
   const broker = createMonitorBroker({
@@ -52,6 +54,7 @@ test("watch arms a monitor inheriting the turn's owner, scope, thread, and desti
   assert.equal(m?.pattern, "FAIL");
   assert.equal(m?.instructions, "summarize failures");
   assert.equal(m?.command, "bg: npm test");
+  assert.equal(m?.purpose, "Run regression tests");
 });
 
 test("watching the same job in the same thread twice reattaches instead of double-arming", async () => {
@@ -87,6 +90,7 @@ test("watch refuses a job from another scope and an unknown job", async () => {
   await registry.register({
     processId: "p-other",
     scopeId: "personal:U2",
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: x",
     ttlMs: 60_000,

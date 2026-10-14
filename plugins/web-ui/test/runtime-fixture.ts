@@ -1,5 +1,5 @@
 import { loadRuntimeConfig, seedRuntimeConfig } from "../src/runtime-config-store.ts";
-import type { RuntimeConfig } from "../src/core-bridge.ts";
+import type { RuntimeConfig } from "../src/runtime-config-cache.ts";
 import { metadata } from "./model-metadata.ts";
 
 export function runtimeConfig(scopeId: string, changes: Partial<RuntimeConfig> = {}): RuntimeConfig {

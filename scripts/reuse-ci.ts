@@ -8,6 +8,7 @@ export const CI_JOBS = [
   "Core",
   "CLI",
   "Lint",
+  "Production dependency audit",
   "Core Postgres tests",
   "Admin plugin",
   "Web UI plugin",

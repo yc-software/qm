@@ -9,6 +9,10 @@ export function isStrongSigningSecret(secret: string | undefined): secret is str
   return (secret?.trim().length ?? 0) >= MIN_SIGNING_SECRET_LENGTH;
 }
 
+export function isBearerSecret(secret: string | undefined): secret is string {
+  return Boolean(secret) && secret === secret?.trim();
+}
+
 interface SourceAuthRequest {
   signature: string;
   timestamp: number;

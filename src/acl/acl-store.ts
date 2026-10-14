@@ -3,26 +3,13 @@ import { parseScopeId } from "../types.ts";
 import { parseRef, refPrefix } from "./resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import type { ResourceKind } from "./resource-ref.ts";
+import type { FileArtifact, FileArtifactRef } from "../files/file-artifact-store.ts";
 
 const isFileGrant = (g: Grant) => parseRef(g.ref).kind === "file";
-
-function basename(p: string): string {
-  const parts = p.split("/");
-  return parts[parts.length - 1] || p;
-}
 
 type ScopeEntitlement = (p: Principal, scope: ScopeId, sessionScopeId: ScopeId, orgScopeId: ScopeId) => boolean;
 
 export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy?: string) => Promise<boolean>;
-
-function toHandle(g: Grant): GrantedHandle {
-  return {
-    handlePath: `shared/${basename(g.ref)}`,
-    ownerScopeId: g.ownerScopeId,
-    ownerPath: g.ref,
-    permission: g.permission,
-  };
-}
 
 function ownerOf(scopeId: ScopeId): string | null {
   const { kind, ref } = parseScopeId(scopeId);
@@ -78,6 +65,7 @@ export interface AclStore {
 
 export interface AclStoreOptions {
   manages?: ScopeManagement;
+  resolveFiles?: (refs: readonly FileArtifactRef[]) => Promise<FileArtifact[]>;
 }
 
 export interface GrantPersistence {
@@ -121,7 +109,9 @@ function createMemoryGrantPersistence(): GrantPersistence {
       });
     },
     async put(g) {
-      if (!grants.some((x) => sameGrant(x, g))) grants.push(g);
+      const existing = grants.findIndex((x) => sameGrant(x, g));
+      if (existing === -1) grants.push(g);
+      else grants[existing] = g;
     },
     async remove(g) {
       for (let i = grants.length - 1; i >= 0; i--) {
@@ -144,6 +134,39 @@ export function createAclStore(
   persist: GrantPersistence = createMemoryGrantPersistence(),
   opts: AclStoreOptions = {},
 ): AclStore {
+  async function resolveGrantedFiles(grants: readonly Grant[]): Promise<Map<string, FileArtifact>> {
+    const refs = grants.filter(isFileGrant).map((g) => ({ id: g.ref, ownerScopeId: g.ownerScopeId }));
+    const files = refs.length ? await opts.resolveFiles?.(refs) : [];
+    return new Map(files?.filter((file) => file.enabled).map((file) => [file.id, file]));
+  }
+
+  async function validateFileGrant(g: Grant): Promise<void> {
+    if (!isFileGrant(g)) return;
+    const file = (await resolveGrantedFiles([g])).get(g.ref);
+    if (!file || file.ownerScopeId !== g.ownerScopeId) {
+      throw new Error(
+        "file grants require an enabled Files record ID owned by the granting scope; put the file in Files first using POST /v1/files/uploads, then share its ID",
+      );
+    }
+  }
+
+  async function handles(grants: Grant[]): Promise<GrantedHandle[]> {
+    const files = await resolveGrantedFiles(grants);
+    const result: GrantedHandle[] = [];
+    for (const grant of grants) {
+      const file = files.get(grant.ref);
+      if (file && file.ownerScopeId === grant.ownerScopeId) {
+        result.push({
+          handlePath: `shared/${file.name}`,
+          ownerScopeId: file.ownerScopeId,
+          fileId: file.id,
+          permission: grant.permission,
+        });
+      }
+    }
+    return result;
+  }
+
   async function canManage(scopeId: ScopeId, principalId: string, authoredBy?: string): Promise<boolean> {
     const owner = ownerOf(scopeId);
     if (owner !== null) return samePerson(principalId, owner);
@@ -155,6 +178,7 @@ export function createAclStore(
       if (!(await canManage(g.ownerScopeId, g.grantedBy, authoredBy))) {
         throw new Error("only a manager of this scope may grant access (no transitive re-share)");
       }
+      await validateFileGrant(g);
       await persist.put(g);
     },
     async revoke(ownerScopeId, ref, granteeScopeId, revokedBy, authoredBy) {
@@ -176,25 +200,26 @@ export function createAclStore(
       ) {
         throw new Error("replacement grants must belong to the selected resource");
       }
+      for (const grant of replacement) await validateFileGrant(grant);
       return persist.replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement);
     },
     async handlesFor(scopeIds) {
       const set = new Set(scopeIds);
-      return (await persist.all()).filter((g) => isFileGrant(g) && set.has(g.granteeScopeId)).map(toHandle);
+      return handles((await persist.all()).filter((g) => isFileGrant(g) && set.has(g.granteeScopeId)));
     },
     async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const reaches = (p: Principal, g: Grant) =>
         entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
         entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return (await persist.all())
-        .filter(
+      return handles(
+        (await persist.all()).filter(
           (g) =>
             isFileGrant(g) &&
             audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
             audience.every((p) => reaches(p, g)),
-        )
-        .map(toHandle);
+        ),
+      );
     },
     async grantsFor(ownerScopeId, ref) {
       return (await persist.all()).filter((g) => g.ownerScopeId === ownerScopeId && g.ref === ref);

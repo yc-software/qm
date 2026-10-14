@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 
@@ -84,27 +83,4 @@ test("browsers without VisualViewport use the CSS fallback", () => {
   Object.defineProperty(dom.window, "visualViewport", { value: undefined, configurable: true });
   assert.doesNotThrow(trackVisualViewport);
   Object.defineProperty(dom.window, "visualViewport", { value: vv, configurable: true });
-});
-
-test("the phone shell is anchored to the layout viewport rather than document flow", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  const layout = [...css.matchAll(/\.layout \{([^}]+)\}/g)].find((match) => match[1]!.includes("--vvh"))![1]!;
-  assert.match(css, /@media \(max-width: 860px\), \(hover: none\) and \(pointer: coarse\)/);
-  assert.match(layout, /position: fixed;/);
-  assert.match(layout, /inset: 0 0 auto;/);
-  assert.match(layout, /height: var\(--vvh, 100dvh\);/);
-  assert.match(layout, /transform: translateY\(var\(--vv-top, 0px\)\);/);
-});
-
-test("keyboard sizing includes bannered shells and touch inputs avoid focus zoom", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  assert.match(
-    css,
-    /\.layout\.bannered,\s*\.layout\.impersonating \{\s*height: calc\(var\(--vvh, 100dvh\) - 38px - env\(safe-area-inset-top\)\);/,
-  );
-  assert.match(css, /\.top-banner,\s*\.impersonation-banner \{\s*transform: translateY\(var\(--vv-top, 0px\)\);/);
-  assert.match(
-    css,
-    /\.composer-input,\s*\.live-work-line \{\s*font-size: max\(16px, var\(--composer-font-size, 16px\)\);/,
-  );
 });

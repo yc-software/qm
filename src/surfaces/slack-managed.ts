@@ -10,6 +10,7 @@ import {
   isGatedEnvelope,
 } from "../slack/deferred-ack.ts";
 import { sendJson } from "../api/http.ts";
+import { isBearerSecret } from "../auth/source-auth.ts";
 
 export function createManagedSlack(opts: {
   serviceUrl: string;
@@ -20,7 +21,7 @@ export function createManagedSlack(opts: {
   reconcile?: () => Promise<void>;
 }) {
   const serviceUrl = new URL(opts.serviceUrl);
-  if (serviceUrl.protocol !== "https:" || serviceUrl.username || serviceUrl.password || !opts.token) {
+  if (serviceUrl.protocol !== "https:" || serviceUrl.username || serviceUrl.password || !isBearerSecret(opts.token)) {
     throw new Error("Managed Slack requires an HTTPS service URL and credential");
   }
   let active: { app: BoltApp; installId: string; staging?: EnvelopeStaging } | undefined;

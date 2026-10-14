@@ -16,6 +16,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
       id: "inbox-session",
       threadRef: "web:taylor@example.com:inbox",
       scopeId: "personal:taylor@example.com",
+      canContinue: true,
       surface: "web",
       title: "Inbox",
       updatedAt: 100,

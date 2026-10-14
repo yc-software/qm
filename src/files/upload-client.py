@@ -4,10 +4,9 @@ import hashlib
 import json
 import mimetypes
 import os
+import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 import uuid
 import zlib
 from pathlib import Path
@@ -21,19 +20,37 @@ class RequestError(RuntimeError):
         self.status = status
 
 
+def quote(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def request(method, url, data=None, headers=None):
+    config = [f"url = {quote(url)}", f"request = {quote(method)}", "silent", "show-error", "max-time = 180", 'write-out = "\\n%{http_code}"']
+    config += [f"header = {quote(f'{name}: {value}')}" for name, value in (headers or {}).items()]
+    if data is not None:
+        config.append('data-binary = "@-"')
+    failure = ""
     for attempt in range(5):
-        try:
-            req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-            with urllib.request.urlopen(req, timeout=180) as response:
-                return response.read()
-        except urllib.error.HTTPError as error:
-            if error.code < 500 and error.code != 429:
-                raise RequestError(error.code, f"request failed ({error.code}): {error.read(4096).decode(errors='replace')}") from None
-        except (urllib.error.URLError, TimeoutError):
-            pass
+        read_end, write_end = os.pipe()
+        with os.fdopen(write_end, "w") as pipe:
+            pipe.write("\n".join(config) + "\n")
+        with os.fdopen(read_end) as pipe:
+            try:
+                result = subprocess.run(["curl", "-K", f"/dev/fd/{pipe.fileno()}"], input=data or b"", capture_output=True, pass_fds=(pipe.fileno(),))
+            except FileNotFoundError:
+                raise RuntimeError("curl is required; install it and rerun") from None
+        content, _, status = result.stdout.rpartition(b"\n")
+        if result.returncode == 0:
+            status = int(status or b"0")
+            if 200 <= status < 300:
+                return content
+            if status < 500 and status != 429:
+                raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
+            failure = f"HTTP {status}: {content[:200].decode(errors='replace')}"
+        else:
+            failure = result.stderr.decode(errors="replace").strip() or f"curl exited {result.returncode}"
         if attempt == 4:
-            raise RuntimeError("transfer failed after retries; rerun with the same state file")
+            raise RuntimeError(f"transfer failed after retries ({failure}); rerun with the same state file")
         time.sleep(2 ** attempt)
 
 
@@ -83,11 +100,17 @@ def main():
     manifest = {"name": args.name or args.file.name, "mimetype": mimetypes.guess_type(args.file.name)[0] or "application/octet-stream", "sizeBytes": size, "checksums": checksums}
     if args.scope:
         manifest["scopeId"] = args.scope
-    if state_path.exists():
-        state = json.loads(state_path.read_text())
-        if state["manifest"] != manifest or state.get("destination") != destination:
-            raise RuntimeError("file or destination changed; use another --state path for a new upload")
-    else:
+    state = json.loads(state_path.read_text()) if state_path.exists() else None
+    if state and state.get("destination") != destination:
+        raise RuntimeError("destination changed; use another --state path for a new upload")
+    if state and state["manifest"] != manifest:
+        if "file" not in state:
+            try:
+                api("DELETE", f"/v1/files/uploads/{state['id']}")
+            except (RequestError, RuntimeError) as error:
+                print(f"could not cancel the previous unfinished upload: {error}", file=sys.stderr)
+        state = None
+    if not state:
         state = {"id": uuid.uuid4().hex, "manifest": manifest, "destination": destination, "next": 1}
         save(state_path, state)
     try:

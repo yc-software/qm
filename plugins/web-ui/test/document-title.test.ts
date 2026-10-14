@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
 
-const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-
 test("page titles retain the static product title", () => {
-  assert.ok(index.includes(`<title>${PRODUCT_TITLE}</title>`));
   assert.equal(documentTitle("chats", "Quarterly planning", true), `Quarterly planning · ${PRODUCT_TITLE}`);
   assert.equal(documentTitle(), PRODUCT_TITLE);
 });

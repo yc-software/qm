@@ -38,3 +38,24 @@ export function parseModelOverlay(value: unknown): ModelOverlay {
   }
   return model;
 }
+
+const embeddingSchema = z.strictObject({
+  kind: z.literal("embedding"),
+  id: schema.shape.id,
+  name: schema.shape.name,
+  provider: z.literal("openai"),
+});
+
+export type EmbeddingModelDefinition = z.infer<typeof embeddingSchema>;
+export type RegisteredModel = ModelOverlay | EmbeddingModelDefinition;
+export type EmbeddingModel = Omit<EmbeddingModelDefinition, "provider"> & { provider: string; baseUrl: string };
+
+export function isEmbeddingModel(model: object): model is EmbeddingModelDefinition | EmbeddingModel {
+  return "kind" in model && model.kind === "embedding";
+}
+
+export function parseRegisteredModel(value: unknown): RegisteredModel {
+  return value && typeof value === "object" && isEmbeddingModel(value)
+    ? embeddingSchema.parse(value)
+    : parseModelOverlay(value);
+}

@@ -1,6 +1,7 @@
 import { html, render } from "lit";
 import { X, Link, Copy, Check, Users, Globe, ChevronDown } from "lucide";
-import { icon, toggleFormMenu, closeFormMenus } from "./ui";
+import { toggleFormMenu, closeFormMenus } from "./ui";
+import { icon } from "./icons";
 import { api, withBase } from "./core-bridge";
 
 interface ShareState {

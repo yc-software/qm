@@ -15,6 +15,8 @@ test("run events push deltas without snapshot polling and recover a separate wor
   const bus = createMemoryEventBus<RunStreamEvent>("test");
   let reads = 0;
   let workerText = "prefix 🌍";
+  let holdSync = false;
+  let syncCalls = 0;
   let status: "running" | "done" = "running";
   const app = {
     async getRun() {
@@ -30,7 +32,8 @@ test("run events push deltas without snapshot polling and recover a separate wor
       return bus.subscribe(listener, { onResync });
     },
     syncRunStream(runId, offset) {
-      emitRunText(bus, runId, workerText.slice(offset), offset);
+      syncCalls++;
+      if (!holdSync) emitRunText(bus, runId, workerText.slice(offset), offset, 0);
     },
     async getRunToolEntries() {
       return [];
@@ -57,12 +60,20 @@ test("run events push deltas without snapshot polling and recover a separate wor
     await sleep(120);
     assert.equal(reads, 2, "only initial authorization and race-free hydration read snapshots");
     workerText += " more";
-    bus.emit({ runId: "run", kind: "delta", offset: 9, text: " more" });
+    bus.emit({ runId: "run", kind: "delta", startOffset: 0, offset: 9, text: " more" });
     await sleep(120);
     assert.equal(reads, 2, "text publications must not poll the run");
     assert.match(wire, /more/);
     workerText += " lost then found";
-    bus.emit({ runId: "run", kind: "delta", offset: 20, text: "found" });
+    const beforeSync = syncCalls;
+    holdSync = true;
+    for (let i = 0; i < 3; i++) {
+      bus.emit({ runId: "run", kind: "delta", startOffset: 0, offset: 20, text: "found" });
+      await sleep(5);
+    }
+    assert.equal(syncCalls - beforeSync, 1, "later gaps must not start overlapping catch-up replays");
+    holdSync = false;
+    app.syncRunStream("run", 14);
     await sleep(50);
     assert.match(wire, /lost then found/);
     status = "done";
@@ -105,7 +116,7 @@ test("run events deliver a pending activity snapshot before subsequent text and 
       return bus.subscribe(listener, { onResync });
     },
     syncRunStream(runId, offset) {
-      emitRunText(bus, runId, workerText.slice(offset), offset);
+      emitRunText(bus, runId, workerText.slice(offset), offset, 0);
     },
     async getRunToolEntries() {
       return [];
@@ -134,7 +145,7 @@ test("run events deliver a pending activity snapshot before subsequent text and 
     bus.emit({ runId: "run", kind: "refresh" });
     await entered.promise;
     workerText = "after-boundary";
-    bus.emit({ runId: "run", kind: "delta", offset: 0, text: workerText });
+    bus.emit({ runId: "run", kind: "delta", startOffset: 0, offset: 0, text: workerText });
     await sleep(30);
     assert.doesNotMatch(wire, /after-boundary/);
     release.resolve();

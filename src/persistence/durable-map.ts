@@ -19,6 +19,7 @@ export interface DurableMap<T> {
   insertIfAbsent?(id: string, value: T): Promise<boolean>;
   merge(id: string, patch: Partial<T>): Promise<T | null>;
   update?(id: string, fn: (value: T) => T): Promise<T | null>;
+  mutateMany(updates: readonly { id: string; apply: (value: T | null) => T }[]): Promise<T[]>;
   deleteIf?(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
@@ -144,6 +145,16 @@ export function createMemoryMap<T>(): DurableMap<T> {
       const next = fn(v);
       m.set(id, next);
       return next;
+    },
+    async mutateMany(updates) {
+      const pending = new Map<string, T>();
+      const results = updates.map(({ id, apply }) => {
+        const next = apply(structuredClone(pending.get(id) ?? m.get(id) ?? null));
+        pending.set(id, next);
+        return next;
+      });
+      for (const [id, value] of pending) m.set(id, value);
+      return results;
     },
     async deleteIf(id, predicate) {
       const value = m.get(id);
@@ -347,6 +358,28 @@ export function createPostgresMap<T>(
         const next = fn(current.rows[0].json as T);
         await client.query(`UPDATE ${table} SET json = $2 WHERE id = $1`, [id, jsonbStringify(next)]);
         return next;
+      });
+    },
+    async mutateMany(updates) {
+      if (!updates.length) return [];
+      return withBump(async (client) => {
+        const rows = await client.query(
+          `SELECT id, json FROM ${table} WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE`,
+          [updates.map(({ id }) => id)],
+        );
+        const current = new Map(rows.rows.map((row) => [row.id as string, row.json as T]));
+        const pending = new Map<string, T>();
+        const results = updates.map(({ id, apply }) => {
+          const next = apply(structuredClone(pending.get(id) ?? current.get(id) ?? null));
+          pending.set(id, next);
+          return next;
+        });
+        await client.query(
+          `INSERT INTO ${table} (id, json) SELECT id, json FROM jsonb_to_recordset($1::jsonb) AS batch(id text, json jsonb)
+           ON CONFLICT (id) DO UPDATE SET json = EXCLUDED.json`,
+          [jsonbStringify([...pending].map(([id, json]) => ({ id, json })))],
+        );
+        return results;
       });
     },
     async deleteIf(id, predicate) {

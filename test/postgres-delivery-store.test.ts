@@ -26,6 +26,22 @@ test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip 
   await exerciseDeliveryStore(createPostgresDeliveryStore(URL!));
 });
 
+test("pg delivery store: recovered reply text is safe to persist and retry", { skip }, async () => {
+  const store = createPostgresDeliveryStore(URL!);
+  const input = {
+    destination: { type: "slack" as const, target: "C-recovered" },
+    text: "\u0000Report\u0000 ready 🚀\n\uD800end\uDC00\u0000",
+    idempotencyKey: "recovered-reply",
+  };
+  const queued = await store.enqueue(input);
+  assert.equal(queued.text, "Report ready 🚀\n\uFFFDend\uFFFD");
+  assert.equal((await store.get(queued.id))?.text, queued.text);
+  const duplicate = await store.enqueue(input);
+  assert.equal(duplicate.id, queued.id);
+  assert.equal(duplicate.text, queued.text);
+  await store.ack(queued.id, Date.now());
+});
+
 test("pg delivery store: the queue survives across store instances (deploy/multi-instance)", { skip }, async () => {
   const writer = createPostgresDeliveryStore(URL!);
   const queued = await writer.enqueue({

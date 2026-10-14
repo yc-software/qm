@@ -21,16 +21,15 @@ keeps what memory already knows; focus on what changed.
 ## State and persistence
 
 Memory is the source of truth. Before the first question, read the notebook with the
-`memory` tool and rewrite it with an `## Onboarding` section and this exact marker:
+`memory` tool and add this exact fact:
 
-`- Onboarding: pending v2 since YYYY-MM-DD.`
+`Onboarding: pending v2 since YYYY-MM-DD.`
 
-After every step, read and rewrite the full notebook, preserving existing content. Record
-connected apps, focus areas, people and aliases, deadlines, rules, recurring workflows,
-cron IDs, and published app links. On completion or an explicit stop, replace the marker
-with:
+After every step, add new facts and edit ones that changed. Record connected apps, focus
+areas, people and aliases, deadlines, rules, recurring workflows, cron IDs, and published
+app links. On completion or an explicit stop, edit the marker fact to:
 
-`- Onboarding: completed v2 on YYYY-MM-DD.`
+`Onboarding: completed v2 on YYYY-MM-DD.`
 
 Memory is not a file; never edit it with shell commands.
 

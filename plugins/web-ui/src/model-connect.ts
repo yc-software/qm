@@ -1,5 +1,5 @@
 import { html, render, nothing, type TemplateResult } from "lit";
-import { api } from "./core-bridge";
+import { api, ApiError } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { appState } from "./shell-state";
@@ -192,14 +192,20 @@ async function load(): Promise<void> {
   paint();
 }
 
+const API_ERROR_COPY: Record<string, string> = {
+  invalid_api_key: "That API key was rejected — check it and try again.",
+  oauth_start_failed: "Sign-in didn't complete. Try again — the code may have expired.",
+  oauth_poll_failed: "Sign-in didn't complete. Try again — the code may have expired.",
+  oauth_complete_failed: "Sign-in didn't complete. Try again — the code may have expired.",
+};
+
+// Classifies from the route's structured `error` code, or fetch's spec'd TypeError / TimeoutError; never the text.
 function friendly(e: unknown): string {
-  const raw = errMessage(e);
-  if (/invalid_api_key|rejected this API key/i.test(raw)) return "That API key was rejected — check it and try again.";
-  if (/oauth_start_failed|oauth_poll_failed|oauth_complete_failed/i.test(raw))
-    return "Sign-in didn't complete. Try again — the code may have expired.";
-  if (/network|fetch failed|timeout/i.test(raw))
+  const code = e instanceof ApiError ? (e.body as { error?: unknown } | null)?.error : undefined;
+  if (typeof code === "string" && API_ERROR_COPY[code]) return API_ERROR_COPY[code];
+  if (e instanceof TypeError || (e instanceof Error && e.name === "TimeoutError"))
     return "Couldn't reach the sign-in service. Check your connection and try again.";
-  return raw;
+  return errMessage(e);
 }
 
 async function afterConnect(provider: "anthropic" | "openai"): Promise<void> {

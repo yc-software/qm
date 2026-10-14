@@ -482,3 +482,10 @@ test("a given message's encoded id is STABLE — the same ts always encodes to t
   const ts = "1717360800.000100";
   assert.equal(encodeTs(ts), encodeTs(ts));
 });
+
+test("a react directive followed by a huge whitespace run strips in linear time", () => {
+  const start = process.hrtime.bigint();
+  extractReactions("thanks [[react:" + " ".repeat(100000) + "]x");
+  extractReactions("[[react: eyes]] tail" + " ".repeat(100000) + "no newline");
+  assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 200);
+});

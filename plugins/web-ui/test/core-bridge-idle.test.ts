@@ -35,7 +35,7 @@ function blankAssistant(): AssistantMessage {
 }
 
 function freshAcc(t0: number): Acc {
-  return { acc: "", lastProgressAt: t0 };
+  return { acc: "", startOffset: 0, lastProgressAt: t0 };
 }
 
 function drain(stream: ReturnType<typeof createAssistantMessageEventStream>): Promise<AssistantMessage> {
@@ -446,4 +446,19 @@ test("live run polling includes only consumed visible steering in activity order
     buildTimeline(final.work!).map((item) => item.kind),
     ["tool", "steer", "tool"],
   );
+});
+
+test("polling advances a trimmed window even when every snapshot has the same length", async () => {
+  instantSleep();
+  stubRuns([
+    { status: "running", result: null, partial: "first tail", partialStartOffset: 200_000 },
+    { status: "running", result: null, partial: "later tail", partialStartOffset: 200_010 },
+    { status: "done", result: { status: "ok" }, partial: "final tail", partialStartOffset: 200_020 },
+  ]);
+  const stream = createAssistantMessageEventStream();
+  const partial = blankAssistant();
+  const st = freshAcc(Date.now());
+  await pollRun(stream, partial, "r", st);
+  assert.deepEqual((await drain(stream)).content, [{ type: "text", text: "final tail" }]);
+  assert.equal(st.startOffset, 200_020);
 });

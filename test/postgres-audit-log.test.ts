@@ -87,3 +87,24 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
   assert.equal(events.length, 1);
   assert.equal(events[0]?.action, "layer-updated");
 });
+
+test("pg audit log: resource filter treats % and _ as literal characters", { skip }, async () => {
+  await reset(true);
+  const log = createPostgresAuditLog(URL!);
+  const s1 = scopeId("personal", "U1");
+  log.record({ ...ev(1, "file.read", s1), resource: "my_report.pdf" });
+  log.record({ ...ev(2, "file.read", s1), resource: "myXreport.pdf" });
+  log.record({ ...ev(3, "file.read", s1), resource: "100% done" });
+  log.record({ ...ev(4, "file.read", s1), resource: "100 done" });
+
+  const underscore = await log.tail({ limit: 10, resourceContains: "my_report" });
+  assert.deepEqual(
+    underscore.map((e) => e.resource),
+    ["my_report.pdf"],
+  );
+  const percent = await log.tail({ limit: 10, resourceContains: "100%" });
+  assert.deepEqual(
+    percent.map((e) => e.resource),
+    ["100% done"],
+  );
+});

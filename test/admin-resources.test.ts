@@ -44,9 +44,7 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
     sessions: built.sessions,
     acl: built.acl,
     serviceCreds: built.serviceCreds,
-    deviceFlowCutover: built.deviceFlowCutover,
     featureFlags: built.featureFlags,
-    credentialServices: () => built.credentialTools.map((tool) => tool.service),
     channelPolicy: built.channelPolicy,
     harnessId,
   });
@@ -426,64 +424,6 @@ test("feature flag table changes one scope live without restart", async () => {
     const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
     const flags = ((await read.json()) as { featureFlags: Array<{ enabledScopes: string[] }> }).featureFlags;
     assert.deepEqual(flags[0]?.enabledScopes, ["channel:C1"]);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("device-flow cutover is scope-specific, audited, and reverses without deleting records", async () => {
-  const srv = start();
-  try {
-    const scope = "channel:C1";
-    const endpoint = `${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}/device-flow-cutover`;
-    const prefer = await fetch(endpoint, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "acmecli", mode: "prefer_ephemeral" }),
-    });
-    assert.equal(prefer.status, 200);
-    assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "acmecli"), "prefer_ephemeral");
-
-    const read = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}`, { headers: ADMIN });
-    const body = (await read.json()) as {
-      deviceFlowCutover: { acmecli: { effective: string; configured: { updatedBy: string } } };
-    };
-    assert.equal(body.deviceFlowCutover.acmecli.effective, "prefer_ephemeral");
-    assert.equal(body.deviceFlowCutover.acmecli.configured.updatedBy, "admin-alice");
-
-    const unsupported = await fetch(endpoint, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "aws", mode: "ephemeral_only" }),
-    });
-    assert.equal(unsupported.status, 400);
-    assert.match(await unsupported.text(), /no credential paths/);
-
-    const rollback = await fetch(endpoint, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "acmecli", mode: "legacy" }),
-    });
-    assert.equal(rollback.status, 200);
-    assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "acmecli"), "legacy");
-
-    await srv.built.deviceFlowCutover.set("org:default-org", "acmecli", "prefer_ephemeral", "admin-alice");
-    const inherit = await fetch(endpoint, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "acmecli", mode: "inherit" }),
-    });
-    assert.equal(inherit.status, 200);
-    assert.equal(await srv.built.deviceFlowCutover.get(scope, "acmecli"), null);
-    assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "acmecli"), "prefer_ephemeral");
-    assert.ok((await srv.built.auditLog.events()).some((event) => event.action === "device-flow-cutover.update"));
-    assert.ok(
-      (await srv.built.auditLog.events()).some(
-        (event) =>
-          event.action === "credential.cutover.update" &&
-          event.resource === "acmecli:legacy/legacy->inherit/prefer_ephemeral",
-      ),
-    );
   } finally {
     await srv.close();
   }
@@ -907,32 +847,6 @@ test("GET /v1/admin/slack-emoji surfaces 404 without a token, and serves the plu
     const body = (await r.json()) as { emoji: Record<string, string>; standard: unknown[] };
     assert.equal(body.emoji.galaxy_brain, "https://emoji.slack-edge.com/T0/galaxy_brain/abc.png");
     assert.ok(body.standard.length > 1000);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("historical cutover policies remain visible and clearable without layer tools", async () => {
-  const srv = start("pi", false);
-  try {
-    const scope = "channel:C1";
-    await srv.built.deviceFlowCutover.set("org:default-org", "retired", "ephemeral_only", "admin");
-    const read = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}`, { headers: ADMIN });
-    const body = (await read.json()) as { deviceFlowCutover: { retired: { effective: string } } };
-    assert.equal(body.deviceFlowCutover.retired.effective, "ephemeral_only");
-    const update = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}/device-flow-cutover`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "retired", mode: "legacy" }),
-    });
-    assert.equal(update.status, 200);
-    const clear = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(scope)}/device-flow-cutover`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ service: "retired", mode: "inherit" }),
-    });
-    assert.equal(clear.status, 200);
-    assert.equal(await srv.built.deviceFlowCutover.resolve(scope, "retired"), "ephemeral_only");
   } finally {
     await srv.close();
   }

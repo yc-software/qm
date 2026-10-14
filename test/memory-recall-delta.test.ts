@@ -1,73 +1,85 @@
 import { compactTranscript } from "../src/harness/context-compaction.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { memoryRecallDelta } from "../src/memory/recall-delta.ts";
+import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";
+import { renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import type { SessionEntry } from "../src/types.ts";
 
-const notebook = (facts: string) => `### personal:alice\n# Memory\n\n${facts}`;
-const entry = (body: string, seq = 1, anchorSeq?: number): SessionEntry => ({
+const alice = "personal:alice";
+const memoryFact = (id: string, text: string): MemoryFact => ({
+  id,
+  text,
+  sensitivity: "ordinary",
+  sources: [],
+  sourceUnknown: false,
+  createdAt: Date.parse("2026-10-01T12:00:00Z"),
+  updatedAt: 0,
+});
+const fact = (id: string, text: string) => ({ scope: alice, id, text: renderFacts([memoryFact(id, text)]) });
+const held = (...facts: Array<[string, string]>) =>
+  new Map([[alice, shownFacts(facts.map(([id, text]) => memoryFact(id, text)))]]);
+const entry = (record: unknown, seq = 1): SessionEntry => ({
   sessionId: "s",
   seq,
   type: "user",
   parentSeq: null,
   createdAt: 1,
-  scopeLabel: "personal:alice",
-  payload: { text: "hello", memoryRecall: { body, ...(anchorSeq !== undefined ? { anchorSeq } : {}) } },
+  scopeLabel: alice,
+  payload: { text: "hello", memoryRecall: JSON.parse(JSON.stringify(record)) },
+});
+const all = held(["1", "ALPHA"], ["2", "BETA"], ["3", "GAMMA"]);
+
+test("the first recall is complete and an unchanged recall adds nothing", () => {
+  const recalled = [fact("1", "ALPHA"), fact("2", "BETA")];
+  const first = memoryRecallDelta(recalled, [], all, new Map([[alice, "Alice"]]));
+  assert.equal(first.text, "### Alice\n- (2026-10-01) ALPHA\n- (2026-10-01) BETA");
+  assert.equal(memoryRecallDelta(recalled, [entry(first.record)], all).text, "");
 });
 
-test("first automatic recall is complete; repeated unchanged recall is empty after reload", () => {
-  const body = notebook("- ALPHA\n- BETA");
-  assert.equal(memoryRecallDelta(body, []).text, body);
-  const persisted = JSON.parse(JSON.stringify([entry(body)])) as SessionEntry[];
-  assert.equal(memoryRecallDelta(body, persisted).text, "");
+test("later recalls add only new facts, stay silent on held ones and withdraw deleted ones", () => {
+  const first = memoryRecallDelta([fact("1", "ALPHA"), fact("2", "BETA")], [], all);
+  const second = memoryRecallDelta([fact("3", "GAMMA")], [entry(first.record)], all);
+  assert.equal(second.text, "New or updated memory facts:\n\n### personal:alice\n- (2026-10-01) GAMMA");
+  const history = [entry(first.record), entry(second.record, 2)];
+  assert.equal(memoryRecallDelta([fact("1", "ALPHA")], history, all).text, "");
+  assert.equal(
+    memoryRecallDelta([fact("3", "GAMMA")], history, held(["3", "GAMMA"])).text,
+    "personal:alice: 2 earlier facts were consolidated or removed; rely only on the current list.",
+  );
 });
 
-test("changed notes emit additions and withdrawals with scope provenance, omitting unchanged facts", () => {
-  const delta = memoryRecallDelta(notebook("- ALPHA\n- GAMMA"), [entry(notebook("- ALPHA\n- BETA"))]);
-  assert.doesNotMatch(delta.text, /ALPHA/);
-  assert.match(delta.text, /New or updated memory facts:[\s\S]*personal:alice[\s\S]*GAMMA/);
-  assert.match(delta.text, /withdrawn[\s\S]*BETA/);
-  assert.equal(delta.record.anchorSeq, 1);
+test("an edited fact withdraws its earlier text even when the new text is not selected", () => {
+  const first = memoryRecallDelta([fact("1", "ALPHA")], [], held(["1", "ALPHA"]));
+  assert.equal(
+    memoryRecallDelta([], [entry(first.record)], held(["1", "ALPHA revised"])).text,
+    "personal:alice: 1 earlier fact was consolidated or removed; rely only on the current list.",
+  );
 });
 
-test("identical text under distinct scopes or headings keeps its distinct meaning", () => {
-  const prior = notebook("- SAME");
-  const next = `${prior}\n\n### channel:eng\n# Memory\n- SAME`;
-  const delta = memoryRecallDelta(next, [entry(prior)]);
-  assert.match(delta.text, /channel:eng/);
-  assert.doesNotMatch(delta.text, /personal:alice/);
-});
-
-test("multiline facts remain intact and headings with unchanged content add nothing", () => {
-  const prior = notebook("## Profile\n- Works remotely\n  from London\n\n## Project\nOld paragraph.");
-  const next = prior.replace("Old paragraph.", "Updated paragraph.");
-  const delta = memoryRecallDelta(next, [entry(prior)]);
-  assert.doesNotMatch(delta.text, /Works remotely|London|Profile/);
-  assert.match(delta.text, /## Project\nUpdated paragraph/);
-});
-
-test("compacting away the recall anchor restores a current baseline", () => {
-  const body = notebook("- ALPHA\n- BETA");
-  const history = [entry(body, 8, 1)];
-  assert.equal(memoryRecallDelta(body, history).text, body);
-  assert.equal(memoryRecallDelta(body, history).record.anchorSeq, undefined);
-});
-
-test("all removed facts are withdrawn and repeated empty memory adds nothing", () => {
-  const before = notebook("- OLD");
-  assert.match(memoryRecallDelta("", [entry(before)], ["personal:alice"]).text, /withdrawn[\s\S]*OLD/);
-  assert.equal(memoryRecallDelta("", [entry(before), entry("", 3, 1)]).text, "");
-});
-
-test("withdrawals never quote facts from a revoked or disabled memory scope", () => {
-  const body = notebook("- PRIVATE_FACT");
-  const result = memoryRecallDelta("", [entry(body)], []);
+test("withdrawals never quote facts from a notebook that is no longer readable", () => {
+  const first = memoryRecallDelta([fact("1", "PRIVATE_FACT")], [], held(["1", "PRIVATE_FACT"]));
+  const result = memoryRecallDelta([], [entry(first.record)], new Map());
   assert.doesNotMatch(result.text, /PRIVATE_FACT|personal:alice/);
   assert.match(result.text, /no longer included/);
 });
 
+test("display labels never change the stored checkpoint or earlier bytes", () => {
+  const first = memoryRecallDelta([fact("1", "ALPHA")], [], all, new Map([[alice, "Alice"]]));
+  const history = [entry(first.record)];
+  const before = JSON.stringify(history);
+  const next = memoryRecallDelta([fact("1", "ALPHA"), fact("2", "BETA")], history, all, new Map([[alice, "Al"]]));
+  assert.equal(next.text, "New or updated memory facts:\n\n### Al\n- (2026-10-01) BETA");
+  assert.equal(JSON.stringify(history), before);
+});
+
+test("compacting away the recall anchor restores a current baseline", () => {
+  const first = memoryRecallDelta([fact("1", "ALPHA")], [], all);
+  const history = [entry({ ...first.record, anchorSeq: 1 }, 8)];
+  assert.match(memoryRecallDelta([fact("1", "ALPHA")], history, all).text, /ALPHA/);
+});
+
 test("recall checkpoint metadata never leaks into attachment-only compaction input", () => {
-  const recorded = entry(notebook("- CHECKPOINT_ONLY_FACT"));
+  const recorded = entry(memoryRecallDelta([fact("1", "CHECKPOINT_ONLY_FACT")], [], all).record);
   recorded.payload = { ...(recorded.payload as Record<string, unknown>), text: "", environment: "file: report.csv" };
   const text = compactTranscript([recorded]);
   assert.match(text, /report.csv/);

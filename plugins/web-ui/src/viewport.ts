@@ -1,23 +1,21 @@
 export const PHONE_MAX_WIDTH = 860;
 
-const query = window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`);
+let query: MediaQueryList | undefined;
+const phoneQuery = () => (query ??= window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`));
 
 export function isPhone(): boolean {
-  return query.matches;
+  return phoneQuery().matches;
 }
 
 export function isTouch(): boolean {
   return window.matchMedia("(hover: none)").matches;
 }
 
-const listeners = new Set<(phone: boolean) => void>();
-query.addEventListener("change", (e) => {
-  for (const fn of listeners) fn(e.matches);
-});
-
 export function onPhoneChange(fn: (phone: boolean) => void): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
+  const query = phoneQuery();
+  const listener = (e: MediaQueryListEvent) => fn(e.matches);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
 }
 
 export function trackVisualViewport(): void {

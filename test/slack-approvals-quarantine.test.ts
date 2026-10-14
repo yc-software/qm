@@ -25,7 +25,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
     classifyActor: async () => ({ externalId: "U1", displayName: "Alice" }),
     classifyUserCached: async () => ({ actor: { externalId: "U1", displayName: "Alice" } }),
   } as never;
-  const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker(), ids: {} as never });
+  const approvals = createApprovals({ core, flow, directory, threads: createThreadTracker() });
   const handlers: Array<{ pattern: RegExp; handler: ActionHandler }> = [];
   approvals.registerActions({ action: (pattern, handler) => void handlers.push({ pattern, handler }) });
   approvals.rememberSlackApprovals([{ requestId: "req-1", command: "rm -rf /tmp/x", reason: "destructive" }], {

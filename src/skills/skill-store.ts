@@ -4,6 +4,7 @@ import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -77,11 +78,13 @@ export interface SkillResolution {
 export interface SkillStoreOptions {
   signingSecret?: string;
   backing?: DurableMap<Skill>;
+  advisoryLock?: AdvisoryLock;
 }
 
 export interface SkillStore {
   create(input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; pack?: Skill["pack"] }): Promise<Skill>;
   update(id: string, manifest: SkillManifest): Promise<Skill>;
+  withNameLock?<T>(scopeId: ScopeId, name: string, fn: () => Promise<T>): Promise<T>;
   get(id: string): Promise<Skill | null>;
   list(): Promise<Skill[]>;
   verify(skill: Skill): boolean;
@@ -181,6 +184,8 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   }
 
   return {
+    withNameLock: (scopeId, name, fn) =>
+      opts.advisoryLock ? opts.advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn) : fn(),
     async create(input) {
       assertSafeSkillName(input.manifest.name);
       const at = Date.now();

@@ -529,7 +529,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.match(JSON.stringify(forked.entries), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
-  const appendForFork = built.sessions.append.bind(built.sessions);
+  const appendForFork = built.sessions.appendMany.bind(built.sessions);
   let releaseForkCopy!: () => void;
   const forkCopyReleased = new Promise<void>((resolve) => {
     releaseForkCopy = resolve;
@@ -539,13 +539,13 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     forkCopyStarted = resolve;
   });
   let copyingSessionId: string | undefined;
-  built.sessions.append = async (lease, entry) => {
+  built.sessions.appendMany = async (lease, entries) => {
     if (!copyingSessionId && lease.sessionId !== first.id && lease.sessionId !== forked.session.id) {
       copyingSessionId = lease.sessionId;
       forkCopyStarted();
       await forkCopyReleased;
     }
-    return appendForFork(lease, entry);
+    return appendForFork(lease, entries);
   };
   const racingForkPromise = built.app.forkSession(first.id, "owner");
   await forkCopyStart;
@@ -557,7 +557,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(addSettled, false);
   releaseForkCopy();
   const [racingFork, addedDuringFork] = await Promise.all([racingForkPromise, addDuringFork]);
-  built.sessions.append = appendForFork;
+  built.sessions.appendMany = appendForFork;
   assert.ok(racingFork);
   assert.equal(addedDuringFork.status, "ok");
   assert.equal(racingFork.session.id, copyingSessionId);
@@ -1212,18 +1212,12 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal((await turn("chan-pal", "web:chan-pal:linked")).status, "ok");
   await assertRoster("web:chan-pal:linked", ["owner", "chan-pal"]);
 
-  const linkedMembers = [
-    { id: "owner", type: "internal" as const },
-    { id: "chan-pal", type: "internal" as const },
-  ];
   const ownerCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
     owner: "owner",
     createdBy: "owner",
     action: "linked roster work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const inheritedCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
@@ -1231,8 +1225,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-pal",
     action: "inherited member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const cronRoster = async (cronId: string) => {
     const fire = (await built.crons.listFires(cronId)).runs.at(-1);
@@ -1259,7 +1251,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal(revokedOwnerCron.fire.status, "ok");
   assert.deepEqual(revokedOwnerCron.participants, new Set(["owner"]));
   await runNowSettled(built.scheduler, inheritedCron.id);
-  assert.equal((await built.crons.get(inheritedCron.id))?.enabled, false);
+  assert.equal(await built.crons.get(inheritedCron.id), null, "leaving the project deletes the member's cron");
 
   await built.app.upsertChannels(channels, [
     { channelId: "C-ENG", principalId: "owner" },
@@ -1272,11 +1264,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-gone",
     action: "inactive member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: [
-      { id: "owner", type: "internal" },
-      { id: "chan-gone", type: "internal" },
-    ],
   });
   await built.identity.deactivate("chan-gone");
   assert.equal(await built.projects.membership(groupRef, "chan-gone"), false);

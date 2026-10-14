@@ -33,6 +33,14 @@ export function personalScope(principalId: string): ScopeId {
   return scopeId("personal", principalId);
 }
 
+export function scopeActor(scope: ScopeId): string {
+  return `system:${scope}`;
+}
+
+export function actsAsScope(principalId: string, scope: ScopeId): boolean {
+  return principalId === scopeActor(scope);
+}
+
 export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string } {
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
@@ -55,6 +63,7 @@ export function isSharedScope(id: ScopeId | undefined): boolean {
 export type ConversationKind = "dm" | "channel" | "group";
 
 export interface Conversation {
+  teamIds?: string[];
   kind: ConversationKind;
   threadRef: string;
   channelRef?: string;
@@ -89,11 +98,6 @@ export interface SpawnMeta {
   fastMode?: boolean;
 }
 
-export interface SessionStatus {
-  emoji: string;
-  text: string;
-}
-
 export interface Session {
   id: string;
   type: SessionType;
@@ -106,7 +110,7 @@ export interface Session {
   archived?: boolean;
   pinned?: boolean;
   color?: string;
-  status?: SessionStatus | null;
+  unread?: boolean;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
   parentSessionId?: string;
@@ -116,6 +120,7 @@ export interface Session {
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -181,7 +186,7 @@ export interface GrantedHandle {
   carried?: true;
   handlePath: string;
   ownerScopeId: ScopeId;
-  ownerPath: string;
+  fileId: string;
   permission: Permission;
 }
 
@@ -288,9 +293,6 @@ export interface Cron extends TriggerBase {
   message?: string;
   loopId?: string;
   createdAt: number;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
-  ownerResourcesRequireOpen?: boolean;
-  members?: Principal[];
   unattendedGrants?: string[];
   sessionRef?: string;
 
@@ -319,6 +321,7 @@ export interface Webhook extends TriggerBase {
 export interface Monitor extends TriggerBase {
   processId: string;
   command: string;
+  purpose?: string;
   threadRef: string;
   instructions?: string;
   pattern?: string;
@@ -341,6 +344,7 @@ export interface ShipActionPolicy {
 
 export interface LoopCaps {
   maxItemsPerFire?: number;
+  maxConcurrentItems?: number;
   maxOpenOutputs?: number;
   maxItemAttempts?: number;
 }
@@ -392,7 +396,6 @@ export interface Loop extends TriggerBase {
   healthReason?: string;
   throttle?: boolean;
   cronId?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
   consecutiveFailedFires?: number;
   quarantineClearedBy?: string;
   quarantineClearedAt?: number;
@@ -639,7 +642,6 @@ export type TurnOrigin =
       screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
-      ownerResourcesRequireOpen?: boolean;
     }
   | { kind: "direct" };
 
@@ -694,7 +696,6 @@ export interface TurnRequest {
   securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
-  ownerResourcesRequireOpen?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;
   botActor?: boolean;
@@ -790,7 +791,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
   adminUrl?: string;
   runId?: string;
   steered?: true;

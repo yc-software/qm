@@ -35,11 +35,7 @@ async function main(): Promise<void> {
     await built.identity.hydrate();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();
-    await built.memory.replace(
-      scopeId,
-      setOnboardingStatus("", "completed", new Date().toISOString().slice(0, 10)),
-      actorId,
-    );
+    await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);
@@ -49,7 +45,7 @@ async function main(): Promise<void> {
       surface: "qualification",
       actor: { externalId: actorId },
       conversation: { kind: "dm", threadRef: `qualification:${randomUUID()}` },
-      text: `Use sandbox action exec with sandbox_id ${sandbox.id} to run exactly: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result.`,
+      text: `Use execute with sandbox_id ${sandbox.id} to run exactly: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result.`,
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);

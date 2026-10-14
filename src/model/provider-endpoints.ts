@@ -74,19 +74,32 @@ export function providerBaseUrl(provider: string): string | undefined {
   return (PROVIDER_IDS as readonly string[]).includes(provider) ? configured[provider as ProviderId] : undefined;
 }
 
-export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string }>(
+/** Our own signal that the gateway has no route for a model id; typed so callers never match its text. */
+export class GatewayModelUnavailableError extends Error {
+  // Read by the vendored pi-ai's extractProviderError when this is thrown mid-stream, so the failed
+  // message carries providerError {status: 404, type: "model_unavailable"}.
+  readonly status = 404;
+  readonly type = "model_unavailable";
+  constructor(modelId: string) {
+    super(`Gateway model is unavailable: ${modelId}`);
+    this.name = "GatewayModelUnavailableError";
+  }
+}
+
+export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
 ): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
   const target = config?.models[model.id];
   if (!target || !config) {
     if (isGatewayModelId(model.id) || config?.reservedModelIds?.has(model.id))
-      throw new Error(`Gateway model is unavailable: ${model.id}`);
+      throw new GatewayModelUnavailableError(model.id);
     return undefined;
   }
   return {
     model: {
       ...model,
+      compat: { ...model.compat, sendSessionAffinityHeaders: true },
       baseUrl: isGatewayModelId(model.id)
         ? `${config.url.replace(/\/v1$/, "")}${model.api === "anthropic-messages" ? "" : "/v1"}`
         : config.url,

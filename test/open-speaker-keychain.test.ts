@@ -43,9 +43,7 @@ test("Open owner computer rechecks revocation before reuse and is destroyed, nev
     openSpeakerKeychain: true,
     ownerAuthAvailable: true,
     connectorEnv: {},
-    credentialTools: [],
     credentialServices: [],
-    credentialCutoverServices: [],
     quarantinedServices: [],
   } as unknown as TurnSandboxContext;
   const boxes = createTurnSandboxes(context);

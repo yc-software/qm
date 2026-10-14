@@ -371,3 +371,43 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   await flush();
   assert.equal(calls.length, 0);
 });
+
+test("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  const record = t.mock.method(webhooks, "recordFire", async () => {
+    throw new Error("database unavailable");
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq("{}")), { status: 202 });
+  await flush();
+  assert.equal(record.mock.callCount(), 2);
+  assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persist fire failure")));
+  record.mock.restore();
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq('{"next":true}', "d-2")), { status: 202 });
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
+});
+
+test("an edited task applies to the next delivery at the same URL and secret", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "old orders",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  await webhooks.update(wh.id, { action: "new orders" });
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ n: 1 }), "d-edit")), { status: 202 });
+  await flush();
+  assert.match(calls[0]?.text ?? "", /new orders/);
+  assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});

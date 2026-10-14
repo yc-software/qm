@@ -1,6 +1,5 @@
 import "./instrument.ts";
 import { createBackgroundController } from "./runs/background-controller.ts";
-import { backgroundTaskArn } from "./runs/background-task-identity.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -84,7 +83,6 @@ if (config.deployProvider === "docker") {
 
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   built.scheduler.start(1000);
-  built.suggestedActivityMaintenance.start();
 } else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -130,17 +128,11 @@ if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
 
 let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
 if (built.backgroundOwnership) {
-  const identity = {
-    ...built.backgroundOwnership,
-    taskArn: await backgroundTaskArn(process.env.ECS_CONTAINER_METADATA_URI_V4),
-  };
   let periodicStop: Promise<void> = Promise.resolve();
   let activationEpoch = 0;
   const stopPeriodic = () => {
     activationEpoch++;
-    periodicStop = Promise.all([built.scheduler.stopClaims(), built.suggestedActivityMaintenance.stop()]).then(
-      () => {},
-    );
+    periodicStop = built.scheduler.stopClaims();
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
       .stopBackgroundClaims()
@@ -149,9 +141,8 @@ if (built.backgroundOwnership) {
       void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
   };
   backgroundController = createBackgroundController({
-    store: identity.store,
-    identity: { deploymentId: identity.deploymentId, instanceId: identity.instanceId, taskArn: identity.taskArn },
-    legacyEnabled: config.backgroundWorkEnabled,
+    store: built.backgroundOwnership.store,
+    deploymentId: built.backgroundOwnership.deploymentId,
     async start(signal) {
       const epoch = ++activationEpoch;
       if (signal.aborted) return;
@@ -161,7 +152,6 @@ if (built.backgroundOwnership) {
       built.scheduler.start(1000);
       await built.scheduler.ready();
       if (signal.aborted || epoch !== activationEpoch) return;
-      built.suggestedActivityMaintenance.start();
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
         runtime.start();
@@ -181,7 +171,7 @@ if (built.backgroundOwnership) {
     },
     onError: reportFailureAs("background ownership", undefined),
   });
-  built.runtime.setBackgroundAdmission(backgroundController.canClaim);
+  built.runtime.setBackgroundAdmission(backgroundController.canClaim, backgroundController.active);
   backgroundController.start();
 }
 
@@ -194,7 +184,6 @@ function shutdown(signal: string): void {
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-  built.suggestedActivityMaintenance.stop();
   built.deploymentLayerRefresh.stop();
   server.close();
   server.closeIdleConnections();

@@ -17,6 +17,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -55,6 +56,12 @@ test("provision runs commands with env and cwd", async () => {
   assert.equal(r.code, 0);
   assert.match(r.stdout, /workspace/);
   assert.match(r.stdout, /VAR=v1/);
+});
+
+test("two cores provisioning the same stopped computer create one sandbox", async () => {
+  const advisoryLock = createMemoryAdvisoryLock();
+  await Promise.all([make({ advisoryLock }).provision(layers), make({ advisoryLock }).provision(layers)]);
+  assert.equal(fake.createdCount(scopeName()), 1);
 });
 
 test("an already-aborted signal never executes a command", async () => {
