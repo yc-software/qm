@@ -4,12 +4,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-const core = createServer((_req, res) => {
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end("{}");
-});
-await new Promise<void>((resolve) => core.listen(0, resolve));
-process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";
@@ -24,7 +18,6 @@ const identity = (user = "alice") => ({
 const headers = { ...identity(), "content-type": "application/json", origin: "https://qm.example.test" };
 const offer = JSON.stringify({ sdp: "v=0\r\no=offer" });
 test.after(() => {
-  core.close();
   surface.close();
 });
 

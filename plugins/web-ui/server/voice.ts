@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { Readable } from "node:stream";
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { sameOriginRequest } from "../../chassis/src/http.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -16,11 +15,31 @@ export const dictationFormats: Record<string, string> = {
 
 export class VoiceProviderError extends Error {
   readonly detail: Record<string, unknown>;
+  readonly status: number | undefined;
+  readonly code: string | undefined;
+  readonly retryAfterS: number | undefined;
   constructor(message: string, detail: Record<string, unknown>, cause?: unknown) {
     super(message, { cause });
     this.name = "VoiceProviderError";
     this.detail = detail;
+    this.status = typeof detail.status === "number" ? detail.status : undefined;
+    this.code = providerErrorCode(detail.body);
+    this.retryAfterS = wholeSeconds(detail.retryAfter);
   }
+}
+
+function providerErrorCode(body: unknown): string | undefined {
+  try {
+    const code = (JSON.parse(String(body)) as { error?: { code?: unknown } } | null)?.error?.code;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function wholeSeconds(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value || [...value].some((c) => c < "0" || c > "9")) return undefined;
+  return Number(value);
 }
 
 export function openaiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -49,7 +68,7 @@ interface Caller {
   signal: AbortSignal;
 }
 
-async function openai(path: string, body: ReadableStream | string, headers: Record<string, string>, caller: Caller) {
+async function openai(path: string, body: FormData | string, headers: Record<string, string>, caller: Caller) {
   let response: Response;
   try {
     response = await fetch(`https://api.openai.com/v1/${path}`, {
@@ -64,8 +83,7 @@ async function openai(path: string, body: ReadableStream | string, headers: Reco
           .digest("hex"),
       },
       body,
-      duplex: "half",
-    } as RequestInit & { duplex: "half" });
+    });
   } catch (error) {
     throw new VoiceProviderError(`OpenAI ${path} request failed`, { path }, error);
   }
@@ -97,36 +115,13 @@ async function openai(path: string, body: ReadableStream | string, headers: Reco
   }
 }
 
-export async function transcribe(
-  audio: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
-  mimeType: string,
-  caller: Caller,
-): Promise<string> {
-  const boundary = `qm-${randomUUID()}`;
-  const head =
-    `--${boundary}\r\ncontent-disposition: form-data; name="model"\r\n\r\n${TRANSCRIBE_MODEL}\r\n` +
-    `--${boundary}\r\ncontent-disposition: form-data; name="file"; filename="dictation.${dictationFormats[mimeType]}"\r\n` +
-    `content-type: ${mimeType}\r\n\r\n`;
-  const body = Readable.toWeb(
-    Readable.from(
-      (async function* () {
-        yield Buffer.from(head);
-        yield* audio;
-        yield Buffer.from(`\r\n--${boundary}--\r\n`);
-      })(),
-    ),
-  ) as ReadableStream;
-  const data = await openai(
-    "audio/transcriptions",
-    body,
-    { "content-type": `multipart/form-data; boundary=${boundary}` },
-    caller,
-  );
-  if (typeof data?.text !== "string" || data.text.length > 100_000)
-    throw new VoiceProviderError("Invalid transcription response", {
-      textType: typeof data?.text,
-      length: typeof data?.text === "string" ? data.text.length : undefined,
-    });
+export async function transcribe(audio: Blob, mimeType: string, caller: Caller): Promise<string> {
+  const form = new FormData();
+  form.set("model", TRANSCRIBE_MODEL);
+  form.set("file", audio, `dictation.${dictationFormats[mimeType]}`);
+  const data = await openai("audio/transcriptions", form, {}, caller);
+  if (typeof data?.text !== "string")
+    throw new VoiceProviderError("Invalid transcription response", { textType: typeof data?.text });
   return data.text.trim();
 }
 

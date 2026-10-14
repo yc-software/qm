@@ -4,12 +4,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
-const core = createServer((_req, res) => {
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end("{}");
-});
-await new Promise<void>((resolve) => core.listen(0, resolve));
-process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
 process.env.WEB_UI_VOICE_USERS = "alice";
@@ -24,7 +18,6 @@ const identity = (user = "alice") => ({
 const headers = { ...identity(), "content-type": "audio/mp4", origin: "https://qm.example.test" };
 
 test.after(() => {
-  core.close();
   surface.close();
 });
 
@@ -56,30 +49,50 @@ test("dictation checks identity, origin, allowlist and format before provider ac
   assert.equal(capability.headers.get("cache-control"), "no-store");
 });
 
-test("dictation streams audio to OpenAI and maps its limits to client errors", async (t) => {
+test("dictation maps OpenAI's limits to client errors", async (t) => {
   const actualFetch = globalThis.fetch;
-  let provider = new Response("{}", { status: 429, headers: { "retry-after": "12" } });
-  let uploaded = 0;
+  let provider = () => new Response("{}");
+  let uploaded: number | undefined;
   t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     if (String(input) !== "https://api.openai.com/v1/audio/transcriptions") return actualFetch(input, init);
-    const form = await new Response(init!.body, { headers: init!.headers }).formData();
-    uploaded = (form.get("file") as File).size;
-    return provider;
+    uploaded = ((init!.body as FormData).get("file") as File).size;
+    return provider();
   });
-  const post = (body: BodyInit = "audio") => fetch(`${base}/api/dictation`, { method: "POST", headers, body });
-  const limited = await post();
-  assert.equal(limited.status, 429);
-  assert.equal(limited.headers.get("retry-after"), "12");
-  assert.equal((await limited.json()).error, "provider_rate_limit");
-  provider = new Response("{}", { status: 429, headers: { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" } });
-  assert.equal((await post()).headers.get("retry-after"), null);
-  provider = new Response("{}", { status: 413 });
-  assert.deepEqual(await (await post()).json(), { error: "audio_too_large" });
-  provider = new Response("{}", { status: 400 });
-  assert.equal((await post("")).status, 400);
-  provider = Response.json({ text: "long recording" });
+  const fail =
+    (status: number, code: string, headers: Record<string, string> = {}) =>
+    () =>
+      new Response(JSON.stringify({ error: { code } }), { status, headers });
+  const post = async (body: BodyInit = "audio") => {
+    const response = await fetch(`${base}/api/dictation`, { method: "POST", headers, body });
+    return { status: response.status, retryAfter: response.headers.get("retry-after"), ...(await response.json()) };
+  };
+  provider = fail(429, "rate_limit_exceeded", { "retry-after": "12" });
+  assert.deepEqual(
+    [(await post()).status, (await post()).retryAfter, (await post()).error],
+    [429, "12", "provider_rate_limit"],
+  );
+  for (const retryAfter of ["", "1e3", "-5", "Wed, 21 Oct 2015 07:28:00 GMT"]) {
+    provider = fail(429, "rate_limit_exceeded", { "retry-after": retryAfter });
+    assert.equal((await post()).retryAfter, null);
+  }
+  provider = fail(429, "rate_limit_exceeded");
+  assert.equal((await post()).retryAfter, null);
+  provider = fail(429, "rate_limit_exceeded", { "retry-after": "99999" });
+  assert.equal((await post()).retryAfter, "3600");
+  provider = fail(429, "insufficient_quota");
+  assert.equal((await post()).error, "dictation_unavailable");
+  provider = fail(413, "file_too_large");
+  assert.equal((await post()).error, "audio_too_large");
+  provider = fail(400, "unsupported_format");
+  assert.equal((await post()).error, "invalid_audio");
+  provider = fail(400, "invalid_parameter");
+  assert.equal((await post()).error, "dictation_unavailable");
+  uploaded = undefined;
+  assert.equal((await post("")).error, "empty_audio");
+  assert.equal(uploaded, undefined);
+  provider = () => Response.json({ text: "long recording" });
   const audio = new Uint8Array(30 * 1024 * 1024);
-  assert.equal((await post(audio)).status, 200);
+  assert.equal((await post(audio)).text, "long recording");
   assert.equal(uploaded, audio.byteLength);
 });
 
@@ -143,7 +156,9 @@ test("provider network failures log their cause chain", async (t) => {
   t.mock.method(console, "error", (line: unknown) => void logged.push(String(line)));
   const result = await fetch(`${base}/api/dictation`, { method: "POST", headers, body: "audio" });
   assert.equal(result.status, 503);
-  const line = logged.find((entry) => entry.startsWith("[voice] dictation_provider:"));
+  const line = logged.find(
+    (entry) => entry.startsWith("[voice] dictation_provider:") && entry.includes('"aborted":false'),
+  );
   assert.match(line ?? "", /fetch failed <- .*ECONNRESET.*socket hang up/);
   assert.match(line ?? "", /"path":"audio\/transcriptions"/);
 });

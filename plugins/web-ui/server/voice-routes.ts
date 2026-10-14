@@ -1,4 +1,9 @@
+import { createWriteStream, openAsBlob } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { json, readBodyBytes, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import { errChain } from "../../chassis/src/errors.ts";
@@ -12,6 +17,21 @@ import {
   voiceRequestAllowed,
   VoiceProviderError,
 } from "./voice.ts";
+
+const TRANSCRIBE_TIMEOUT_MS = 600_000;
+const LIVE_SESSION_TIMEOUT_MS = 25_000;
+const MAX_RETRY_AFTER_S = 3600;
+
+async function withSpooledAudio<T>(req: IncomingMessage, mimeType: string, use: (audio: Blob) => Promise<T> | T) {
+  const dir = await mkdtemp(join(tmpdir(), "qm-dictation-"));
+  try {
+    const file = join(dir, "audio");
+    await pipeline(req, createWriteStream(file));
+    return await use(await openAsBlob(file, { type: mimeType }));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
 function reportVoiceError(error: unknown, code: string, aborted = false): void {
   const detail = { ...(error instanceof VoiceProviderError ? error.detail : {}), aborted };
@@ -71,26 +91,34 @@ export async function handleVoiceRoute(
       user,
       org: config.org,
       apiKey: openaiKey()!,
-      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(dictation ? 600_000 : 25_000)]),
+      signal: AbortSignal.any([
+        controller.signal,
+        AbortSignal.timeout(dictation ? TRANSCRIBE_TIMEOUT_MS : LIVE_SESSION_TIMEOUT_MS),
+      ]),
     };
     if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller));
-    return json(res, 200, { text: await transcribe(req, mimeType, caller) });
+    const text = await withSpooledAudio(req, mimeType, (audio) =>
+      audio.size ? transcribe(audio, mimeType, caller) : null,
+    );
+    return text === null ? json(res, 400, { error: "empty_audio" }) : json(res, 200, { text });
   } catch (error) {
     reportVoiceError(error, dictation ? "dictation_provider" : "voice_provider", controller.signal.aborted);
     if (controller.signal.aborted) return;
-    if (!req.readableEnded) res.setHeader("connection", "close");
-    const status = error instanceof VoiceProviderError ? error.detail.status : undefined;
-    if (status === 429) {
-      const retryAfter = Number((error as VoiceProviderError).detail.retryAfter);
-      if (Number.isInteger(retryAfter) && retryAfter >= 0)
-        res.setHeader("retry-after", String(Math.min(retryAfter, 3600)));
+    const provider = error instanceof VoiceProviderError ? error : undefined;
+    if (provider?.status === 429 && provider.code !== "insufficient_quota") {
+      if (provider.retryAfterS !== undefined)
+        res.setHeader("retry-after", String(Math.min(provider.retryAfterS, MAX_RETRY_AFTER_S)));
       return json(res, 429, {
         error: "provider_rate_limit",
         message: "OpenAI is rate limiting requests. Try again shortly.",
       });
     }
-    if (dictation && status === 413) return json(res, 413, { error: "audio_too_large" });
-    if (dictation && status === 400)
+    if (dictation && provider?.status === 413) return json(res, 413, { error: "audio_too_large" });
+    if (
+      dictation &&
+      provider?.status === 400 &&
+      (provider.code === "unsupported_format" || provider.code === "invalid_value")
+    )
       return json(res, 400, { error: "invalid_audio", message: "OpenAI could not read this recording." });
     return dictation
       ? json(res, 503, {
