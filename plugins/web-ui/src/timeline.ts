@@ -322,7 +322,7 @@ export function streamedAnswer(text: string, work: WorkBlock): string {
     : streamingTextTail(text, work.activity);
 }
 
-export function streamTextFrom(text: string, offset: number, startOffset: number): string {
+function streamTextFrom(text: string, offset: number, startOffset: number): string {
   if (offset >= startOffset) return text.slice(offset - startOffset);
   let boundary = 0;
   while (boundary < text.length && text[boundary]!.trim()) boundary++;
