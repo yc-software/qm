@@ -8,6 +8,7 @@ test("updates restart only after preparation succeeds, without prompting", async
   let options;
   let checks = 0;
   let restarts = 0;
+  let stopped = 0;
   const errors = [];
   let onError;
   mock.method(console, "error", (...args) => errors.push(args));
@@ -22,7 +23,13 @@ test("updates restart only after preparation succeeds, without prompting", async
     },
   });
   mock.module("update-electron-app", {
-    namedExports: { UpdateSourceType: { StaticStorage: 1 }, updateElectronApp: (value) => (options = value) },
+    namedExports: {
+      UpdateSourceType: { StaticStorage: 1 },
+      updateElectronApp: (value) => {
+        options = value;
+        return { stopUpdates: () => stopped++ };
+      },
+    },
   });
   try {
     const { startUpdates } = await import("../updates.mjs");
@@ -43,6 +50,9 @@ test("updates restart only after preparation succeeds, without prompting", async
     options.onNotifyUser();
     await tick();
     assert.equal(restarts, 0);
+    assert.equal(stopped, 2);
+    check();
+    assert.equal(checks, 1, "manual checks must retain an already downloaded update");
     prepared.resolve(true);
     await tick();
     assert.equal(restarts, 1);

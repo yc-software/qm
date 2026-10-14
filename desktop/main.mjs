@@ -258,27 +258,33 @@ async function start() {
     await writeFile(`${configPath}.tmp`, JSON.stringify({ url }), { mode: 0o600 });
     await rename(`${configPath}.tmp`, configPath);
   };
-  const checkForUpdates = startUpdates(async () => {
-    for (const page of workspaceWindows) {
-      if (page.isDestroyed()) continue;
-      const ready = await page.webContents.executeJavaScript(`(() => {
+  const checkForUpdates = startUpdates(
+    async () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(false);
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        const ready = await page.webContents.executeJavaScript(`(() => {
         const event = new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } });
         return window.dispatchEvent(event) && event.detail.ready;
       })()`);
-      if (!ready) return false;
-    }
-    for (const page of workspaceWindows) {
-      if (page.isDestroyed()) continue;
-      await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
-      page.webContents.session.flushStorageData();
-      await page.webContents.session.cookies.flushStore();
-    }
-    if (target) {
-      const current = mainWindow?.webContents.getURL();
-      await saveInstance(loginDestination(target, target, current));
-    }
-    return true;
-  });
+        if (!ready) return false;
+      }
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
+        page.webContents.session.flushStorageData();
+        await page.webContents.session.cookies.flushStore();
+      }
+      if (target) {
+        const current = mainWindow?.webContents.getURL();
+        await saveInstance(loginDestination(target, target, current));
+      }
+      return true;
+    },
+    () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(true);
+    },
+  );
   const assertSetup = (event) => {
     if (event.sender !== setupWindow?.webContents || event.senderFrame?.url !== setupUrl) {
       throw new Error("Untrusted settings request");
