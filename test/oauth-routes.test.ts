@@ -241,3 +241,36 @@ test("authorize state stays inside the tightest provider limit and still carries
     await srv.close();
   }
 });
+
+test("disconnecting revokes the grant at the provider, and still disconnects when the provider fails", async () => {
+  for (const providerOk of [true, false]) {
+    const calls: string[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      if (url === "https://oauth2.googleapis.com/revoke") {
+        calls.push(init.body);
+        return { ok: providerOk, status: providerOk ? 200 : 503, json: async () => ({}) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const srv = start(fetchImpl);
+    try {
+      await srv.built.connectorTokens.setConnectorToken("gmail.googleapis.com", "U1", {
+        accessToken: "at-u1",
+        expiresAt: Date.now() + 3_600_000,
+      });
+      const body = JSON.stringify({ principalId: "U1", provider: "google" });
+      const res = await fetch(`${srv.base}/v1/connectors/oauth/revoke`, {
+        method: "POST",
+        headers: sign("POST", "/v1/connectors/oauth/revoke", body),
+        body,
+      });
+      assert.equal(res.status, 200);
+      const out = (await res.json()) as { providerRevocation: string[] };
+      assert.deepEqual(calls, ["token=at-u1"], "one call per distinct token");
+      assert.deepEqual(out.providerRevocation, [providerOk ? "revoked" : "failed: HTTP 503"]);
+      assert.equal(await srv.built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
+    } finally {
+      await srv.close();
+    }
+  }
+});

@@ -66,6 +66,63 @@ export type FetchLike = (
 
 const realFetch: FetchLike = (url, init) => fetch(url, init);
 
+/** Where each provider lets a client revoke a token with only the token itself. Revoking one of these ends the
+ * whole grant (Google also drops the refresh token). Providers missing here need client credentials or have no
+ * endpoint; for those, disconnecting only deletes QM's copy. */
+const REVOKE: Record<string, (token: string) => { url: string; headers: Record<string, string>; body: string }> = {
+  google: (token) => ({
+    url: "https://oauth2.googleapis.com/revoke",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token }).toString(),
+  }),
+  slack: (token) => ({
+    url: "https://slack.com/api/auth.revoke",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/x-www-form-urlencoded" },
+    body: "",
+  }),
+  linear: (token) => ({
+    url: "https://api.linear.app/oauth/revoke",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/x-www-form-urlencoded" },
+    body: "",
+  }),
+  dropbox: (token) => ({
+    url: "https://api.dropboxapi.com/2/auth/token/revoke",
+    headers: { authorization: `Bearer ${token}` },
+    body: "",
+  }),
+};
+
+export type ProviderRevokeResult = "revoked" | "unsupported" | `failed: ${string}`;
+
+/** Best effort: never throws, so a provider outage can't block the local disconnect. */
+export async function revokeAtProvider(
+  provider: string,
+  token: string,
+  opts: { fetchImpl?: FetchLike; timeoutMs?: number } = {},
+): Promise<ProviderRevokeResult> {
+  const build = REVOKE[provider];
+  if (!build) return "unsupported";
+  const req = build(token);
+  const call = (opts.fetchImpl ?? realFetch)(req.url, { method: "POST", headers: req.headers, body: req.body });
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("timed out")), opts.timeoutMs ?? 5_000);
+  });
+  try {
+    const res = await Promise.race([call, timeout]);
+    if (!res.ok) return `failed: HTTP ${res.status}`;
+    if (provider === "slack") {
+      const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!body?.ok) return `failed: ${body?.error ?? "slack error"}`;
+    }
+    return "revoked";
+  } catch (e) {
+    return `failed: ${e instanceof Error ? e.message : "error"}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function parseScopes(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string" && raw.trim()) return raw.trim().split(/\s+/);
