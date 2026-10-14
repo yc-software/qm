@@ -7,13 +7,7 @@ import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import {
-  acquireLeaseWithin,
-  appendEntryOutsideTurn,
-  entryDeliveryKey,
-  type SessionStore,
-  type TranscriptAppendSessions,
-} from "../sessions/session-store.ts";
+import { acquireLeaseWithin, entryDeliveryKey, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
@@ -102,8 +96,10 @@ export function runResultDelivery(
   return null;
 }
 
-export type TurnFailureSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
+export type TurnFailureSessions = Pick<
+  SessionStore,
+  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries"
+>;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
@@ -131,7 +127,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
       message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
       runId: run.id,
     };
-    await appendEntryOutsideTurn(sessions, lease, { type: "system", payload, scopeLabel: session.scopeId });
+    await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
     return true;
   } finally {
     await sessions.releaseLease(lease);

@@ -5,14 +5,9 @@ import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { estimateHistoryTokens, forModelContext } from "../src/harness/context-compaction.ts";
 
-import {
-  contextSummaryPayload,
-  createContextSummaryPayload,
-  tapeCheckpointPayload,
-} from "../src/sessions/session-store.ts";
+import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { createGoalRecord, goalSnapshotPayload, latestGoalRecord } from "../src/harness/goal.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
-import { foldTape, lintFold, tapeEventsEntitled } from "../src/harness/tape-fold.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 
@@ -156,7 +151,7 @@ for (const stage of ["before", "during", "abort-error"] as const) {
   });
 }
 
-for (const stage of ["append", "appendTape", "reset"] as const) {
+for (const stage of ["append", "reset"] as const) {
   test(`${stage} failure is not swallowed or retried as summarization failure`, async () => {
     const f = await fixture();
     try {
@@ -239,13 +234,12 @@ test("recent recovery cannot recover an unauthorized summary or goal", async () 
     const history = await f.compaction.compactRecent(f.input);
     assert.equal(latestGoalRecord(history), null);
     assert.doesNotMatch(JSON.stringify(history), /private sentinel/);
-    assert.doesNotMatch(JSON.stringify(foldTape(await f.sessions.getTape(f.input.session.id))), /private sentinel/);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }
 });
 
-test("recent recovery replaces the replay prefix even when the exclusion ends inside a completed turn", async () => {
+test("recent recovery drops an oversized request inside a completed turn and keeps the goal", async () => {
   const f = await fixture();
   const goal = createGoalRecord({ objective: "verify result" });
   try {
@@ -265,116 +259,11 @@ test("recent recovery replaces the replay prefix even when the exclusion ends in
       scopeLabel: "team:eng",
     });
     await refresh(f);
-    for (const entry of f.input.visibleHistory)
-      if (entry.type === "user" || entry.type === "assistant")
-        await f.sessions.appendTape(f.input.lease, {
-          kind: "message",
-          payload: {
-            role: entry.type,
-            content: [{ type: "text", text: (entry.payload as { text: string }).text }],
-            timestamp: entry.createdAt,
-          },
-          scopeLabel: entry.scopeLabel,
-          entrySeq: entry.seq,
-          harness: "pi",
-        });
-    await f.sessions.appendTape(f.input.lease, {
-      kind: "annotation",
-      payload: tapeCheckpointPayload("turnEnd"),
-      scopeLabel: "personal:test",
-      entrySeq: last.seq,
-    });
     const history = await f.compaction.compactRecent(f.input);
-    const tape = await f.sessions.getTape(f.input.session.id);
-    const folded = foldTape(tape);
-    assert.deepEqual(folded, reconstructMessagesFromHistory(history));
-    assert.ok(countTokens(JSON.stringify(folded)) < 500);
-    assert.ok(lintFold(folded).ok);
+    assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
+    assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
     assert.deepEqual(latestGoalRecord(history), goal);
     assert.ok(history.at(-1)!.seq > last.seq);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), history[0]!.seq);
-    assert.equal(
-      tapeEventsEntitled(tape, [{ id: "test", type: "internal", teamIds: ["eng"] }], "personal:test", "org:test"),
-      true,
-    );
-    assert.equal(tapeEventsEntitled(tape, [{ id: "test", type: "internal" }], "personal:test", "org:test"), false);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
-
-test("a failed recent replay replacement cannot advance tape coverage", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.appendTape(f.input.lease, {
-      kind: "annotation",
-      payload: tapeCheckpointPayload("turnEnd"),
-      scopeLabel: "personal:test",
-      entrySeq: 11,
-    });
-    const appendTape = f.sessions.appendTape;
-    f.sessions.appendTape = async (lease, record) => {
-      if ((record.payload as { event?: string }).event === "legacy_import") throw new Error("import unavailable");
-      return appendTape(lease, record);
-    };
-    await assert.rejects(f.compaction.compactRecent(f.input), /import unavailable/);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), 11);
-    assert.equal(f.resets(), 0);
-    assert.ok((await f.sessions.latestEntrySeq(f.input.session.id)) > 11);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
-
-for (const covered of [false, true]) {
-  test(`recent recovery ${covered ? "advances" : "does not manufacture"} tape coverage`, async () => {
-    const f = await fixture();
-    try {
-      if (covered)
-        await f.sessions.appendTape(f.input.lease, {
-          kind: "annotation",
-          payload: tapeCheckpointPayload("turnEnd"),
-          scopeLabel: "personal:test",
-          entrySeq: 11,
-        });
-      const before = await f.sessions.tapeCoverage(f.input.session.id);
-      const history = await f.compaction.compactRecent(f.input);
-      assert.equal(await f.sessions.tapeCoverage(f.input.session.id), covered ? history[0]!.seq : before);
-      const tape = await f.sessions.getTape(f.input.session.id);
-      const recovery = tape.find((row) => row.kind === "context_event")!;
-      assert.equal((recovery.payload as { mode: string }).mode, "recent");
-      assert.equal((recovery.payload as { event: string }).event, "legacy_import");
-      assert.equal(recovery.coversEntrySeq, covered ? history[0]!.seq : undefined);
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
-}
-
-test("an incomplete recent replacement cannot label retained messages with an older replay boundary", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.append(f.input.lease, {
-      type: "assistant",
-      payload: { text: "Retained completed action." },
-      scopeLabel: "personal:test",
-    });
-    await f.sessions.appendTape(f.input.lease, {
-      kind: "annotation",
-      payload: tapeCheckpointPayload("turnEnd"),
-      scopeLabel: "personal:test",
-      entrySeq: 5,
-    });
-    await refresh(f);
-    await f.compaction.compactRecent(f.input);
-    assert.equal(await f.sessions.tapeCoverage(f.input.session.id), 5);
-    await f.sessions.appendTape(f.input.lease, {
-      kind: "context_event",
-      payload: { event: "compaction", text: "A later summary." },
-      scopeLabel: "personal:test",
-      coversEntrySeq: 11,
-    });
-    assert.match(JSON.stringify(foldTape(await f.sessions.getTape(f.input.session.id))), /Retained completed action/);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }
@@ -415,10 +304,6 @@ for (const tainted of [false, true]) {
       assert.deepEqual(reloaded, history);
       assert.ok(estimateHistoryTokens(reloaded) <= 300);
       assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
-      assert.doesNotMatch(
-        JSON.stringify(foldTape(await f.sessions.getTape(f.input.session.id))),
-        /old message|hidden summary sentinel/,
-      );
     } finally {
       await f.sessions.releaseLease(f.input.lease);
     }

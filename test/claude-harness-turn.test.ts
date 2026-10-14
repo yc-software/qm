@@ -297,55 +297,47 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
   });
 }
 
-for (const persistence of ["final entry", "reply checkpoint"]) {
-  for (const ending of ["close", "throw"]) {
-    test(`Claude completes a committed reply when cancelled during ${persistence} persistence and the SDK will ${ending}`, async () => {
-      const waiting = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const cancel = new AbortController();
-      currentScript = (prompts) => {
-        const generator = (async function* () {
-          await prompts[Symbol.asyncIterator]().next();
-          yield {
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
-          };
-          yield resultMessage("Final full answer");
-          if (ending === "throw") throw new Error("query interrupted");
-        })();
-        if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
-        return generator;
-      };
-      const harness = createClaudeHarness({});
-      const { turn, entries } = harnessTurn({ cancel: cancel.signal });
-      const pause = async () => {
-        waiting.resolve();
-        await release.promise;
-      };
-      if (persistence === "final entry") {
-        const emit = turn.emit;
-        turn.emit = async (entry) => {
-          if (entry.type === "assistant") await pause();
-          return emit(entry);
+for (const ending of ["close", "throw"]) {
+  test(`Claude completes a committed reply when cancelled during final entry persistence and the SDK will ${ending}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    currentScript = (prompts) => {
+      const generator = (async function* () {
+        await prompts[Symbol.asyncIterator]().next();
+        yield {
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
         };
-      } else {
-        turn.tape = async (entry) => {
-          if (entry.kind === "annotation") await pause();
-        };
-      }
-      const running = harness.turns.runTurn(turn);
-      await waiting.promise;
-      cancel.abort();
-      release.resolve();
-      const result = await running;
-      assert.equal(result.stopped, undefined);
-      assert.equal(result.reply, "Final full answer");
-      assert.deepEqual(
-        entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-        [{ text: "Final full answer" }],
-      );
-    });
-  }
+        yield resultMessage("Final full answer");
+        if (ending === "throw") throw new Error("query interrupted");
+      })();
+      if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
+      return generator;
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+    const pause = async () => {
+      waiting.resolve();
+      await release.promise;
+    };
+    const emit = turn.emit;
+    turn.emit = async (entry) => {
+      if (entry.type === "assistant") await pause();
+      return emit(entry);
+    };
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, undefined);
+    assert.equal(result.reply, "Final full answer");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Final full answer" }],
+    );
+  });
 }
 
 test("model calls are counted per API response and charged their real input tokens", async () => {
@@ -451,7 +443,7 @@ test("each steered prompt gets its own LLM request record", async () => {
   assert.equal(
     (llmRequests[1]!.promptEnvelope as { system: string }).system,
     "be brief",
-    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
+    "steer steps reuse the turn's envelope",
   );
   assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
   assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
@@ -592,7 +584,7 @@ test("steering forwards prepared images and file paths while retaining the origi
   assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
 });
 
-test("Claude sends documents without persisting their contents in the tape", async () => {
+test("Claude sends documents without persisting their contents in session entries", async () => {
   const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const secret = "private-document-text";
   let sent = "";
@@ -603,28 +595,23 @@ test("Claude sends documents without persisting their contents in the tape", asy
       return;
     }
   };
-  const tape: unknown[] = [];
-  const { turn } = harnessTurn({
+  const { turn, entries } = harnessTurn({
     documents: [
       { name: "a.pdf", mimeType: "application/pdf", dataBase64: pdf },
       { name: "a.txt", mimeType: "text/plain", dataBase64: Buffer.from(secret).toString("base64") },
     ],
-    tape: async (entry) => {
-      tape.push(entry);
-    },
   });
   await createClaudeHarness({}).turns.runTurn(turn);
   assert.ok(sent.includes(pdf));
   assert.ok(sent.includes(secret));
-  assert.ok(!JSON.stringify(tape).includes(pdf));
-  assert.ok(!JSON.stringify(tape).includes(secret));
+  assert.ok(!JSON.stringify(entries).includes(pdf));
+  assert.ok(!JSON.stringify(entries).includes(secret));
 });
 
 test("Claude includes steered native and fallback documents without capturing their echoed contents", async () => {
   const signals = createMemoryRunSignalStore();
   const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const docx = (await readFile(new URL("./fixtures/documents/sample.docx", import.meta.url))).toString("base64");
-  const tape: unknown[] = [];
   let sent = "";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
@@ -637,12 +624,7 @@ test("Claude includes steered native and fallback documents without capturing th
     yield resultMessage("read both");
     yield resultMessage("done");
   };
-  const { turn } = harnessTurn({
-    runId: "steer-documents",
-    tape: async (row) => {
-      tape.push(row);
-    },
-  });
+  const { turn, entries } = harnessTurn({ runId: "steer-documents" });
   turn.documents = [
     { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
   ];
@@ -667,8 +649,8 @@ test("Claude includes steered native and fallback documents without capturing th
   assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
   assert.match(sent, /truncated to fit/);
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
-  assert.ok(!JSON.stringify(tape).includes(pdf));
-  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(entries).includes(pdf));
+  assert.ok(!JSON.stringify(entries).includes("DOCX-QUARTZ-731"));
 });
 
 test("Claude coordinators expose neither command tools nor native subagents", async () => {
@@ -707,14 +689,7 @@ for (const surfaceTools of [false, true]) {
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
   const signals = createMemoryRunSignalStore();
-  const tape: unknown[] = [];
-  const { turn, entries } = harnessTurn({
-    runId: "echo-intake",
-    input: "same text",
-    tape: async (row) => {
-      tape.push(row);
-    },
-  });
+  const { turn, entries } = harnessTurn({ runId: "echo-intake", input: "same text" });
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
     yield (await iterator.next()).value as unknown as FakeSdkMessage;
@@ -749,7 +724,6 @@ test("Claude emits repeated-text steers only at distinct native user echoes", as
     [undefined, "one", "two"],
   );
   assert.equal((await signals.pending("echo-intake")).length, 0);
-  assert.equal(tape.filter((row) => (row as { meta?: { ts?: string } }).meta?.ts).length, 2);
 });
 
 test("Claude retains a queued message which the SDK never consumes", async () => {

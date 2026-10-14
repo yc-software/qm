@@ -1,4 +1,4 @@
-import { searchRowsFromEntries } from "../src/harness/tape-projection.ts";
+import { searchRowsFromEntries } from "../src/sessions/entry-search.ts";
 import { openSessionStore, parseBackfillArgs, resolveSessions, runBackfill } from "./lib/backfill-runner.ts";
 
 const { apply, only } = parseBackfillArgs();

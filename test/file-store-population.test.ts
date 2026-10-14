@@ -124,7 +124,7 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
   assert.equal(
     inb.images[0]!.artifactId,
     page.files[0]!.id,
-    "the exact model image carries the same durable ref for tape replay",
+    "the exact model image carries the same durable ref for replay",
   );
 });
 

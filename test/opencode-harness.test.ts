@@ -171,7 +171,7 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
   assert.equal(row.step, 0);
   assert.equal(row.model, "openai/gpt-5");
   assert.equal(row.truncated, false);
-  assert.deepEqual(row.promptEnvelope, { system: "s" }, "messages stay on the tape, not in the envelope");
+  assert.deepEqual(row.promptEnvelope, { system: "s" }, "messages stay out of the envelope");
   assert.deepEqual(row.transport, { modelId: "openai/gpt-5" });
   assert.equal(row.durationMs, 1929);
   assert.deepEqual(row.usage, {
@@ -494,7 +494,7 @@ test("OpenCode steer message IDs sort against IDs minted by native OpenCode 1.18
   assert.ok(first < second, "IDs minted in the same millisecond keep creation order");
 });
 
-test("OpenCode includes steered PDF and extracted documents without copying echoed contents into tape", async (t) => {
+test("OpenCode includes steered PDF and extracted documents without copying echoed contents into session entries", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-doc-"));
   const capturePath = join(dir, "steered.json");
   const binary = fakeSidecar(
@@ -532,13 +532,9 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   });
   const pdf = readFileSync(new URL("./fixtures/documents/sample.pdf", import.meta.url)).toString("base64");
   const docx = readFileSync(new URL("./fixtures/documents/sample.docx", import.meta.url)).toString("base64");
-  const tape: unknown[] = [];
   const entries: SessionEntry[] = [];
   const turn = turnInput(entries, []);
   turn.runId = "opencode-steer-docs";
-  turn.tape = async (row) => {
-    tape.push(row);
-  };
   turn.documents = [
     { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
   ];
@@ -588,8 +584,8 @@ test("OpenCode includes steered PDF and extracted documents without copying echo
   assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
   assert.match(sent, /truncated to fit/);
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
-  assert.ok(!JSON.stringify(tape).includes(pdf));
-  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(entries).includes(pdf));
+  assert.ok(!JSON.stringify(entries).includes("DOCX-QUARTZ-731"));
 });
 
 for (const [modelId, fastMode, expected] of [

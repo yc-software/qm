@@ -1981,7 +1981,7 @@ for (const final of [true, false]) {
   }
 }
 
-test("Codex steers extracted documents into the active turn without copying contents into tape", async (t) => {
+test("Codex steers extracted documents into the active turn without copying contents into session entries", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-steer-doc-test-"));
   const binary = stopReportsFailedCodexBinary(dir);
   const capture = join(dir, "steered.json");
@@ -2008,7 +2008,6 @@ test("Codex steers extracted documents into the active turn without copying cont
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
   });
-  const tape: unknown[] = [];
   const entries: SessionEntry[] = [];
   const scope = "personal:tester" as ScopeId;
   const running = harness.turns.runTurn({
@@ -2034,9 +2033,6 @@ test("Codex steers extracted documents into the active turn without copying cont
       return saved;
     },
     recordModelCall: () => {},
-    tape: async (row) => {
-      tape.push(row);
-    },
     prepareSteer: async (text) => ({
       text,
       documents: [
@@ -2067,7 +2063,7 @@ test("Codex steers extracted documents into the active turn without copying cont
   );
   assert.equal((await signals.pending("steer-document-run")).length, 0);
   assert.match(readFileSync(capture, "utf8"), /STEER-PRIVATE-492/);
-  assert.doesNotMatch(JSON.stringify(tape), /STEER-PRIVATE-492/);
+  assert.doesNotMatch(JSON.stringify(entries), /STEER-PRIVATE-492/);
   assert.doesNotMatch(readFileSync(capture, "utf8"), /OUTSIDE-BUDGET-492/);
   assert.match(readFileSync(capture, "utf8"), /truncated to fit/);
 });

@@ -43,7 +43,6 @@ import {
   harnessToolOptions,
   oneShotModelUtilities,
   oneShotRunner,
-  tapeReplyCheckpoint,
   recordSteerIntake,
   recordStoppedReply,
   type SteerIntake,
@@ -51,7 +50,7 @@ import {
   type HarnessToolPlumbing,
   withResumedToolCall,
 } from "./harness-shared.ts";
-import { recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
+import { OMITTED_IMAGE_TEXT, recordedMessageTimestamps, reconstructMessagesFromHistory } from "./replay.ts";
 import { countTokens } from "../util/tokens.ts";
 
 const OPENCODE_VERSION = "1.18.31";
@@ -115,9 +114,8 @@ type ActiveTurn = {
   captures: LlmCapture[];
   steers: Array<{
     text: string;
-    parts: unknown[];
     intake: SteerIntake;
-    stamp?: Awaited<ReturnType<typeof recordSteerIntake>>;
+    recorded?: true;
     messageId: string;
   }>;
   model: string;
@@ -212,18 +210,6 @@ export function modelRef(id: string): { providerID: string; modelID: string } {
   return { providerID: String(resolved?.provider ?? (id.startsWith("gpt-") ? "openai" : "anthropic")), modelID: id };
 }
 
-function stripDataUrls(message: unknown): unknown {
-  const m = message as { parts?: unknown[] };
-  if (!m || !Array.isArray(m.parts)) return message;
-  const parts = m.parts.map((part) => {
-    const p = part as { url?: unknown };
-    if (typeof p?.url !== "string" || !p.url.startsWith("data:")) return part;
-    const { url: _url, ...rest } = p;
-    return { ...rest, omitted: true };
-  });
-  return { ...(message as Record<string, unknown>), parts };
-}
-
 function replayMessages(
   source: ReturnType<typeof reconstructMessagesFromHistory>,
   sessionId: string,
@@ -250,7 +236,7 @@ function replayMessages(
           sessionID: sessionId,
           messageID,
           type: "text",
-          text: part.text,
+          text: part.type === "text" ? part.text : OMITTED_IMAGE_TEXT,
         })),
       });
       continue;
@@ -263,6 +249,7 @@ function replayMessages(
         parts.push({ id: id("part"), sessionID: sessionId, messageID, type: "text", text: part.text });
         continue;
       }
+      if (part.type !== "toolCall") continue;
       const result = source[i + 1];
       const paired = result?.role === "toolResult" && result.toolCallId === part.id ? result : null;
       if (paired) i++;
@@ -277,13 +264,14 @@ function replayMessages(
           ? {
               status: "error",
               input: part.arguments,
-              error: paired.content.map((item) => item.text).join("\n"),
+              error: paired.content.map((item) => (item.type === "text" ? item.text : OMITTED_IMAGE_TEXT)).join("\n"),
               time: { start: message.timestamp, end: paired.timestamp },
             }
           : {
               status: "completed",
               input: part.arguments,
-              output: paired?.content.map((item) => item.text).join("\n") ?? "",
+              output:
+                paired?.content.map((item) => (item.type === "text" ? item.text : OMITTED_IMAGE_TEXT)).join("\n") ?? "",
               title: part.name,
               metadata: {},
               time: { start: message.timestamp, end: paired?.timestamp ?? message.timestamp },
@@ -643,9 +631,10 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
                 for (const message of request.messages) {
                   if (message.info?.role !== "user") continue;
                   const id = message.info?.id;
-                  const steer = state.steers.find((steer) => !steer.stamp && steer.messageId === id);
+                  const steer = state.steers.find((steer) => !steer.recorded && steer.messageId === id);
                   if (steer) {
-                    steer.stamp = await recordSteerIntake(state.turn, steer.intake);
+                    steer.recorded = true;
+                    await recordSteerIntake(state.turn, steer.intake);
                   }
                 }
               }
@@ -996,7 +985,6 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         ];
         const steer = {
           text,
-          parts: [...parts],
           intake,
           messageId: openCodeMessageId(),
         };
@@ -1099,7 +1087,6 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         url: `data:${image.mimeType};base64,${image.dataBase64}`,
       })),
     ];
-    const tapePromptParts = [...promptParts];
     promptParts.push(...(await documentParts(turn.documents ?? [])));
     const enabled = Object.fromEntries(definitions.map((tool) => [tool.name, false]));
     for (const tool of tools) enabled[bridgeToolName(tool.name)] = true;
@@ -1138,44 +1125,13 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           await processEvent({ payload: { type: "message.part.updated", properties: { part } } });
         }
       }
-      if (turn.tape) {
-        let tapedTriggerUser = false;
-        for (const message of messages.data ?? []) {
-          const role = (message as { info?: { role?: string } }).info?.role;
-          if (role !== "user" && role !== "assistant") continue;
-          const isTrigger = role === "user" && !tapedTriggerUser;
-          if (isTrigger) tapedTriggerUser = true;
-          const steered =
-            role === "user" ? state.steers.find((steer) => steer.messageId === message.info.id) : undefined;
-          if (steered && !steered.stamp) continue;
-          const storedParts = isTrigger ? tapePromptParts : steered?.parts;
-          await turn.tape({
-            kind: "message",
-            harness: "opencode",
-            payload: stripDataUrls(storedParts ? { ...message, parts: storedParts } : message),
-            scopeLabel: turn.scopeLabel,
-            ...steered?.stamp,
-            ...(isTrigger
-              ? {
-                  entrySeq: userEntry.seq,
-                  meta: {
-                    bareText: turn.input,
-                    ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-                  },
-                }
-              : {}),
-          });
-        }
-      }
       for (const thinking of reasoningFromParts(parts))
         await turn.emit({ type: "thinking", payload: thinking, scopeLabel: turn.scopeLabel });
       const reply = ref.runtimeHandoff || ref.silentRequested ? "" : textFromParts(parts);
       const interrupted = state.stopped || turn.cancel?.aborted === true;
       if (reply) {
-        const finalEntry = interrupted
-          ? await recordStoppedReply(turn, reply)
-          : await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
-        if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
+        if (interrupted) await recordStoppedReply(turn, reply);
+        else await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
       }
       return {
         reply,

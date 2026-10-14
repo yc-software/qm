@@ -3,14 +3,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
-import { promptEnvelopeBody, type NewEntry, type NewTapeRecord } from "../src/sessions/session-store.ts";
+import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;
-  tape: NewTapeRecord[];
 };
 
 function turnInput(sessionId: string, sink: Sink, overrides: Partial<HarnessTurnInput> = {}): HarnessTurnInput {
@@ -27,9 +26,6 @@ function turnInput(sessionId: string, sink: Sink, overrides: Partial<HarnessTurn
       const appended = { ...entry, seq: seq++, createdAt: Date.now() };
       sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
       return appended as unknown as SessionEntry;
-    },
-    tape: async (rec: NewTapeRecord) => {
-      sink.tape.push(rec);
     },
     recordModelCall: () => {},
     ...overrides,
@@ -82,10 +78,10 @@ function gatedSse(events: Array<Record<string, unknown>>, gate: Promise<void>): 
 for (const variant of ["text", "images", "documents", "finished during preparation"]) {
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
-  test(`tape rows land in consumption order, including steered ${variant}`, async () => {
+  test(`steered input lands in consumption order, including steered ${variant}`, async () => {
     const signals = createMemoryRunSignalStore();
     const harness = createPiHarness({ apiKey: "sk-test", signals });
-    const sink: Sink = { entries: [], tape: [] };
+    const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
       "base64",
     );
@@ -93,13 +89,11 @@ for (const variant of ["text", "images", "documents", "finished during preparati
     const steerQueued = new Promise<void>((resolve) => {
       releaseFirstStep = () => setTimeout(resolve, 50);
     });
-    const tapeRowsAtDispatch: number[] = [];
     const requestMessages: Array<Array<{ role: string }>> = [];
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       calls += 1;
-      tapeRowsAtDispatch.push(sink.tape.filter((rec) => rec.kind === "message").length);
       requestMessages.push((JSON.parse(String(init?.body ?? "{}")) as { messages?: [] }).messages ?? []);
       if (calls === 1) {
         setTimeout(() => {
@@ -130,7 +124,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       return sse(textReplyEvents("final reply"));
     }) as typeof globalThis.fetch;
     try {
-      const turn = turnInput("tape-order", sink, { runId: "run-order" });
+      const turn = turnInput("steer-order", sink, { runId: "run-order" });
       const emit = turn.emit;
       turn.emit = async (entry) => {
         if (entry.type === "thinking") await new Promise((resolve) => setTimeout(resolve, 100));
@@ -160,30 +154,11 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       }
       assert.equal(result.reply, "final reply");
 
-      const messageRows = sink.tape.filter((rec) => rec.kind === "message");
-      assert.deepEqual(
-        messageRows.map((rec) => (rec.payload as { role: string }).role),
-        ["user", "assistant", "user", "assistant"],
-        "the tape holds exactly the consumed messages, in consumption order",
-      );
-      assert.equal(messageRows[0]!.meta?.bareText, "do the thing");
-      assert.equal(messageRows[2]!.meta?.bareText, "actually, do it differently");
-      assert.equal(messageRows[2]!.meta?.ts, "1712.001", "the steer row is stamped with its arrival ts");
-      if (withImages) {
-        const content = (messageRows[2]!.payload as { content: Array<Record<string, unknown>> }).content;
-        assert.deepEqual(
-          content.find((block) => block.type === "image"),
-          {
-            type: "image",
-            mimeType: "image/png",
-            artifactRef: "steered-photo",
-          },
-        );
-      }
+      if (withImages) assert.ok(JSON.stringify(requestMessages[1]).includes("YWJj"));
       if (variant === "documents") {
         assert.ok(!JSON.stringify(requestMessages[0]).includes(documentBase64));
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));
-        assert.ok(!JSON.stringify(sink.tape).includes(documentBase64));
+        assert.ok(!JSON.stringify(sink.entries).includes(documentBase64));
       }
       const steeredEntry = sink.entries.find(
         (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
@@ -194,19 +169,18 @@ for (const variant of ["text", "images", "documents", "finished during preparati
           steeredEntry.seq > sink.entries.find((entry) => entry.type === "thinking")!.seq,
           "slow persistence of prior thinking must not cross the intake event",
         );
-      assert.equal(messageRows[2]!.entrySeq, steeredEntry.seq);
+      assert.equal(
+        (steeredEntry.payload as { ts?: string }).ts,
+        "1712.001",
+        "the steer entry is stamped with its arrival ts",
+      );
+      assert.match((steeredEntry.payload as { text: string }).text, /actually, do it differently/);
       assert.deepEqual(await signals.takePending("run-order"), [], "consumed steer is acknowledged");
       assert.equal(calls, 2);
-      assert.equal(tapeRowsAtDispatch[0], 1, "the trigger user row is committed before the first dispatch");
-      assert.equal(
-        tapeRowsAtDispatch[1],
-        3,
-        "step 2 is not dispatched until the trigger, first reply, and injected steer are all on the tape",
-      );
       assert.deepEqual(
         requestMessages[1]!.map((message) => message.role),
         ["user", "assistant", "user"],
-        "the steer was injected into the model context exactly where the tape says",
+        "the steer was injected into the model context after the first reply",
       );
     } finally {
       globalThis.fetch = realFetch;
@@ -214,33 +188,9 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   });
 }
 
-test("a failed tape append fails the turn loudly with the append error, no checkpoint", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
-  const sink: Sink = { entries: [], tape: [] };
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => sse(textReplyEvents("a reply that must not survive"))) as typeof globalThis.fetch;
-  try {
-    const turn = turnInput("tape-fatal", sink, {
-      tape: async (rec: NewTapeRecord) => {
-        if (rec.kind === "message" && (rec.payload as { role?: string }).role === "assistant")
-          throw new Error("tape insert refused");
-        sink.tape.push(rec);
-      },
-    });
-    await assert.rejects(harness.turns.runTurn(turn), /tape insert refused/);
-    assert.equal(
-      sink.tape.some((rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd),
-      false,
-      "no completeness checkpoint is stamped over the failure",
-    );
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
-
 test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
-  const sink: Sink = { entries: [], tape: [] };
+  const sink: Sink = { entries: [] };
   const store = createMemorySessionStore();
   const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
   const attempt = await store.acquireLease(session.id, "turn");
@@ -255,17 +205,16 @@ test("a lease lost mid-turn fails the turn instead of degrading silently", async
   }) as typeof globalThis.fetch;
   try {
     const turn = turnInput(session.id, sink, {
-      tape: (rec: NewTapeRecord) => store.appendTape(lease, rec),
+      emit: (entry) => store.append(lease, entry),
     });
     await assert.rejects(harness.turns.runTurn(turn), /without a valid session lease/);
-    assert.equal(await store.tapeCoverage(session.id), -1, "nothing on the stolen-lease tape claims coverage");
   } finally {
     globalThis.fetch = realFetch;
   }
 });
 
 test("completed Pi attach results retain openable files in viewer history", async () => {
-  const { createTranscriptSource } = await import("../src/harness/tape-projection.ts");
+  const { createTranscriptSource } = await import("../src/sessions/transcript-source.ts");
   const store = createMemorySessionStore();
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
@@ -300,16 +249,13 @@ test("completed Pi attach results retain openable files in viewer history", asyn
     const result = await harness.turns.runTurn(
       turnInput(
         session.id,
-        { entries: [], tape: [] },
+        { entries: [] },
         {
           session,
           tools: {
             attach: async () => ({ ok: true, files, staged: files.length }),
           } as unknown as HarnessTurnInput["tools"],
           emit: (entry) => store.append(lease, entry),
-          tape: async (rec) => {
-            await store.appendTape(lease, rec);
-          },
         },
       ),
     );
@@ -348,7 +294,7 @@ for (const route of ["gateway", "direct", "personal"] as const) {
           }
         : {}),
     });
-    const sink: Sink = { entries: [], tape: [] };
+    const sink: Sink = { entries: [] };
     const pdf = await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url));
     const dataBase64 = Buffer.concat([pdf, Buffer.alloc(4_000_000 - pdf.length, 32)]).toString("base64");
     const realFetch = globalThis.fetch;
@@ -380,9 +326,9 @@ for (const route of ["gateway", "direct", "personal"] as const) {
   });
 }
 
-test("native document bytes reach the provider on every step without entering the transcript tape", async () => {
+test("native document bytes reach the provider on every step without entering session entries", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
-  const sink: Sink = { entries: [], tape: [] };
+  const sink: Sink = { entries: [] };
   const realFetch = globalThis.fetch;
   const requests: Array<Record<string, unknown>> = [];
   const dataBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
@@ -398,7 +344,7 @@ test("native document bytes reach the provider on every step without entering th
     );
     assert.match(JSON.stringify(requests), /"type":"document"/);
     assert.ok(JSON.stringify(requests).includes(dataBase64));
-    assert.ok(!JSON.stringify(sink.tape).includes(dataBase64));
+    assert.ok(!JSON.stringify(sink.entries).includes(dataBase64));
     await harness.turns.runTurn(turnInput("native-documents", sink));
     assert.ok(
       !JSON.stringify(requests.at(-1)).includes(dataBase64),
@@ -409,9 +355,9 @@ test("native document bytes reach the provider on every step without entering th
   }
 });
 
-test("Pi Responses captures exclude history and document text without changing requests or tape", async () => {
+test("Pi Responses captures exclude history and document text without changing requests or entries", async () => {
   const harness = createPiHarness({ openaiApiKey: "sk-test", modelId: "gpt-5.6-sol" });
-  const sink: Sink = { entries: [], tape: [] };
+  const sink: Sink = { entries: [] };
   const captures: HarnessLlmRequestRecord[] = [];
   const realFetch = globalThis.fetch;
   const requests: unknown[] = [];
@@ -451,7 +397,7 @@ test("Pi Responses captures exclude history and document text without changing r
     assert.match(JSON.stringify(requests[0]), /do the thing/);
     assert.match(JSON.stringify(requests.at(-1)), /do the thing/);
     assert.match(JSON.stringify(requests.at(-1)), /The turn ended with an empty message/);
-    assert.match(JSON.stringify(sink.tape), /do the thing/);
+    assert.match(JSON.stringify(sink.entries), /do the thing/);
     const firstEnvelope = promptEnvelopeBody(captures[0]!.promptEnvelope)!;
     assert.match(firstEnvelope.body, /BASE/);
     for (const capture of captures) {
@@ -461,14 +407,14 @@ test("Pi Responses captures exclude history and document text without changing r
     assert.ok(JSON.stringify(requests).includes("RTF-QUARTZ-731"));
     assert.ok(captures.length > 0);
     assert.ok(!JSON.stringify(captures).includes("RTF-QUARTZ-731"));
-    assert.ok(!JSON.stringify(sink.tape).includes("RTF-QUARTZ-731"));
+    assert.ok(!JSON.stringify(sink.entries).includes("RTF-QUARTZ-731"));
   } finally {
     globalThis.fetch = realFetch;
   }
 });
 
 for (const stopBeforeIntake of [false, true]) {
-  test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and replay order"}`, async () => {
+  test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
     const signals = createMemoryRunSignalStore();
     const harness = createPiHarness({ apiKey: "sk-test", signals });
     const store = createMemorySessionStore();
@@ -497,7 +443,7 @@ for (const stopBeforeIntake of [false, true]) {
       await harness.turns.runTurn(
         turnInput(
           session.id,
-          { entries: [], tape: [] },
+          { entries: [] },
           {
             session,
             runId: "tool-steer",
@@ -519,32 +465,24 @@ for (const stopBeforeIntake of [false, true]) {
               entries.push(saved);
               return saved;
             },
-            tape: (row) => store.appendTape(lease, row),
           },
         ),
       );
-      const tape = await store.getTape(session.id);
-      const steerRows = tape.filter((row) => row.meta?.ts === "tool.1");
       const users = entries.filter((entry) => entry.type === "user");
       if (stopBeforeIntake) {
         assert.equal(users.length, 1);
-        assert.equal(steerRows.length, 0);
         assert.equal((await signals.pending("tool-steer")).filter((row) => row.signal.kind === "steer").length, 1);
         const before = calls;
-        await harness.turns.runTurn(turnInput(session.id, { entries: [], tape: [] }));
+        await harness.turns.runTurn(turnInput(session.id, { entries: [] }));
         assert.equal(calls, before + 1, "cached Pi session must not redeliver the queued steer on its own");
       } else {
         assert.deepEqual(
           entries.map((entry) => entry.type),
           ["user", "tool_call", "tool_result", "user", "assistant"],
         );
-        assert.equal(steerRows[0]?.entrySeq, users[1]?.seq);
-        assert.equal(steerRows[0]?.meta?.entryCreatedAt, users[1]?.createdAt);
-        const { projectTapeEntries } = await import("../src/harness/tape-projection.ts");
-        const replay = projectTapeEntries(session.id, tape);
-        assert.ok(replay);
+        assert.equal((users[1]!.payload as { ts?: string }).ts, "tool.1");
         assert.deepEqual(
-          replay.entries.map((entry) => [entry.seq, entry.type]),
+          (await store.getEntries(session.id)).map((entry) => [entry.seq, entry.type]),
           entries.map((entry) => [entry.seq, entry.type]),
         );
         assert.equal((await signals.pending("tool-steer")).length, 0);
@@ -557,80 +495,62 @@ for (const stopBeforeIntake of [false, true]) {
   });
 }
 
-for (const failure of ["acknowledge", "tape"] as const) {
-  test(`a consumed steer is recorded when ${failure === "acknowledge" ? "its acknowledgement fails" : "an earlier tape append failed"}`, async () => {
-    const signals = createMemoryRunSignalStore();
-    if (failure === "acknowledge")
-      signals.acknowledge = async () => {
-        throw new Error("signal store unavailable");
-      };
-    const harness = createPiHarness({ apiKey: "sk-test", signals });
-    const sink: Sink = { entries: [], tape: [] };
-    const realFetch = globalThis.fetch;
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      if (++calls > 1) return sse(textReplyEvents("done"));
-      const events = textReplyEvents("");
-      events[1] = {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
-      };
-      events[2] = {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
-      };
-      events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
-      return sse(events);
-    }) as typeof fetch;
-    try {
-      const turn = turnInput("steer-failure", sink, {
-        runId: "steer-failure",
-        tools: {
-          memoryRead: async () => {
-            await signals.send("steer-failure", { kind: "steer", text: "use the other file", ts: "fail.1" });
-            await new Promise((resolve) => setTimeout(resolve, 30));
-            return "saved facts";
-          },
-        } as HarnessTurnInput["tools"],
-        tape: async (rec: NewTapeRecord) => {
-          if (failure === "tape" && rec.kind === "message" && (rec.payload as { role?: string }).role === "toolResult")
-            throw new Error("tape insert refused");
-          sink.tape.push(rec);
+test("a consumed steer is recorded when its acknowledgement fails", async () => {
+  const signals = createMemoryRunSignalStore();
+  signals.acknowledge = async () => {
+    throw new Error("signal store unavailable");
+  };
+  const harness = createPiHarness({ apiKey: "sk-test", signals });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    if (++calls > 1) return sse(textReplyEvents("done"));
+    const events = textReplyEvents("");
+    events[1] = {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "read-memory", name: "memory", input: {} },
+    };
+    events[2] = {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify({ action: "read" }) },
+    };
+    events[4] = { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 3 } };
+    return sse(events);
+  }) as typeof fetch;
+  try {
+    const turn = turnInput("steer-failure", sink, {
+      runId: "steer-failure",
+      tools: {
+        memoryRead: async () => {
+          await signals.send("steer-failure", { kind: "steer", text: "use the other file", ts: "fail.1" });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return "saved facts";
         },
-      });
-      const steered = () =>
-        sink.entries.filter((entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered);
-      if (failure === "tape") {
-        await assert.rejects(harness.turns.runTurn(turn), /tape insert refused/);
-        assert.equal(steered().length, 1, "the consumed steer keeps its canonical intake entry");
-        assert.equal((await signals.pending("steer-failure")).length, 0, "the recorded steer is acknowledged");
-        assert.equal(
-          sink.tape.some((rec) => rec.meta?.ts === "fail.1"),
-          false,
-          "no tape row is written after the tape failed",
-        );
-      } else {
-        const result = await harness.turns.runTurn(turn);
-        assert.equal(result.reply, "done", "an acknowledgement failure does not tear down the live turn");
-        assert.equal(steered().length, 1);
-        assert.equal(sink.tape.find((rec) => rec.meta?.ts === "fail.1")?.entrySeq, steered()[0]!.seq);
-        assert.equal(
-          (await signals.pending("steer-failure")).filter((row) => row.signal.kind === "steer").length,
-          1,
-          "an unacknowledged steer stays pending for replay",
-        );
-      }
-    } finally {
-      globalThis.fetch = realFetch;
-      await harness.turns.close?.();
-    }
-  });
-}
+      } as HarnessTurnInput["tools"],
+    });
+    const result = await harness.turns.runTurn(turn);
+    assert.equal(result.reply, "done", "an acknowledgement failure does not tear down the live turn");
+    const steered = sink.entries.filter(
+      (entry) => entry.type === "user" && (entry.payload as { steered?: boolean }).steered,
+    );
+    assert.equal(steered.length, 1);
+    assert.equal((steered[0]!.payload as { ts?: string }).ts, "fail.1");
+    assert.equal(
+      (await signals.pending("steer-failure")).filter((row) => row.signal.kind === "steer").length,
+      1,
+      "an unacknowledged steer stays pending for replay",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await harness.turns.close?.();
+  }
+});
 
 for (const abort of ["shutdown", "stop"] as const) {
-  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted on entries and tape and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
+  test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
     const harness = createPiHarness({ apiKey: "sk-test" });
     const store = createMemorySessionStore();
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
@@ -660,7 +580,7 @@ for (const abort of ["shutdown", "stop"] as const) {
       await harness.turns.runTurn(
         turnInput(
           session.id,
-          { entries: [], tape: [] },
+          { entries: [] },
           {
             session,
             runId: `${abort}-tool`,
@@ -679,7 +599,6 @@ for (const abort of ["shutdown", "stop"] as const) {
               entries.push(saved);
               return saved;
             },
-            tape: (row) => store.appendTape(lease, row),
           },
         ),
       );
@@ -691,18 +610,6 @@ for (const abort of ["shutdown", "stop"] as const) {
           ? { interrupted: true, result: "[exit 143]" }
           : { interrupted: undefined, result: "[exit 143]" },
       );
-      const tape = await store.getTape(session.id);
-      const tapedResult = tape.find(
-        (row) => row.kind === "message" && (row.payload as { role?: string }).role === "toolResult",
-      );
-      assert.ok(tapedResult);
-      assert.equal(
-        (tapedResult.payload as { interrupted?: unknown }).interrupted,
-        abort === "shutdown" ? true : undefined,
-      );
-      const { openTapeToolCalls, foldTape, lintFold } = await import("../src/harness/tape-fold.ts");
-      assert.deepEqual(openTapeToolCalls(tape).open, abort === "shutdown" ? ["read-memory"] : []);
-      assert.ok(lintFold(foldTape(tape)).ok, "the served fold keeps the result beside its call");
       const { resumeStrategy } = await import("../src/core/turn-resume.ts");
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
       assert.equal(

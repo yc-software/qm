@@ -12,12 +12,9 @@ import type {
 import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import { collectBytes } from "../../util/bytes.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
-import type { FileArtifact, FileArtifactStore } from "../../files/file-artifact-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
-import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../attachments.ts";
 import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
 import type { OrchestratorInput } from "./types.ts";
@@ -54,38 +51,6 @@ export function headLooksLikeText(head: Buffer): boolean {
     if (c === 0xfffd || (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d)) suspicious++;
   }
   return suspicious / head.length < 0.1;
-}
-
-export async function loadTapeImage(
-  files: FileArtifactStore,
-  artifactRef: string,
-  remainingBytes: number,
-  authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
-) {
-  const artifact = await files.get(artifactRef);
-  if (
-    !artifact ||
-    !(await authorize(artifact)) ||
-    !isVisionAttachment(artifact) ||
-    artifact.sizeBytes <= 0 ||
-    !artifact.sha256
-  )
-    return null;
-  if (artifact.sizeBytes > MAX_VISION_IMAGE_BYTES || artifact.sizeBytes > remainingBytes) return "over-budget";
-  const opened = await files.open(artifactRef);
-  if (!opened) return null;
-  if (
-    opened.sizeBytes !== artifact.sizeBytes ||
-    opened.artifact.sizeBytes !== artifact.sizeBytes ||
-    opened.artifact.sha256 !== artifact.sha256 ||
-    opened.artifact.mimetype !== artifact.mimetype
-  ) {
-    opened.stream.destroy();
-    return null;
-  }
-  const bytes = await collectBytes(opened.stream, { maxBytes: Math.min(MAX_VISION_IMAGE_BYTES, remainingBytes) });
-  if (bytes.sizeBytes !== artifact.sizeBytes || bytes.sha256 !== artifact.sha256) return null;
-  return { data: bytes.data.toString("base64"), mimeType: artifact.mimetype, sizeBytes: bytes.sizeBytes };
 }
 
 const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {

@@ -30,6 +30,7 @@
  */
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
+import { withoutWire } from "./context-compaction.ts";
 
 type GoalStatus = "active" | "paused" | "complete";
 
@@ -250,7 +251,7 @@ export function goalWorkFromEntries(entries: ReadonlyArray<{ type: string; paylo
     if (e.type === "user" || e.type === "assistant" || e.type === "text") {
       if (typeof payload.text === "string") lines.push(`${e.type}: ${payload.text}`);
     } else if (e.type === "tool_call" || e.type === "tool_result") {
-      lines.push(`${e.type}: ${JSON.stringify(e.payload ?? {})}`);
+      lines.push(`${e.type}: ${JSON.stringify(withoutWire(e.payload))}`);
     }
   }
   return goalWorkDigest(lines);

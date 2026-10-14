@@ -175,7 +175,7 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "tape"; sessionId: string; title: string; status: string; rendered: string }
+  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
@@ -934,7 +934,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
           return {
             ok: true,
-            mode: "tape",
+            mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
             status: await statusOf(target),

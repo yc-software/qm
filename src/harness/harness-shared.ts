@@ -1,3 +1,4 @@
+import type { ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
@@ -11,8 +12,7 @@ import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from ".
 import { goalWorkFromEntries, rehydrateOpenGoal } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 
 export interface HarnessToolPlumbing {
@@ -41,71 +41,46 @@ export type BridgedTool = {
 
 export interface SteerIntake {
   text: string;
+  prompt?: string;
   ts?: string;
   attachments?: HarnessTurnInput["attachments"];
+  images?: HarnessTurnInput["images"];
   acknowledge?: () => Promise<void>;
 }
 
-export async function recordSteerIntake(
-  turn: HarnessTurnInput,
-  steer: SteerIntake,
-): Promise<Pick<NewTapeRecord, "entrySeq" | "meta">> {
-  const entry = await turn.emit({
+export function imageRefs(images: HarnessTurnInput["images"]): { images?: ReplayImageRef[] } {
+  if (!images?.length) return {};
+  return {
+    images: images.map((image) => ({
+      mimeType: image.mimeType,
+      ...(image.artifactId ? { artifactId: image.artifactId } : {}),
+    })),
+  };
+}
+
+export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerIntake): Promise<void> {
+  await turn.emit({
     type: "user",
     payload: {
       text: steer.text,
+      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.ts ? { ts: steer.ts } : {}),
       steered: true,
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+      ...imageRefs(steer.images),
     },
     scopeLabel: turn.scopeLabel,
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
-  return {
-    entrySeq: entry.seq,
-    meta: {
-      bareText: steer.text,
-      ...(steer.ts ? { ts: steer.ts } : {}),
-      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-      entryCreatedAt: entry.createdAt,
-    },
-  };
 }
 
-export async function tapeReplyCheckpoint(
-  turn: Pick<HarnessTurnInput, "tape" | "scopeLabel">,
-  entry: Pick<SessionEntry, "seq" | "createdAt" | "payload">,
-): Promise<void> {
-  if (!turn.tape) return;
-  await turn.tape({
-    kind: "annotation",
-    payload: tapeCheckpointPayload("subturnEnd", { type: "assistant", payload: entry.payload, at: entry.createdAt }),
-    scopeLabel: turn.scopeLabel,
-    entrySeq: entry.seq,
-  });
-}
-
-export async function recordStoppedReply(turn: HarnessTurnInput, text: string): Promise<SessionEntry | null> {
+export async function recordStoppedReply(
+  turn: HarnessTurnInput,
+  text: string,
+  replay: Record<string, unknown> = {},
+): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
-  return turn.emit({ type: "assistant", payload: { text, stopped: true }, scopeLabel: turn.scopeLabel });
-}
-
-export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput {
-  const tape = turn.tape;
-  if (!tape) return turn;
-  const emit = turn.emit;
-  return {
-    ...turn,
-    emit: async (entry) => {
-      const saved = await emit(entry);
-      try {
-        await tape(tapeEntryMirrorRecord(saved));
-      } catch (error) {
-        swallow("harness: entry mirror", error);
-      }
-      return saved;
-    },
-  };
+  return turn.emit({ type: "assistant", payload: { text, stopped: true, ...replay }, scopeLabel: turn.scopeLabel });
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {

@@ -11,7 +11,6 @@ import {
   type GoalRecord,
 } from "../src/harness/goal.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
-import { tapeCheckpointPayload } from "../src/sessions/session-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { ScopeId } from "../src/types.ts";
 
@@ -216,34 +215,5 @@ for (const background of [false, true]) {
     assert.equal(carried.scopeLabel, sourceScope);
     assert.equal((carried.payload as { securityTainted?: boolean }).securityTainted, true);
     assert.equal(latestGoalRecord(forModelContext(entries)), null);
-  });
-}
-
-for (const covered of [false, true]) {
-  test(`goal compaction ${covered ? "advances covered tape through the summary" : "does not certify an existing tape gap"}`, async () => {
-    const { sessions, session, lease, compaction } = await fixture("active");
-    try {
-      const visibleHistory = (await sessions.getContextWindow(session.id)).entries;
-      if (covered)
-        await sessions.appendTape(lease, {
-          kind: "annotation",
-          payload: tapeCheckpointPayload("turnEnd"),
-          scopeLabel: scope,
-          entrySeq: visibleHistory.at(-1)!.seq,
-        });
-      const before = await sessions.tapeCoverage(session.id);
-      const rebuilt = await compaction.compactContextIfNeeded({
-        session,
-        lease,
-        visibleHistory,
-        scopeId: scope,
-        orgScopeId: "org:test",
-        actorId: "test",
-      });
-      const summary = rebuilt.find((entry) => (entry.payload as { kind?: string }).kind === "context_summary")!;
-      assert.equal(await sessions.tapeCoverage(session.id), covered ? summary.seq : before);
-    } finally {
-      await sessions.releaseLease(lease);
-    }
   });
 }

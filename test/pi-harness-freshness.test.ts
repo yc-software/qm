@@ -154,21 +154,28 @@ test("model utilities resolve provider credentials for every call", async () => 
   assert.equal(resolutions, 2);
 });
 
-test("prior-turn bootstrap is taped as a retry-idempotent import before the first prompt", async () => {
-  const harness = createPiHarness();
-  const records: Array<{ kind: string; payload: unknown }> = [];
+test("prior-turn bootstrap reaches the model before the first prompt", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const bodies: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    bodies.push(String(init?.body ?? ""));
+    return new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "stop" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
   const turn = recordingTurn("BASE", [], "prior-bootstrap");
   turn.priorTurns = [
     { role: "assistant", text: "I opened this thread with the release result" },
     { role: "user", name: "Jordan", text: "tell me more" },
   ];
-  turn.tape = async (record) => {
-    records.push({ kind: record.kind, payload: record.payload });
-  };
-  await runIgnoringPromptError(harness, turn);
-  const bootstrap = records.filter((record) => record.kind === "context_event");
-  assert.equal(bootstrap.length, 1);
-  assert.equal((bootstrap[0]!.payload as { event?: string }).event, "legacy_import");
-  assert.match(JSON.stringify(bootstrap[0]), /release result/);
-  assert.match(JSON.stringify(bootstrap[0]), /tell me more/);
+  try {
+    await runIgnoringPromptError(harness, turn);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(bodies.length > 0);
+  assert.match(bodies[0]!, /release result/);
+  assert.match(bodies[0]!, /tell me more/);
 });

@@ -12,7 +12,6 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
-import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
@@ -307,10 +306,9 @@ export function createHarnessRouter(
               }
             : {}),
         };
-        const taped = adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched);
         return adapter.profile.capabilities.has("goal-enforcement")
-          ? adapter.turns.runTurn(taped)
-          : runTurnEnforcingGoal(adapter, taped, choice.harnessId);
+          ? adapter.turns.runTurn(dispatched)
+          : runTurnEnforcingGoal(adapter, dispatched, choice.harnessId);
       },
       async resetSession(sessionId) {
         lastHarness.delete(sessionId);

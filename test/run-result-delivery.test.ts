@@ -387,15 +387,6 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     message: "I couldn't finish that turn: something went wrong on my end",
     runId: "r-1",
   });
-  const tape = await sessions.getTape(session.id);
-  assert.equal(tape.length, 2);
-  assert.equal(
-    tape.filter((row) => (row.payload as { turnEnd?: boolean }).turnEnd === true).length,
-    1,
-    "exactly one turnEnd checkpoint keeps model coverage intact",
-  );
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
   assert.equal((await sessions.getEntries(session.id)).length, 1);

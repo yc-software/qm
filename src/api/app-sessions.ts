@@ -8,10 +8,8 @@ import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { entryWithinTenure, transcriptEntries, windowedTranscript } from "../sessions/session-store.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
-import { appendCoverageImport } from "../harness/replay.ts";
-import { swallowAs } from "../util/errors.ts";
+import { entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
+import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { latestGoalRecord } from "../harness/goal.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
@@ -173,11 +171,9 @@ export function createSessionMethods(
   const viewerEntryAt = async (sessionId: string, principalId: string, seq: number) => {
     const latest = await deps.sessions.latestEntrySeq(sessionId);
     if (seq > latest) return undefined;
-    let scoped = transcriptEntries(
-      (await transcripts.forViewer(sessionId, principalId, { limit: latest - seq + 1 })).entries,
-    );
+    let scoped = (await transcripts.forViewer(sessionId, principalId, { limit: latest - seq + 1 })).entries;
     if (scoped.length && scoped[0]!.seq > seq) {
-      scoped = transcriptEntries((await transcripts.forViewer(sessionId, principalId)).entries);
+      scoped = (await transcripts.forViewer(sessionId, principalId)).entries;
     }
     return scoped.find((e) => e.seq === seq) ?? (await viewerStoredEntryAt(sessionId, principalId, seq));
   };
@@ -224,11 +220,11 @@ export function createSessionMethods(
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
-      let all = transcriptEntries(read.entries);
+      let all = read.entries;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(all, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forRender(sessionId, { limit, beforeSeq: window?.beforeSeq });
-        all = transcriptEntries(read.entries);
+        all = read.entries;
       }
       const w = windowedTranscript(all, window);
       const earlier = w.earlier + read.earlier;
@@ -274,11 +270,11 @@ export function createSessionMethods(
         deps.sessions.listPins(sessionId),
       ]);
       let read = initialRead;
-      let visible = transcriptEntries(read.entries);
+      let visible = read.entries;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
         read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
-        visible = transcriptEntries(read.entries);
+        visible = read.entries;
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
@@ -324,9 +320,8 @@ export function createSessionMethods(
       if (!seqs.length) return decoratedPins(pinRecords, [], resolveMissing);
       const latest = await deps.sessions.latestEntrySeq(session.id);
       const minSeq = Math.min(...seqs);
-      const visible = transcriptEntries(
-        (await transcripts.forViewer(session.id, reader, { limit: Math.max(1, latest - minSeq + 1) })).entries,
-      );
+      const visible = (await transcripts.forViewer(session.id, reader, { limit: Math.max(1, latest - minSeq + 1) }))
+        .entries;
       return decoratedPins(pinRecords, visible, resolveMissing);
     },
 
@@ -887,7 +882,7 @@ export function createSessionMethods(
       if (!source) return null;
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
-        let visible = transcriptEntries((await transcripts.forViewer(sessionId, principalId)).entries);
+        let visible = (await transcripts.forViewer(sessionId, principalId)).entries;
         if (projectMembers?.length) {
           const views = await Promise.all(
             projectMembers.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
@@ -921,11 +916,6 @@ export function createSessionMethods(
             copied.map((entry) => ({ type: entry.type, payload: entry.payload, scopeLabel: entry.scopeLabel })),
           );
           forkBoundarySeq = copiedEntries.at(-1)?.seq ?? null;
-          if (forkBoundarySeq !== null) {
-            await appendCoverageImport(deps.sessions, lease, copiedEntries, source.scopeId).catch(
-              swallowAs("fork: tape import", undefined),
-            );
-          }
         } finally {
           await deps.sessions.releaseLease(lease);
         }
@@ -947,7 +937,7 @@ export function createSessionMethods(
         });
         const stored = (await deps.sessions.get(forked.id)) ?? forked;
         const session = { ...stored, canContinue: await canContinueOnWeb(principalId, stored) };
-        return { session, entries: transcriptEntries((await transcripts.forRender(forked.id)).entries) };
+        return { session, entries: (await transcripts.forRender(forked.id)).entries };
       };
       const projectId = parsed.kind === "group" ? projectIdFromGroupRef(parsed.ref) : null;
       if (!projectId) return fork();

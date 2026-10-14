@@ -91,7 +91,6 @@ const LIVE_COLUMNS = [
   ["directory_channel_members", ["principal_id"]],
 ];
 const HISTORY_COLUMNS = [
-  ["session_entries", ["scope_label", "payload"]],
   ["session_llm_requests", ["scope_label", "request"]],
   ["runs", ["request", "result"]],
   ["tool_calls", ["output"]],

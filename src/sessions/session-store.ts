@@ -148,149 +148,7 @@ export interface SessionPin extends NewSessionPin {
   createdAt: number;
 }
 
-type TapeKind = "message" | "context_event" | "annotation";
-
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
-
-export const TAPE_RENDER_VERSION = 1;
-
-export interface TapeCheckpointEntry {
-  type: EntryType;
-  payload: unknown;
-  at: number;
-}
-
-export function tapeCheckpointPayload(
-  bound: "turnEnd" | "subturnEnd",
-  entry?: TapeCheckpointEntry,
-  spanStart?: number,
-): Record<string, unknown> {
-  return {
-    [bound]: true,
-    render: TAPE_RENDER_VERSION,
-    ...(entry ? { entry } : {}),
-    ...(spanStart !== undefined ? { spanStart } : {}),
-  };
-}
-
-export function tapeEntryMirrorRecord(entry: {
-  seq: number;
-  createdAt: number;
-  type: string;
-  payload: unknown;
-  scopeLabel: ScopeId;
-}): NewTapeRecord {
-  return {
-    kind: "annotation",
-    payload: { entry: { type: entry.type, payload: entry.payload, at: entry.createdAt } },
-    scopeLabel: entry.scopeLabel,
-    entrySeq: entry.seq,
-  };
-}
-
-export function tapeTranscriptEntryRecord(entry: SessionEntry): NewTapeRecord {
-  return {
-    kind: "annotation",
-    payload: {
-      event: "transcript_entry",
-      entry: { type: entry.type, payload: entry.payload, at: entry.createdAt, parentSeq: entry.parentSeq },
-    },
-    scopeLabel: entry.scopeLabel,
-    entrySeq: entry.seq,
-  };
-}
-
-export function transcriptEntryFromTape(row: TapeRecord): SessionEntry | null {
-  if (row.kind !== "annotation" || row.entrySeq === undefined) return null;
-  const payload = row.payload as {
-    event?: unknown;
-    entry?: { type?: unknown; payload?: unknown; at?: unknown; parentSeq?: unknown };
-  } | null;
-  const entry = payload?.entry;
-  if (
-    payload?.event !== "transcript_entry" ||
-    !entry ||
-    typeof entry.type !== "string" ||
-    typeof entry.at !== "number" ||
-    (entry.parentSeq !== null && typeof entry.parentSeq !== "number")
-  )
-    return null;
-  return {
-    sessionId: row.sessionId,
-    seq: row.entrySeq,
-    parentSeq: entry.parentSeq,
-    type: entry.type as EntryType,
-    payload: entry.payload ?? null,
-    scopeLabel: row.scopeLabel,
-    createdAt: entry.at,
-  };
-}
-
-export type TranscriptAppendSessions = Pick<SessionStore, "append" | "appendTape" | "latestEntrySeq" | "tapeCoverage">;
-
-export async function appendEntryOutsideTurn(
-  sessions: TranscriptAppendSessions,
-  lease: Lease,
-  entry: NewEntry,
-  modelText?: (appended: SessionEntry) => string,
-): Promise<SessionEntry> {
-  const tapeContiguous =
-    (await sessions.tapeCoverage(lease.sessionId)) === (await sessions.latestEntrySeq(lease.sessionId));
-  const appended = await sessions.append(lease, entry);
-  if (!tapeContiguous) return appended;
-  if (modelText) {
-    await sessions.appendTape(lease, {
-      kind: "message",
-      payload: { role: "user", content: [{ type: "text", text: modelText(appended) }], timestamp: appended.createdAt },
-      scopeLabel: entry.scopeLabel,
-      meta: { entryCreatedAt: appended.createdAt },
-    });
-  }
-  await sessions.appendTape(lease, {
-    kind: "annotation",
-    payload: tapeCheckpointPayload("turnEnd", { type: entry.type, payload: entry.payload, at: appended.createdAt }),
-    scopeLabel: entry.scopeLabel,
-    entrySeq: appended.seq,
-  });
-  return appended;
-}
-
-export const TAPE_IMPORT_MAX_ENTRIES = 500;
-
-interface TapeMeta {
-  bareText?: string;
-  ts?: string;
-  changeTime?: string;
-  hidden?: boolean;
-  overheard?: boolean;
-  sourceRole?: "agent";
-  author?: string;
-  attachments?: unknown[];
-  display?: string;
-  securityTainted?: boolean;
-  entryCreatedAt?: number;
-}
-
-export interface NewTapeRecord {
-  kind: TapeKind;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  harness?: string;
-  meta?: TapeMeta;
-  entrySeq?: number;
-  coversEntrySeq?: number;
-}
-
-export interface TapeRecord extends NewTapeRecord {
-  sessionId: string;
-  seq: number;
-  createdAt: number;
-}
-
-export interface GetTapeOptions {
-  sinceSeq?: number;
-  limit?: number;
-}
 
 export interface GetEntriesOptions {
   sinceSeq?: number;
@@ -582,10 +440,6 @@ export function userMessagePreview(payload: unknown, maxLen = 160): string {
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
-export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntry[] {
-  return entries.filter((e) => e.type !== "soul");
-}
-
 export const ENTRY_STRING_BUDGET = 2_000;
 
 export type TranscriptEntry = SessionEntry & { truncated?: true };
@@ -735,17 +589,11 @@ export interface SessionStore {
   appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
   getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
-  getTranscriptEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
-  canReadTranscriptSuffix(sessionId: string, beforeSeq: number): Promise<boolean>;
+  countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
   clearSecurityTaint(sessionId: string): Promise<boolean>;
-
-  appendTapeMany(lease: Lease, records: readonly NewTapeRecord[]): Promise<TapeRecord[]>;
-  appendTape(lease: Lease, rec: NewTapeRecord): Promise<TapeRecord>;
-  getTape(sessionId: string, opts?: GetTapeOptions): Promise<TapeRecord[]>;
-  tapeCoverage(sessionId: string): Promise<number>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
@@ -766,7 +614,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleEntries(sessionId: string, principalId: string): Promise<SessionEntry[]>;
+  visibleEntries(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 

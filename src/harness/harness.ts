@@ -1,3 +1,4 @@
+import type { ReplayImageLoader } from "./replay-images.ts";
 import type { ResumableToolCall } from "../core/turn-resume.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
@@ -11,15 +12,7 @@ import type {
   TurnRequest,
 } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
-import type {
-  GapPhases,
-  GapWork,
-  LlmCallUsage,
-  LlmTransportMeta,
-  NewEntry,
-  NewTapeRecord,
-  TapeRecord,
-} from "../sessions/session-store.ts";
+import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
@@ -100,6 +93,7 @@ export interface CodexTurnAuth {
 }
 
 export interface HarnessTurnInput {
+  loadImage?: ReplayImageLoader;
   session: Session;
   runId?: string;
   cancel?: AbortSignal;
@@ -137,10 +131,6 @@ export interface HarnessTurnInput {
   commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
-  tape?(rec: NewTapeRecord): Promise<unknown>;
-  tapeRows?: TapeRecord[];
-  tapeMode?: "shadow" | "serve";
-  tapeFold?: unknown[];
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
@@ -165,7 +155,6 @@ export interface HarnessTurnResult {
   silent?: boolean;
   stopped?: true;
   stoppedByUser?: true;
-  stoppedTapeComplete?: true;
   pendingApprovals?: Array<{
     command: string;
     reason: string;
@@ -225,14 +214,7 @@ export interface HarnessModelUtilities {
 type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";
 type HarnessToolTransport = "mock" | "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
 type HarnessCapability =
-  | "abort"
-  | "steer"
-  | "images"
-  | "thinking-level"
-  | "fast-mode"
-  | "provider-sessions"
-  | "native-tape"
-  | "goal-enforcement";
+  "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "goal-enforcement";
 
 export interface HarnessAdapterProfile {
   id: string;

@@ -22,7 +22,6 @@ import {
   sanitizeLlmPayload,
   trimPayloadToByteBudget,
   seedRawMessagesIntoSession,
-  thinkingBlocksFromContent,
   toPiMessage,
   transportFromModel,
 } from "../src/harness/pi-harness.ts";
@@ -861,30 +860,6 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
   assert.match(prompt, /I can send the chart if you share it again/);
   assert.doesNotMatch(prompt, /noisy rendered Slack block/);
   assert.match(prompt, /NEWEST message:\nyes, send it/);
-});
-
-test("thinkingBlocksFromContent extracts reasoning, KEEPS signatures (complete WAL), keeps redacted, skips text/tool/empty", () => {
-  const content = [
-    { type: "thinking", thinking: "Let me check the docs first.", thinkingSignature: "AAAA-opaque-base64-token" },
-    { type: "text", text: "On it." },
-    { type: "toolCall", id: "t1", name: "execute", arguments: { command: "ls" } },
-    { type: "thinking", thinking: "   ", thinkingSignature: "sig" },
-    { type: "thinking", thinking: "", thinkingSignature: "encrypted-payload", redacted: true },
-    { type: "thinking", thinking: "No signature here." },
-  ];
-  const out = thinkingBlocksFromContent(content);
-  assert.deepEqual(out, [
-    { thinking: "Let me check the docs first.", thinkingSignature: "AAAA-opaque-base64-token" },
-    { thinking: "", redacted: true, thinkingSignature: "encrypted-payload" },
-    { thinking: "No signature here." },
-  ]);
-});
-
-test("thinkingBlocksFromContent is defensive: non-arrays and non-thinking content yield nothing", () => {
-  assert.deepEqual(thinkingBlocksFromContent(undefined), []);
-  assert.deepEqual(thinkingBlocksFromContent(null), []);
-  assert.deepEqual(thinkingBlocksFromContent("a string"), []);
-  assert.deepEqual(thinkingBlocksFromContent([{ type: "text", text: "hi" }]), []);
 });
 
 test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {

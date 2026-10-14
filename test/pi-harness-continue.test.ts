@@ -4,13 +4,12 @@ import { createPiHarness, endsAtRecordedToolResult } from "../src/harness/pi-har
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import { resumeNote } from "../src/core/turn-resume.ts";
-import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
+import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;
-  tape: NewTapeRecord[];
 };
 
 type RequestBody = { messages: Array<{ role: string; content: unknown }> };
@@ -50,9 +49,6 @@ function turnInput(sink: Sink, overrides: Partial<HarnessTurnInput>): HarnessTur
       sink.entries.push({ seq: appended.seq, type: e.type, payload: e.payload });
       return appended as unknown as SessionEntry;
     },
-    tape: async (rec: NewTapeRecord) => {
-      sink.tape.push(rec);
-    },
     recordModelCall: () => {},
     ...overrides,
   };
@@ -84,7 +80,7 @@ function sse(text: string): Response {
 
 async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurnInput> = {}) {
   const harness = createPiHarness({ apiKey: "sk-test" });
-  const sink: Sink = { entries: [], tape: [] };
+  const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
   const llmTurnSeqs: Array<number | null> = [];
   const realFetch = globalThis.fetch;
@@ -129,11 +125,6 @@ test("a genuine resume whose context ends at a recorded tool result continues th
     ["assistant"],
     "no user entry is appended for the resumed attempt",
   );
-  assert.deepEqual(
-    sink.tape.filter((rec) => rec.kind === "message").map((rec) => (rec.payload as { role: string }).role),
-    ["assistant"],
-    "no trigger user row is taped",
-  );
 });
 
 test("a resume that re-runs a retry-safe call continues the assistant turn right after the re-run result", async () => {
@@ -155,10 +146,6 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
     ["tool_result", "assistant"],
     "no note entry follows the re-run",
   );
-  assert.deepEqual(
-    sink.tape.filter((rec) => rec.kind === "message").map((rec) => (rec.payload as { role: string }).role),
-    ["toolResult", "assistant"],
-  );
   const flattened = JSON.stringify(requests[0]!.messages);
   assert.ok(flattened.includes("shared/q2.md"), "the model sees the re-run result");
   assert.equal(promptedNote(requests), false);
@@ -176,11 +163,6 @@ test("without the resume signal a context ending at a tool result is prompted no
   const { sink, requests } = await runResume([ASK, CALL, RESULT], { input: "follow-up question" });
   assert.equal(JSON.stringify(requests[0]!.messages).includes("follow-up question"), true);
   assert.equal(sink.entries[0]?.type, "user");
-  assert.equal(
-    sink.tape.filter((rec) => rec.kind === "message" && (rec.payload as { role: string }).role === "user").length,
-    1,
-    "the trigger user row is taped as usual",
-  );
 });
 
 test("endsAtRecordedToolResult accepts only a real trailing tool result", () => {

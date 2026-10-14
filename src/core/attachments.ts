@@ -38,8 +38,6 @@ export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
 
-export const MAX_HISTORY_IMAGE_BYTES = 10_000_000;
-
 export interface InboundImage {
   name: string;
   mimeType: string;
@@ -402,16 +400,6 @@ export function deliveryNote(manifest: string): string {
 export function isDeliveryNote(text: string): boolean {
   const t = text.trim();
   return t.startsWith(DELIVERY_NOTE_PREFIX) && t.endsWith("]") && !t.includes("\n");
-}
-
-export function deliveryNoteManifest(text: string): string | null {
-  if (!isDeliveryNote(text)) return null;
-  return text.trim().slice(DELIVERY_NOTE_PREFIX.length, -1);
-}
-
-export function legacyDeliveryNoteManifest(text: string): string | null {
-  const m = /^\(delivered file\(s\) to the conversation: ([^\n]*)\)$/.exec(text.trim());
-  return m ? m[1]! : null;
 }
 
 export type OutboundFile = string | { file_id: string };
