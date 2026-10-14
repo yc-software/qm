@@ -1,5 +1,4 @@
 import { decisionCatalog, parseDecisionProvider, parseDecisionRule } from "../../decisions/decisions.ts";
-import { GATEWAY_MODEL_PREFIX, gatewayModelCatalog } from "../../model/gateway-models.ts";
 import { selectableBaseModels } from "../../model/pi-models.ts";
 import { parseScopeId } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -17,7 +16,6 @@ export const decisionsResource: AdminResource = {
     deps.decisions && {
       ...decisionCatalog(),
       models: selectableBaseModels().map((m) => m.id),
-      gatewayModels: gatewayModelCatalog().map((m) => m.id.slice(GATEWAY_MODEL_PREFIX.length)),
       credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? []).map((c) => c.slug),
       providers: await deps.decisions.providers(),
       rules: await deps.decisions.rules(),

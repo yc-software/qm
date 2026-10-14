@@ -204,10 +204,14 @@ function ruleEditor() {
       state.data.providers.map((p: any) => p.id),
       set("provider"),
     )}
-    ${field("Decision model", d.model, set("model"), "model served by the provider", false, [
-      ...state.data.rules.filter((r: any) => r.model.provider === d.provider).map((r: any) => r.model.model),
-      ...(state.data.providers.find((p: any) => p.id === d.provider)?.baseUrl ? [] : state.data.gatewayModels || []),
-    ])}
+    ${field(
+      "Decision model",
+      d.model,
+      set("model"),
+      "model served by the provider",
+      false,
+      state.data.rules.filter((r: any) => r.model.provider === d.provider).map((r: any) => r.model.model),
+    )}
     ${select("Mode", d.mode, state.data.modes, set("mode"))}
     ${select("On error", d.onError, ["", ...d.options.map((o: any) => o.key)], set("onError"))}
     ${d.options.map((o: any, i: number) => optionFields(d, o, i))}
