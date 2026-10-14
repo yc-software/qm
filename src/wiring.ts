@@ -3,7 +3,7 @@ import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import { brokerCredentialAuthHeader } from "./api/credential-broker.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks } from "./decisions/hooks.ts";
+import { createDecisionHooks, routeTurnRuntime } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -1519,17 +1519,17 @@ export function buildApp(
         hydrateModelCatalog,
         input.runtimePurpose,
       );
-    if (input.runtime?.modelId || input.continueTurn) return resolve(input.runtime);
-    const routed = (
-      await decide("turn_start", input.input, {
-        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-        scopeLabel: input.scopeLabel,
-        sessionId: input.session.id,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.cancel ? { cancel: input.cancel } : {}),
-      })
-    )?.runtime;
-    return resolve(routed ? { ...input.runtime, ...routed } : input.runtime);
+    return resolve(
+      await routeTurnRuntime(input.runtime, input.continueTurn, () =>
+        decide("turn_start", input.input, {
+          ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+          scopeLabel: input.scopeLabel,
+          sessionId: input.session.id,
+          ...(input.runId ? { runId: input.runId } : {}),
+          ...(input.cancel ? { cancel: input.cancel } : {}),
+        }),
+      ),
+    );
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {

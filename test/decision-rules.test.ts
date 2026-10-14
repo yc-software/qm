@@ -11,6 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
+import { routeTurnRuntime } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -401,4 +402,19 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     }),
     undefined,
   );
+});
+
+test("turn_start routing also applies when the turn already names a model", async () => {
+  const web = { harnessId: "claude", modelId: "claude-opus", effortLevel: "max" };
+  const routed = { modelId: "m-deep" };
+  assert.deepEqual(await routeTurnRuntime(web, false, async () => ({ runtime: routed })), routed);
+  assert.deepEqual(await routeTurnRuntime(web, false, async () => undefined), web);
+  assert.deepEqual(await routeTurnRuntime(undefined, false, async () => ({})), undefined);
+  let asked = false;
+  const kept = await routeTurnRuntime(web, true, async () => {
+    asked = true;
+    return { runtime: routed };
+  });
+  assert.equal(kept, web);
+  assert.equal(asked, false, "a continued turn is never reclassified");
 });

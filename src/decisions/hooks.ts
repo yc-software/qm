@@ -4,6 +4,21 @@ import type { DecisionStore } from "./store.ts";
 
 const HOOK_TIMEOUT_MS = 5_000;
 
+/**
+ * The runtime a turn runs on once turn_start rules have had their say. A model
+ * the turn already names (the web composer always sends one) is only a default:
+ * an enforced rule replaces it outright, so the routed model never inherits a
+ * harness or effort it may not support. A continued turn keeps its runtime.
+ */
+export async function routeTurnRuntime<R extends object>(
+  requested: R | undefined,
+  continueTurn: boolean | undefined,
+  classify: () => Promise<{ runtime?: R } | undefined>,
+): Promise<R | undefined> {
+  if (continueTurn) return requested;
+  return (await classify())?.runtime ?? requested;
+}
+
 export interface DecisionTurn {
   actorId?: string;
   scopeLabel: string;
