@@ -103,6 +103,7 @@ import {
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import { captureSessionSwitch } from "./product-analytics";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
 export const sessionsState = {
@@ -1816,6 +1817,7 @@ export async function openSessionInto(
     return;
   }
   if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  const started = performance.now();
 
   refreshSessionsOnOpen();
 
@@ -1835,6 +1837,7 @@ export async function openSessionInto(
     continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
   ]);
   if (!isLiveConversation(conv) || !isCurrent()) return;
+  const fetched = performance.now();
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1865,4 +1868,16 @@ export async function openSessionInto(
   }
   conv.setPins(entriesRes.pins ?? []);
   renderList();
+  requestAnimationFrame(() =>
+    setTimeout(() => {
+      const painted = performance.now();
+      captureSessionSwitch(`/api/sessions/${encodeURIComponent(s.id)}`, {
+        duration_ms: Math.round(painted - started),
+        fetch_ms: Math.round(fetched - started),
+        render_ms: Math.round(painted - fetched),
+        prefetched: Boolean(entriesPrefetch),
+        entries: entriesRes.entries?.length ?? 0,
+      });
+    }),
+  );
 }

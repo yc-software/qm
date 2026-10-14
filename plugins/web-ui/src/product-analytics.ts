@@ -28,7 +28,37 @@ const allowedProperties = new Set([
   "company_id",
   "surface",
   "view",
+  "duration_ms",
+  "fetch_ms",
+  "render_ms",
+  "prefetched",
+  "entries",
+  "transfer_bytes",
+  "server_timing",
 ]);
+const MAX_TRANSCRIPT_TIMINGS = 50;
+const transcriptTimings = new Map<string, { transfer_bytes: number; server_timing: Record<string, number> }>();
+let transcriptObserver: PerformanceObserver | undefined;
+
+function observeTranscriptTimings(): void {
+  if (transcriptObserver || typeof PerformanceObserver === "undefined") return;
+  transcriptObserver = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries() as PerformanceResourceTiming[]) {
+      if (!entry.name.includes("/api/sessions/")) continue;
+      const path = new URL(entry.name).pathname;
+      const parts = path.split("/");
+      if (parts.at(-3) !== "api" || parts.at(-2) !== "sessions") continue;
+      transcriptTimings.delete(path);
+      transcriptTimings.set(path, {
+        transfer_bytes: entry.encodedBodySize,
+        server_timing: Object.fromEntries(entry.serverTiming.map((t) => [t.name, Math.round(t.duration)])),
+      });
+      if (transcriptTimings.size > MAX_TRANSCRIPT_TIMINGS)
+        transcriptTimings.delete(transcriptTimings.keys().next().value!);
+    }
+  });
+  transcriptObserver.observe({ type: "resource", buffered: false });
+}
 
 export function stopAnalytics(): void {
   generation++;
@@ -86,6 +116,7 @@ export async function initializeAnalytics(me: Me, view = "chats"): Promise<void>
     posthog.group("company", me.org);
     posthog.register({ company_id: me.org, surface: "web" });
     client = posthog;
+    observeTranscriptTimings();
     capturePageview(currentView);
   } catch {
     client = undefined;
@@ -110,6 +141,19 @@ export function captureMessage(runId: string, firstMessage: boolean): void {
   try {
     client.capture("message_sent", { $insert_id: `${runId}:message_sent` });
     if (firstMessage) client.capture("session_started", { $insert_id: `${runId}:session_started` });
+  } catch {
+    return;
+  }
+}
+
+export function captureSessionSwitch(
+  sessionPath: string,
+  timing: { duration_ms: number; fetch_ms: number; render_ms: number; prefetched: boolean; entries: number },
+): void {
+  if (!client) return;
+  const network = [...transcriptTimings].findLast(([path]) => path.endsWith(sessionPath))?.[1];
+  try {
+    client.capture("session_switch", { ...timing, ...network });
   } catch {
     return;
   }

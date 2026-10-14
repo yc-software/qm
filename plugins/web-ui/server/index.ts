@@ -270,7 +270,8 @@ interface ViteDevServer {
 
 type CreateViteServer = (opts: Record<string, unknown>) => Promise<ViteDevServer>;
 
-function relay(res: ServerResponse, r: { status: number; text: string }): void {
+function relay(res: ServerResponse, r: { status: number; text: string; serverTiming?: string }): void {
+  if (r.serverTiming) res.setHeader("server-timing", r.serverTiming);
   sendBuffered(res, r.status, { "content-type": "application/json", "x-content-type-options": "nosniff" }, r.text);
 }
 

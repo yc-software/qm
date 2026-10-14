@@ -32,7 +32,7 @@ export async function fetchCoreText(input: {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   retrySafeRead?: boolean;
-}): Promise<{ status: number; text: string }> {
+}): Promise<{ status: number; text: string; serverTiming?: string }> {
   if (input.retrySafeRead && (input.method !== "GET" || input.body)) {
     throw new Error("Core read retries require a bodyless GET");
   }
@@ -54,7 +54,12 @@ export async function fetchCoreText(input: {
       status = response.status;
       phase = "body";
       requestId = response.headers.get("x-request-id");
-      return { status: response.status, text: await response.text() };
+      const serverTiming = response.headers.get("server-timing");
+      return {
+        status: response.status,
+        text: await response.text(),
+        ...(serverTiming ? { serverTiming } : {}),
+      };
     } catch (error) {
       const cause = error instanceof Error ? error.cause : undefined;
       const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;

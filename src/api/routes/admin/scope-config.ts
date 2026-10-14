@@ -21,6 +21,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
+import { serverTimingHeader } from "../../server-timing.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
@@ -492,12 +493,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
         scopeModelOptions(deps, values, view !== null && url.searchParams.get("catalog") !== "refresh"),
       )
     : undefined;
-  res.setHeader(
-    "server-timing",
-    Object.entries(timings)
-      .map(([name, duration]) => `${name};dur=${duration.toFixed(1)}`)
-      .join(", "),
-  );
+  res.setHeader("server-timing", serverTimingHeader(Object.entries(timings)));
   const elapsed = performance.now() - started;
   if (view && url.searchParams.get("catalog") !== "refresh" && elapsed > 500)
     console.warn(

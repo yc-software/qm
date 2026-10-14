@@ -23,10 +23,13 @@ const core = createServer((req, res) => {
   if (!req.url?.startsWith("/v1/sessions/test?")) return void res.end("{}");
   requests.push({ url: req.url, headers: req.headers });
   if (requests.length === 1) {
-    res.writeHead(200, { "content-length": "100" });
+    res.writeHead(200, { "content-length": "100", "server-timing": "qm_session_total;dur=99.99" });
     res.write("partial");
     setTimeout(() => res.destroy(), 10);
-  } else res.end(JSON.stringify({ session: { id: "test" }, entries: [] }));
+  } else {
+    res.writeHead(200, { "server-timing": "qm_session_total;dur=12.34" });
+    res.end(JSON.stringify({ session: { id: "test" }, entries: [] }));
+  }
 }).listen(0, "127.0.0.1");
 await once(core, "listening");
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
@@ -50,6 +53,7 @@ test("session route retries interrupted body with the same viewer and fresh vali
   );
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { session: { id: "test" }, entries: [] });
+  assert.equal(response.headers.get("server-timing"), "qm_session_total;dur=12.34");
   assert.equal(requests.length, 2);
   assert.notEqual(requests[0]!.url, requests[1]!.url);
   for (const request of requests) {

@@ -1,3 +1,4 @@
+import { timeSessionRead } from "../sessions/read-timing.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -263,26 +264,35 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, principalId, window) {
       const found = await sessionForViewer(sessionId, principalId);
       if (!found) return null;
-      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
+      const session = {
+        ...found,
+        canContinue: await canContinueOnWeb(principalId, found),
+      };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, {
-          limit,
-          beforeSeq: window?.beforeSeq,
-          sinceSeq: window?.sinceSeq,
-        }),
-        deps.sessions.listPins(sessionId),
+        timeSessionRead("transcript", () =>
+          transcripts.forViewer(sessionId, principalId, {
+            limit,
+            beforeSeq: window?.beforeSeq,
+            sinceSeq: window?.sinceSeq,
+          }),
+        ),
+        timeSessionRead("pins", () => deps.sessions.listPins(sessionId)),
       ]);
       let read = initialRead;
       let visible = transcriptEntries(read.entries);
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
-        read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
+        read = await timeSessionRead("transcript", () =>
+          transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq }),
+        );
         visible = transcriptEntries(read.entries);
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));
+      const pins = await timeSessionRead("pins", () =>
+        decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq)),
+      );
       return {
         session,
         entries: w.entries,

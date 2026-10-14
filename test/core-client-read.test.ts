@@ -130,3 +130,20 @@ test("the original deadline aborts body collection on the second attempt", async
     clearTimeout(keepAlive);
   }
 });
+
+test("core text reads preserve server timing without forwarding unrelated headers", async (t) => {
+  const serverTiming = "qm_session_total;dur=12.34, qm_session_acl;dur=1.25";
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async () =>
+      new Response("{}", {
+        headers: { "server-timing": serverTiming, "set-cookie": "private=value" },
+      }),
+  );
+  assert.deepEqual(await fetchCoreText({ origin: "http://core", method: "GET", path: "/test" }), {
+    status: 200,
+    text: "{}",
+    serverTiming,
+  });
+});
