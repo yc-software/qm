@@ -18,33 +18,58 @@ export const LEGACY_TAPE_STEPS_SQL = [
     started_at BIGINT,
     last_session TEXT,
     done BOOLEAN NOT NULL DEFAULT false,
-    tape_written BOOLEAN NOT NULL DEFAULT false
+    invalid_messages BIGINT NOT NULL DEFAULT 0,
+    keyed_blocks BIGINT NOT NULL DEFAULT 0,
+    copied_steps BIGINT NOT NULL DEFAULT 0,
+    copied_turns BIGINT NOT NULL DEFAULT 0
   )`,
   `INSERT INTO legacy_tape_steps_progress DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING`,
+  `CREATE TABLE IF NOT EXISTS legacy_tape_writes(at BIGINT NOT NULL)`,
   `CREATE OR REPLACE FUNCTION legacy_tape_written() RETURNS trigger LANGUAGE plpgsql AS $written$
 BEGIN
-  UPDATE legacy_tape_steps_progress SET tape_written = true WHERE NOT tape_written;
+  INSERT INTO legacy_tape_writes VALUES ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);
   RETURN NULL;
 END $written$`,
   `CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 200)
 LANGUAGE plpgsql AS $prepare$
-DECLARE ids TEXT[];
+DECLARE
+  ids TEXT[];
+  frozen_at BIGINT;
+  n_invalid BIGINT;
+  n_keyed BIGINT;
+  n_steps BIGINT;
+  n_turns BIGINT;
 BEGIN
+  IF NOT pg_try_advisory_lock(hashtext('prepare_legacy_tape_steps')) THEN
+    RAISE EXCEPTION 'prepare_legacy_tape_steps() is already running in another session';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'legacy_tape_frozen' AND tgrelid = 'session_tape'::regclass) THEN
-    UPDATE legacy_tape_steps_progress
-       SET started_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint, tape_written = false;
+    IF EXISTS (SELECT 1 FROM legacy_tape_steps_progress WHERE started_at IS NOT NULL OR last_session IS NOT NULL OR done) THEN
+      RAISE EXCEPTION 'legacy_tape_frozen is gone but a preparation already started: reset legacy_tape_steps_progress, legacy_tape_steps, legacy_turn_runs and legacy_tape_writes before starting again';
+    END IF;
+    PERFORM set_config('lock_timeout', '5s', true);
     CREATE TRIGGER legacy_tape_frozen AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON session_tape
       FOR EACH STATEMENT EXECUTE FUNCTION legacy_tape_written();
+    ALTER TABLE session_tape ENABLE ALWAYS TRIGGER legacy_tape_frozen;
+    UPDATE legacy_tape_steps_progress SET started_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
     COMMIT;
   END IF;
+  SELECT started_at INTO frozen_at FROM legacy_tape_steps_progress;
   IF to_regclass('legacy_prep_runs') IS NULL THEN
-    CREATE TABLE legacy_prep_runs(id TEXT, session_id TEXT, turn_user_seq BIGINT, started_at BIGINT, finished_at BIGINT);
+    CREATE TABLE legacy_prep_runs(
+      id TEXT, session_id TEXT, turn_user_seq BIGINT, started_at BIGINT, finished_at BIGINT, prev_max_finished BIGINT
+    );
     IF to_regclass('runs') IS NOT NULL THEN
       INSERT INTO legacy_prep_runs
-        SELECT r.id, s.id, r.turn_user_seq, r.started_at, r.finished_at
-          FROM runs r JOIN sessions s ON s.thread_ref = r.session_id;
+        SELECT r.id, s.id, r.turn_user_seq, r.started_at, r.finished_at,
+               max(r.finished_at) OVER (PARTITION BY s.id ORDER BY r.started_at, r.id
+                                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)
+          FROM runs r JOIN sessions s ON s.thread_ref = r.session_id
+         WHERE r.started_at IS NOT NULL;
     END IF;
-    CREATE INDEX legacy_prep_runs_by_session ON legacy_prep_runs(session_id);
+    CREATE INDEX legacy_prep_runs_by_seq ON legacy_prep_runs(session_id, turn_user_seq);
+    CREATE INDEX legacy_prep_runs_by_start ON legacy_prep_runs(session_id, started_at DESC, id DESC)
+      WHERE finished_at IS NOT NULL;
     COMMIT;
   END IF;
   LOOP
@@ -53,52 +78,65 @@ BEGIN
              WHERE id > COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '')
              ORDER BY id LIMIT batch) next_sessions;
     EXIT WHEN ids IS NULL;
-    WITH blocks AS (
-      SELECT t.session_id, t.seq AS tape_seq, m.msg, b.blk, (b.ord - 1)::int AS idx
-        FROM session_tape t
-        CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(t.payload, 'json') THEN t.payload::json END AS msg) m
-        CROSS JOIN LATERAL json_array_elements(
-          CASE WHEN json_typeof(m.msg -> 'content') = 'array' THEN m.msg -> 'content' ELSE '[]'::json END
-        ) WITH ORDINALITY AS b(blk, ord)
-       WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND m.msg ->> 'role' = 'assistant'
-    ), keyed AS (
-      SELECT blocks.*,
-             CASE blk ->> 'type'
-               WHEN 'toolCall' THEN 'call:' || (blk ->> 'id')
-               WHEN 'thinking' THEN CASE WHEN COALESCE(blk ->> 'thinkingSignature', '') <> ''
-                                         THEN 'sig:' || (blk ->> 'thinkingSignature') END
-               WHEN 'text' THEN 'text:' || (blk ->> 'text')
+    CREATE TEMP TABLE legacy_batch_blocks ON COMMIT DROP AS
+      SELECT t.session_id, t.seq AS tape_seq, v.valid,
+             m.msg ->> 'api' AS api, m.msg ->> 'provider' AS provider, m.msg ->> 'model' AS model,
+             m.msg ->> 'stopReason' AS stop_reason, b.blk, (b.ord - 1)::int AS idx,
+             CASE b.blk ->> 'type'
+               WHEN 'toolCall' THEN 'call:' || (b.blk ->> 'id')
+               WHEN 'thinking' THEN CASE WHEN COALESCE(b.blk ->> 'thinkingSignature', '') <> ''
+                                         THEN 'sig:' || (b.blk ->> 'thinkingSignature') END
+               WHEN 'text' THEN 'text:' || (b.blk ->> 'text')
              END AS key
-        FROM blocks
-    ), tape_unique AS (
-      SELECT * FROM (SELECT keyed.*, count(*) OVER (PARTITION BY session_id, key) AS n FROM keyed WHERE key IS NOT NULL) k
-       WHERE n = 1
+        FROM session_tape t
+        CROSS JOIN LATERAL (SELECT pg_input_is_valid(t.payload, 'jsonb') AS valid) v
+        CROSS JOIN LATERAL (SELECT CASE WHEN v.valid THEN t.payload::json END AS msg) m
+        LEFT JOIN LATERAL json_array_elements(
+          CASE WHEN json_typeof(m.msg -> 'content') = 'array' THEN m.msg -> 'content' ELSE '[]'::json END
+        ) WITH ORDINALITY AS b(blk, ord) ON true
+       WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND t.harness = 'pi'
+         AND (NOT v.valid OR m.msg ->> 'role' = 'assistant');
+    SELECT count(*) FILTER (WHERE NOT valid), count(*) FILTER (WHERE key IS NOT NULL)
+      INTO n_invalid, n_keyed FROM legacy_batch_blocks;
+    WITH tape_unique AS (
+      SELECT b.* FROM legacy_batch_blocks b
+        JOIN (SELECT session_id, key FROM legacy_batch_blocks WHERE key IS NOT NULL
+               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)
     ), entries AS (
-      SELECT e.session_id, e.seq, e.type,
+      SELECT e.session_id, e.seq, e.type, p.j,
              CASE WHEN e.type = 'tool_call' THEN 'call:' || (p.j ->> 'callId')
                   WHEN e.type = 'thinking' THEN 'sig:' || (p.j ->> 'thinkingSignature')
                   ELSE 'text:' || (p.j ->> 'text') END AS key
         FROM session_entries e
         CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p
        WHERE e.session_id IN (SELECT DISTINCT session_id FROM tape_unique)
-         AND e.type IN ('tool_call', 'thinking', 'text', 'assistant')
+         AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at
          AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'
     ), entries_unique AS (
-      SELECT * FROM (SELECT entries.*, count(*) OVER (PARTITION BY session_id, key) AS n FROM entries WHERE key IS NOT NULL) x
-       WHERE n = 1
+      SELECT x.* FROM entries x
+        JOIN (SELECT session_id, key FROM entries WHERE key IS NOT NULL
+               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)
     )
     INSERT INTO legacy_tape_steps(session_id, seq, step, wire)
     SELECT e.session_id, e.seq,
-           jsonb_build_object('id', 'tape:' || t.tape_seq, 'api', t.msg ->> 'api', 'provider', t.msg ->> 'provider',
-                              'model', t.msg ->> 'model', 'stopReason', t.msg ->> 'stopReason', 'index', t.idx),
-           CASE WHEN e.type = 'tool_call' THEN
+           jsonb_strip_nulls(jsonb_build_object('id', 'tape:' || t.tape_seq, 'api', t.api, 'provider', t.provider,
+                                                'model', t.model, 'stopReason', t.stop_reason, 'index', t.idx)),
+           NULLIF(
              COALESCE((SELECT jsonb_object_agg(f.key, f.value::jsonb) FROM json_each(t.blk) f
-                        WHERE f.key NOT IN ('type', 'id', 'name', 'arguments')), '{}'::jsonb)
-             || jsonb_build_object('argumentsJson', COALESCE((t.blk -> 'arguments')::text, '{}'))
-           END
+                        WHERE f.key <> ALL (CASE t.blk ->> 'type'
+                                              WHEN 'toolCall' THEN ARRAY['type', 'id', 'name', 'arguments']
+                                              WHEN 'thinking' THEN ARRAY['type', 'thinking', 'thinkingSignature']
+                                              ELSE ARRAY['type', 'text'] END)), '{}'::jsonb)
+             || CASE WHEN e.type = 'tool_call' THEN
+                  jsonb_build_object('argumentsJson', COALESCE((t.blk -> 'arguments')::text, '{}'))
+                  || CASE WHEN (t.blk ->> 'name') IS DISTINCT FROM (e.j ->> 'tool')
+                          THEN jsonb_build_object('name', t.blk ->> 'name') ELSE '{}'::jsonb END
+                ELSE '{}'::jsonb END,
+             '{}'::jsonb)
       FROM entries_unique e
-      JOIN tape_unique t ON t.session_id = e.session_id AND t.key = e.key
+      JOIN tape_unique t USING (session_id, key)
     ON CONFLICT (session_id, seq) DO NOTHING;
+    GET DIAGNOSTICS n_steps = ROW_COUNT;
     INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)
     SELECT e.session_id, e.seq, COALESCE(by_seq.id, by_window.id), by_seq.id IS NULL
       FROM session_entries e
@@ -108,20 +146,28 @@ BEGIN
          WHERE r.session_id = e.session_id AND r.turn_user_seq = e.seq
       ) by_seq ON true
       LEFT JOIN LATERAL (
-        SELECT CASE WHEN count(*) = 1 THEN min(r.id) END AS id FROM legacy_prep_runs r
-         WHERE r.session_id = e.session_id AND r.started_at <= e.created_at
-           AND e.created_at <= COALESCE(r.finished_at, 9223372036854775807)
+        SELECT latest.id FROM (
+          SELECT r.id, r.finished_at, r.prev_max_finished FROM legacy_prep_runs r
+           WHERE r.session_id = e.session_id AND r.finished_at IS NOT NULL AND r.started_at <= e.created_at
+           ORDER BY r.started_at DESC, r.id DESC LIMIT 1
+        ) latest
+         WHERE e.created_at <= latest.finished_at AND COALESCE(latest.prev_max_finished, -1) < e.created_at
       ) by_window ON true
-     WHERE e.session_id = ANY(ids) AND e.type = 'user' AND jsonb_typeof(p.j) = 'object'
+     WHERE e.session_id = ANY(ids) AND e.type = 'user' AND e.created_at < frozen_at AND jsonb_typeof(p.j) = 'object'
        AND NOT p.j @> '{"steered":true}' AND NOT p.j @> '{"overheard":true}'
        AND NOT COALESCE(jsonb_typeof(p.j -> 'runId') = 'string' AND p.j ->> 'runId' <> '', false)
        AND COALESCE(by_seq.id, by_window.id) IS NOT NULL
     ON CONFLICT (session_id, seq) DO NOTHING;
-    UPDATE legacy_tape_steps_progress SET last_session = ids[array_length(ids, 1)];
+    GET DIAGNOSTICS n_turns = ROW_COUNT;
+    UPDATE legacy_tape_steps_progress
+       SET last_session = ids[array_length(ids, 1)],
+           invalid_messages = invalid_messages + n_invalid, keyed_blocks = keyed_blocks + n_keyed,
+           copied_steps = copied_steps + n_steps, copied_turns = copied_turns + n_turns;
     COMMIT;
   END LOOP;
   DROP TABLE legacy_prep_runs;
   UPDATE legacy_tape_steps_progress SET done = true;
   COMMIT;
+  PERFORM pg_advisory_unlock(hashtext('prepare_legacy_tape_steps'));
 END $prepare$`,
 ];
