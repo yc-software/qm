@@ -219,8 +219,8 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
     },
     async waitForState(id, target, waitOpts) {
       const timeoutMs = waitOpts?.timeoutMs ?? 120_000;
-      const intervalMs = waitOpts?.intervalMs ?? 1500;
-      const deadline = Date.now() + timeoutMs;
+      const started = Date.now();
+      const deadline = started + timeoutMs;
       let last: MicrovmDescription | null = null;
       while (Date.now() < deadline) {
         last = await api.getMicrovm(id);
@@ -228,13 +228,18 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
         if (last.state === "TERMINATED" && target !== "TERMINATED") {
           throw new AwsApiError(`microVM ${id} terminated while waiting for ${target}: ${last.stateReason ?? ""}`, 409);
         }
-        await sleep(intervalMs);
+        await sleep(waitOpts?.intervalMs ?? pollInterval(started, 1500));
       }
       throw new AwsApiError(`timed out waiting for microVM ${id} to reach ${target} (last=${last?.state})`, 504);
     },
   };
   return api;
 }
+
+const FAST_POLL_MS = 200;
+const FAST_POLL_WINDOW_MS = 15_000;
+const pollInterval = (startedMs: number, slowMs: number): number =>
+  Date.now() - startedMs < FAST_POLL_WINDOW_MS ? FAST_POLL_MS : slowMs;
 
 export interface VmFetchOptions {
   method?: string;
@@ -344,7 +349,8 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
   }
 
   async function waitDaemon(id: string, endpoint: string): Promise<void> {
-    const deadline = Date.now() + 60_000;
+    const started = Date.now();
+    const deadline = started + 60_000;
     let lastErr = "";
     let throttled = 0;
     while (Date.now() < deadline) {
@@ -366,7 +372,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
         throttled = 0;
         lastErr = errMessage(e);
       }
-      await sleep(2000);
+      await sleep(pollInterval(started, 2000));
     }
     throw new Error(`microVM ${id} exec daemon never became reachable: ${lastErr}`);
   }

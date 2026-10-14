@@ -361,6 +361,39 @@ test("apply: an explicit suspended-duration setting still wins", async () => {
   assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
 });
 
+test("rotation: the replacement body is launched before the old one is terminated, and the old one stays resumable until then", async () => {
+  const { api, vms } = fakeApi();
+  const order: string[] = [];
+  const realRun = api.runMicrovm.bind(api);
+  const realTerminate = api.terminate.bind(api);
+  api.runMicrovm = async (input) => {
+    const r = await realRun(input);
+    order.push(`run ${r.microvmId}`);
+    return r;
+  };
+  api.terminate = async (id) => {
+    order.push(`terminate ${id}`);
+    return realTerminate(id);
+  };
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = (await store.get(ID))!;
+  assert.equal(await p.rotationDue!(d), false);
+  await store.put(ID, { ...first, createdAtMs: Date.now() - 7 * 3600_000 - 60_000 });
+  vms.get(first.microvmId)!.state = "SUSPENDED";
+  assert.equal(await p.rotationDue!(d), true, "due 30 minutes before the visit-path rotation");
+  assert.ok(await p.resolveEndpoint!(d, version("/unused")), "visits still reach the old body meanwhile");
+
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const second = (await store.get(ID))!;
+  assert.notEqual(second.microvmId, first.microvmId);
+  assert.deepEqual(order.slice(-2), [`run ${second.microvmId}`, `terminate ${first.microvmId}`]);
+  assert.equal(await p.rotationDue!(d), false);
+});
+
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
@@ -395,8 +428,8 @@ test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", 
   assert.ok(a && b && c);
   assert.equal(
     counts.describe,
-    describesAfterApply + 2,
-    "three simultaneous misses share one tryGet + one ensureRunning describe",
+    describesAfterApply + 1,
+    "three simultaneous misses share one describe, reused by ensureRunning",
   );
 });
 
@@ -743,8 +776,9 @@ test("app data: a failed rotate snapshot defers the rotation — the stale body 
   });
 
   const e = await p.apply(deployment(ID), version(localSnapshot("a", "1")));
-  assert.equal(counts.terminate, 0, "the stale body is not terminated when its data can't be saved");
-  assert.equal(counts.run, 0, "no replacement launched");
+  assert.equal(vms.get("mvm-old")!.state, "RUNNING", "the stale body is not terminated when its data can't be saved");
+  assert.equal(counts.run, 1, "a replacement was launched ahead of the snapshot");
+  assert.equal(vms.get("mvm-1")!.state, "TERMINATED", "and discarded instead of leaked");
   assert.equal(e.host, "mvm-old.lambda-microvm.us-west-2.on.aws", "the stale body keeps serving");
 });
 
@@ -792,9 +826,10 @@ test("app data: a deferred rotation serves the stale body from resolveEndpoint i
 
   await p.apply(d, version(localSnapshot("a", "1")));
   assert.ok((await store.get(ID))!.rotateNotBeforeMs! > Date.now(), "deferral stamped");
+  const runsAfterDeferral = counts.run;
   const resolved = await p.resolveEndpoint!(d, version("/unused"));
   assert.ok(resolved, "stale-but-deferred body keeps serving");
-  assert.equal(counts.run, 0, "no replacement launched during the deferral");
+  assert.equal(counts.run, runsAfterDeferral, "no replacement launched during the deferral");
 });
 
 test("litestream: shadow-WAL dir is excluded from both snapshot and hydrate", async () => {

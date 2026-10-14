@@ -46,6 +46,10 @@ const EXIT_APP_PORT_HELD = 97;
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
 const RESOLVE_CACHE_MS = 15_000;
+const ROTATE_AHEAD_MS = 30 * 60_000;
+const RUNTIME_PREWARM =
+  "python3 -c 'import http.server, sqlite3, json, ssl, asyncio, urllib.request' >/dev/null 2>&1 & " +
+  'node -e \'require("node:http"); require("node:https")\' >/dev/null 2>&1 & wait; true';
 
 const DEFAULT_INGRESS = (region: string): string =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -127,6 +131,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appPort = opts.appPort ?? APP_PORT_DEFAULT;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
+  const rotateDueMs = Math.max(0, rotateAfterMs - ROTATE_AHEAD_MS);
+  const rotationDue = (stored: StoredDeployBody): boolean =>
+    Date.now() - stored.createdAtMs > rotateDueMs &&
+    !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
@@ -347,25 +355,34 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     throw lastErr;
   }
 
+  async function launchWarmBody(deploymentId: string, alwaysOn?: boolean): Promise<{ id: string; endpoint: string }> {
+    const body = await launchBody(deploymentId, alwaysOn);
+    void execRaw(body.id, body.endpoint, RUNTIME_PREWARM, 60).catch((e) => swallow("aws-deploy: runtime prewarm", e));
+    return body;
+  }
+
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
     return launchQueue(d.id, async () => {
       const stored = await store.get(d.id);
+      let next: { id: string; endpoint: string } | undefined;
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
-        if (alive && !stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint);
+        if (alive && !rotationDue(stored)) {
+          await ensureRunning(stored.microvmId, stored.endpoint, desc);
           return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
         }
-        if (alive && stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint).catch(() => {});
+        if (alive) {
+          next = await launchWarmBody(d.id, d.alwaysOn);
+          const replacement = next;
+          await ensureRunning(stored.microvmId, stored.endpoint, desc).catch(() => {});
           const defer = async (
             label: string,
             e: unknown,
             extra: Partial<StoredDeployBody> = {},
           ): Promise<{ id: string; endpoint: string; fresh: boolean }> => {
             swallow(label, e);
+            await api.terminate(replacement.id).catch((e2) => swallow("aws-deploy: abandon replacement", e2));
             await store.put(d.id, { ...stored, rotateNotBeforeMs: Date.now() + 5 * 60_000, ...extra });
             return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
           };
@@ -386,7 +403,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           }
         }
       }
-      const body = await launchBody(d.id, d.alwaysOn);
+      const body = next ?? (await launchWarmBody(d.id, d.alwaysOn));
       try {
         await hydrateData(d.id, body.id, body.endpoint);
       } catch (e) {
@@ -555,7 +572,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs)
       )
         return null;
-      await ensureRunning(stored.microvmId, stored.endpoint);
+      await ensureRunning(stored.microvmId, stored.endpoint, desc);
       const exec = (script: string, timeoutSec: number) =>
         execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
       const report = appReporter(opts.onError, d, version.env);
@@ -624,6 +641,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     profile: { managedScaleToZero: true, inPlaceReconcile: true, ...(s3 ? { dataDir: DATA_DIR } : {}) },
 
     apply: (d, version) => place(d, version),
+
+    async rotationDue(d): Promise<boolean> {
+      const stored = await store.get(d.id);
+      return !!stored && rotationDue(stored);
+    },
 
     reconcile: (d, version, input) => place(d, version, input),
 

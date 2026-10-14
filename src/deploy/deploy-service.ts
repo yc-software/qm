@@ -27,6 +27,7 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow } from "../util/errors.ts";
 
+const ROTATE_IF_USED_WITHIN_MS = 7 * 24 * 3600_000;
 export interface DeployFile {
   path: string;
   data: string | Uint8Array;
@@ -86,7 +87,7 @@ export interface DeployService {
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
-  keepAlwaysOnWarm(): Promise<number>;
+  maintainDeployments(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -245,6 +246,16 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return fresh;
     });
   };
+
+  const rotateDeployment = (id: string): Promise<void> =>
+    withDeployLock(id, async () => {
+      const cur = await deps.deployStore.get(id);
+      if (!cur || cur.status !== "running" || !(await deps.provider.rotationDue?.(cur))) return;
+      const v = currentVersionOf(cur);
+      if (!v) return;
+      const endpoint = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
+      await markVersionRunning(cur.id, v.version, endpoint);
+    });
 
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
   const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
@@ -533,21 +544,27 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async keepAlwaysOnWarm() {
+    async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
-        let warmed = 0;
+        let maintained = 0;
         for (const d of await deps.deployStore.list()) {
-          if (!d.alwaysOn || d.status !== "running") continue;
+          if (d.status !== "running") continue;
+          if (!d.alwaysOn && (d.lastAccessAt ?? 0) < Date.now() - ROTATE_IF_USED_WITHIN_MS) continue;
           try {
             const cur = await deps.deployStore.get(d.id);
-            if (!cur?.alwaysOn || cur.status !== "running") continue;
-            await liveEndpoint(cur);
-            warmed++;
+            if (!cur || cur.status !== "running") continue;
+            if (await deps.provider.rotationDue?.(cur)) {
+              await rotateDeployment(cur.id);
+              maintained++;
+            } else if (cur.alwaysOn) {
+              await liveEndpoint(cur);
+              maintained++;
+            }
           } catch (e) {
-            console.error("%s", `[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
+            console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
           }
         }
-        return warmed;
+        return maintained;
       });
       return result ?? 0;
     },

@@ -2722,8 +2722,8 @@ export function buildApp(
     deployIdleTtlMs && deployIdleTtlMs > 0
       ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
       : null;
-  const KEEP_WARM_INTERVAL_MS = 5 * 60_000;
-  const keepWarmSweeper = createSweeper(() => app.keepAlwaysOnWarm(), KEEP_WARM_INTERVAL_MS);
+  const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
+  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
   const deepIdleMachineMs = config.deepIdleMachineMs;
   const devIdleMachineMs = config.devIdleMachineMs;
   const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
@@ -2775,7 +2775,7 @@ export function buildApp(
       composioReturnSweeper.start();
       fileUploads?.start();
       idleSweeper?.start();
-      keepWarmSweeper.start();
+      deployMaintenanceSweeper.start();
       deepIdleSweeper?.start();
       wakeSweep.start();
       swarms?.start();
@@ -2802,7 +2802,7 @@ export function buildApp(
       spendSweeper?.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
-      keepWarmSweeper.stop(),
+      deployMaintenanceSweeper.stop(),
       deepIdleSweeper?.stop(),
       blobSweeper.stop(),
       composioReturnSweeper.stop(),
