@@ -213,6 +213,13 @@ export function createPostgresMap<T>(
            ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
           ],
         },
+        {
+          id: `durable-map/${table}/stats-${field.toLowerCase()}`,
+          statements: [
+            `CREATE STATISTICS IF NOT EXISTS ${table}_${field.toLowerCase()}_stats ON (json->>'${field}') FROM ${table}`,
+            `ANALYZE ${table}`,
+          ],
+        },
       ];
     }),
   ];
@@ -282,14 +289,13 @@ export function createPostgresMap<T>(
       }
       let sql = `SELECT ${projection} - $1::text[] AS json FROM ${table}`;
       if (query.where) {
-        params.push(
-          query.where.field,
-          query.where.anyOfFold.map((v) => v.toLowerCase()),
-        );
+        const field = query.where.field;
+        if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid select field: ${field}`);
+        params.push(query.where.anyOfFold.map((v) => v.toLowerCase()));
         sql += ` WHERE id IN (
-          SELECT id FROM ${table} WHERE lower(json->>$${params.length - 1}) = ANY($${params.length}::text[])
+          SELECT id FROM ${table} WHERE lower(json->>'${field}') = ANY($${params.length}::text[])
           UNION
-          SELECT id FROM ${table} WHERE json->>$${params.length - 1} ~ '[^\\x01-\\x7f]')`;
+          SELECT id FROM ${table} WHERE json->>'${field}' ~ '[^\\x01-\\x7f]')`;
       }
       if (query.afterId !== undefined) {
         params.push(query.afterId);
