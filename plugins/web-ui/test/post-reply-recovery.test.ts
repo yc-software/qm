@@ -513,6 +513,16 @@ test("post replies remain visible in new and continuing conversations", async (t
           host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
           "Commentary marker",
         );
+        work.activity = [
+          { seq: 3, parentSeq: null, type: "text_start", createdAt: Date.now(), payload: { streamOffset: 0 } },
+        ];
+        streaming.content = [{ type: "text", text: "ipped tail complete" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".assistant-body > .streaming-text qm-markdown")
+            ?.content,
+          "…earlier output omitted\n\ntail complete",
+        );
         delete work.streamStartOffset;
         work.activity = priorActivity;
         work.activity = [

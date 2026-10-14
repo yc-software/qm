@@ -136,7 +136,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
         return;
       }
       if (event.kind !== "delta" || refreshing) return;
-      const startOffset = event.startOffset;
+      const startOffset = event.startOffset ?? 0;
       offset = Math.max(offset, startOffset);
       if (event.offset > offset) {
         sync();

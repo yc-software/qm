@@ -2116,7 +2116,7 @@ export function createChatSurface(
         const streamingFinal = isStreaming && phase?.phase === "final_answer";
         const workActive =
           hasWork && isStreaming && !streamingFinal && (work?.status === "working" || work?.status === "thinking");
-        const text = streamingFinal ? streamedAnswer(chunk.text, work!) : chunk.text;
+        const text = isStreaming && work ? streamedAnswer(chunk.text, work) : chunk.text;
         for (const [partIndex, part] of setupContent(
           assistantDisplayText(workActive ? "" : text, message.stopReason),
         ).entries()) {
@@ -2143,7 +2143,7 @@ export function createChatSurface(
           if (body.trim())
             parts.push(
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, animating, streamingFinal ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work!) : ((message as AssistantWork).streamingBaseline ?? ""))}
+                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
               </div>`,
             );
           for (const link of links) parts.push(connectorWidget(link));
