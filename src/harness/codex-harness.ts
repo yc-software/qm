@@ -7,7 +7,6 @@ import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { NonRetryableTurnError, ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { DEFAULT_CODEX_MODEL_ID, modelSupportedByHarness } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
-import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { asError, swallow } from "../util/errors.ts";
@@ -35,7 +34,6 @@ import {
   recordSteerIntake,
   recordStoppedReply,
   type SteerIntake,
-  transitionTask,
   type BridgedTool,
   type HarnessToolPlumbing,
   withResumedToolCall,
@@ -60,7 +58,6 @@ export interface CodexHarnessOptions extends HarnessToolPlumbing {
   /** Custodian of the ChatGPT-subscription Codex login (keychain-backed in production). */
   authStore?: CodexAuthStore;
   signals?: RunSignalStore;
-  tasks?: TaskStore;
 }
 
 export function codexHarnessConfigOptions(config: Config): CodexHarnessOptions {
@@ -146,7 +143,6 @@ type ActiveTurn = {
   publicMessages: Map<string, CodexItem & { complete?: boolean }>;
   stoppedReply?: string;
   taskIds: Map<string, string>;
-  taskStatuses: Map<string, TaskStatus>;
   taskResults: Set<string>;
   model: string;
   modelCalls: number;
@@ -386,14 +382,6 @@ function reasoningFromTurn(turn: CodexTurn): string[] {
   );
 }
 
-export function codexTaskTitle(prompt: unknown): string {
-  if (typeof prompt !== "string" || !prompt.trim()) return "subagent task";
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  const named = /\bYou are (?:the )?([^.!?]{1,80}? subagent)\b/i.exec(normalized)?.[1];
-  const title = named ?? normalized;
-  return title.length > 120 ? `${title.slice(0, 119).trimEnd()}…` : title;
-}
-
 export function codexReasoningEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh" | undefined {
   return value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : undefined;
 }
@@ -462,16 +450,7 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
       for (const receiver of receivers) {
         if (state.taskIds.has(receiver)) continue;
         const taskId = `${String(item.id)}:${receiver}`;
-        if (opts.tasks)
-          await opts.tasks.create({
-            id: taskId,
-            sessionId: state.turn.session.id,
-            originRunId: state.turn.runId ?? state.turn.session.id,
-            title: codexTaskTitle(item.prompt),
-            status: "in_progress",
-          });
         state.taskIds.set(receiver, taskId);
-        state.taskStatuses.set(taskId, "in_progress");
         active.set(receiver, state);
         await state.turn.emit({
           type: "tool_call",
@@ -487,17 +466,12 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
     for (const [receiver, agent] of Object.entries(agents)) {
       const taskId = state.taskIds.get(receiver);
       if (!taskId) continue;
-      let next: TaskStatus | undefined;
+      let next: "completed" | "failed" | undefined;
       if (agent.status === "completed" || agent.status === "shutdown") next = "completed";
       else if (agent.status === "errored" || agent.status === "interrupted" || agent.status === "notFound") {
         next = "failed";
-      } else if (agent.status === "running") next = "in_progress";
-      const prior = state.taskStatuses.get(taskId);
-      if (next && prior && next !== prior) {
-        await transitionTask(opts.tasks, taskId, prior, next, state.turn.runId ?? state.turn.session.id);
-        state.taskStatuses.set(taskId, next);
       }
-      if ((next === "completed" || next === "failed") && !state.taskResults.has(taskId)) {
+      if (next && !state.taskResults.has(taskId)) {
         state.taskResults.add(taskId);
         await state.turn.emit({
           type: "tool_result",
@@ -1112,7 +1086,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         seenUserItems: new Set(),
         publicMessages: new Map(),
         taskIds: new Map(),
-        taskStatuses: new Map(),
         taskResults: new Set(),
         model: selectedModel,
         modelCalls: 0,
@@ -1384,15 +1357,6 @@ export function createCodexHarness(opts: CodexHarnessOptions = {}): Harness {
         cleanupErrors.push(error);
       }
       turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, status] of state.taskStatuses) {
-        if (status === "pending" || status === "in_progress") {
-          try {
-            await transitionTask(opts.tasks, taskId, status, "failed", turn.runId ?? turn.session.id);
-          } catch (error) {
-            cleanupErrors.push(error);
-          }
-        }
-      }
       for (const [activeThreadId, activeState] of active) {
         if (activeState === state) active.delete(activeThreadId);
       }

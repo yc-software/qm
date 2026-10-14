@@ -5,7 +5,6 @@ import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
-import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { goalWorkFromEntries, rehydrateOpenGoal } from "./goal.ts";
@@ -260,18 +259,6 @@ export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"
     .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
     .map((item) => item.text)
     .join("\n");
-}
-
-export async function transitionTask(
-  store: TaskStore | undefined,
-  id: string,
-  expected: TaskStatus,
-  next: TaskStatus,
-  runId: string,
-): Promise<void> {
-  if (!store) return;
-  const updated = await store.transitionStatus(id, expected, next, runId);
-  if (!updated) throw new Error(`task ${id} was not ${expected} while transitioning to ${next}`);
 }
 
 export type OneShotRunner = (

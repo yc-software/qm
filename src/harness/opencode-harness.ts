@@ -25,7 +25,6 @@ import {
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
-import type { TaskStore } from "../tasks/task-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
@@ -75,7 +74,6 @@ export interface OpenCodeHarnessOptions extends HarnessToolPlumbing {
   signals?: RunSignalStore;
   binaryPath?: string;
   startupTimeoutMs?: number;
-  tasks?: TaskStore;
   /**
    * Admin-registered custom providers, resolved (with keys) when the
    * opencode server starts. Registrations made while a server is already
@@ -547,18 +545,6 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           (value) => typeof value === "string" && value.trim(),
         ) as string | undefined;
         if (!suppliedTitle && status === "pending") return;
-        const initialStatus = status === "running" ? "in_progress" : "pending";
-        if (opts.tasks) {
-          await opts.tasks
-            .create({
-              id: partId,
-              sessionId: state.turn.session.id,
-              originRunId: state.turn.runId ?? state.turn.session.id,
-              title: suppliedTitle?.trim() ?? "subagent task",
-              status: initialStatus,
-            })
-            .catch(() => undefined);
-        }
         await state.turn.emit({
           type: "tool_call",
           payload: { tool: "task", callId: part.callID, ...(toolState?.input as object) },
@@ -570,16 +556,6 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       if (prior !== status && (status === "completed" || status === "error")) {
         const result =
           status === "completed" ? String(toolState?.output ?? "") : String(toolState?.error ?? "task failed");
-        if (opts.tasks) {
-          const current = await opts.tasks.get(partId);
-          if (current)
-            await opts.tasks.transitionStatus(
-              partId,
-              current.status,
-              status === "completed" ? "completed" : "failed",
-              state.turn.runId ?? state.turn.session.id,
-            );
-        }
         await state.turn.emit({
           type: "tool_result",
           payload: { tool: "task", callId: part.callID, result, isError: status === "error" },
@@ -1192,17 +1168,6 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       if (!signalsStopped) await stopSignals?.();
       await Promise.allSettled(queuedSignals);
       turn.cancel?.removeEventListener("abort", onCancel);
-      if (opts.tasks) {
-        const taskIds = [...state.seenTasks.keys()];
-        await Promise.all(
-          taskIds.map(async (taskId) => {
-            const task = await opts.tasks!.get(taskId);
-            if (task && (task.status === "pending" || task.status === "in_progress")) {
-              await opts.tasks!.transitionStatus(task.id, task.status, "failed", turn.runId ?? turn.session.id);
-            }
-          }),
-        );
-      }
       await flushLlmRequests();
       for (const [id, candidate] of active) if (candidate.turn === turn) active.delete(id);
       await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);

@@ -30,7 +30,6 @@ import {
   modelSupportsFastMode,
 } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
-import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
@@ -49,7 +48,6 @@ import {
   recordSteerIntake,
   recordStoppedReply,
   type SteerIntake,
-  transitionTask,
   type HarnessToolPlumbing,
   withResumedToolCall,
 } from "./harness-shared.ts";
@@ -75,7 +73,6 @@ export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
    */
   authEnv?: () => Promise<NodeJS.ProcessEnv>;
   signals?: RunSignalStore;
-  tasks?: TaskStore;
 }
 
 export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions {
@@ -404,7 +401,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       for (const value of thinking.splice(0))
         await turn.emit({ type: "thinking", payload: { thinking: value }, scopeLabel: turn.scopeLabel });
     };
-    const taskStates = new Map<string, { callId: string; status: TaskStatus; resultEmitted: boolean }>();
+    const taskStates = new Map<string, { callId: string; resultEmitted: boolean }>();
     const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
     let stepCallIds = new Set<string>();
     let recordedSteps = 0;
@@ -683,15 +680,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
             if (!taskStates.has(message.task_id)) {
-              if (opts.tasks)
-                await opts.tasks.create({
-                  id: message.task_id,
-                  sessionId: turn.session.id,
-                  originRunId: turn.runId ?? turn.session.id,
-                  title: message.description || message.prompt || "subagent task",
-                  status: "in_progress",
-                });
-              taskStates.set(message.task_id, { callId, status: "in_progress", resultEmitted: false });
+              taskStates.set(message.task_id, { callId, resultEmitted: false });
               if (!message.skip_transcript) {
                 await turn.emit({
                   type: "tool_call",
@@ -706,25 +695,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               }
             }
           }
-          if (message.type === "system" && message.subtype === "task_updated") {
-            const tracked = taskStates.get(message.task_id);
-            let next: TaskStatus | undefined;
-            if (message.patch.status === "completed") next = "completed";
-            else if (message.patch.status === "failed" || message.patch.status === "killed") next = "failed";
-            else if (message.patch.status === "running") next = "in_progress";
-            if (tracked && next && next !== tracked.status) {
-              await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
-              tracked.status = next;
-            }
-          }
           if (message.type === "system" && message.subtype === "task_notification") {
             const tracked = taskStates.get(message.task_id);
             if (tracked) {
-              const next: TaskStatus = message.status === "completed" ? "completed" : "failed";
-              if (tracked.status !== next) {
-                await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
-                tracked.status = next;
-              }
               if (!tracked.resultEmitted && !message.skip_transcript) {
                 tracked.resultEmitted = true;
                 await turn.emit({
@@ -875,11 +848,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       queue.close();
       if (!signalsStopped) await stopSignals?.();
       turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, task] of taskStates) {
-        if (task.status === "pending" || task.status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
-        }
-      }
       active.delete(sdkQuery);
       sdkQuery.close();
       rmSync(jail, { recursive: true, force: true });

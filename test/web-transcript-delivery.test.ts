@@ -328,7 +328,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   const runs = createMemoryRunStore().runs;
-  wireRunResultDeliveries(runs, inner, undefined, undefined, sessions);
+  wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });

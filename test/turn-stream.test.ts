@@ -169,35 +169,6 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   }
 });
 
-test("getRun projects durable tasks for its surface poller", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "ts-")),
-      workers: 0,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "task-view" },
-    text: "hello",
-    async: true,
-  });
-  await built.tasks.create({
-    id: "task-1",
-    sessionId: "task-view",
-    originRunId: ack.runId!,
-    title: "research",
-    status: "in_progress",
-  });
-
-  assert.deepEqual((await built.app.getRun(ack.runId!))?.tasks, [
-    { id: "task-1", title: "research", status: "in_progress" },
-  ]);
-});
-
 test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
   const built = buildApp(
     testConfig({

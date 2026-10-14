@@ -223,11 +223,6 @@ export interface Destination {
   relaySender?: string;
   threadTs?: string;
   editRef?: string;
-  taskList?: Array<{
-    id: string;
-    title: string;
-    status: "pending" | "in_progress" | "completed" | "skipped" | "failed";
-  }>;
   unfurlLinks?: boolean;
   react?: { messageTs: string; emoji: string };
   delete?: { messageTs: string };

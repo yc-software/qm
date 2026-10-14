@@ -21,7 +21,6 @@ import {
   codexChildToolAllowed,
   codexReasoningEffort,
   codexReplayCallId,
-  codexTaskTitle,
   codexTokenUsageUpdate,
   codexTurnInputText,
   createCodexHarness,
@@ -32,7 +31,6 @@ import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../src/core/turn-error.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
-import { createMemoryTaskStore } from "../src/tasks/memory-task-store.ts";
 import { CodexAppServer } from "../src/harness/codex-app-server.ts";
 import { redactSecrets } from "../src/harness/redact-secrets.ts";
 import { DEFAULT_CODEX_MODEL_ID } from "../src/model/pi-models.ts";
@@ -491,8 +489,7 @@ test("Codex forwards tool-result screening into its native tool bridge", () => {
 
 test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-codex-test-"));
-  const tasks = createMemoryTaskStore();
-  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir), tasks });
+  const harness = createCodexHarness({ binaryPath: fakeCodexBinary(dir), env: testHarnessEnv(dir) });
   t.after(async () => {
     await harness.turns.close?.();
     rmSync(dir, { recursive: true, force: true });
@@ -525,10 +522,6 @@ test("Codex harness drives app-server JSON-RPC with a read-only jail", async (t)
   assert.deepEqual(
     entries.map((entry) => entry.type),
     ["user", "tool_call", "tool_result", "assistant"],
-  );
-  assert.deepEqual(
-    (await tasks.list()).map(({ title, status }) => ({ title, status })),
-    [{ title: "return ALPHA", status: "completed" }],
   );
 });
 
@@ -563,14 +556,6 @@ test("Codex ignores continueTurn and still records the resume note as this attem
   assert.equal(result.reply, "hello");
   assert.equal(entries[0]?.type, "user");
   assert.equal((entries[0]!.payload as { text: string }).text, note);
-});
-
-test("Codex task titles stay concise when the provider includes the parent request", () => {
-  assert.equal(
-    codexTaskTitle("The user asked for two workers. You are the WEST subagent. Return a useful summary."),
-    "WEST subagent",
-  );
-  assert.equal(codexTaskTitle("Return ALPHA"), "Return ALPHA");
 });
 
 test("Codex maps the web effort control to native reasoning effort", () => {

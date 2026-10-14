@@ -51,7 +51,6 @@ import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
-import type { TaskStore } from "../../tasks/task-store.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
@@ -174,7 +173,6 @@ export interface OrchestratorDeps {
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
-  tasks?: TaskStore;
   blobTransfer?: BlobTransferStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;

@@ -19,7 +19,6 @@ import {
   statusPlaceholderKey,
   postWithVerify,
   recoveryVerifyOldest,
-  renderTaskList,
   slackReplyArgs,
   slackSectionBlocks,
   stripReactionDirectives,
@@ -312,39 +311,11 @@ export function createDeliveryPoller(deps: {
                 ...messageFooter,
                 ...(d.destination.debugFooter ? [{ type: "mrkdwn", text: d.destination.debugFooter }] : []),
               ];
-              const taskList = d.destination.taskList?.length ? renderTaskList(d.destination.taskList) : undefined;
-              const footerBlocks =
-                taskList || footer.length
-                  ? [
-                      ...(text.trim() ? slackSectionBlocks(text) : []),
-                      ...(taskList ? [{ type: "section", text: { type: "mrkdwn", text: taskList } }] : []),
-                      ...(footer.length ? [{ type: "context", elements: footer }] : []),
-                    ]
-                  : undefined;
+              const footerBlocks = footer.length
+                ? [...(text.trim() ? slackSectionBlocks(text) : []), { type: "context", elements: footer }]
+                : undefined;
               if (!text.trim() && !(messageFooter.length && d.attachments?.length)) {
-                if (taskList) {
-                  let preserved = false;
-                  if (editRef) {
-                    try {
-                      await client.chat.update({
-                        channel,
-                        ts: editRef,
-                        text: taskList,
-                        blocks: [{ type: "section", text: { type: "mrkdwn", text: taskList } }],
-                        ...botIdentityArgs(),
-                      });
-                      preserved = true;
-                    } catch (error) {
-                      swallow("slack: preserve recovered task list", error);
-                    }
-                  }
-                  if (!preserved) {
-                    await client.chat.postMessage({
-                      ...slackReplyArgs(channel, taskList, threadTs, { threadOnly: Boolean(threadTs) }),
-                      blocks: [{ type: "section", text: { type: "mrkdwn", text: taskList } }],
-                    });
-                  }
-                } else if (editRef) {
+                if (editRef) {
                   await client.chat
                     .delete({ channel, ts: editRef })
                     .catch(swallowAs("slack: delete status placeholder", undefined));

@@ -2,7 +2,6 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import type { Task, TaskStore } from "../tasks/task-store.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
@@ -35,11 +34,7 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
-export function runResultDelivery(
-  run: Run,
-  taskList: Task[] = [],
-  adminUrlFor?: AdminUrlFor,
-): RunResultDelivery | null {
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
@@ -58,7 +53,6 @@ export function runResultDelivery(
       ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
       : {}),
     ...(editRef ? { editRef } : {}),
-    ...(taskList.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };
   const idempotencyKey = `run:${run.id}`;
@@ -149,7 +143,6 @@ export interface RunResultRecovery {
 export function wireRunResultDeliveries(
   runs: Pick<RunStore, "onTerminal" | "terminalFinished">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
-  tasks?: TaskStore,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
@@ -159,8 +152,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
-    const delivery = runResultDelivery(run, taskList, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;
