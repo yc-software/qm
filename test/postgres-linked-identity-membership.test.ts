@@ -23,23 +23,23 @@ test(
     );
     try {
       const control = createControlService(built.app, built.scheduler, built.admin);
-      const email = "var@acyclic.example";
-      const canonical = "oidc|acyclic-var";
-      const room = scopeId("channel", "C-acyclic");
-      const channel = { channelId: "C-acyclic", name: "acyclic", isPrivate: true };
-      const destination = { type: "slack", target: "C-acyclic", audienceScopeId: room } as const;
+      const email = "person@example.com";
+      const canonical = "oidc|person";
+      const room = scopeId("channel", "C-room");
+      const channel = { channelId: "C-room", name: "room", isPrivate: true };
+      const destination = { type: "slack", target: "C-room", audienceScopeId: room } as const;
       const claims = (actorId: string): CapabilityClaims => ({
         actorId,
         scopeId: room,
         privateScope: true,
         destination,
-        destinations: [{ key: "k-room", label: "#acyclic", ...destination }],
+        destinations: [{ key: "k-room", label: "#room", ...destination }],
         defaultDestinationKey: "k-room",
         exp: Date.now() + CAPABILITY_TTL_MS,
       });
       const makeCron = () =>
         built.app.createCron({
-          title: "Acyclic digest",
+          title: "Room digest",
           action: "summarize the channel",
           schedule: { everyMs: 3_600_000 },
           owner: canonical,
@@ -47,8 +47,8 @@ test(
           ownerScopeId: room,
         });
 
-      await built.app.upsertDirectory([{ principalId: email, displayName: "Var", type: "internal" }]);
-      await built.app.upsertChannels([channel], [{ channelId: "C-acyclic", principalId: email }]);
+      await built.app.upsertDirectory([{ principalId: email, displayName: "Person", type: "internal" }]);
+      await built.app.upsertChannels([channel], [{ channelId: "C-room", principalId: email }]);
       await built.principalLinks.link({
         principalId: email,
         canonicalId: canonical,
@@ -72,7 +72,7 @@ test(
       assert.equal((await control.deleteCron(kept.id, claims(canonical))).ok, false, "removed from the room");
       assert.equal(await built.app.authorizesCapabilityScope({ actorId: canonical, scopeId: room }), false);
 
-      await built.app.upsertChannels([channel], [{ channelId: "C-acyclic", principalId: email }]);
+      await built.app.upsertChannels([channel], [{ channelId: "C-room", principalId: email }]);
       await built.principalLinks.unlink(email);
       assert.equal((await control.deleteCron(kept.id, claims(canonical))).ok, false, "no longer the same person");
       assert.equal(await built.app.authorizesCapabilityScope({ actorId: canonical, scopeId: room }), false);
