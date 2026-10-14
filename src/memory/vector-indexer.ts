@@ -13,17 +13,19 @@ export function createMemoryVectorIndexer(opts: {
 }) {
   const onError = opts.onError ?? ((error: unknown) => reportFailure("memory vector index", error));
   let pending: Promise<void> | undefined;
+  let active: AbortController | undefined;
   let model: string | undefined;
   let dimensions: number | undefined;
   let afterId: string | undefined;
   let nextProbeAt = 0;
   async function run(): Promise<void> {
+    const controller = (active = new AbortController());
     await opts.leaderLease.hold("memory:vector-index", async (lost) => {
       const current = await opts.resolve();
       if (!current) return;
-      const controller = new AbortController();
       void lost.then(() => controller.abort());
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
+      signal.throwIfAborted();
       const { embedder, store } = current;
       const now = (opts.now ?? Date.now)();
       if (model !== embedder.id || dimensions === undefined || now >= nextProbeAt) {
@@ -70,11 +72,16 @@ export function createMemoryVectorIndexer(opts: {
     });
   }
   return {
+    stop(): Promise<void> {
+      active?.abort();
+      return pending ?? Promise.resolve();
+    },
     tick(): Promise<void> {
       pending ??= run()
         .catch(onError)
         .finally(() => {
           pending = undefined;
+          active = undefined;
         });
       return pending;
     },

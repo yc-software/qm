@@ -232,3 +232,30 @@ test("indexer drains full batches within twenty seconds and prunes once per tick
   assert.equal(f.prunes.length, 2);
   assert.deepEqual(f.failures, []);
 });
+
+test("stopping a mid-drain indexer aborts promptly without another put", { timeout: 1000 }, async () => {
+  const f = fixture();
+  const missing = f.store.missing;
+  const entered = Promise.withResolvers<void>();
+  f.store.missing = async (...args) => {
+    const [fact] = await missing(...args);
+    return Array.from({ length: 64 }, (_, i) => ({
+      ...fact!,
+      factId: String(Number(args[4] ?? 0) + i + 1),
+    }));
+  };
+  f.embedder.embed = async (texts, signal) => {
+    if (f.writes.length) {
+      entered.resolve();
+      await new Promise<void>((resolve) => signal!.addEventListener("abort", () => resolve(), { once: true }));
+    }
+    return texts.map(() => [1, 0]);
+  };
+  const tick = f.indexer.tick();
+  await entered.promise;
+  await f.indexer.stop();
+  await tick;
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.prunes.length, 0);
+});

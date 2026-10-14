@@ -42,7 +42,10 @@ export function createSemanticMemory(opts: {
   return {
     memory,
     start: () => sweeper.start(),
-    stop: () => sweeper.stop(),
+    stop() {
+      void indexer.stop();
+      return sweeper.stop();
+    },
     async close() {
       await store?.close();
       store = undefined;
