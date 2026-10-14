@@ -168,6 +168,8 @@ END $prepare$`;
 
 const SYSTEM_ERROR_CLASSES = "'40', '42', '53', '55', '57', '58'";
 
+const MAX_SKIPPED_SESSIONS = 100;
+
 const SKIPPING_LOOP = `    BEGIN
       SELECT * INTO n_invalid, n_keyed, n_steps, n_turns FROM legacy_tape_steps_batch(ids, frozen_at);
       n_skipped := 0;
@@ -191,6 +193,9 @@ const SKIPPING_LOOP = `    BEGIN
           n_skipped := n_skipped + 1;
         END;
       END LOOP;
+      IF n_skipped > 0 AND (SELECT skipped_sessions FROM legacy_tape_steps_progress) + n_skipped > ${MAX_SKIPPED_SESSIONS} THEN
+        RAISE EXCEPTION 'more than ${MAX_SKIPPED_SESSIONS} sessions could not be prepared, so the failure is unlikely to be in the data: %', last_error;
+      END IF;
       IF array_length(ids, 1) > 1 AND n_skipped = array_length(ids, 1) THEN
         RAISE EXCEPTION 'every session in the batch after % failed, so the failure is not in the data: %',
           COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '(start)'), last_error;

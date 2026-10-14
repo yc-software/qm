@@ -296,3 +296,37 @@ test(
     });
   },
 );
+
+test("pg legacy tape step preparation stops once more than 100 sessions have been skipped", { skip }, async () => {
+  await withSchema(async (raw) => {
+    await raw.query(
+      `INSERT INTO sessions(id, type, scope_id, thread_ref, created_at)
+       SELECT 's' || lpad(g::text, 3, '0'), 'dm', $1, 'web:s' || g, 1 FROM generate_series(1, 202) g`,
+      [scope],
+    );
+    await raw.query(
+      `INSERT INTO session_tape(session_id, seq, kind, harness, payload, scope_label, created_at)
+       SELECT 's' || lpad(g::text, 3, '0'), 0, 'message', 'pi',
+              '{"role":"assistant","content":[{"type":"toolCall","id":"call-' || g || '","name":"execute","arguments":{}}]}', $1, 1
+         FROM generate_series(1, 202, 2) g`,
+      [scope],
+    );
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+       SELECT 's' || lpad(g::text, 3, '0'), 0, NULL, 'tool_call', '{"tool":"execute","callId":"call-' || g || '"}', $1, 0
+         FROM generate_series(1, 202, 2) g`,
+      [scope],
+    );
+    await raw.query("ALTER TABLE legacy_tape_steps ADD CONSTRAINT refuse_all CHECK (false) NOT VALID");
+
+    await assert.rejects(
+      raw.query("CALL prepare_legacy_tape_steps(50)"),
+      /more than 100 sessions could not be prepared, so the failure is unlikely to be in the data: 23514/,
+    );
+
+    const state = (await raw.query("SELECT done, skipped_sessions::int AS skipped FROM legacy_tape_steps_progress"))
+      .rows[0];
+    assert.equal(state.done, false);
+    assert.ok(state.skipped <= 100, `skipped ${state.skipped}`);
+  });
+});
