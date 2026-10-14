@@ -81,7 +81,9 @@ BEGIN
       WITH messages AS MATERIALIZED (
         SELECT t.session_id, t.seq, t.created_at, v.valid, m.*
           FROM session_tape t
-          CROSS JOIN LATERAL (SELECT pg_input_is_valid(t.payload, 'jsonb') AS valid OFFSET 0) v
+          CROSS JOIN LATERAL (
+            SELECT pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{' AS valid OFFSET 0
+          ) v
           CROSS JOIN LATERAL (
             SELECT r.* FROM json_to_record(CASE WHEN v.valid THEN t.payload::json END)
               AS r(role TEXT, api TEXT, provider TEXT, model TEXT, "stopReason" TEXT, content JSON)

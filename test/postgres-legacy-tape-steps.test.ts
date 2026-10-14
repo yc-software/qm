@@ -90,6 +90,8 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
         ]),
         '{"role":"assistant","content":[{"type":"text","text":"bad \\ud800"}]}',
         message([{ type: "text", text: "Done." }]),
+        "null",
+        "[]",
       ],
       [
         ["thinking", { thinking: "plan", thinkingSignature: "sig-1" }],
@@ -153,7 +155,7 @@ test("pg legacy tape steps keep each step's model and exact block wire, and map 
     assert.deepEqual(await progress(raw), {
       last_session: "tapeless",
       done: true,
-      invalid_messages: 1,
+      invalid_messages: 3,
       keyed_blocks: 6,
       copied_steps: 3,
       copied_turns: 2,
