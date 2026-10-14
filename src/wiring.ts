@@ -46,7 +46,9 @@ import {
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
-import { createSemanticMemoryService, type MemoryVector } from "./memory/semantic-recall.ts";
+import { createSemanticMemoryService } from "./memory/semantic-recall.ts";
+import { createPostgresVectorStore, type MemoryVectorStore } from "./memory/postgres-vector-store.ts";
+import { createMemoryVectorIndexer } from "./memory/vector-indexer.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
@@ -845,17 +847,35 @@ export function buildApp(
   const notebookMemory: MemoryService = config.databaseUrl
     ? createPostgresMemoryService(config.databaseUrl)
     : createMemoryService(workspace);
+  let memoryVectorStore: MemoryVectorStore | undefined;
+  const resolveMemoryIndex = async () => {
+    if (!config.databaseUrl) return undefined;
+    const id = await configStore.getEmbeddingModelDurable();
+    if (!id) return undefined;
+    const embedder = await resolveMemoryEmbedder(id);
+    memoryVectorStore ??= createPostgresVectorStore(config.databaseUrl);
+    return { embedder, store: memoryVectorStore };
+  };
   const defaultMemory = createSemanticMemoryService(
     notebookMemory,
-    async () => {
-      const id = await configStore.getEmbeddingModelDurable();
-      return id ? resolveMemoryEmbedder(id) : undefined;
-    },
-    artifactMap<MemoryVector>("memory_vectors", ["scope"]),
-    {
-      onError: (error) => reportFailure("memory semantic recall; using recent facts", error),
-    },
+    async () => (await resolveMemoryIndex())?.embedder,
+    config.databaseUrl
+      ? {
+          async *search(input) {
+            if (!memoryVectorStore) return;
+            yield* memoryVectorStore.search(input);
+          },
+        }
+      : undefined,
+    { onError: (error) => reportFailure("memory semantic recall; using recent facts", error) },
   );
+  const memoryVectorIndexer = createMemoryVectorIndexer({ resolve: resolveMemoryIndex, leaderLease });
+  const memoryVectorSweeper = config.databaseUrl
+    ? createSweeper(() => memoryVectorIndexer.tick(), config.memoryVectorIndexIntervalMs, {
+        label: "memory-vector-index",
+        immediate: true,
+      })
+    : undefined;
   // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
@@ -2780,6 +2800,7 @@ export function buildApp(
         .catch(swallowAs("wiring: monitor resume failed", undefined));
       monitorRetentionSweeper.start();
       spendSweeper?.start();
+      memoryVectorSweeper?.start();
       if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
       blobSweeper.start();
       composioReturnSweeper.start();
@@ -2810,6 +2831,7 @@ export function buildApp(
       processReaper?.stop(),
       monitorRetentionSweeper.stop(),
       spendSweeper?.stop(),
+      memoryVectorSweeper?.stop(),
       skillSyncEngine.stop(),
       idleSweeper?.stop(),
       deployMaintenanceSweeper.stop(),
@@ -2887,6 +2909,8 @@ export function buildApp(
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
       await harness.turns.close?.();
+      await memoryVectorStore?.close();
+      memoryVectorStore = undefined;
       await flyTunnel?.stop();
     },
   };

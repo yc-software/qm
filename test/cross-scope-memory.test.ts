@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createSemanticMemoryService, type MemoryVector } from "../src/memory/semantic-recall.ts";
+import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
 
@@ -30,7 +30,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
         });
       },
     }),
-    createMemoryMap<MemoryVector>(),
+    scoredMemoryIndex(base, (text) => Number(text.split(" ")[0])),
   );
   return { base, memory, calls, workspace };
 }
@@ -210,4 +210,42 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
   const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "q", maxChars: 6000 }), new Map());
   assert.match(out, /zzzz/);
   assert.ok(out.length <= 6000);
+});
+
+test("pagination continues past many oversized and duplicate matches", async (t) => {
+  const { base, memory } = await fixture(t);
+  await base.capture(
+    "personal:a",
+    Array.from({ length: 130 }, (_, i) => `0.99 oversized ${i} ${"x".repeat(1000)}`),
+    AT,
+  );
+  await base.capture("personal:a", ["0.9 final small"], AT);
+  const out = renderRecall(
+    await recallAcrossScopes(memory, ["personal:a"], { query: "verify", maxChars: 80 }),
+    new Map(),
+  );
+  assert.match(out, /final small/);
+  assert.doesNotMatch(out, /oversized/);
+});
+
+test("a fully packed prompt closes every iterator without fetching another page", async (t) => {
+  const { base } = await fixture(t);
+  let nextPages = 0;
+  let closed = 0;
+  const memory = {
+    ...base,
+    async *recallPages() {
+      try {
+        yield [{ id: "1", text: "x".repeat(45), score: 1 }];
+        nextPages++;
+        yield [{ id: "2", text: "later", score: 0.9 }];
+      } finally {
+        closed++;
+      }
+    },
+  };
+  const rows = await recallAcrossScopes(memory, ["personal:a"], { maxChars: 60 });
+  assert.equal(rows.length, 1);
+  assert.equal(nextPages, 0);
+  assert.equal(closed, 1);
 });

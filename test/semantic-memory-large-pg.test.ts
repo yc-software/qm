@@ -1,0 +1,76 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
+import { factHash } from "../src/memory/facts.ts";
+
+const url = process.env.DATABASE_URL;
+
+test("a 4500-fact scope ranks a bounded 3072-dimensional page in under one second", { skip: !url }, async (t) => {
+  const scope = `personal:large-${randomUUID()}`;
+  const model = `large-${randomUUID()}`;
+  const base = createPostgresMemoryService(url!);
+  const index = createPostgresVectorStore(url!);
+  const client = new pg.Client({ connectionString: url! });
+  await client.connect();
+  t.after(async () => {
+    await client.end();
+    await index.close();
+  });
+  await base.facts!(scope);
+  await index.missing(model, 1);
+  await client.query(
+    `INSERT INTO memory_facts(scope_id, text, sensitivity, source_unknown, created_at, updated_at)
+    SELECT $1, 'Large notebook fact ' || g, 'ordinary', false, g, g FROM generate_series(1,4500) g`,
+    [scope],
+  );
+  const vector = Array.from({ length: 3072 }, (_, i) => Math.sin(i * 123.4567));
+  await client.query(
+    `INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
+    SELECT scope_id, $2, id::text, encode(sha256(convert_to(text,'UTF8')),'hex'), 3072, $3::vector
+    FROM memory_facts WHERE scope_id = $1 AND created_at <= 4490`,
+    [scope, model, JSON.stringify(vector)],
+  );
+  await client.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
+  const facts = (await base.facts!(scope)).map((fact) => ({
+    id: fact.id,
+    hash: factHash(fact.text),
+    at: fact.createdAt,
+  }));
+  const iterator = index.search({ scope, model, vector, facts, pageSize: 64 })[Symbol.asyncIterator]();
+  const start = performance.now();
+  const first = await iterator.next();
+  const elapsed = performance.now() - start;
+  await iterator.return?.();
+  assert.equal(first.done, false);
+  assert.equal(first.value!.length, 64);
+  assert.ok(first.value!.every((row) => row.score > 0.99));
+  assert.equal(first.value![0]!.factId, facts[4489]!.id);
+  assert.ok(elapsed < 1000, `4500-fact first page took ${elapsed.toFixed(1)}ms`);
+  t.diagnostic(`4500 facts / 3072 dimensions / 64 results: ${elapsed.toFixed(1)}ms`);
+});
+
+test(
+  "a stricter similarity floor still includes unindexed live facts at the recency score",
+  { skip: !url },
+  async (t) => {
+    const scope = `personal:floor-${randomUUID()}`;
+    const base = createPostgresMemoryService(url!);
+    const index = createPostgresVectorStore(url!);
+    t.after(() => index.close());
+    await base.capture(scope, ["unindexed current fact"], 1000);
+    const facts = (await base.facts!(scope)).map((fact) => ({
+      id: fact.id,
+      hash: factHash(fact.text),
+      at: fact.createdAt,
+    }));
+    const matches = [];
+    for await (const page of index.search({ scope, model: "strict", vector: [1, 0], facts, minSimilarity: 0.9 }))
+      matches.push(...page);
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0]!.factId, facts[0]!.id);
+    assert.ok(Math.abs(matches[0]!.score - 0.2) < 1e-9);
+  },
+);

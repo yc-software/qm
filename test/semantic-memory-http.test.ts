@@ -1,5 +1,12 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { createPostgresVectorStore } from "../src/memory/postgres-vector-store.ts";
+import { createMemoryEmbedder } from "../src/model/embeddings.ts";
+import { factHash } from "../src/memory/facts.ts";
+import type { MemoryService } from "../src/memory/memory-service.ts";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -22,7 +29,62 @@ const close = async (server: Server) => {
   await new Promise<void>((r) => server.close(() => r()));
 };
 
-test("HTTP turn injects semantic matches; grep remains independent and authorized", async (t) => {
+const database = process.env.DATABASE_URL;
+const pgTest = database ? test : test.skip;
+async function isolatedDatabase(t: TestContext) {
+  const admin = new pg.Client({ connectionString: database! });
+  await admin.connect();
+  const name = `memory_http_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE DATABASE ${name}`);
+  const fixture = { url: "", stop: async () => {} };
+  t.after(async () => {
+    await fixture.stop();
+    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await admin.end();
+  });
+  const url = new URL(database!);
+  url.pathname = `/${name}`;
+  fixture.url = url.toString();
+  return fixture;
+}
+
+async function seedVectors(
+  memory: MemoryService,
+  databaseUrl: string,
+  model: string,
+  baseUrl: string,
+  scopes: string[],
+) {
+  const index = createPostgresVectorStore(databaseUrl);
+  const embedder = createMemoryEmbedder(
+    { kind: "embedding", id: model, name: model, provider: "openai", baseUrl },
+    "test-key",
+  );
+  try {
+    for (const scope of scopes) {
+      const facts = await memory.facts!(scope);
+      const vectors = await embedder.embed(
+        facts.map((fact) => fact.text),
+        AbortSignal.timeout(5000),
+      );
+      await index.put(
+        facts.map((fact, i) => ({
+          scope,
+          model: embedder.id,
+          factId: fact.id,
+          hash: factHash(fact.text),
+          vector: vectors[i]!,
+        })),
+      );
+    }
+  } finally {
+    await index.close();
+  }
+}
+
+pgTest("HTTP turn injects semantic matches; grep remains independent and authorized", async (t) => {
+  const databaseFixture = await isolatedDatabase(t);
+  const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {
     let body = "";
@@ -41,10 +103,26 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
   const built = buildApp(
     testConfig({
       memoryStrategy: "agent-only",
+      databaseUrl,
       providerBaseUrls: { openai: providerUrl },
       openaiApiKey: "test-key",
     }),
   );
+  databaseFixture.stop = () => built.runtime.stop();
+  await migrateRegisteredPgSchemas(databaseUrl);
+  await built.memory.facts!("personal:U1");
+  await built.memory.recall("personal:U1", { query: "no model configured" });
+  const inspector = new pg.Client({ connectionString: databaseUrl });
+  await inspector.connect();
+  try {
+    const { rows } = await inspector.query(
+      "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector') AS installed, to_regclass('memory_fact_vectors') AS vectors",
+    );
+    assert.equal(rows[0].installed, false);
+    assert.equal(rows[0].vectors, null);
+  } finally {
+    await inspector.end();
+  }
   const embeddingId = "test-model";
   await built.modelRegistry.upsert(
     { kind: "embedding", id: embeddingId, name: "Embeddings", provider: "openai" },
@@ -56,6 +134,7 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
   const otherFact = "Another user's confidential browser preference";
   await built.memory.capture("personal:U1", [fact, ...filler], Date.now());
   await built.memory.capture("personal:U2", [otherFact], Date.now());
+  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["org:default-org", "personal:U1"]);
   const server = createInsecureTestServer(built.app, {
     memory: built.memory,
     capabilitySecret: TEST_CAPABILITY_SECRET,
@@ -119,7 +198,11 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
     inputs.every((batch) => batch.every((text) => !/FOREIGN_HISTORY_SENTINEL|TAINTED_HISTORY_SENTINEL/.test(text))),
   );
 
-  await built.memory.edit!("personal:U1", [{ id: "1", text: "Updated preference: use browser smoke tests." }]);
+  const personalFact = (await built.memory.facts!("personal:U1")).find((row) => row.text === fact)!;
+  await built.memory.edit!("personal:U1", [
+    { id: personalFact.id, text: "Updated preference: use browser smoke tests." },
+  ]);
+  await seedVectors(built.memory, databaseUrl, embeddingId, providerUrl, ["personal:U1"]);
   const updated = await post("/v1/turns", { ...request, conversation: { kind: "dm", threadRef: "updated" } });
   const newResult = (await updated.json()) as { reply: string };
   assert.ok(!newResult.reply.includes(fact));
@@ -139,7 +222,9 @@ test("HTTP turn injects semantic matches; grep remains independent and authorize
   );
 });
 
-test("HTTP Open DM combines room and current memory, then blocks reads after membership revocation", async (t) => {
+pgTest("HTTP Open DM combines room and current memory, then blocks reads after membership revocation", async (t) => {
+  const databaseFixture = await isolatedDatabase(t);
+  const databaseUrl = databaseFixture.url;
   const inputs: string[][] = [];
   const provider = httpServer(async (req, res) => {
     let body = "";
@@ -163,10 +248,12 @@ test("HTTP Open DM combines room and current memory, then blocks reads after mem
     testConfig({
       sharingPosture: "open",
       memoryStrategy: "agent-only",
+      databaseUrl,
       providerBaseUrls: { openai: providerUrl },
       openaiApiKey: "test",
     }),
   );
+  databaseFixture.stop = () => built.runtime.stop();
   await built.modelRegistry.upsert({ kind: "embedding", id: "test", name: "Embeddings", provider: "openai" }, "admin");
   await built.config.setEmbeddingModel("test");
   const personal = "personal:U1",
@@ -194,6 +281,7 @@ test("HTTP Open DM combines room and current memory, then blocks reads after mem
   );
   await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
+  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
   const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));

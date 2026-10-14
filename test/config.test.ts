@@ -1014,3 +1014,10 @@ test("a subscription-only company ChatGPT deployment defaults pi to the plain Co
   );
   assert.equal(configuredModelForHarness(base, "pi"), undefined);
 });
+
+test("memory vector indexing has a bounded configurable interval", () => {
+  assert.equal(loadConfig({}).memoryVectorIndexIntervalMs, 30_000);
+  assert.equal(loadConfig({ MEMORY_VECTOR_INDEX_INTERVAL_MS: "60000" }).memoryVectorIndexIntervalMs, 60_000);
+  for (const value of ["0", "-1", "1.5", "2147483648", "invalid"])
+    assert.throws(() => loadConfig({ MEMORY_VECTOR_INDEX_INTERVAL_MS: value }), /MEMORY_VECTOR_INDEX_INTERVAL_MS/);
+});

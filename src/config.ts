@@ -172,6 +172,7 @@ export interface Config {
   memoryStrategy: MemoryStrategyKind;
   memoryProviderConfig?: MemoryProviderConfig;
   memoryCaptureQuietMs: number;
+  memoryVectorIndexIntervalMs: number;
   memoryCaptureMaxTurns?: number;
   workers: number;
   leaseTtlMs: number;
@@ -1397,6 +1398,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       );
     }
   }
+  const memoryVectorIndexIntervalMs =
+    numEnvStrict("MEMORY_VECTOR_INDEX_INTERVAL_MS", env.MEMORY_VECTOR_INDEX_INTERVAL_MS) ?? 30_000;
+  if (
+    !Number.isInteger(memoryVectorIndexIntervalMs) ||
+    memoryVectorIndexIntervalMs <= 0 ||
+    memoryVectorIndexIntervalMs > 2147483647
+  )
+    throw new Error("MEMORY_VECTOR_INDEX_INTERVAL_MS must be a positive integer no greater than 2147483647");
   const securityScreenTimeoutMs =
     numEnvStrict("SECURITY_SCREEN_TIMEOUT_MS", env.SECURITY_SCREEN_TIMEOUT_MS) ??
     CONFIG_DEFAULTS.securityScreenTimeoutMs;
@@ -1624,6 +1633,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
+    memoryVectorIndexIntervalMs,
     memoryCaptureQuietMs:
       numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
     ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined

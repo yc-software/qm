@@ -3,16 +3,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createSemanticMemoryService, memoryRecallQuery, type MemoryVector } from "../src/memory/semantic-recall.ts";
+import { createSemanticMemoryService, memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { createMemoryEmbedder, unitVector, type MemoryEmbedder } from "../src/model/embeddings.ts";
 import { recallAcrossScopes, renderRecall } from "../src/memory/cross-scope.ts";
 import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
   (await recallAcrossScopes(memory, [scope], context)).map((fact) => fact.text).join("\n");
+import { factHash } from "../src/memory/facts.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
@@ -21,7 +22,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), "semantic-memory-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const base = createMemoryService(createLocalWorkspaceStore(dir));
-  const index = createMemoryMap<MemoryVector>();
+  const index = scoredMemoryIndex(base, (text) => (/browser|verify|updated/i.test(text) ? 1 : 0));
   const calls: string[][] = [];
   const embedder: MemoryEmbedder = {
     id: "test-v1",
@@ -53,7 +54,7 @@ test("semantic recall selects an old match, respects budget, and leaves full gre
 });
 
 test("empty/deleted notebooks and other scopes cannot return cached facts", async (t) => {
-  const { base, memory, index, calls } = await fixture(t);
+  const { base, memory, calls } = await fixture(t);
   await base.capture("personal:a", ["browser preference"], AT);
   await recall(memory, "personal:a", { query: "verify" });
   calls.length = 0;
@@ -61,7 +62,7 @@ test("empty/deleted notebooks and other scopes cannot return cached facts", asyn
   assert.deepEqual(calls, []);
   await base.delete!("personal:a", ["1"]);
   assert.equal(await recall(memory, "personal:a", { query: "verify" }), "");
-  assert.deepEqual(await index.all(), []);
+  assert.deepEqual(calls, []);
 });
 
 test("embedding outage falls back to whole bullets, without disabling grep or writes", async (t) => {
@@ -172,28 +173,40 @@ test("without an embedding model, prompt recall takes the newest facts across no
   assert.doesNotMatch(out, /old 0 /);
 });
 
-test("a provider vector-width change falls back to recency and rebuilds the index", async (t) => {
-  const { base, index } = await fixture(t);
-  let width = 2;
-  const embedder: MemoryEmbedder = {
-    id: "same-model",
-    embed: async (texts) => texts.map(() => Array.from({ length: width }, () => 1)),
-  };
-  const memory = createSemanticMemoryService(base, async () => embedder, index);
+test("query failures fall back without rebuilding facts in recall", async (t) => {
+  const { base, embedder, calls } = await fixture(t);
   await base.capture("personal:a", ["A fact"], AT);
-  await recall(memory, "personal:a", { query: "fact" });
-  width = 3;
-  assert.equal(await recall(memory, "personal:a", { query: "fact" }), "- (2026-10-01) A fact");
-  await recall(memory, "personal:a", { query: "fact" });
-  assert.deepEqual(
-    (await index.all()).map((row) => row.vector.length),
-    [3],
+  let errors = 0;
+  const memory = createSemanticMemoryService(
+    base,
+    async () => embedder,
+    {
+      async *search(input) {
+        assert.deepEqual(input.vector, [1, 0]);
+        assert.ok(input.signal);
+        yield [];
+        throw new Error("Database query unavailable");
+      },
+    },
+    { onError: () => errors++ },
   );
+  assert.equal(
+    await recall(memory, "personal:a", { query: "verify", signal: AbortSignal.timeout(1000) }),
+    "- (2026-10-01) A fact",
+  );
+  assert.equal(errors, 1);
+  assert.deepEqual(calls, [["verify"]]);
 });
 
-test("moving the embedding gateway to another URL keeps the vector index", async (t) => {
-  const { base, index } = await fixture(t);
-  await base.capture("personal:a", ["browser preference", "release note"], AT);
+test("without Postgres semantic recall stays readable and never embeds facts", async (t) => {
+  const { base, embedder, calls } = await fixture(t);
+  await base.capture("personal:a", ["older fact", "newer fact"], AT);
+  const memory = createSemanticMemoryService(base, async () => embedder);
+  assert.match(await recall(memory, "personal:a", { query: "verify" }), /newer fact[\s\S]*older fact/);
+  assert.deepEqual(calls, []);
+});
+
+test("moving the embedding gateway keeps the same model identity", async () => {
   const model = {
     kind: "embedding" as const,
     baseUrl: "https://gateway.invalid",
@@ -201,64 +214,65 @@ test("moving the embedding gateway to another URL keeps the vector index", async
     name: "embed",
     provider: "qm:gateway",
   };
-  const embedded: string[] = [];
-  const through = (url: string) => {
-    const transport = { url, apiKey: "k", apiKeyHeader: "x-k", models: { "gateway/embed": "embed" } };
-    const embedder = createMemoryEmbedder(model, null, transport, async (_url, init) => {
-      const input = JSON.parse(String(init?.body)).input as string[];
-      embedded.push(...input);
-      return Response.json({
-        data: input.map((text, i) => ({ index: i, embedding: /browser|verify/i.test(text) ? [1, 0] : [0, 1] })),
-      });
-    });
-    return createSemanticMemoryService(base, async () => embedder, index);
-  };
-  assert.equal(
-    await recall(through("http://signer.one:8080/v1"), "personal:a", { query: "verify" }),
-    "- (2026-10-01) browser preference",
-  );
-  const rows = await index.all();
-  embedded.length = 0;
-  assert.equal(
-    await recall(through("http://signer.two:8080/v1"), "personal:a", { query: "verify" }),
-    "- (2026-10-01) browser preference",
-  );
-  assert.deepEqual(embedded, ["verify"]);
-  assert.deepEqual(await index.all(), rows);
+  const through = (url: string) =>
+    createMemoryEmbedder(model, null, { url, apiKey: "k", apiKeyHeader: "x-k", models: { "gateway/embed": "embed" } });
+  assert.equal(through("http://signer.one:8080/v1").id, through("http://signer.two:8080/v1").id);
 });
 
-test("re-indexing a large notebook for a new model keeps index writes bounded", async (t) => {
-  const { base, index } = await fixture(t);
-  await base.capture(
-    "personal:a",
-    Array.from({ length: 40 }, (_, i) => `fact ${i}`),
-    AT,
+test("a later page error restarts direct and cross-scope recall entirely in recency order", async (t) => {
+  const { base, embedder } = await fixture(t);
+  await base.capture("personal:a", ["old semantic match"], AT);
+  await base.capture("personal:a", ["newest fallback"], AT + 1000);
+  const [old] = await base.facts!("personal:a");
+  const memory = createSemanticMemoryService(base, async () => embedder, {
+    async *search() {
+      yield [{ factId: old!.id, hash: factHash(old!.text), score: 1 }];
+      throw new Error("page unavailable");
+    },
+  });
+  const direct = await memory.recall("personal:a", { query: "verify" });
+  assert.match(direct[0]!.text, /newest fallback/);
+  const across = await recallAcrossScopes(memory, ["personal:a"], { query: "verify" });
+  assert.match(across[0]!.text, /newest fallback/);
+  assert.equal(across.length, 2);
+});
+
+test("fallback reloads current disclosed facts after an edit races the index query", async (t) => {
+  const { base, embedder } = await fixture(t);
+  await base.capture("personal:a", ["old private fact"], AT);
+  const memory = createSemanticMemoryService(base, async () => embedder, {
+    async *search() {
+      await base.edit!("personal:a", [{ id: "1", text: "current fact" }]);
+      yield [];
+      throw new Error("old hash no longer exists");
+    },
+  });
+  const result = await memory.recall("personal:a", { query: "verify" });
+  assert.match(result[0]!.text, /current fact/);
+  assert.doesNotMatch(result[0]!.text, /old private/);
+});
+
+test("search cancellation uses the caller signal, not the elapsed query embedding deadline", async (t) => {
+  const { base } = await fixture(t);
+  await base.capture("personal:a", ["A fact"], AT);
+  const controller = new AbortController();
+  let embeddingSignal: AbortSignal | undefined;
+  const memory = createSemanticMemoryService(
+    base,
+    async () => ({
+      id: "test",
+      async embed(_texts, signal) {
+        embeddingSignal = signal;
+        return [[1, 0]];
+      },
+    }),
+    {
+      async *search(input) {
+        assert.equal(input.signal, controller.signal);
+        assert.notEqual(input.signal, embeddingSignal);
+        yield input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
+      },
+    },
   );
-  let inFlight = 0;
-  let peak = 0;
-  const track = async (write: () => Promise<void>) => {
-    peak = Math.max(peak, ++inFlight);
-    await new Promise((resolve) => setImmediate(resolve));
-    try {
-      await write();
-    } finally {
-      inFlight--;
-    }
-  };
-  const tracked = {
-    ...index,
-    put: (id: string, value: MemoryVector) => track(() => index.put(id, value)),
-    delete: (id: string) => track(() => index.delete(id)),
-  };
-  const model = (id: string): MemoryEmbedder => ({ id, embed: async (texts) => texts.map(() => [1, 0]) });
-  for (const id of ["old-model", "new-model"])
-    await recall(
-      createSemanticMemoryService(base, async () => model(id), tracked),
-      "personal:a",
-      { query: "fact" },
-    );
-  assert.ok(peak <= 4, `peak concurrent index writes ${peak}`);
-  const rows = await index.all();
-  assert.equal(rows.length, 40);
-  assert.ok(rows.every((row) => row.model === "new-model"));
+  assert.equal((await memory.recall("personal:a", { query: "verify", signal: controller.signal })).length, 1);
 });

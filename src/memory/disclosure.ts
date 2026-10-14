@@ -6,6 +6,7 @@ import type { CurrentScopeMembers, IsCurrentSharedScopeMember } from "../resolut
 import { MemoryFactsMissing, parseFactId, renderFacts, type MemoryFact, type MemoryProvenance } from "./facts.ts";
 import { queryFacts, type MemoryService } from "./memory-service.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { recallCandidates } from "./recall-candidates.ts";
 
 export interface MemoryDisclosure {
   actor: Principal;
@@ -116,6 +117,9 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
     return {
       ...memory,
       recall: async (scope, context) => ((await narrow(scope)) ? memory.recall(scope, context) : []),
+      async *recallPages(scope, context) {
+        if (await narrow(scope)) for await (const row of recallCandidates(memory, scope, context)) yield [row];
+      },
       query: async (scope, query, limit, context) =>
         (await narrow(scope)) ? memory.query(scope, query, limit, context) : [],
       read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
@@ -148,6 +152,12 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       await memory.delete!(scope, ids, author);
     },
     read: async (scope) => renderFacts(await visible(scope)),
+    async *recallPages(scope, context) {
+      const shown = new Set((await visible(scope)).map((fact) => fact.id));
+      for await (const row of recallCandidates(memory, scope, context)) {
+        if (row.id !== undefined && shown.has(row.id)) yield [row];
+      }
+    },
     async recall(scope, context) {
       const shown = new Set((await visible(scope)).map((fact) => fact.id));
       return (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
