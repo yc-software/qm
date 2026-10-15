@@ -27,8 +27,6 @@ export interface ToolPayload {
   denied?: boolean;
   error?: string;
   reason?: string;
-  stdout?: string;
-  stderr?: string;
   code?: number;
   timedOut?: boolean;
   isError?: boolean;
@@ -99,10 +97,7 @@ export function toolCategory(payload: ToolPayload): string {
 }
 
 export function toolExecutionOutput(result: ToolPayload): string | null {
-  if (typeof result.code === "number" && typeof result.result === "string") return result.result;
-  if (typeof result.stdout === "string" || typeof result.stderr === "string")
-    return [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
-  return null;
+  return typeof result.code === "number" && typeof result.result === "string" ? result.result : null;
 }
 
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {

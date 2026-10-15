@@ -188,7 +188,7 @@ test("ordinary command exits stay neutral while tool errors retain failure label
 test("historical completed nonzero exits do not inherit the old error flag", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
     for (const output of [
-      { stdout: "", stderr: "" },
+      { result: "[exit 1]" },
       { unscreened: true, result: "[NOT security-screened]\n[exit 1]" },
     ]) {
       const tool = row("[ -d dir ]", { ...identity, ...output, code: 1, timedOut: false, isError: true });

@@ -312,8 +312,8 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
 test("unified sandbox execution keeps legacy failure and display semantics", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
     assert.equal(toolCategory(identity), "execute");
-    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "ok");
-    assert.equal(toolRowKind(row(identity, { ...identity, code: 0, stdout: "ok" }), "complete"), "ok");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, result: "failed\n[exit 1]" }), "complete"), "ok");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 0, result: "ok\n[exit 0]" }), "complete"), "ok");
     assert.equal(
       toolRowKind(
         row(identity, { ...identity, code: 1, timedOut: false, isError: true, result: "failed\n[exit 1]" }),
@@ -367,11 +367,10 @@ test("unscreened execution retains its warning and neutral exit status without p
   assert.equal(toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"), "ok");
   assert.equal(toolExecutionOutput(result), result.result);
   assert.equal(
-    toolRowKind(row({ tool: "execute" }, { code: 0, stdout: "fake [exit 7]", isError: false }), "complete"),
+    toolRowKind(row({ tool: "execute" }, { code: 0, result: "fake [exit 7]\n[exit 0]", isError: false }), "complete"),
     "ok",
   );
   assert.equal(toolRowKind(row({ tool: "execute" }, { code: 0, timedOut: true }), "complete"), "failed");
-  assert.equal(toolExecutionOutput({ stdout: "", stderr: "", code: 0 }), "");
   assert.equal(toolExecutionOutput({ code: 0, result: "done\n[exit 0]" }), "done\n[exit 0]");
   assert.equal(toolExecutionOutput({ isError: true, result: "[tool output quarantined]" }), null);
   assert.equal(
