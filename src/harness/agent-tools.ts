@@ -671,6 +671,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
+      const { stdout: _stdout, stderr: _stderr, ...execMeta } = r;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const reachedPrefix = r.reached ? `[ran on ${r.reached.label}'s computer]\n` : "";
       const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
@@ -680,7 +681,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : "";
       return recordResult(
         callId,
-        { tool: "execute", ...scopeNote, ...r },
+        { tool: "execute", ...scopeNote, ...execMeta },
         {
           content: [
             {

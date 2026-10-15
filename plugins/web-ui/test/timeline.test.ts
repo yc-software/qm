@@ -315,6 +315,13 @@ test("unified sandbox execution keeps legacy failure and display semantics", () 
     assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "ok");
     assert.equal(toolRowKind(row(identity, { ...identity, code: 0, stdout: "ok" }), "complete"), "ok");
     assert.equal(
+      toolRowKind(
+        row(identity, { ...identity, code: 1, timedOut: false, isError: true, result: "failed\n[exit 1]" }),
+        "complete",
+      ),
+      "ok",
+    );
+    assert.equal(
       toolRowKind({ call: null, result: act(1, "tool_result", { ...identity, code: 2 }) }, "complete"),
       "ok",
     );
@@ -365,6 +372,7 @@ test("unscreened execution retains its warning and neutral exit status without p
   );
   assert.equal(toolRowKind(row({ tool: "execute" }, { code: 0, timedOut: true }), "complete"), "failed");
   assert.equal(toolExecutionOutput({ stdout: "", stderr: "", code: 0 }), "");
+  assert.equal(toolExecutionOutput({ code: 0, result: "done\n[exit 0]" }), "done\n[exit 0]");
   assert.equal(toolExecutionOutput({ isError: true, result: "[tool output quarantined]" }), null);
   assert.equal(
     toolRowKind(

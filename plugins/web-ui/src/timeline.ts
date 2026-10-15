@@ -99,7 +99,7 @@ export function toolCategory(payload: ToolPayload): string {
 }
 
 export function toolExecutionOutput(result: ToolPayload): string | null {
-  if (result.unscreened && typeof result.result === "string") return result.result;
+  if (typeof result.code === "number" && typeof result.result === "string") return result.result;
   if (typeof result.stdout === "string" || typeof result.stderr === "string")
     return [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
   return null;

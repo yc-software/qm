@@ -5,6 +5,7 @@ import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
+import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -722,7 +723,45 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   const payload = emitted.find((e) => e.type === "tool_result")!.payload;
   assert.equal(payload.result, seen, "the replay record is exactly what the model saw");
   assert.equal(payload.resultTruncated, true, "the entry is flagged so renderers can surface the loss");
-  assert.ok((payload.stdout as string).length <= 100_000, "persisted payload strings are capped too");
+  assert.equal(payload.stdout, undefined, "raw stdout is not stored beside the result");
+  assert.equal(payload.stderr, undefined, "raw stderr is not stored beside the result");
+});
+
+test("execute stores its output once and replays exactly what the model saw", async () => {
+  const emitted: Emitted[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    execute: async () => ({ stdout: "built 3 files", stderr: "warning: slow disk", code: 2, timedOut: false }),
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+
+  const live = (await call(execute, { command: "make", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const stored = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.deepEqual(
+    { stdout: stored.stdout, stderr: stored.stderr, code: stored.code, timedOut: stored.timedOut },
+    { stdout: undefined, stderr: undefined, code: 2, timedOut: false },
+  );
+  assert.equal(stored.result, "built 3 files\n[stderr]\nwarning: slow disk\n[exit 2]");
+
+  const history: SessionEntry[] = [
+    { type: "user" as const, payload: { text: "build it" } },
+    ...emitted.map((e) => ({ type: e.type, payload: e.payload })),
+  ].map((e, i) => ({ ...e, sessionId: "s", seq: i + 1, parentSeq: null, scopeLabel: "personal:U1", createdAt: i + 1 }));
+  const replayed = reconstructMessagesFromHistory(history).find((m) => m.role === "toolResult") as {
+    content: Array<{ type: string; text: string }>;
+    isError: boolean;
+  };
+  assert.deepEqual(replayed.content, live.content);
+  assert.equal(replayed.isError, false);
 });
 
 test("Auto can quarantine a tool result before the model or durable replay sees it", async () => {
