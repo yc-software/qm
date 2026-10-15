@@ -643,6 +643,33 @@ test("overheard traffic between a cut-off call and the stop does not split the s
   assert.ok(!text.includes("[system] Turn stopped by user."), "no separate stop note");
 });
 
+test("a call killed by a Stop has the stop explained as its result, once", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("tool_result", { callId: "c1", result: "[stderr]\nKilled\n\n[exit 137]", stopped: true }, 3),
+    ent("system", { kind: "turn_stopped", reason: "by user" }, 4),
+    ent("user", { text: "what happened?" }, 5),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "toolResult", "user"],
+  );
+  assert.match(JSON.stringify(msgs[2]!.content), /Turn stopped by user while this call was running/);
+  assert.ok(!JSON.stringify(msgs).includes("[system] Turn stopped by user."), "no separate stop note");
+});
+
+test("a result recorded while a Stop fired keeps its text when no stop was recorded", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("tool_result", { callId: "c1", result: "[exit 137]", stopped: true }, 3),
+  ];
+  assert.match(JSON.stringify(reconstructMessagesFromHistory(history)), /\[exit 137\]/);
+});
+
 test("a tool result cut off by a deploy says so in its replayed result", () => {
   const history: SessionEntry[] = [
     ent("user", { text: "deploy it" }, 1),

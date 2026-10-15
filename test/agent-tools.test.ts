@@ -4164,6 +4164,7 @@ test("a tool result recorded after shutdown fires is marked interrupted; user St
     const emitted = await record(abort);
     const payload = emitted.find((e) => e.type === "tool_result")!.payload;
     assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
+    assert.equal(payload.stopped === true, abort === "stop", `${abort}: only a Stop marks the result as cut off`);
     assert.deepEqual(strategy(emitted), { kind: "continue" });
   }
 });

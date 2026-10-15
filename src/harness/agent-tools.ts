@@ -387,8 +387,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
       sourceScopeId,
     });
-    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload))
-      payload = { ...payload, interrupted: true, stop: { kind: "shutdown" } };
+    if (type === "tool_result" && isObj(payload)) {
+      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: { kind: "shutdown" } };
+      else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
+    }
     await ref.emit({ type, payload, scopeLabel });
   };
 

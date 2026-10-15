@@ -28,6 +28,10 @@ function stoppedToolResult(reason: string): string {
   return `[system] Turn stopped ${reason} while this call was running; its outcome wasn't recorded. Check what happened before retrying.`;
 }
 
+function cutOffByStop(result: SessionEntry | undefined): boolean {
+  return !result || (result.payload as { stopped?: unknown } | null)?.stopped === true;
+}
+
 function stoppedToolCalls(
   history: readonly SessionEntry[],
   resultByCallId: ReadonlyMap<string, SessionEntry>,
@@ -44,7 +48,7 @@ function stoppedToolCalls(
       overheard?: unknown;
     };
     if (e.type === "user" && p.steered !== true && p.overheard !== true) open = [];
-    else if (e.type === "tool_call" && typeof p.callId === "string" && !resultByCallId.has(p.callId))
+    else if (e.type === "tool_call" && typeof p.callId === "string" && cutOffByStop(resultByCallId.get(p.callId)))
       open.push(p.callId);
     else if (e.type === "system" && p.kind === TURN_STOPPED_KIND && typeof p.reason === "string") {
       if (open.length) folded.add(e);
@@ -414,9 +418,15 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
     }
     out.push(m);
     if (m.role !== "assistant") continue;
-    for (const c of m.content)
-      if (c.type === "toolCall")
-        out.push(toolResultMessage(c, resultByCallId.get(c.id), m.timestamp, stopped.results.get(c.id)));
+    for (const c of m.content) {
+      if (c.type !== "toolCall") continue;
+      const stopNote = stopped.results.get(c.id);
+      out.push(
+        stopNote
+          ? toolResultMessage(c, undefined, m.timestamp, stopNote)
+          : toolResultMessage(c, resultByCallId.get(c.id), m.timestamp),
+      );
+    }
   }
   if (out[0] && out[0].role !== "user")
     out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });
