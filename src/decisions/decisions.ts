@@ -122,8 +122,7 @@ export function parseDecisionRule(
     return { error: `${r.id}: hook must be one of ${DECISION_HOOKS.join(", ")}` };
   if (!LIVE_DECISION_HOOKS.includes(r.hook as DecisionHook))
     return { error: `${r.id}: hook ${String(r.hook)} is not available yet; use ${LIVE_DECISION_HOOKS.join(", ")}` };
-  if (typeof r.question !== "string" || !r.question.trim() || r.question.length > MAX_TEXT_CHARS)
-    return { error: `${r.id}: question is required, at most ${MAX_TEXT_CHARS} characters` };
+  if (typeof r.question !== "string" || !r.question.trim()) return { error: `${r.id}: question is required` };
   if (!DECISION_MODES.includes(r.mode as DecisionRule["mode"]))
     return { error: `${r.id}: mode must be one of ${DECISION_MODES.join(", ")}` };
   if (typeof r.options !== "object" || r.options === null || Array.isArray(r.options))

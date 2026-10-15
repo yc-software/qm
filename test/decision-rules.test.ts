@@ -51,6 +51,11 @@ const fixed = (p: Record<string, number> | Error, calls: string[][] = []): Decis
   },
 });
 
+test("decision questions can exceed 500 characters", () => {
+  const question = "A detailed classification criterion. ".repeat(30);
+  assert.deepEqual(parse({ ...route(), question }), { rule: { ...route(), question } });
+});
+
 test("parseDecisionRule validates hooks, options, actions, onError, provider and model catalog", () => {
   assert.match(err(parse(injection())), /tool_response is not available yet/);
   assert.deepEqual(parse(route()), { rule: route() });
