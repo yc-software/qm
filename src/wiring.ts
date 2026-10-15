@@ -1902,6 +1902,14 @@ export function buildApp(
     },
   };
   pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/turn_wall_clock_configs/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS turn_wall_clock_configs",
+      // Let a rolled-back server recreate the empty table instead of failing its startup read.
+      `DELETE FROM qm_schema_migrations WHERE id = 'durable-map/turn_wall_clock_configs/0001'`,
+    ],
+  });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
