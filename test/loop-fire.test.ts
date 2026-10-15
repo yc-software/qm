@@ -980,8 +980,7 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
   assert.equal((await s.items.get(item.id))?.thread?.at(-1)?.role, "system");
 });
 
-test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async (t) => {
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
   const s = service((req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {

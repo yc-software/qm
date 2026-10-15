@@ -512,7 +512,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 if (settled || interrupted) return false;
                 steerPrompts.push({
                   message: baseMessage,
-                  intake: { text: steer, request, ts, attachments: prepared?.attachments, acknowledge },
+                  intake: { text: steer, ts, attachments: prepared?.attachments, acknowledge },
                 });
                 pendingPrompts++;
                 queue.push(message);

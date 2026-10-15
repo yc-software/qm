@@ -309,18 +309,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       ).length;
     },
 
-    async latestHumanSteer(sessionId, runId) {
-      return (entries.get(sessionId) ?? []).findLast((entry) => {
-        const payload = entry.payload as { runId?: string; personText?: string; personId?: string };
-        return (
-          entry.type === "user" &&
-          payload.runId === runId &&
-          typeof payload.personText === "string" &&
-          typeof payload.personId === "string"
-        );
-      });
-    },
-
     async getContextWindow(sessionId) {
       return contextWindowFromEntries(entries.get(sessionId) ?? []);
     },

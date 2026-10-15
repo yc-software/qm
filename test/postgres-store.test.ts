@@ -1641,7 +1641,9 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
   try {
     const seed = createPostgresSessionStore(URL!);
     await seed.scanAll();
-    await raw.query("ALTER FUNCTION safe_jsonb(text) PARALLEL SAFE");
+    await raw.query(`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
+      LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
+      BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
     await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON session_entries ((safe_jsonb(payload) ->> 'ts'))");
 
     const s = createPostgresSessionStore(URL!);
@@ -1670,6 +1672,7 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     );
   } finally {
     await raw.query("DROP INDEX IF EXISTS safe_jsonb_parallel_repair_test");
+    await raw.query("DROP FUNCTION IF EXISTS safe_jsonb(text)");
     await raw.end();
   }
 });
@@ -3296,43 +3299,3 @@ test(
     }
   },
 );
-
-test("pg session store selects the latest human correction for exactly one run", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "correction-test");
-  const session = await store.getOrCreateByThread(`correction-${randomUUID()}`, "dm", scope);
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
-  for (const payload of [
-    { runId: "a", personId: "author", personText: "first" },
-    { runId: "a", personId: "author", personText: "latest" },
-    { runId: "b", personId: "author", personText: "other run" },
-    { runId: "a", text: "internal coordination" },
-  ])
-    await store.append(lease, { type: "user", payload, scopeLabel: scope });
-  assert.equal(
-    ((await store.latestHumanSteer(session.id, "a"))!.payload as { personText: string }).personText,
-    "latest",
-  );
-  assert.equal(await store.latestHumanSteer(session.id, "missing"), undefined);
-  await store.releaseLease(lease);
-  const raw = new (await import("pg")).default.Pool({ connectionString: URL });
-  try {
-    for (const [seq, payload] of [
-      [4, '{"text":"poisoned\\u0000tail"}'],
-      [5, '{"text":"poisoned\\ud800tail"}'],
-      [6, '{"truncated"'],
-      [7, '{"n":1e1000000}'],
-    ])
-      await raw.query(
-        "INSERT INTO session_entries(session_id, seq, type, payload, scope_label, created_at) VALUES ($1,$2,'user',$3,$4,0)",
-        [session.id, seq, payload, scope],
-      );
-    assert.equal(
-      ((await store.latestHumanSteer(session.id, "a"))!.payload as { personText: string }).personText,
-      "latest",
-    );
-  } finally {
-    await raw.end();
-  }
-});

@@ -2029,7 +2029,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                       if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
                       const steer = {
                         text,
-                        request,
                         prompt,
                         ts,
                         attachments: prepared?.attachments,
