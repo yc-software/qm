@@ -138,7 +138,14 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "./turn-resume.ts";
+import {
+  findTrailingPartialTurn,
+  resumeNote,
+  resumeStrategy,
+  runtimeSwitchNote,
+  turnAtSeq,
+  unrecordedToolResult,
+} from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   recordedMessageTimestamps,
@@ -2821,12 +2828,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const rawEntries = (await deps.sessions.getContextWindow(session.id)).entries;
         const priorTurns = memoryHistoryReset ? undefined : input.priorTurns;
-        const visibleHistory = filterHistory(forModelContext(rawEntries));
+        let visibleHistory = filterHistory(forModelContext(rawEntries));
         const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const recallMs = Date.now() - recallStart;
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
-        const resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        if (partial && resumePlan?.kind === "settle") {
+          // A tool call's lost outcome is recorded as its result, so the model reads what happened to it there.
+          const unrecorded = resumePlan.calls;
+          const settled = await withManagedRosterVersion(() =>
+            deps.sessions.appendMany(
+              lease,
+              unrecorded.map((call) => ({
+                type: "tool_result" as const,
+                payload: {
+                  tool: call.tool,
+                  callId: call.callId,
+                  isError: true,
+                  result: unrecordedToolResult(input.resumeCause),
+                },
+                scopeLabel: scopeId,
+              })),
+            ),
+          );
+          visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
+          resumePlan = resumeStrategy(visibleHistory, partial);
+        }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
         const compactStart = Date.now();
         const history = await withManagedRosterVersion(() =>
@@ -2993,8 +3021,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const requestInHistory = !!partial && history.some((entry) => entry.seq === partial.userSeq);
         const continueTurn =
           (resumePlan?.kind === "continue" || resumePlan?.kind === "retry") && requestInHistory && !releasedToolOutput;
-        if (partial && !requestInHistory)
-          turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
+        if (partial && !requestInHistory) turnInput += `\nCurrent request:\n${baseText}`;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
@@ -3655,9 +3682,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
             segment = await runHarnessSegment(
-              resumeNote({ cause: { kind: "runtime_change" } }) +
-                (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
-                " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
+              runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
                 (recovery &&
                 !resumedHistory.some(
                   (entry) =>
@@ -3666,7 +3691,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     typeof entry.payload.text === "string" &&
                     entry.payload.text.startsWith(baseText),
                 )
-                  ? `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`
+                  ? `\nCurrent request:\n${baseText}`
                   : ""),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory },

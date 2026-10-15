@@ -5,7 +5,9 @@ import {
   isResumeNote,
   resumeNote,
   resumeStrategy,
+  runtimeSwitchNote,
   turnAtSeq,
+  unrecordedToolResult,
 } from "../src/core/turn-resume.ts";
 import type { SessionEntry } from "../src/types.ts";
 
@@ -115,14 +117,16 @@ test("resumeNote is recognized by isResumeNote and mentions background jobs only
   assert.ok(isResumeNote(resumeNote({ backgroundJobs: true })));
   assert.doesNotMatch(resumeNote(), /background/i);
   assert.match(resumeNote({ backgroundJobs: true }), /`background` list\/poll/);
+  assert.ok(isResumeNote(runtimeSwitchNote(undefined)));
+  assert.ok(isResumeNote(runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5" })));
   assert.ok(!isResumeNote("build and deploy the release"));
 });
 
 test("the no-work wording promises nothing recorded, and neither wording re-sends the input", () => {
   const restart = resumeNote({ strategy: { kind: "restart" } });
   assert.ok(isResumeNote(restart));
-  assert.doesNotMatch(restart, /recorded above|Continue from where you left off/);
-  assert.match(restart, /nothing to pick up\. Start the request now/);
+  assert.doesNotMatch(restart, /recorded work|Continue/);
+  assert.match(restart, /Start the request now/);
   for (const note of [resumeNote(), restart]) assert.doesNotMatch(note, /build and deploy the release/);
 });
 
@@ -227,13 +231,25 @@ test("resumeStrategy re-runs a lone dangling call the model marked retry-safe, w
   });
 });
 
-test("resumeStrategy falls back to the interrupted note when the dangling call is unsafe, unmarked, or ambiguous", () => {
+test("resumeStrategy records what happened to calls it cannot safely re-run: unsafe, unmarked, or ambiguous", () => {
   const unsafe = [user("build and deploy the release", 1), safeCall(2, false)];
-  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 1 }), { kind: "note" });
+  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 1 }), {
+    kind: "settle",
+    calls: [{ callId: "c2", tool: "history" }],
+  });
   const unmarked = [user("build and deploy the release", 1), toolCall(2)];
-  assert.deepEqual(resumeStrategy(unmarked, { userSeq: 1, workEntries: 1 }), { kind: "note" });
+  assert.deepEqual(resumeStrategy(unmarked, { userSeq: 1, workEntries: 1 }), {
+    kind: "settle",
+    calls: [{ callId: "c2", tool: "execute" }],
+  });
   const twoDangling = [user("build and deploy the release", 1), safeCall(2, true), safeCall(3, true)];
-  assert.deepEqual(resumeStrategy(twoDangling, { userSeq: 1, workEntries: 2 }), { kind: "note" });
+  assert.deepEqual(resumeStrategy(twoDangling, { userSeq: 1, workEntries: 2 }), {
+    kind: "settle",
+    calls: [
+      { callId: "c2", tool: "history" },
+      { callId: "c3", tool: "history" },
+    ],
+  });
   const priorTurnCall = [safeCall(0, true), user("build and deploy the release", 1), toolCall(2), toolResult(3)];
   assert.deepEqual(resumeStrategy(priorTurnCall, { userSeq: 1, workEntries: 2 }), { kind: "continue" });
 });
@@ -242,23 +258,37 @@ test("resumeStrategy restarts when the dead attempt recorded no work", () => {
   assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
 });
 
-test("the resume notes state the recorded cause, and only the retry note promises a complete record", () => {
+test("the resume notes state the recorded cause and are recognized as resume notes", () => {
   const note = resumeNote();
   assert.ok(isResumeNote(note));
   assert.match(note, /cause not recorded/);
-  assert.doesNotMatch(note, /deploy/);
-  assert.doesNotMatch(note, /almost never worth mentioning/);
-  assert.match(note, /unknown outcome/);
-  const retried = resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } });
-  assert.ok(isResumeNote(retried));
-  assert.match(retried, /result of the tool call that was in flight is recorded above/);
-  assert.doesNotMatch(retried, /unknown outcome/);
-  assert.match(retried, /Continue from where you left off/);
-  assert.doesNotMatch(retried, /history|c1/);
-  const handoff = resumeNote({ cause: { kind: "runtime_change" } });
-  assert.ok(isResumeNote(handoff));
-  assert.doesNotMatch(handoff, /deploy/);
-  assert.match(handoff, /unknown outcome/);
+  assert.match(note, /Don't mention this/);
+  assert.ok(
+    isResumeNote(resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } })),
+  );
+});
+
+test("a tool call whose outcome was lost records the cause as its own result", () => {
+  assert.match(
+    unrecordedToolResult({ kind: "shutdown" }),
+    /^\[system\] A routine platform deploy interrupted this call/,
+  );
+  assert.match(unrecordedToolResult({ kind: "shutdown" }), /Don't mention this/);
+  assert.match(
+    unrecordedToolResult({ kind: "error", code: "transient", status: 503 }),
+    /^\[system\] A model-provider failure \(transient, HTTP 503\) interrupted this call/,
+  );
+  assert.match(unrecordedToolResult({ kind: "lease_expired" }), /^\[system\] A worker crash interrupted this call/);
+  assert.match(unrecordedToolResult(undefined), /^\[system\] This call was interrupted; its outcome wasn't recorded/);
+});
+
+test("the runtime switch note names the new runtime", () => {
+  assert.match(
+    runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5", fastMode: true, effortLevel: "high" }),
+    /^\[system\] Runtime switched to claude-opus-5-5 fast; effort high\./,
+  );
+  assert.doesNotMatch(runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5" }), /fast|effort/);
+  assert.match(runtimeSwitchNote(undefined), /^\[system\] Context was trimmed without a new summary\./);
 });
 
 test("a tool_result marked interrupted does not answer its call, so the call is still resumable", () => {
@@ -266,7 +296,7 @@ test("a tool_result marked interrupted does not answer its call, so the call is 
   const entries = [user("build and deploy the release", 1), safeCall(4, true), killed];
   assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }).kind, "retry");
   const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
-  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }), { kind: "note" });
+  assert.deepEqual(resumeStrategy(unsafe, { userSeq: 1, workEntries: 2 }), { kind: "note" }, "it already has a result");
 });
 
 test("resumeStrategy continues silently only when every call is answered and the ledger ends at a real tool result", () => {
@@ -287,7 +317,8 @@ test("resumeStrategy continues silently only when every call is answered and the
   });
   assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), killed(3)], partial), { kind: "note" });
   assert.deepEqual(resumeStrategy([safeCall(0, true), user("go", 1), toolCall(2)], { userSeq: 1, workEntries: 1 }), {
-    kind: "note",
+    kind: "settle",
+    calls: [{ callId: "c2", tool: "execute" }],
   });
   assert.deepEqual(
     resumeStrategy([user("go", 1), toolCall(2), toolResult(3), safeCall(4, true), killed(5)], {
@@ -299,18 +330,14 @@ test("resumeStrategy continues silently only when every call is answered and the
 });
 
 test("resume notes name exactly the cause the run store recorded", () => {
-  const deploy = resumeNote({ cause: { kind: "shutdown" } });
-  assert.match(deploy, /handed the run back \(usually a routine platform deploy\)/);
-  assert.match(deploy, /usually not worth mentioning to the user/);
-
-  const provider = resumeNote({ cause: { kind: "error", code: "transient", status: 503 } });
-  assert.match(provider, /model provider call failed \(transient, HTTP 503\)/);
-  assert.doesNotMatch(provider, /deploy/);
-
-  const crashed = resumeNote({ strategy: { kind: "restart" }, cause: { kind: "lease_expired" } });
-  assert.match(crashed, /before it recorded any work — the worker running it stopped responding/);
-  assert.doesNotMatch(crashed, /deploy/);
-
-  assert.match(resumeNote({ cause: { kind: "error" } }), /it failed with an internal error/);
-  assert.match(resumeNote({ cause: { kind: "runtime_change" } }), /the runtime was switched/);
+  assert.match(resumeNote({ cause: { kind: "shutdown" } }), /mid-turn — a routine platform deploy\./);
+  assert.match(
+    resumeNote({ cause: { kind: "error", code: "transient", status: 503 } }),
+    /a model-provider call failed \(transient, HTTP 503\)/,
+  );
+  assert.match(
+    resumeNote({ strategy: { kind: "restart" }, cause: { kind: "lease_expired" } }),
+    /stopped before recording any work — the worker crashed\. Start the request now/,
+  );
+  assert.match(resumeNote({ cause: { kind: "error" } }), /— an internal error\./);
 });

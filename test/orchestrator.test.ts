@@ -399,7 +399,7 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /system note: your previous attempt at the request above was interrupted/);
+  assert.match(res.reply ?? "", /\[system\] Your previous attempt was interrupted mid-turn/);
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original interrupted user entry, not the resume note");
   assert.equal(res.sourceAssistantEntrySeq, 4);
 
@@ -418,7 +418,7 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
   );
   assert.match(
     userTexts[1]!,
-    /^\(system note: your previous attempt at the request above was interrupted/,
+    /^\[system\] Your previous attempt was interrupted mid-turn/,
     "the retry prompts a continuation instead",
   );
 });
@@ -436,7 +436,7 @@ test("the resume note is recorded hidden so no surface renders it as a typed use
   const [original, note] = userEntries as [(typeof userEntries)[0], (typeof userEntries)[0]];
   assert.match(
     String((note.payload as { text?: string }).text ?? ""),
-    /^\(system note: your previous attempt at the request above was interrupted/,
+    /^\[system\] Your previous attempt was interrupted mid-turn/,
   );
   assert.notEqual(
     (original.payload as { hidden?: boolean }).hidden,
@@ -458,7 +458,7 @@ test("a retry of an attempt that recorded NO work restarts it — never claims w
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /interrupted before it recorded any work.*Start the request now/s);
+  assert.match(res.reply ?? "", /stopped before recording any work.*Start the request now/s);
   assert.doesNotMatch(
     res.reply ?? "",
     /recorded above|don't start over/,

@@ -758,7 +758,7 @@ test("Claude ignores continueTurn and still prompts the resume note as a user me
   assert.equal(result.reply, "picking up");
   assert.equal(entries[0]?.type, "user");
   assert.equal((entries[0]!.payload as { text: string }).text, note);
-  assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
+  assert.ok(prompted[0]!.includes("[system] Your previous attempt"), "the note reaches the model as a user prompt");
 });
 
 for (const shutdown of [false, true]) {
