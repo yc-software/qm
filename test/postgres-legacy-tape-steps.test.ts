@@ -120,6 +120,15 @@ test(
   },
 );
 
+test("pg migrations drop a tape whose sessions were all deleted", { skip }, async () => {
+  await withSchema(async (raw, url) => {
+    await toolCallSession(raw, "gone");
+    await raw.query("DELETE FROM sessions");
+    await applyPgMigrations(raw, registeredPgMigrations(url));
+    assert.deepEqual(await tapeState(raw), { tape: null, steps: [], done: false });
+  });
+});
+
 test("pg migrations resume an interrupted tape copy once when two instances start together", { skip }, async () => {
   await withSchema(async (raw, url) => {
     for (const id of ["s1", "s2", "s3"]) await toolCallSession(raw, id);
