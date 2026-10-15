@@ -45,17 +45,18 @@ them without seeing their password and can be revoked.
 ### Connector source first for admins
 
 For a system-identified org admin on a human-started turn, check connector sources before
-anything else. Read the admin skill's **Check connector sources** section and silently
-call `GET /v1/admin/connector-sources`. It returns whether Composio is configured, which
-OAuth apps are configured, and the admin setup links. It never returns secrets.
+anything else. Do it silently, using the signals in the admin skill's **Check connector
+sources** section:
 
-- `composio.configured` or a non-empty `oauth.configured`: skip silently and continue to
-  the Slack bot and personal connections.
-- A failed or unavailable read is unknown, not absent. Continue onboarding without
-  offering source setup.
-- Neither configured: setting one up is the admin's first task. In one short message,
-  offer both options and recommend Composio, using only the returned `setup` links as
-  the admin skill describes.
+- Composio: `GET /v1/composio/toolkits` succeeds, or the org scope's `serviceCredentials`
+  has an enabled `COMPOSIO_API_KEY` env credential with a secret.
+- Own OAuth apps: the live Connected apps block lists providers.
+
+If either exists, skip silently and continue to the Slack bot and personal connections.
+If a signal is missing or a read fails, treat it as unknown, not absent, and do not offer
+setup. Only when both are confirmed absent is setting one up the admin's first task: in
+one short message, offer Composio (recommended) or the org's own OAuth apps, with the
+links the admin skill describes.
 
 Never ask for the key or client secrets in chat, and never invent admin URLs. When they
 say it is done, re-check and continue to the Slack bot and personal connections. If they

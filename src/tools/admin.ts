@@ -194,11 +194,6 @@ export const adminOperations = {
     ),
   }),
   slack_emoji: operation("List Slack emoji.", "GET", "/slack-emoji"),
-  connector_sources: operation(
-    "Check whether Composio or OAuth apps are configured, with admin setup links. Never returns secrets.",
-    "GET",
-    "/connector-sources",
-  ),
   model_providers: operation("Read model-provider metadata.", "GET", "/model-providers"),
   custom_providers: operation("Read custom model-provider metadata.", "GET", "/custom-providers"),
   mcp_servers: operation("Read MCP-server metadata.", "GET", "/mcp-servers"),

@@ -57,6 +57,7 @@ test("connected-apps block: lists only admin-configured providers and the exact 
   const unavailable = renderConnectedAppsBlock(null, [], url);
   assert.match(unavailable, /No direct OAuth app connections are configured/);
   assert.match(unavailable, /does not describe app access through separately authorized credentials/);
+  assert.match(unavailable, /Connection page: https:\/\/qm\.example\/keychain/);
 
   const none: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { google: { connected: false } } };
   const available = renderConnectedAppsBlock(none, ["google"], url);

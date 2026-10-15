@@ -51,7 +51,6 @@ import {
   startSlackInstallation,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
-import { getConnectorSources } from "./admin/connector-sources.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
@@ -83,7 +82,6 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/slack/managed/events", auth: "public", handle: managedSlackRequest },
   { method: "GET", path: "/v1/admin/slack-installation", auth: "either", handle: getSlackInstallation },
   { method: "GET", path: "/v1/admin/slack-emoji", auth: "either", handle: getSlackEmojiList },
-  { method: "GET", path: "/v1/admin/connector-sources", auth: "either", handle: getConnectorSources },
   { method: "PUT", path: "/v1/admin/slack-installation", auth: "either", handle: putSlackInstallation },
   { method: "DELETE", path: "/v1/admin/slack-installation", auth: "either", handle: deleteSlackInstallation },
   { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
