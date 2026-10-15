@@ -281,8 +281,7 @@ function lastAssistantText(entries: readonly SessionEntry[]): string | undefined
       const before = entries[i - 1];
       const partial = before?.type === "assistant" ? entryText(before) : "";
       return (
-        partial ||
-        `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""} before replying.`
+        partial || `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""}. No reply.`
       );
     }
     if (e.type !== "assistant" && e.type !== "text") continue;

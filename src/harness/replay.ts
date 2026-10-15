@@ -42,8 +42,15 @@ function stoppedToolCalls(
   const folded = new Set<SessionEntry>();
   let open: string[] = [];
   for (const e of history) {
-    const p = (e.payload ?? {}) as { callId?: unknown; kind?: unknown; reason?: unknown; steered?: unknown };
-    if (e.type === "user" && p.steered !== true) open = [];
+    const p = (e.payload ?? {}) as {
+      callId?: unknown;
+      kind?: unknown;
+      reason?: unknown;
+      steered?: unknown;
+      overheard?: unknown;
+    };
+    // Steers and overheard channel traffic arrive mid-turn; only a new ask (or a hidden resume note) ends it.
+    if (e.type === "user" && p.steered !== true && p.overheard !== true) open = [];
     else if (e.type === "tool_call" && typeof p.callId === "string" && !resultByCallId.has(p.callId))
       open.push(p.callId);
     else if (e.type === "system" && p.kind === TURN_STOPPED_KIND && typeof p.reason === "string") {

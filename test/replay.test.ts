@@ -630,3 +630,15 @@ test("a turn stopped while a tool call ran explains the stop in that call's resu
   assert.match(JSON.stringify(msgs[2]!.content), /Turn stopped by user while this call was running/);
   assert.ok(!JSON.stringify(msgs).includes("[system] Turn stopped by user."), "no separate stop note");
 });
+
+test("overheard traffic between a cut-off call and the stop does not split the stop from that call", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("user", { overheard: true, ts: "3", name: "Alice", text: "lunch?" }, 3),
+    ent("system", { kind: "turn_stopped", reason: "by user" }, 4),
+  ];
+  const text = JSON.stringify(reconstructMessagesFromHistory(history));
+  assert.match(text, /Turn stopped by user while this call was running/);
+  assert.ok(!text.includes("[system] Turn stopped by user."), "no separate stop note");
+});
