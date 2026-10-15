@@ -1,3 +1,4 @@
+import { isResumeNote } from "../core/turn-resume.ts";
 import {
   defineHarness,
   type Harness,
@@ -181,7 +182,7 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!boom-always" || boomAlwaysSessions.has(turn.session.id)) {
           boomAlwaysSessions.add(turn.session.id);
           throw new Error("boom: simulated turn fault");
-        } else if (command0.startsWith("(system note:") && resumePostSessions.has(turn.session.id)) {
+        } else if (isResumeNote(command0) && resumePostSessions.has(turn.session.id)) {
           const msg = resumePostSessions.get(turn.session.id)!;
           resumePostSessions.delete(turn.session.id);
           await turn.emit({
@@ -197,7 +198,7 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
-        } else if (command0.startsWith("(system note:") && shutdownResumeSessions.has(turn.session.id)) {
+        } else if (isResumeNote(command0) && shutdownResumeSessions.has(turn.session.id)) {
           shutdownResumeSessions.delete(turn.session.id);
           reply = "finished after resume";
         } else if (command0 === "!work-until-shutdown") {

@@ -143,6 +143,8 @@ export function installFakeManagedAgents(): FakeManagedAgents {
     },
     async writeFileBytes(absPath, data): Promise<void> {
       alive(r);
+      if (!absPath.startsWith("/workspace/"))
+        throw new Error('7 PERMISSION_DENIED: path outside workspace (workspace "/workspace")');
       const hostPath = absPath.startsWith(GUEST_HOME_DIR) ? r.home + absPath.slice(GUEST_HOME_DIR.length) : absPath;
       mkdirSync(dirname(hostPath), { recursive: true });
       writeFileSync(hostPath, Buffer.from(data));

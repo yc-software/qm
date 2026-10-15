@@ -10,6 +10,7 @@ import type {
   Session,
   SessionEntry,
   TurnRequest,
+  TurnRuntime,
 } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
 import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
@@ -127,6 +128,7 @@ export interface HarnessTurnInput {
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
+  onRuntime?(runtime: TurnRuntime): void;
   claudeOauthToken?: string;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;

@@ -147,6 +147,29 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
   assert.equal((await skills.get(mine.id))!.manifest.description, "user authored");
 });
 
+test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", async () => {
+  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const org = scopeId("org", "default-org");
+  const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
+  writeSeedSkill(dir, "retired", "old catalog skill", "# Retired v1");
+  await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+  const installed = (await skills.list()).find((s) => s.manifest.name === "retired")!;
+  await skills.archive(installed.id);
+
+  const again = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+  assert.deepEqual(again, { installed: [], updated: [], skipped: ["retired"] });
+  writeSeedSkill(dir, "retired", "catalog changed upstream", "# Retired v2");
+  const changed = await installSeedSkills(skills, { dir, scopeId: org, respectArchived: true });
+  assert.deepEqual(changed, { installed: [], updated: [], skipped: ["retired"] });
+  const kept = (await skills.list()).filter((s) => s.manifest.name === "retired");
+  assert.equal(kept.length, 1, "no replacement record is created beside the archived one");
+  assert.equal(kept[0]!.status, "archived");
+
+  const republished = await installSeedSkills(skills, { dir, scopeId: org });
+  assert.deepEqual(republished, { installed: [], updated: ["retired"], skipped: [] });
+  assert.equal((await skills.get(installed.id))!.status, "published");
+});
+
 test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", async () => {
   const skills = createSkillStore({ signingSecret: "seed-test-secret" });
   const org = scopeId("org", "default-org");

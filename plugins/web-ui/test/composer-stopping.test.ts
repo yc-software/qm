@@ -97,6 +97,7 @@ test("stopping returns Send immediately and queues every submit path without int
         },
         activePendingApprovals: () => [],
         hasUnresolvedApproval: () => false,
+        turnRuntime: () => null,
         isStopping: () => stopping,
         drawActiveChat: draw,
         stopLiveRun: async () => {

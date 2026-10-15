@@ -8,7 +8,7 @@ import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
+import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import { isTerminal, releasesDedupKey } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
@@ -43,6 +43,7 @@ function rowToRun(r: Record<string, unknown>): Run {
     createdAt: Number(r.created_at),
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
+    lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
   };
 }
 
@@ -132,6 +133,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
         ],
       },
+      {
+        id: "runs/store/0007-last-stop",
+        statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_stop TEXT`],
+      },
     ],
     [
       {
@@ -219,7 +224,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     run: Run,
     error: string,
     retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number },
+    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number; stop?: RunStop },
   ): Promise<{ requeued: boolean; applied: boolean }> {
     const ifExpiredAt = opts?.ifExpiredAt ?? null;
     const countsAsError = opts?.countsAsError ?? false;
@@ -228,9 +233,16 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     if (retry && errorAttemptsAfter < run.maxAttempts && !overClaimed) {
       const { rowCount } = await q(
         `UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL,
-           error_attempts=error_attempts+$4, retry_after=$5
+           error_attempts=error_attempts+$4, retry_after=$5, last_stop=$6
          WHERE id=$1 AND lease_token=$2 AND status='running' AND ($3::bigint IS NULL OR lease_expires_at <= $3) RETURNING pg_notify('qm_run_available', 'null')`,
-        [run.id, run.leaseToken, ifExpiredAt, countsAsError ? 1 : 0, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0)],
+        [
+          run.id,
+          run.leaseToken,
+          ifExpiredAt,
+          countsAsError ? 1 : 0,
+          Date.now() + Math.max(0, opts?.retryAfterMs ?? 0),
+          JSON.stringify(opts?.stop ?? (countsAsError ? { kind: "error" } : { kind: "lease_expired" })),
+        ],
       );
       return { requeued: rowCount > 0, applied: rowCount > 0 };
     }
@@ -329,10 +341,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       return rowCount > 0;
     },
 
-    async releaseLease(runId, leaseToken): Promise<boolean> {
+    async releaseLease(runId, leaseToken, stop): Promise<boolean> {
       const { rowCount } = await q(
-        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
-        [runId, leaseToken],
+        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, last_stop=COALESCE($3, last_stop) WHERE id=$1 AND lease_token=$2 AND status='running' RETURNING pg_notify('qm_run_available', 'null')",
+        [runId, leaseToken, stop ? JSON.stringify(stop) : null],
       );
       return rowCount > 0;
     },
@@ -356,7 +368,11 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
       return {
         requeued: (
-          await retire(run, error, opts?.retry !== false, { countsAsError: true, retryAfterMs: opts?.retryAfterMs })
+          await retire(run, error, opts?.retry !== false, {
+            countsAsError: true,
+            retryAfterMs: opts?.retryAfterMs,
+            ...(opts?.stop ? { stop: opts.stop } : {}),
+          })
         ).requeued,
       };
     },

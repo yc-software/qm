@@ -290,3 +290,27 @@ test("the agent cannot cancel its goal from a keep-going round", async () => {
   assert.match(refusals[0]!, /Only the user's own message can cancel/);
   assert.equal(savedGoal(emitted)?.status, "paused", "only the stop paused it; it was never cancelled");
 });
+
+test("the router reports the runtime each turn runs on, and the rule that routed it", async () => {
+  const reported: unknown[] = [];
+  const reply: Round = async (turn) => {
+    await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+    return { reply: "done" };
+  };
+  const routed = createHarnessRouter(
+    new Map([["claude", fakeAdapter(reply).harness]]),
+    createMockHarness(),
+    async (_input, routedBy) => {
+      routedBy("hard-task");
+      return { harnessId: "claude", modelId: "claude-haiku-5-5" };
+    },
+  );
+  await routed.turns.runTurn(stubTurn([], { onRuntime: (runtime) => reported.push(runtime) }));
+  await router(fakeAdapter(reply).harness).turns.runTurn(
+    stubTurn([], { onRuntime: (runtime) => reported.push(runtime) }),
+  );
+  assert.deepEqual(reported, [
+    { harnessId: "claude", modelId: "claude-haiku-5-5", label: "Haiku 5.5", change: { rule: "hard-task" } },
+    { harnessId: "claude", modelId: "claude-opus-5-5", label: "Opus 5.5" },
+  ]);
+});

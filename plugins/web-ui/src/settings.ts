@@ -1,7 +1,16 @@
 import "./onboarding-welcome";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
-import { api, fetchUiState, putUiState, withBase } from "./core-bridge";
+import {
+  alwaysSteer,
+  api,
+  fetchUiState,
+  pinLatestPrompt,
+  putUiState,
+  setAlwaysSteer,
+  setPinLatestPrompt,
+  withBase,
+} from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./icons";
@@ -294,6 +303,67 @@ function openBehaviorRow(): TemplateResult {
   `;
 }
 
+function choiceRow(
+  title: string,
+  note: string,
+  options: Array<{ value: boolean; label: string }>,
+  current: boolean,
+  choose: (value: boolean) => void,
+): TemplateResult {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row-copy">
+        <div class="settings-row-title">${title}</div>
+        <div class="settings-row-note">${note}</div>
+      </div>
+      <div class="settings-choice" role="radiogroup" aria-label=${title}>
+        ${options.map(
+          (option) => html`
+            <button
+              class="settings-choice-option ${current === option.value ? "selected" : ""}"
+              type="button"
+              role="radio"
+              aria-checked=${current === option.value ? "true" : "false"}
+              @click=${() => {
+                choose(option.value);
+                drawSettings();
+              }}
+            >
+              <span>${option.label}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </div>
+  `;
+}
+
+function pinPromptRow(): TemplateResult {
+  return choiceRow(
+    "Pin my last message",
+    "Keeps your latest message at the top of the chat while you scroll its reply.",
+    [
+      { value: true, label: "Pinned" },
+      { value: false, label: "Off" },
+    ],
+    pinLatestPrompt(),
+    setPinLatestPrompt,
+  );
+}
+
+function sendWhileWorkingRow(): TemplateResult {
+  return choiceRow(
+    "Sending while QM is working",
+    "Steer folds your message into the running task instead of waiting for it to finish.",
+    [
+      { value: false, label: "Queue" },
+      { value: true, label: "Steer" },
+    ],
+    alwaysSteer(),
+    setAlwaysSteer,
+  );
+}
+
 const SURFACE_OPTIONS: Array<{ webOnly: boolean; label: string }> = [
   { webOnly: false, label: "All conversations" },
   { webOnly: true, label: "Web only" },
@@ -489,8 +559,8 @@ function settingsPane(): TemplateResult {
       <h1 class="pane-title">Settings</h1>
     </div>
     <div class="settings-group">
-      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${sidebarSurfaceRow()}
-      ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
+      ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
+      ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>

@@ -431,3 +431,28 @@ test("turn_start rules see the turn's context alongside the message", () => {
   assert.ok(state.endsWith("Latest message:\nAudit our session cookies"));
   assert.ok(turnStartState({ input: "hi", scopeLabel: "org:x" }).includes("- requested runtime: none"));
 });
+
+test("a turn_start rule only counts as routing the turn when it changes the runtime", async () => {
+  const { routeTurnRuntime } = await import("../src/decisions/hooks.ts");
+  const opus = { harnessId: "pi", modelId: "claude-opus-5-5" };
+  const haiku = { harnessId: "pi", modelId: "claude-haiku-5-5" };
+  const verdict = {
+    ruleId: "hard-task",
+    option: "reroute",
+    action: "use_runtime" as const,
+    runtime: { modelId: haiku.modelId },
+    probabilities: { reroute: 0.9 },
+    mode: "enforce" as const,
+  };
+  const route = async (runtime: { modelId?: string }) => (runtime.modelId === haiku.modelId ? haiku : opus);
+
+  assert.deepEqual(await routeTurnRuntime(verdict, route, async () => opus), { choice: haiku, routedBy: "hard-task" });
+  assert.deepEqual(await routeTurnRuntime(verdict, route, async () => haiku), { choice: haiku });
+  assert.deepEqual(await routeTurnRuntime(undefined, route, async () => opus), { choice: opus });
+  assert.deepEqual(
+    await routeTurnRuntime(verdict, route, async () => {
+      throw new Error("unsupported pinned model");
+    }),
+    { choice: haiku },
+  );
+});

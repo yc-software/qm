@@ -53,7 +53,9 @@ function requireRegistry(deps: AppDeps): { packs: SkillPackStore; fetcher: Skill
 async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Promise<Set<string>> {
   const all = await deps.skills.list();
   return new Set(
-    all.filter((s) => s.scopeId === scope && s.createdBy !== `pack:${packId}`).map((s) => s.manifest.name),
+    all
+      .filter((s) => s.scopeId === scope && s.status !== "archived" && s.createdBy !== `pack:${packId}`)
+      .map((s) => s.manifest.name),
   );
 }
 

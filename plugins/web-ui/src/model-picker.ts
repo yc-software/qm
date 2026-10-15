@@ -38,6 +38,13 @@ function effortText(level: EffortLevel | string): TemplateResult | string {
   return rank >= EFFORT_PEAK_FLOOR ? html`<span class="effort-peak">${label}</span>` : label;
 }
 
+interface RoutedRuntime {
+  harnessId: string;
+  modelId: string;
+  label?: string;
+  change?: { rule: string } | { agent: string };
+}
+
 export interface ModelCatalog {
   options(): ModelOption[];
   supportsFast(modelId: string): boolean;
@@ -455,7 +462,12 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     </div>`;
   }
 
-  function render(agent: T, choice: ModelOption | undefined, disabled: boolean): TemplateResult {
+  function render(
+    agent: T,
+    choice: ModelOption | undefined,
+    disabled: boolean,
+    routed?: RoutedRuntime,
+  ): TemplateResult {
     const selected = choice ?? catalog.options()[0];
     if (!selected) return html`<span class="context-model-status">No models available</span>`;
     const open = composerState.openMenu === "loadout";
@@ -471,6 +483,24 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
     const fastUnsupportedReason = modelSupportsFast ? "Not supported by this harness" : "Not supported by this model";
     const fastOn = fastAvailable && effectiveFastMode();
     const speedLabel = (ultrafastOn && ", Ultrafast") || (fastOn && ", Fast") || "";
+    const settingLabel = choice ? modelLabel(choice) : (bindings.emptyLabel ?? "Choose model");
+    const settingAria = choice
+      ? `Model: ${settingLabel}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}`
+      : settingLabel;
+    const routedOption = routed
+      ? catalog.options().find((option) => option.harnessId === routed.harnessId && option.model.id === routed.modelId)
+      : undefined;
+    const routedName = routedOption ? modelLabel(routedOption) : (routed?.label ?? routed?.modelId ?? "");
+    const rule = routed?.change && "rule" in routed.change ? routed.change.rule : undefined;
+    const reason = rule ? `routed by ${rule}` : "switched for this request";
+    const triggerLabel = routed
+      ? `Model: ${routedName}, ${reason}${rule ? " for this turn" : ""}; your setting is ${settingLabel}`
+      : settingAria;
+    const routedTip = routed
+      ? `${rule ? `The ${rule} rule` : "The agent"} ran this ${rule ? "turn" : "request"} on ${routedName}. Your setting is ${settingLabel}.`
+      : "";
+    const effortSuffix = choice ? effortText(composerState.effortLevel) : "";
+    const suffix = routed ? reason : effortSuffix;
     return html`<div
       class="menu-control loadout-control"
       data-align="left"
@@ -492,7 +522,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         class="menu-button loadout-button ${ultrafastOn ? "ultrafast-active" : ""}"
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
-        aria-label=${choice ? `Model: ${modelLabel(choice)}, ${effortLabel(composerState.effortLevel)} effort${speedLabel}` : (bindings.emptyLabel ?? "Choose model")}
+        aria-label=${triggerLabel}
+        ${tip(routedTip)}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}
@@ -520,8 +551,8 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
           placeLoadout();
         }}
       >
-        <span class="menu-label">${choice ? modelLabel(choice) : (bindings.emptyLabel ?? "Choose model")}</span>
-        ${choice ? html`<span class="menu-suffix">${effortText(composerState.effortLevel)}</span>` : nothing}
+        <span class="menu-label">${routed ? routedName : settingLabel}</span>
+        ${suffix ? html`<span class="menu-suffix">${suffix}</span>` : nothing}
         ${ultrafastOn ? html`<span class="loadout-ultrafast-badge">${icon(Zap, 12)} Ultrafast</span>` : nothing}
         ${fastOn ? html`<span class="loadout-bolt">${icon(Zap, 13)}</span>` : nothing}${icon(ChevronDown, 13)}
       </button>

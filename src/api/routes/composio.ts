@@ -1,4 +1,4 @@
-import { isBackendCredential, type PublicServiceCredential } from "../../credentials/keychain.ts";
+import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
@@ -14,10 +14,6 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
-
-export function isComposioServiceCredential(c: PublicServiceCredential): boolean {
-  return c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY";
-}
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -117,7 +113,7 @@ async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string
     )) ?? [];
   const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
   const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
-    (c) => isComposioServiceCredential(c) && allowed.has(c.slug),
+    (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
   );
   if (records.length !== 1) {
     sendJson(ctx.res, records.length ? 409 : 403, {

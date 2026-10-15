@@ -30,6 +30,7 @@ import type {
   SessionEntry,
   SessionType,
   TurnResult,
+  TurnRuntime,
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
@@ -138,7 +139,14 @@ import {
   withoutAlreadyIngested,
 } from "./attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
-import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "./turn-resume.ts";
+import {
+  findTrailingPartialTurn,
+  resumeNote,
+  resumeStrategy,
+  runtimeSwitchNote,
+  turnAtSeq,
+  unrecordedToolResult,
+} from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
   recordedMessageTimestamps,
@@ -1063,7 +1071,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let modeFrame = applyPromptVars(frameMd, frameVars);
       if (delegateWork)
         modeFrame +=
-          "\n\nKeep this conversation responsive. You cannot execute commands yourself. Delegate all substantial work (research, coding, computation, or multi-step investigations) with subagents open, providing a complete task, relevant context, and authorization. Handle quick answers, status requests, and coordination yourself. Do not substitute other tools for command execution or do substantial work inline. After dispatching, end this turn promptly; subagent completion durably wakes you to collect and report the result. Do not wait or poll for subagents. Relay new user instructions to the appropriate subagent with subagents followup_task. Describe progress and results naturally without explaining the delegation machinery.";
+          "\n\nKeep this conversation responsive. You cannot execute commands yourself. Delegate all substantial work (research, coding, computation, or multi-step investigations) with subagents open and a short colleague-to-colleague brief. Handle quick answers, status requests, and coordination yourself. Do not substitute other tools for command execution or do substantial work inline. After dispatching, end this turn promptly; subagent completion durably wakes you to collect and report the result. Do not wait or poll for subagents. Relay new user instructions to the appropriate subagent with subagents followup_task. Describe progress and results naturally without explaining the delegation machinery.";
       if (modeName === "mode-conversation" && input.proactiveOpener) {
         modeFrame += "\nNo one has written yet; open the conversation yourself per the onboarding note below.";
       }
@@ -2821,12 +2829,33 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const rawEntries = (await deps.sessions.getContextWindow(session.id)).entries;
         const priorTurns = memoryHistoryReset ? undefined : input.priorTurns;
-        const visibleHistory = filterHistory(forModelContext(rawEntries));
+        let visibleHistory = filterHistory(forModelContext(rawEntries));
         const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const recallMs = Date.now() - recallStart;
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
-        const resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
+        if (partial && resumePlan?.kind === "settle") {
+          // A tool call's lost outcome is recorded as its result, so the model reads what happened to it there.
+          const unrecorded = resumePlan.calls;
+          const settled = await withManagedRosterVersion(() =>
+            deps.sessions.appendMany(
+              lease,
+              unrecorded.map((call) => ({
+                type: "tool_result" as const,
+                payload: {
+                  tool: call.tool,
+                  callId: call.callId,
+                  isError: true,
+                  result: unrecordedToolResult(input.resumeCause),
+                },
+                scopeLabel: scopeId,
+              })),
+            ),
+          );
+          visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
+          resumePlan = resumeStrategy(visibleHistory, partial);
+        }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
         const compactStart = Date.now();
         const history = await withManagedRosterVersion(() =>
@@ -2984,13 +3013,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         let turnInput = resumePlan
-          ? resumeNote({ strategy: resumePlan, backgroundJobs: !!backgroundBroker })
+          ? resumeNote({
+              strategy: resumePlan,
+              backgroundJobs: !!backgroundBroker,
+              ...(input.resumeCause ? { cause: input.resumeCause } : {}),
+            })
           : baseText;
         const requestInHistory = !!partial && history.some((entry) => entry.seq === partial.userSeq);
         const continueTurn =
           (resumePlan?.kind === "continue" || resumePlan?.kind === "retry") && requestInHistory && !releasedToolOutput;
-        if (partial && !requestInHistory)
-          turnInput += `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`;
+        if (partial && !requestInHistory) turnInput += `\nCurrent request:\n${baseText}`;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
@@ -3020,6 +3052,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let firstChunkAt: number | undefined;
         let lastChunkAt: number | undefined;
         const emittedEntries: SessionEntry[] = [];
+        let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
         failureUserPayload =
           !syntheticPrompt && input.text.trim()
@@ -3150,14 +3183,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             return errMessage(error);
           }
         };
-        const adoptRuntime = async (choice: RuntimeChoice) => {
+        let agentSwitch: "task" | "scope" | undefined;
+        const adoptRuntime = async (choice: RuntimeChoice, lifetime: "task" | "scope") => {
           const error = await checkRuntimeAuth(choice);
           if (error) throw new NonRetryableTurnError(error);
+          agentSwitch = lifetime;
           ({ userProviderKeys, userModelOverride, userHarnessOverride, claudeOauthToken } =
             await loadRuntimeAuth(choice));
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
-        if (restoredRuntime) await adoptRuntime(restoredRuntime);
+        if (restoredRuntime) await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
         if (automatedTurn && input.model && inputHarness) {
           const error = await deps.validateScheduledRuntime?.(
             scopeId,
@@ -3374,6 +3409,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { runtimePinned: true }
               : {}),
             runtimeActorId: actor.id,
+            onRuntime: (reported: TurnRuntime) => {
+              const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
+              turnRuntime = runtime;
+              if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
+            },
             ...(runtimePurpose ? { runtimePurpose } : {}),
             ...(deps.runtime && input.runId
               ? {
@@ -3629,7 +3669,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               throw new NonRetryableTurnError("The task reached its wall-clock limit during runtime handoff");
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
-              await adoptRuntime(segment.runtimeHandoff.choice);
+              await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
               await deps.harness.turns.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(
@@ -3651,9 +3691,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
             segment = await runHarnessSegment(
-              resumeNote({ cause: "runtime-change" }) +
-                (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
-                " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
+              runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
                 (recovery &&
                 !resumedHistory.some(
                   (entry) =>
@@ -3662,7 +3700,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     typeof entry.payload.text === "string" &&
                     entry.payload.text.startsWith(baseText),
                 )
-                  ? `\nCurrent request (continue from recorded work; do not restart):\n${baseText}`
+                  ? `\nCurrent request:\n${baseText}`
                   : ""),
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory },
@@ -3989,6 +4027,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         }
 
+        if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         await fallbackTitleWrite;
 
         if (input.background && finalResult.status !== "pending_approval") {

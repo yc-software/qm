@@ -103,6 +103,7 @@ test("activity selection fills and persists an editable draft without sending or
         },
         activePendingApprovals: () => [],
         hasUnresolvedApproval: () => false,
+        turnRuntime: () => null,
         hasLiveRun: () => false,
         isStopping: () => false,
         drawActiveChat: draw,

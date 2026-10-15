@@ -105,7 +105,7 @@ async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurn
 }
 
 function promptedNote(requests: RequestBody[]): boolean {
-  return JSON.stringify(requests[0]!.messages).includes("(system note:");
+  return JSON.stringify(requests[0]!.messages).includes("[system] Your previous attempt");
 }
 
 test("a genuine resume whose context ends at a recorded tool result continues the assistant turn silently", async () => {

@@ -6,6 +6,7 @@ import {
   isHarnessId,
   modelSupportedByHarness,
   resolveModel,
+  safeModelMetadata,
   thinkingLevelsForHarness,
   modelUnavailableReason,
   type HarnessId,
@@ -273,7 +274,7 @@ export async function resolveRuntimeChoiceDurable(
 export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
-  resolve: (input: HarnessTurnInput) => RuntimeChoice | Promise<RuntimeChoice>,
+  resolve: (input: HarnessTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
@@ -288,7 +289,17 @@ export function createHarnessRouter(
     tools: utility.tools,
     turns: {
       async runTurn(input) {
-        const choice = await resolve(input);
+        let routedBy: string | undefined;
+        const choice = await resolve(input, (ruleId) => {
+          routedBy = ruleId;
+        });
+        const label = safeModelMetadata(choice.modelId)?.label;
+        input.onRuntime?.({
+          harnessId: choice.harnessId,
+          modelId: choice.modelId,
+          ...(label ? { label } : {}),
+          ...(routedBy ? { change: { rule: routedBy } } : {}),
+        });
         const adapter = adapters.get(choice.harnessId);
         if (!adapter) throw new Error(`harness ${choice.harnessId} is unavailable`);
         const prior = lastHarness.get(input.session.id);

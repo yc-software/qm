@@ -53,20 +53,6 @@ export function resolverFor(deps: ServerDeps): OAuthClientResolver {
   );
 }
 
-export async function configuredOAuthProviders(deps: ServerDeps): Promise<string[]> {
-  const resolve = resolverFor(deps);
-  const names = Object.keys(PROVIDERS);
-  const configured = await Promise.all(
-    names.map((name) =>
-      resolve(name, {}).then(
-        (client) => !!client.id && !!client.secret,
-        () => false,
-      ),
-    ),
-  );
-  return names.filter((_, i) => configured[i]);
-}
-
 function parseAccountType(v: string | null | undefined): AccountType {
   return v === "personal" || v === "company" ? v : "default";
 }

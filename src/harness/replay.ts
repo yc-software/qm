@@ -12,7 +12,7 @@ import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.
 import { deliveryNote } from "../core/attachments.ts";
 import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
-import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
@@ -278,9 +278,22 @@ function toolResultMessage(
   const base = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name };
   const text = (value: string) => [{ type: "text" as const, text: value }];
   if (!re) return { ...base, content: text(missing), isError: true, timestamp: at };
-  const p = (re.payload ?? {}) as { interrupted?: unknown; isError?: unknown; result?: unknown; wire?: ToolResultWire };
+  const p = (re.payload ?? {}) as {
+    interrupted?: unknown;
+    stop?: { kind?: unknown };
+    isError?: unknown;
+    result?: unknown;
+    wire?: ToolResultWire;
+  };
   if (p.interrupted === true)
-    return { ...base, content: text(INTERRUPTED_TOOL_RESULT), isError: true, timestamp: re.createdAt };
+    return {
+      ...base,
+      content: text(
+        typeof p.stop?.kind === "string" ? unrecordedToolResult({ kind: p.stop.kind }) : INTERRUPTED_TOOL_RESULT,
+      ),
+      isError: true,
+      timestamp: re.createdAt,
+    };
   return {
     ...base,
     content: p.wire?.content ? resultContent(p.wire.content) : text(String(p.result ?? "")),

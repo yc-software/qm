@@ -51,7 +51,7 @@ test("layout restoration ignores removed panes and falls back when an anchor was
   assert.equal(removed!.scrollTop, 0);
 });
 
-function fixture() {
+function fixture(options: Parameters<typeof createTranscriptViewport>[0] = {}) {
   const dom = new JSDOM(
     '<section><div class="pinned-strip"></div><div class="message-stack"><article class="user-row"></article></div></section>',
   );
@@ -97,7 +97,7 @@ function fixture() {
       disconnect() {}
     },
   });
-  const viewport = createTranscriptViewport();
+  const viewport = createTranscriptViewport(options);
   viewport.sync(s);
   viewport.follow(true);
   for (const cb of frames.values()) cb(0);
@@ -393,6 +393,42 @@ test("only reaching the sticky edge elevates the prompt; pin resizes update the 
     assert.equal(f.s.style.getPropertyValue("--chat-sticky-top"), "90px");
     assert.equal(f.prompt.classList.contains("stuck"), true);
     f.scroll(0);
+    assert.equal(f.prompt.classList.contains("stuck"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("turning the pin preference off releases the latest prompt live, and turning it on pins it again", () => {
+  let pin = true;
+  const f = fixture({ pinPrompt: () => pin });
+  try {
+    f.resize(30, 50);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    assert.equal(f.prompt.classList.contains("stuck"), true);
+    pin = false;
+    f.viewport.refresh();
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
+    assert.equal(f.prompt.classList.contains("stuck"), false);
+    f.scroll(700);
+    f.resize(30, 50);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
+    assert.equal(f.prompt.classList.contains("stuck"), false);
+    pin = true;
+    f.viewport.refresh();
+    assert.equal(f.prompt.classList.contains("latest-prompt"), true);
+    assert.equal(f.prompt.classList.contains("stuck"), true);
+  } finally {
+    f.close();
+  }
+});
+
+test("a prompt that starts unpinned is never made sticky", () => {
+  const f = fixture({ pinPrompt: () => false });
+  try {
+    f.resize(30, 50);
+    f.scroll(600);
+    assert.equal(f.prompt.classList.contains("latest-prompt"), false);
     assert.equal(f.prompt.classList.contains("stuck"), false);
   } finally {
     f.close();

@@ -20,6 +20,7 @@ import type {
   SessionEntry,
   TurnRequest,
   TurnResult,
+  TurnRuntime,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
@@ -298,6 +299,7 @@ export interface App {
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
     goal?: GoalView;
+    runtime?: TurnRuntime;
     partial?: string;
     partialStartOffset?: number;
     alive?: boolean;
@@ -344,6 +346,7 @@ export interface App {
     earlierEntries?: number;
     pins?: SessionPinView[];
     goal?: GoalView;
+    runtime?: TurnRuntime;
   } | null>;
   canViewSessionSnapshot(
     sessionId: string,

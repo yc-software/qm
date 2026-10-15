@@ -1,4 +1,5 @@
 import type { GoalRecord } from "../harness/goal.ts";
+import type { TurnRuntime } from "../types.ts";
 
 export interface GoalView {
   objective: string;
@@ -17,6 +18,8 @@ export interface TurnStream {
   noteToolCall(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
+  noteRuntime(runId: string, runtime: TurnRuntime): void;
+  runtime(runId: string): TurnRuntime | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
@@ -37,6 +40,7 @@ interface Entry {
   text: string;
   totalChars: number;
   goal: GoalView | null;
+  runtime: TurnRuntime | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
@@ -63,6 +67,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
     text: "",
     totalChars: 0,
     goal: null,
+    runtime: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
@@ -147,6 +152,15 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     goal(runId) {
       return runs.get(runId)?.goal ?? null;
+    },
+
+    noteRuntime(runId, runtime) {
+      ensure(runId).runtime = runtime;
+      opts.onChange?.(runId);
+    },
+
+    runtime(runId) {
+      return runs.get(runId)?.runtime ?? null;
     },
 
     firstBlock(runId) {

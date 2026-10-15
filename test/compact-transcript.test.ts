@@ -15,7 +15,7 @@ test("compactTranscript marks an interrupted tool call (no recorded result) so t
     ent("tool_call", { tool: "execute", command: "bash refresh.sh", callId: "c1" }, 2),
     ent("user", { text: "(system note: the platform restarted mid-turn...)" }, 3),
   ]);
-  assert.match(out, /tool_result for tool_call#2 \(none recorded\): \[interrupted/);
+  assert.match(out, /tool_result for tool_call#2 \(none recorded\): \[system\] This call was interrupted/);
   assert.ok(out.includes(INTERRUPTED_TOOL_RESULT));
 });
 

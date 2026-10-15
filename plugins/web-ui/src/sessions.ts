@@ -1859,5 +1859,6 @@ export async function openSessionInto(
   }
   conv.setPins(entriesRes.pins ?? []);
   conv.setGoal(entriesRes.goal ?? null);
+  conv.setTurnRuntime(entriesRes.runtime ?? null);
   renderList();
 }
