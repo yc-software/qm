@@ -2907,6 +2907,12 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   });
   assert.equal(approved.status, "ok");
   assert.match(approved.reply ?? "", /approved-input/);
+  const userEntries = (await risky.sessions.getEntries(approved.sessionId!)).filter((e) => e.type === "user");
+  assert.deepEqual(
+    userEntries.map((e) => (e.payload as { text?: unknown }).text),
+    [request.text],
+    "the approved message is recorded once",
+  );
   assert.equal(
     risky.modelGateway.audit().filter((call) => call.model === "mock-security").length,
     screensBeforeApproval,
@@ -2920,6 +2926,11 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   });
   assert.equal(denied.status, "refused");
   assert.match(denied.reason ?? "", /approval denied/);
+  assert.deepEqual(
+    (await deniedApp.sessions.getEntries(deniedPending.sessionId!)).filter((e) => e.type === "user"),
+    [],
+    "denied flagged input never enters the session log",
+  );
   assert.equal(
     deniedApp.modelGateway.audit().some((call) => call.model === "mock"),
     false,

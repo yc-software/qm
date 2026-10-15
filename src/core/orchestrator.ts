@@ -956,7 +956,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...grantModesField,
             });
-            return true;
           });
         } catch (err) {
           if (err instanceof ProjectRosterChanged) {
@@ -2951,9 +2950,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           .filter((s) => s && s.trim())
           .join("\n\n");
         const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
-        const pausedTurnUserEntry = input.approval
-          ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
-          : undefined;
+        const pausedTurnUserEntry =
+          input.approval && approvalRecord?.kind !== "input"
+            ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
+            : undefined;
         const resumedFromSeq = pausedTurnUserEntry?.seq;
         const approvalReplay =
           !!pausedTurnUserEntry &&
