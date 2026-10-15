@@ -37,7 +37,7 @@ test("legacy stopped placeholders are recognized without treating ordinary repli
 test("a turn_stopped record renders as the stopped state, once, and never as a message", () => {
   const stop = (seq: number): SessionEntry => ({
     type: "system",
-    payload: { kind: "turn_stopped", reason: "a person stopped it" },
+    payload: { kind: "turn_stopped", reason: "by user" },
     createdAt: 5000,
     seq,
   });

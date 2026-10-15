@@ -2339,7 +2339,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             await recordStoppedTurn(
               turn,
               partial,
-              userAborted ? abortReason : "the run was cancelled before it finished",
+              userAborted ? abortReason : "because the run was cancelled",
               steps.closing(reply),
             );
             const cacheUsage = sumCacheUsage(callStats);

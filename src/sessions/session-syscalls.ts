@@ -280,7 +280,10 @@ function lastAssistantText(entries: readonly SessionEntry[]): string | undefined
       // A partial reply recorded just before the stop is still the last thing said.
       const before = entries[i - 1];
       const partial = before?.type === "assistant" ? entryText(before) : "";
-      return partial || `(stopped: ${typeof stop.reason === "string" ? stop.reason : "no reason recorded"})`;
+      return (
+        partial ||
+        `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""} before replying.`
+      );
     }
     if (e.type !== "assistant" && e.type !== "text") continue;
     const text = entryText(e);
@@ -814,7 +817,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
-                const stopped = await stopSessionTree(deps, target, "the parent agent interrupted it");
+                const stopped = await stopSessionTree(deps, target, "by the parent agent");
                 return stopped
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };

@@ -722,7 +722,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (!terminal && (reply || stopped))
-          await recordStoppedTurn(turn, reply, stopped ? stopReason : "the run was cancelled before it finished");
+          await recordStoppedTurn(turn, reply, stopped ? stopReason : "because the run was cancelled");
         return {
           reply,
           ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),

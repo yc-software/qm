@@ -41,7 +41,7 @@ import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
-const USER_STOP = "a person stopped it";
+const USER_STOP = "by user";
 
 export function attributedSteerText(
   steerer: { id: string; displayName?: string | undefined },

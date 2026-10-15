@@ -881,7 +881,8 @@ export function createSessionMethods(
       if (!lease) {
         if (before.status === "active")
           for (const run of await deps.runs.inFlightForThread(session.threadRef))
-            if (run.status === "running") await deps.signals?.send(run.id, { kind: "abort", reason: "its goal was cancelled" });
+            if (run.status === "running")
+              await deps.signals?.send(run.id, { kind: "abort", reason: "because its goal was cancelled" });
         ({ lease } = await acquireLeaseWithin(deps.sessions, session.id, "backfill", GOAL_CANCEL_LEASE_WAIT_MS));
       }
       if (!lease) return { cancelled: false as const, reason: "busy" as const };

@@ -66,7 +66,7 @@ test("a mid-prompt cancel takes the stopped exit and persists the stopped partia
     );
     const finalEntry = sink.entries.at(-1);
     assert.equal(finalEntry?.type, "system");
-    assert.deepEqual(finalEntry?.payload, { kind: "turn_stopped", reason: "the run was cancelled before it finished" });
+    assert.deepEqual(finalEntry?.payload, { kind: "turn_stopped", reason: "because the run was cancelled" });
   } finally {
     globalThis.fetch = realFetch;
   }

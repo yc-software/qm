@@ -806,7 +806,7 @@ for (const shutdown of [false, true]) {
       assert.deepEqual(entries.at(-2)!.payload, { text: "Visible partial", stopped: true });
       assert.deepEqual(entries.at(-1)!.payload, {
         kind: "turn_stopped",
-        reason: "the run was cancelled before it finished",
+        reason: "because the run was cancelled",
       });
       assert.equal(partial, null);
     }

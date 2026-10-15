@@ -1925,14 +1925,14 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
       },
     },
     root,
-    "the parent agent interrupted it",
+    "by the parent agent",
   );
   assert.equal(stopped, true);
   assert.deepEqual(
     sent.map((s) => s.signal),
     [
-      { kind: "abort", reason: "the parent agent interrupted it" },
-      { kind: "abort", reason: "the parent agent interrupted it" },
+      { kind: "abort", reason: "by the parent agent" },
+      { kind: "abort", reason: "by the parent agent" },
     ],
   );
 });
