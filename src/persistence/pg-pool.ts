@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -218,7 +218,10 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   if (!migrations.length) return;
   const client = await pool.connect();
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+    while (
+      !(await client.query("SELECT pg_try_advisory_lock(hashtext('qm:schema-migrations')) AS locked")).rows[0]?.locked
+    )
+      await sleep(300);
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,

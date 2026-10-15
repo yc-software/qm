@@ -864,12 +864,22 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ],
       },
       {
-        id: "sessions/store/0033-human-steer-index",
+        id: "sessions/store/0033-human-steer-json",
+        statements: [
+          `CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
+           LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_jsonb$
+           BEGIN RETURN t::jsonb;
+           EXCEPTION WHEN data_exception THEN RETURN NULL;
+           END $safe_jsonb$`,
+        ],
+      },
+      {
+        id: "sessions/store/0034-human-steer-index",
         statements: [
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_human_steer
-             ON session_entries(session_id, (payload::jsonb->>'runId'), seq DESC)
-             WHERE type = 'user' AND jsonb_typeof(payload::jsonb->'personText') = 'string'
-               AND jsonb_typeof(payload::jsonb->'personId') = 'string'`,
+             ON session_entries(session_id, (safe_jsonb(payload)->>'runId'), seq DESC)
+             WHERE type = 'user' AND jsonb_typeof(safe_jsonb(payload)->'personText') = 'string'
+               AND jsonb_typeof(safe_jsonb(payload)->'personId') = 'string'`,
         ],
       },
     ],
@@ -1256,8 +1266,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async latestHumanSteer(sessionId, runId) {
       const [row] = await q(
         `SELECT * FROM session_entries WHERE session_id = $1 AND type = 'user'
-         AND payload::jsonb->>'runId' = $2 AND jsonb_typeof(payload::jsonb->'personText') = 'string'
-         AND jsonb_typeof(payload::jsonb->'personId') = 'string'
+         AND safe_jsonb(payload)->>'runId' = $2 AND jsonb_typeof(safe_jsonb(payload)->'personText') = 'string'
+         AND jsonb_typeof(safe_jsonb(payload)->'personId') = 'string'
          ORDER BY seq DESC LIMIT 1`,
         [sessionId, runId],
       );
