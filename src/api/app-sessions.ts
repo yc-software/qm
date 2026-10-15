@@ -937,7 +937,7 @@ export function createSessionMethods(
           source.type,
           source.scopeId,
           source.channelName,
-          source.surface ?? "web",
+          "web",
         );
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),

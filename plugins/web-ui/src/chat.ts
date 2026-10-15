@@ -173,7 +173,6 @@ import {
   renderList,
   sessionsState,
   sessionSlackUrl,
-  surfaceOf,
   openSession,
   syncWorkingPulse,
 } from "./sessions";
@@ -185,6 +184,7 @@ import {
   isAbandonedNewChat,
   shouldStartProactiveOpener,
   markWorking,
+  surfaceOf,
   watchActivityLabel,
 } from "./session-list";
 import { liveTurnThreadRef } from "./working-dot";

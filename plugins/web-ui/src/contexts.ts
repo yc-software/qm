@@ -30,8 +30,8 @@ import { actionSnippet, fieldSelect, formatBytes, initials, menuSelect, relTime 
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
-import { activityOf } from "./session-list";
+import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo } from "./sessions";
+import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
@@ -286,7 +286,7 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
 }
 
 function sessionsIn(scopeId: string): CoreSession[] {
-  return sessionsState.list
+  return sidebarSessions(sessionsState.list)
     .filter((s) => s.scopeId === scopeId && !s.archived)
     .sort((a, b) => activityOf(b) - activityOf(a));
 }

@@ -263,7 +263,7 @@ export interface CoreProject {
 
 export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): string | null {
   if (!workspaceUrl) return null;
-  const m = threadRef.match(/^(?:dm|ch):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
+  const m = threadRef.match(/^(?:dm|ch|grp):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
   if (!m) return null;
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }

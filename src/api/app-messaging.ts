@@ -540,7 +540,13 @@ export function createMessagingMethods(
       if (!delivery || delivery.destination.type !== "principal") return;
       const recipientId = delivery.destination.target;
       const recipientScope = scopeId("personal", recipientId);
-      const session = await deps.sessions.getOrCreateByThread(recipientThreadRef, "dm", recipientScope);
+      const session = await deps.sessions.getOrCreateByThread(
+        recipientThreadRef,
+        "dm",
+        recipientScope,
+        undefined,
+        "slack",
+      );
       await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
       await deps.sessions.addParticipant(session.id, recipientId);
     },

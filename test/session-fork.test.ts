@@ -30,6 +30,7 @@ test("forking copies the transcript into a fresh independent web session", async
   assert.ok(fork, "participant can fork");
   assert.notEqual(fork.session.id, sid);
   assert.ok(fork.session.threadRef.startsWith("web:U1:"), "fork lives on a fresh web thread");
+  assert.equal(fork.session.surface, "web");
   assert.notEqual(fork.session.threadRef, source.session.threadRef);
   assert.equal(fork.session.scopeId, source.session.scopeId);
   const stored = await Promise.all(
