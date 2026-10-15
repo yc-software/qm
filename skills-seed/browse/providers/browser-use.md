@@ -32,9 +32,9 @@ export "$PROFILE_ENV"="$PROFILE"
 
 A profile stores cookies and local storage. Rules that keep sign-ins alive:
 
-- **State is written when the browser STOPS.** Closing CDP does not stop a Browser Use
-  browser, and nothing is saved until the stop call in Clean up runs. A browser that
-  times out instead loses what happened in it.
+- **State is written when the browser stops**, either by the stop call in Clean up or by
+  hitting its `timeout`. Nothing is saved while it runs, and closing CDP (or the runner
+  exiting) does not stop it. Stop explicitly rather than waiting out the timeout.
 - **One browser per profile at a time.** Stop the running browser before starting another
   on the same profile; parallel sessions on one login invite forced logouts.
 - **Give the write-back a beat.** Wait ~10 seconds after a stop before launching the next
@@ -146,8 +146,8 @@ A mid-session verification check on a live task browser needs no stop — hand o
 
 ## Clean up
 
-Always stop the browser — it keeps billing until its timeout otherwise, and stopping is
-what saves the profile:
+Always stop the browser. The runner leaves it running, so it otherwise bills until its
+timeout, and the stop is what saves the profile:
 
 ```bash
 curl -fsS -X PATCH "https://api.browser-use.com/api/v4/browsers/$BU_SID" \
