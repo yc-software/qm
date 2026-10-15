@@ -93,6 +93,8 @@ test("non-human, stopped and non-completion results do not produce response outc
     await analytics.responseFinished({ ...run, request: { ...run.request, origin: { kind } } });
   }
   await analytics.responseFinished({ ...run, request: { ...run.request, botActor: true } });
+  for (const provenance of [{ sessionSenderId: "sender" }, { delegatingRunId: "parent-run" }])
+    await analytics.responseFinished({ ...run, request: { ...run.request, ...provenance } });
   for (const flag of ["analyticsSuppressed", "proactiveOpener"] as const) {
     for (const status of ["ok", "failed"] as const) {
       await analytics.responseFinished({ ...run, request: { ...run.request, [flag]: true }, result: { status } });

@@ -1937,7 +1937,11 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
   );
 });
 
-for (const origin of [{ kind: "human" }, { kind: "ambient", live: true }, { kind: "automation" }] as const) {
+for (const origin of [
+  { kind: "human", messageTs: "1", entryTs: "2" },
+  { kind: "ambient", live: true, entryTs: "2" },
+  { kind: "automation" },
+] as const) {
   test(`nested tasks and followups inherit ${origin.kind} origin`, async () => {
     const r = await delegatedHumanRig({ origin });
     const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
@@ -1950,6 +1954,8 @@ for (const origin of [{ kind: "human" }, { kind: "ambient", live: true }, { kind
     const child = (await r.sessions.get(opened.sessionId))!;
     const nested = (await r.runs.latestForThread(child.threadRef))!;
     assert.equal(nested.request.origin.kind, origin.kind);
+    assert.equal("messageTs" in nested.request.origin, false);
+    assert.equal("entryTs" in nested.request.origin, false);
     assert.equal(nested.request.delegatingRunId, r.run.id);
     assert.equal(nested.request.sessionSenderId, r.child.id);
     assert.ok((await childApi.write({ target: child.id, followup: true, text: "inspect again" })).ok);

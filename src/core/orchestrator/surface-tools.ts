@@ -1,3 +1,4 @@
+import { isSessionTurn } from "../turn-origin.ts";
 import type {
   Conversation,
   DeliveryProvenance,
@@ -101,8 +102,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   const currentDestination = defaultDestination;
   const rateLimitRecipient =
     input.origin?.kind === "human" &&
-    !input.sessionSenderId &&
-    !input.delegatingRunId &&
+    !isSessionTurn(input) &&
     currentDestination.type === "slack" &&
     currentDestination.target
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }

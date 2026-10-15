@@ -1,3 +1,4 @@
+import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -344,11 +345,6 @@ export function renderSubagentMail(input: {
     `  <instructions>If the person who asked for this work is waiting on it, relay what matters in your own words. Otherwise act on it internally without acknowledging it. Never repeat a result already reported or send a no-action-needed update. The subagent's full transcript is kept with it; use the subagents tool to read it or give it another task.</instructions>`,
     "</wake>",
   ].join("\n");
-}
-
-function sessionTurnOrigin(origin: SpawnMeta["origin"], text: string): OrchestratorInput["origin"] {
-  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
-  return origin;
 }
 
 function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayText: string): OrchestratorInput {

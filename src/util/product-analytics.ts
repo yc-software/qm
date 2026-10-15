@@ -1,4 +1,4 @@
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
 
 export function createProductAnalytics(
@@ -54,6 +54,7 @@ export function createProductAnalytics(
     async responseFinished(run) {
       if (
         resolveTurnOrigin(run.request).kind !== "human" ||
+        isSessionTurn(run.request) ||
         run.request.botActor ||
         run.request.analyticsSuppressed ||
         run.request.proactiveOpener ||

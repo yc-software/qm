@@ -1,3 +1,4 @@
+import { sessionTurnOrigin } from "../core/turn-origin.ts";
 import type { App } from "./app-types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { parseScopeId, type ScopeId, type Session, type TurnOrigin } from "../types.ts";
@@ -34,7 +35,7 @@ export async function startSession(
       ...(out.session.channelName ? { channelName: out.session.channelName } : {}),
     },
     text: input.text,
-    ...(input.origin ? { origin: input.origin.kind === "human" ? { kind: "human" as const } : input.origin } : {}),
+    ...(input.origin ? { origin: sessionTurnOrigin(input.origin, input.text) } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     spawned: true,

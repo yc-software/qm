@@ -193,6 +193,23 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.equal(delegatedClaims?.liveAuthor, true);
   assert.equal(delegatedClaims?.liveActor, true);
   assert.equal(delegatedClaims?.triggered, undefined);
+  const credential = await b.keychain!.save({
+    ownerId: "U1",
+    service: "delegated-test",
+    secret: "fixture-secret",
+    envKey: "DELEGATED_TEST_TOKEN",
+  });
+  assert.equal(
+    await childTurn(
+      `!execute ${JSON.stringify({
+        command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available',
+        ownerAuth: true,
+        credentials: [credentialHandle(credential)],
+      })}`,
+    ),
+    "available",
+  );
+  assert.deepEqual(await b.keychain!.grantsForScope("channel:C1"), []);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");

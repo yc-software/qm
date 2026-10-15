@@ -35,7 +35,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { turnOriginRequestFields } from "./turn-origin.ts";
+import { isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
@@ -541,7 +541,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";
       const humanTurn = input.origin.kind === "human";
-      const sessionTurn = !!input.sessionSenderId || !!input.delegatingRunId;
+      const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
@@ -2549,13 +2549,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           });
         const earlyTaskAck =
           input.surface === "slack" &&
-          input.origin.kind === "human" &&
+          humanInput &&
           conversation.kind === "dm" &&
           !input.approval &&
           !input.botActor &&
           !input.swarm;
         const publishFirstAck = (deliberatePost: boolean) => {
-          if (!input.runId || !input.addressed || isPollFire || !spineFirstBlockOpen || resume || approvalReplay)
+          if (
+            !input.runId ||
+            !input.addressed ||
+            sessionTurn ||
+            isPollFire ||
+            !spineFirstBlockOpen ||
+            resume ||
+            approvalReplay
+          )
             return;
           spineFirstBlockOpen = false;
           const ack = spineFirstBlock.trim();
