@@ -79,7 +79,7 @@ for (const kind of ["command", "security-screen"] as const) {
         securityScreenData: undefined,
       });
       if (kind === "command")
-        built.config.setCommandPolicy("org:default-org", {
+        await built.config.setCommandPolicy("org:default-org", {
           mode: "denylist",
           rules: [{ pattern: "approval-isolation", decision: "require_approval", reason: "Confirm this command" }],
         });
@@ -490,7 +490,7 @@ test("a resolved command approval informs the model without changing its request
     turns.push(turn);
   };
   try {
-    built.config.setCommandPolicy("org:default-org", {
+    await built.config.setCommandPolicy("org:default-org", {
       mode: "denylist",
       rules: [{ pattern: "approval-isolation", decision: "require_approval", reason: "test approval" }],
     });

@@ -1187,10 +1187,10 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
   const config = ctx.deps.config;
-  if (ctx.body.inherit === true) await config.setRuntimeSelectionLatest(target.scope, null);
+  if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelectionLatest(target.scope);
+    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
     else {
       const legacyModel = await config.getBaseModelOwnDurable(target.scope);
       const fallback = runtimeFallback(ctx);
@@ -1201,7 +1201,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
         modelSupportedByHarness(legacyModel, fallback.harnessId) &&
         (await webuiModelEnabled(ctx, legacyModel))
       ) {
-        await config.setRuntimeSelectionLatest(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
+        await config.setRuntimeSelection(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
       }
     }
   } else {
@@ -1225,7 +1225,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       if (!available.modelsByHarness[harnessId]?.includes(modelId))
         return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
     }
-    await config.setRuntimeSelectionLatest(target.scope, choice);
+    await config.setRuntimeSelection(target.scope, choice);
   }
   audit(ctx.deps, {
     principalId: target.actorId,
@@ -1259,7 +1259,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "expected { on: boolean | null } (null reverts to the org default)",
     });
-  await ctx.deps.config.setChannelHeaderPinLatest(target.scope, ctx.body.on);
+  await ctx.deps.config.setChannelHeaderPin(target.scope, ctx.body.on);
   audit(ctx.deps, {
     principalId: target.actorId,
     action: "channel-header-pin.update",

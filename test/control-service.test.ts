@@ -986,7 +986,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["mock"]);
   const runtime = { harnessId: "mock" as const, modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
@@ -1011,9 +1011,8 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
-  built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
@@ -1031,16 +1030,14 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["mock"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
     assert.equal(result.run.request.harness, "mock");
     assert.equal(result.run.request.fastMode, false);
-    built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
   await assert.rejects(

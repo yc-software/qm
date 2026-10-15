@@ -1222,7 +1222,7 @@ export function createSessionMethods(
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
-              ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
+              ? await deps.config.setSoul(scopeIdValue, content, actorId)
               : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
           if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
           deps.auditLog.record({

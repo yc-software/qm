@@ -332,7 +332,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.equal(response.status, 403, `deployment ${suffix}`);
     }
 
-    built.config.setCommandPolicy(scopeId("org", "default-org"), {
+    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval" }],
     });

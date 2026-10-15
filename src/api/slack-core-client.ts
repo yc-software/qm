@@ -218,7 +218,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async publishEmojiCatalog(emoji) {
-      deps.config.setSlackEmojiCatalog(orgScope, emoji);
+      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
     },
 
     async surfaceHeaderFacts(scope) {

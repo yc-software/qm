@@ -1014,8 +1014,8 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
-  built.config.setBrowseMaxSteps("org:default-org", 120);
-  built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
+  await built.config.setBrowseMaxSteps("org:default-org", 120);
+  await built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
   const res2 = await app.turn(dm("!run echo steps again"));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
@@ -1042,7 +1042,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     return realProvision(layers, opts);
   };
 
-  built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
+  await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:stale1" } }));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -1072,7 +1072,7 @@ test("browse follows a live org base model change, not the process-start default
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "claude-opus-5", "starts on the deployment default");
 
-  built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
   res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live2" } }));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -2675,7 +2675,7 @@ test("a session approval covers the whole rule: a different command matching it 
 test("an admin-registered rule grants by rule across turns; the approval is keyed on its pattern", async () => {
   const { app, config } = freshApp();
   const pattern = "\\bzz-tool\\s+\\S+";
-  config.setCommandPolicy(scopeId("org", "default-org"), {
+  await config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
   });
@@ -2698,7 +2698,7 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
   await config.setSecurityPosture(org, "dangerous");
-  config.setCommandPolicy(org, {
+  await config.setCommandPolicy(org, {
     mode: "allowlist",
     rules: [
       { pattern: "printf", decision: "require_approval", reason: "test approval" },
@@ -3180,7 +3180,7 @@ test("a thread image is ingested into a session once; later turns that re-send i
 
 test("an approved automation replay preserves and re-screens its external event provenance", async () => {
   const built = freshApp();
-  built.config.setCommandPolicy(scopeId("org", "default-org"), {
+  await built.config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern: "printf", decision: "require_approval", reason: "confirm automation" }],
   });
@@ -3417,7 +3417,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
 
 test("allow once authorizes a single use of the rule, not the rest of the session", async () => {
   const { app, config } = freshApp();
-  config.setCommandPolicy(scopeId("org", "default-org"), {
+  await config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
   });

@@ -186,8 +186,8 @@ test("branding governance validates, round-trips through surface-config, clears,
 test("surface-config filters persisted model choices to the active native harness", async () => {
   const srv = start("claude");
   try {
-    srv.built.config.setBaseModel("org:default-org", "claude-opus-4-8");
-    srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8", "gpt-5.6-sol"]);
+    await srv.built.config.setBaseModel("org:default-org", "claude-opus-4-8");
+    await srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8", "gpt-5.6-sol"]);
     const response = await fetch(`${srv.base}/v1/surface-config`);
     const config = (await response.json()) as { harnessId: string; baseModel: string; webuiModels: string[] };
     assert.equal(config.harnessId, "claude");
@@ -201,10 +201,9 @@ test("surface-config filters persisted model choices to the active native harnes
 test("runtime-config lets a person set, keep, and inherit an approved personal runtime", async () => {
   const srv = start("pi");
   try {
-    srv.built.config.setApprovedHarnesses(["pi", "claude"]);
-    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
-    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setApprovedHarnesses(["pi", "claude"]);
+    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6", "claude-opus-4-8", "gpt-5.5"]);
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal:alice`;
 
     const initial = (await fetch(url).then((r) => r.json())) as {
@@ -242,8 +241,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
       fastMode: false,
     });
 
-    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "claude", modelId: "claude-opus-4-8" });
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "claude", modelId: "claude-opus-4-8" });
     assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
 
     const keep = await fetch(`${srv.base}/v1/runtime-config`, {
@@ -262,8 +260,7 @@ test("runtime-config lets a person set, keep, and inherit an approved personal r
     assert.equal(inherited.effective.harnessId, "claude");
     assert.equal(inherited.scopeOverride, null);
 
-    srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
-    await srv.built.config.flushScope("personal:alice");
+    await srv.built.config.setBaseModel("personal:alice", "claude-sonnet-4-6");
     assert.equal(((await fetch(url).then((r) => r.json())) as { upgradeAvailable: boolean }).upgradeAvailable, true);
     const keepLegacy = await fetch(`${srv.base}/v1/runtime-config`, {
       method: "PUT",
@@ -502,8 +499,7 @@ test("admin runtime saves reasoning level and fast mode with the default model",
   const srv = start();
   const url = `${srv.base}/v1/admin/scopes/org:default-org/runtime`;
   try {
-    srv.built.config.setApprovedHarnesses(["pi", "claude"]);
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setApprovedHarnesses(["pi", "claude"]);
     const saved = await fetch(url, {
       method: "PUT",
       headers: ADMIN,

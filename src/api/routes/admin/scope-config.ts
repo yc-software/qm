@@ -109,7 +109,6 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       if ("error" in result) {
         return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
       }
-      await deps.config!.flushScope(targetScope);
     } catch (err) {
       await deps.config!.refreshScope(targetScope);
       throw err;

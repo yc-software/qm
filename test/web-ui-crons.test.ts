@@ -268,7 +268,7 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
-  built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["mock"]);
   const cron = await built.app.createCron({
     title: "runtime",
     action: "check",

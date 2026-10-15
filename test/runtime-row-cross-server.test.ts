@@ -56,7 +56,7 @@ test("an org runtime change on one server keeps a cron runtime another server sa
   const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
   const right = createMemoryConfigStore("default-org", { baseModels: shared });
 
-  const leftWrite = left.setRuntimeSelectionLatest(org, pick);
+  const leftWrite = left.setRuntimeSelection(org, pick);
   await paused.readStarted;
   await right.setPurposeRuntime("cron", cron);
   paused.release();
@@ -75,7 +75,7 @@ test("saving a purpose runtime on one server keeps the org runtime another serve
 
   const leftWrite = left.setPurposeRuntime("cron", cron);
   await paused.readStarted;
-  await right.setRuntimeSelectionLatest(org, pick);
+  await right.setRuntimeSelection(org, pick);
   paused.release();
   await leftWrite;
 
@@ -91,9 +91,9 @@ test("concurrent org runtime changes on two servers get distinct revisions", asy
   const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
   const right = createMemoryConfigStore("default-org", { baseModels: shared });
 
-  const leftWrite = left.setRuntimeSelectionLatest(org, pick);
+  const leftWrite = left.setRuntimeSelection(org, pick);
   await paused.readStarted;
-  await right.setRuntimeSelectionLatest(org, { harnessId: "pi", modelId: "other" });
+  await right.setRuntimeSelection(org, { harnessId: "pi", modelId: "other" });
   paused.release();
   await leftWrite;
 
@@ -109,9 +109,9 @@ test("acknowledging the org runtime on one server keeps a scope runtime another 
   const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
   const right = createMemoryConfigStore("default-org", { baseModels: shared });
 
-  const ack = left.acknowledgeRuntimeSelectionLatest(channel);
+  const ack = left.acknowledgeRuntimeSelection(channel);
   await paused.readStarted;
-  await right.setRuntimeSelectionLatest(channel, { harnessId: "pi", modelId: "new" });
+  await right.setRuntimeSelection(channel, { harnessId: "pi", modelId: "new" });
   paused.release();
   await ack;
 
@@ -123,9 +123,9 @@ test("acknowledging the org runtime on one server keeps a scope runtime another 
 test("clearing the org runtime keeps purpose runtimes and removes an empty row", async () => {
   const shared = await freshMap();
   const store = createMemoryConfigStore("default-org", { baseModels: shared });
-  await store.setRuntimeSelectionLatest(org, pick);
+  await store.setRuntimeSelection(org, pick);
   await store.setPurposeRuntime("cron", cron);
-  await store.setRuntimeSelectionLatest(org, null);
+  await store.setRuntimeSelection(org, null);
   assert.deepEqual(await shared.get(org), { scopeId: org, cronRuntime: cron });
   await store.clearPurposeRuntime("cron");
   assert.equal(await shared.get(org), null);
