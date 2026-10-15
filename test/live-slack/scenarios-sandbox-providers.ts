@@ -31,13 +31,8 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       continue;
     }
     if (entry.type !== "tool_result" || !calls.has(p.callId) || p.isError !== false) continue;
-    const structured = "code" in p || "timedOut" in p || "stdout" in p || "action" in p;
-    if (
-      structured
-        ? p.background !== true && p.code === 0 && p.timedOut === false && p.stdout === stdout
-        : p.result === `${stdout}\n[exit 0]`
-    )
-      executed = true;
+    const structured = "code" in p || "timedOut" in p || "action" in p;
+    if (p.result === `${stdout}\n[exit 0]` && (!structured || (p.code === 0 && p.timedOut === false))) executed = true;
   }
   assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
   assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);

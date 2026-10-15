@@ -180,7 +180,7 @@ export const scenarios: Scenario[] = [
           e.payload.isError === false &&
           e.payload.code === 0 &&
           e.payload.timedOut === false &&
-          e.payload.stdout === `${marker}\n`,
+          e.payload.result === `${marker}\n\n[exit 0]`,
       );
       assert.ok(ran, "core transcript has no successful command execution — cannot evaluate performance");
 
