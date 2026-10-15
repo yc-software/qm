@@ -3474,14 +3474,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
-            ...(effectiveTurnWallClockMs !== undefined
-              ? {
-                  turnWallClockMs:
-                    effectiveTurnWallClockMs > 0
-                      ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
-                      : effectiveTurnWallClockMs,
-                }
-              : {}),
+            turnWallClockMs:
+              effectiveTurnWallClockMs > 0
+                ? Math.max(1, effectiveTurnWallClockMs - (Date.now() - turnStart))
+                : effectiveTurnWallClockMs,
             ...(securityPolicy.screening !== "off"
               ? {
                   screenToolResult: async ({
