@@ -780,28 +780,6 @@ test("forModelContext applies the latest-summary boundary: one summary, nothing 
   );
 });
 
-test("hiding a tainted latest summary does not expose the raw entries it covers", () => {
-  const entries = [
-    mkEntry({ seq: 0, type: "user", payload: { text: "old clean" } }),
-    mkEntry({ seq: 1, type: "user", payload: { text: "old tainted", securityTainted: true } }),
-    mkEntry({
-      seq: 2,
-      type: "system",
-      payload: { ...createContextSummaryPayload(1, "tainted recap"), securityTainted: true },
-    }),
-    mkEntry({ seq: 3, type: "assistant", payload: { text: "new clean" } }),
-  ];
-
-  assert.deepEqual(
-    forModelContext(entries).map((e) => e.seq),
-    [3],
-  );
-  assert.deepEqual(
-    forModelContext(entries, { includeSecurityTainted: true }).map((e) => e.seq),
-    [2, 3],
-  );
-});
-
 test("under-HARD turn: the harness sees the boundary-filtered context, not stacked summaries over raw history", async () => {
   const base = spyHarness();
   const { wrapped, seen } = captureHarness(base.harness);

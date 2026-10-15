@@ -1109,19 +1109,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
-    async clearSecurityTaint(sessionId) {
-      return withPgTransaction(await pool(), async (client) => {
-        await lockSession(client, sessionId);
-        const updated = await client.query(
-          "UPDATE session_entries SET payload = (payload::jsonb - 'securityTainted')::text " +
-            "WHERE session_id = $1 AND jsonb_typeof(payload::jsonb) = 'object' AND payload::jsonb ? 'securityTainted'",
-          [sessionId],
-        );
-        if ((updated.rowCount ?? 0) > 0) return true;
-        return (await client.query("SELECT 1 FROM sessions WHERE id = $1", [sessionId])).rows.length === 1;
-      });
-    },
-
     async countEntriesBefore(sessionId, beforeSeq, principalId) {
       const rows =
         principalId === undefined
@@ -1177,12 +1164,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async getContextWindow(sessionId) {
       const [meta, summary, memoryContext] = await Promise.all([
-        q(
-          `SELECT count(*)::int AS total,
-                  bool_or((payload::jsonb -> 'securityTainted') = 'true'::jsonb) AS taint
-             FROM session_entries WHERE session_id = $1`,
-          [sessionId],
-        ),
+        q("SELECT count(*)::int AS total FROM session_entries WHERE session_id = $1", [sessionId]),
         q(
           `SELECT (payload::jsonb ->> 'throughSeq')::int AS through
              FROM session_entries
@@ -1210,7 +1192,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           ...rows.map(rowToEntry),
         ],
         totalEntries: Number(meta[0]?.total ?? 0),
-        hasSecurityTaint: meta[0]?.taint === true,
       };
     },
 

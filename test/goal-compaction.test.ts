@@ -16,11 +16,7 @@ import type { ScopeId } from "../src/types.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
-async function fixture(
-  status: GoalRecord["status"],
-  summarize = true,
-  goalOptions: { scopeLabel?: ScopeId; securityTainted?: boolean } = {},
-) {
+async function fixture(status: GoalRecord["status"], summarize = true, goalOptions: { scopeLabel?: ScopeId } = {}) {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("goal", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
@@ -36,7 +32,7 @@ async function fixture(
   };
   await sessions.append(lease, {
     type: "system",
-    payload: { kind: "goal", goal, ...(goalOptions.securityTainted ? { securityTainted: true } : {}) },
+    payload: { kind: "goal", goal },
     scopeLabel: goalOptions.scopeLabel ?? scope,
   });
   for (let i = 0; i < 10; i++) {
@@ -169,11 +165,10 @@ test("foreground compaction cannot recover a goal excluded by audience filtering
 });
 
 for (const background of [false, true]) {
-  test(`${background ? "background" : "foreground"} compaction preserves goal source scope and security taint`, async () => {
+  test(`${background ? "background" : "foreground"} compaction preserves goal source scope`, async () => {
     const sourceScope = "personal:alice" as ScopeId;
     const { sessions, session, lease, compaction } = await fixture("active", true, {
       scopeLabel: sourceScope,
-      securityTainted: true,
     });
     if (background) {
       await sessions.releaseLease(lease);
@@ -182,7 +177,6 @@ for (const background of [false, true]) {
         scopeId: scope,
         orgScopeId: "org:test",
         actorId: "alice",
-        includeSecurityTainted: true,
       });
       const deadline = Date.now() + 3000;
       while (
@@ -198,9 +192,7 @@ for (const background of [false, true]) {
         await compaction.compactContextIfNeeded({
           session,
           lease,
-          visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries, {
-            includeSecurityTainted: true,
-          }),
+          visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
           scopeId: scope,
           orgScopeId: "org:test",
           actorId: "alice",
@@ -213,7 +205,5 @@ for (const background of [false, true]) {
     const carried = latestGoalEntry(entries);
     assert.ok(carried);
     assert.equal(carried.scopeLabel, sourceScope);
-    assert.equal((carried.payload as { securityTainted?: boolean }).securityTainted, true);
-    assert.equal(latestGoalRecord(forModelContext(entries)), null);
   });
 }

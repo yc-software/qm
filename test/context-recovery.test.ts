@@ -269,43 +269,38 @@ test("recent recovery drops an oversized request inside a completed turn and kee
   }
 });
 
-for (const tainted of [false, true]) {
-  test(`a ${tainted ? "tainted" : "foreign"} summary still supplies the durable exclusion floor`, async () => {
-    const f = await fixture();
-    try {
-      await f.sessions.append(f.input.lease, {
-        type: "system",
-        payload: {
-          ...createContextSummaryPayload(11, "hidden summary sentinel"),
-          ...(tainted ? { securityTainted: true } : {}),
-        },
-        scopeLabel: tainted ? "personal:test" : "personal:other",
-      });
-      await f.sessions.append(f.input.lease, {
-        type: "user",
-        payload: { text: "Latest request." },
-        scopeLabel: "personal:test",
-      });
-      await refresh(f);
-      f.input.visibleHistory = filterHistoryForAudience(
-        f.input.visibleHistory,
-        [{ id: "test", type: "internal" }],
-        "personal:test",
-        "org:test",
-      );
-      const history = await f.compaction.compactRecent(f.input);
-      assert.equal(contextSummaryPayload(history[0]!)!.throughSeq, 11);
-      const reloaded = filterHistoryForAudience(
-        forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries),
-        [{ id: "test", type: "internal" }],
-        "personal:test",
-        "org:test",
-      );
-      assert.deepEqual(reloaded, history);
-      assert.ok(estimateHistoryTokens(reloaded) <= 300);
-      assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
-}
+test("a foreign summary still supplies the durable exclusion floor", async () => {
+  const f = await fixture();
+  try {
+    await f.sessions.append(f.input.lease, {
+      type: "system",
+      payload: createContextSummaryPayload(11, "hidden summary sentinel"),
+      scopeLabel: "personal:other",
+    });
+    await f.sessions.append(f.input.lease, {
+      type: "user",
+      payload: { text: "Latest request." },
+      scopeLabel: "personal:test",
+    });
+    await refresh(f);
+    f.input.visibleHistory = filterHistoryForAudience(
+      f.input.visibleHistory,
+      [{ id: "test", type: "internal" }],
+      "personal:test",
+      "org:test",
+    );
+    const history = await f.compaction.compactRecent(f.input);
+    assert.equal(contextSummaryPayload(history[0]!)!.throughSeq, 11);
+    const reloaded = filterHistoryForAudience(
+      forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries),
+      [{ id: "test", type: "internal" }],
+      "personal:test",
+      "org:test",
+    );
+    assert.deepEqual(reloaded, history);
+    assert.ok(estimateHistoryTokens(reloaded) <= 300);
+    assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
+  } finally {
+    await f.sessions.releaseLease(f.input.lease);
+  }
+});

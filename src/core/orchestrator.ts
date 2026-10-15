@@ -49,7 +49,7 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { GapPhase, Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { acquireLeaseWithin, entrySecurityTainted, isOverheardEntry } from "../sessions/session-store.ts";
+import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -755,22 +755,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (screenInbound) {
           const existingSession = await deps.sessions.getByThread(conversation.threadRef);
           const existingEntries = existingSession ? await deps.sessions.getEntries(existingSession.id) : [];
-          const quarantinedAttachmentSourceIds = new Set(
-            existingEntries.flatMap((entry) => {
-              const payload = entry.payload as {
-                securityTainted?: unknown;
-                quarantinedAttachmentSourceIds?: unknown;
-              } | null;
-              return payload?.securityTainted === true && Array.isArray(payload.quarantinedAttachmentSourceIds)
-                ? payload.quarantinedAttachmentSourceIds.filter((id): id is string => typeof id === "string")
-                : [];
-            }),
-          );
-          if (enforceScreen && quarantinedAttachmentSourceIds.size && input.attachments?.length) {
-            input.attachments = input.attachments.filter(
-              (attachment) => !attachment.sourceId || !quarantinedAttachmentSourceIds.has(attachment.sourceId),
-            );
-          }
           const recorded = recordedMessageTimestamps(existingEntries);
           overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
         }
@@ -840,9 +824,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               verifiedSessionMessage,
             })
           : null;
-        return { overheard, hasUnscreenableAttachment, externalPromptData, screenPayload };
+        return { hasUnscreenableAttachment, externalPromptData, screenPayload };
       };
-      let screenedOverheard: OverheardEntryPayload[] = [];
       let flaggedScreenedInput: { reason: string; sources: string[] } | undefined;
       let inputUnscreened = false;
       if (screenInbound && !enforceScreen) {
@@ -859,9 +842,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
           .catch(swallowAs("orchestrator: observed inbound screen", undefined));
       } else if (screenInbound) {
-        const inbound = await buildInboundScreen();
-        screenedOverheard = inbound.overheard;
-        const { hasUnscreenableAttachment, externalPromptData, screenPayload } = inbound;
+        const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
         if (screenPayload || hasUnscreenableAttachment) {
           const canScreenText =
             !!screenPayload &&
@@ -957,34 +938,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await withManagedRosterVersion(async () => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            await deps.sessions.appendMany(
-              lease,
-              screenedOverheard.map((overheard) => ({
-                type: "user",
-                payload: { ...overheard, securityTainted: true },
-                scopeLabel: scopeId,
-              })),
-            );
-            const taintedPayload: Record<string, unknown> = {
-              ...swarmEntryProvenance,
-              text: input.text,
-              securityTainted: true,
-              hidden: true,
-              ...((input.attachments ?? []).some((attachment) => attachment.sourceId)
-                ? {
-                    quarantinedAttachmentSourceIds: input.attachments!.flatMap((attachment) =>
-                      attachment.sourceId ? [attachment.sourceId] : [],
-                    ),
-                  }
-                : {}),
-              ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
-              ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
-            };
-            await deps.sessions.append(lease, {
-              type: "user",
-              payload: taintedPayload,
-              scopeLabel: scopeId,
-            });
             const command = "security-screen";
             const requestId = inputApprovalId(session.id, replayableRequest(input));
             const grantModesField =
@@ -2199,11 +2152,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
             await mirrorRunActivity(decisionEntry);
             await pending.delete(input.approval.requestId);
-            if (p.kind === "input") {
-              await deps.sessions
-                .clearSecurityTaint(session.id)
-                .catch(swallowAs("clearSecurityTaint on input approval", false));
-            }
             const useKey = p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
               releasedToolOutput = p.screenedOutput;
@@ -2870,14 +2818,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (importedEntries.length) importedOverheard.push(...toImport);
         }
 
-        const contextWindow = await deps.sessions.getContextWindow(session.id);
-        const rawEntries = contextWindow.entries;
-        const historyHasSecurityTaint = contextWindow.hasSecurityTaint;
-        const priorTurns = historyHasSecurityTaint || memoryHistoryReset ? undefined : input.priorTurns;
-        if (historyHasSecurityTaint) {
-          await deps.harness.turns.resetSession?.(session.id);
-        }
-        const visibleHistory = filterHistory(forModelContext(rawEntries, { includeSecurityTainted: false }));
+        const rawEntries = (await deps.sessions.getContextWindow(session.id)).entries;
+        const priorTurns = memoryHistoryReset ? undefined : input.priorTurns;
+        const visibleHistory = filterHistory(forModelContext(rawEntries));
         const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const recallMs = Date.now() - recallStart;
@@ -3018,11 +2961,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (partial)
           postKeys.seed(
             completedSurfaceEnqueues(
-              filterHistory(
-                (await deps.sessions.getEntries(session.id, { sinceSeq: partial.userSeq })).filter(
-                  (entry) => !entrySecurityTainted(entry),
-                ),
-              ),
+              filterHistory(await deps.sessions.getEntries(session.id, { sinceSeq: partial.userSeq })),
               partial.userSeq,
               surfaceName,
             ),
@@ -3258,22 +3197,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const persistStart = Date.now();
             try {
               const stored = (() => {
-                const tainted = entry;
                 if (
-                  tainted.type === "assistant" ||
-                  tainted.type === "approval_request" ||
-                  ((tainted.type === "tool_result" || tainted.type === "tool_call") &&
-                    isObj(tainted.payload) &&
-                    tainted.payload.blocked === "needs_approval")
+                  entry.type === "assistant" ||
+                  entry.type === "approval_request" ||
+                  ((entry.type === "tool_result" || entry.type === "tool_call") &&
+                    isObj(entry.payload) &&
+                    entry.payload.blocked === "needs_approval")
                 ) {
-                  const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
+                  const payload = isObj(entry.payload) ? { ...entry.payload } : {};
                   if (typeof payload.workStartedAt !== "number")
                     payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                   if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
-                  return { ...tainted, payload };
+                  return { ...entry, payload };
                 }
-                if (tainted.type !== "user") return tainted;
-                const payload = isObj(tainted.payload) ? { ...tainted.payload } : {};
+                if (entry.type !== "user") return entry;
+                const payload = isObj(entry.payload) ? { ...entry.payload } : {};
                 if (!recordedRecall && !payload.steered && !payload.overheard) {
                   recordedRecall = true;
                   payload.memoryContext = nextContext;
@@ -3288,7 +3226,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                   payload.display = input.displayText;
                 if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
-                return { ...tainted, payload };
+                return { ...entry, payload };
               })();
               const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
               emittedEntries.push(appended);
@@ -3687,9 +3625,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               await deps.harness.turns.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(
-              forModelContext((await deps.sessions.getContextWindow(session.id)).entries, {
-                includeSecurityTainted: false,
-              }),
+              forModelContext((await deps.sessions.getContextWindow(session.id)).entries),
             );
             if (recovery)
               resumedHistory = await withManagedRosterVersion(() =>
@@ -3772,9 +3708,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           if (spine.surfaceOutboundCount === 0 && !silentPollNarration) {
             const nudgeHistory = filterHistory(
-              forModelContext((await deps.sessions.getContextWindow(session.id)).entries, {
-                includeSecurityTainted: false,
-              }),
+              forModelContext((await deps.sessions.getContextWindow(session.id)).entries),
             );
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",

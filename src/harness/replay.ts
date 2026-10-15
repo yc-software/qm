@@ -124,7 +124,7 @@ export const AGENT_OPENED_TEXT = "[The agent opened this conversation.]";
 
 export const OMITTED_IMAGE_TEXT = "[image omitted from replay]";
 
-const ENVELOPE_KEYS = new Set(["step", "securityTainted"]);
+const ENVELOPE_KEYS = new Set(["step"]);
 
 export function zeroUsage(): Usage {
   return {

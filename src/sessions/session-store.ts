@@ -43,11 +43,6 @@ export function createContextSummaryPayload(throughSeq: number, text: string): C
 export interface ContextWindow {
   entries: SessionEntry[];
   totalEntries: number;
-  hasSecurityTaint: boolean;
-}
-
-export function entrySecurityTainted(entry: SessionEntry): boolean {
-  return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
 }
 
 export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
@@ -61,7 +56,6 @@ export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow
         ? [...entries]
         : entries.filter((entry) => entry.seq > throughSeq || entry === memoryContext),
     totalEntries: entries.length,
-    hasSecurityTaint: entries.some(entrySecurityTainted),
   };
 }
 
@@ -593,7 +587,6 @@ export interface SessionStore {
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
-  clearSecurityTaint(sessionId: string): Promise<boolean>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;

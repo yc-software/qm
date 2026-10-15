@@ -161,11 +161,6 @@ pgTest("HTTP turn injects semantic matches; grep remains independent and authori
     scopeLabel: "personal:U2",
     payload: { text: "FOREIGN_HISTORY_SENTINEL" },
   });
-  await built.sessions.append(lease, {
-    type: "user",
-    scopeLabel: "personal:U1",
-    payload: { text: "TAINTED_HISTORY_SENTINEL", securityTainted: true },
-  });
   await built.sessions.releaseLease(lease);
   const response = await post("/v1/turns", request);
   const result = (await response.json()) as { status: string; reply: string };
@@ -194,9 +189,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent and authori
   const forbidden = await post("/v1/memory/search", { query: "confidential" }, { "x-agent-capability": cap });
   assert.deepEqual(((await forbidden.json()) as { results: unknown[] }).results, []);
   assert.ok(inputs.every((batch) => batch.every((text) => !text.includes(otherFact))));
-  assert.ok(
-    inputs.every((batch) => batch.every((text) => !/FOREIGN_HISTORY_SENTINEL|TAINTED_HISTORY_SENTINEL/.test(text))),
-  );
+  assert.ok(inputs.every((batch) => batch.every((text) => !text.includes("FOREIGN_HISTORY_SENTINEL"))));
 
   const personalFact = (await built.memory.facts!("personal:U1")).find((row) => row.text === fact)!;
   await built.memory.edit!("personal:U1", [

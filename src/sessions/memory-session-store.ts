@@ -327,19 +327,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return (entries.get(sessionId)?.length ?? 0) - 1;
     },
 
-    async clearSecurityTaint(sessionId) {
-      const log = entries.get(sessionId);
-      if (!log) return false;
-      for (const entry of log) {
-        if (!entry.payload || typeof entry.payload !== "object") continue;
-        const payload = { ...(entry.payload as Record<string, unknown>) };
-        delete payload.securityTainted;
-        if (!("securityTainted" in (entry.payload as object))) continue;
-        entry.payload = payload;
-      }
-      return true;
-    },
-
     async recordLlmRequest(sessionId, rec: NewLlmRequest) {
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope && !promptEnvelopes.has(envelope.hash)) promptEnvelopes.set(envelope.hash, envelope.body);

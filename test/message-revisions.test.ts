@@ -140,11 +140,11 @@ test("a deletion after an edit appends a second marker; repeated deletions dedup
   );
 });
 
-test("self events and hidden or quarantined originals are left alone", async () => {
+test("self events and hidden originals are left alone", async () => {
   const sessions = createMemorySessionStore();
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
-    { text: "quarantined", ts: "100.2", securityTainted: true, hidden: true },
+    { text: "hidden", ts: "100.2", hidden: true },
   ]);
 
   await recordMessageRevisions(sessions, [edit({ self: true }), edit({ ts: "100.2", text: "revealed" })]);
