@@ -126,6 +126,7 @@ The person signs in once on the live browser; the profile keeps it.
    ```
 
    Use the existing context (`contexts[0]`): a new context doesn't carry the profile.
+
 2. They sign in, finish any 2FA, and say done. If the browser was launched with
    `SAVE=false` (another browser holds the profile), stop that one first and relaunch, or
    the sign-in is lost.
