@@ -2021,7 +2021,7 @@ test("a human correction in a delegated run takes precedence over its ancestor",
   assert.ok(lease);
   await r.sessions.append(lease, {
     type: "user",
-    payload: { runId: r.run.id, personId: actor.id, personText: "child correction" },
+    payload: { runId: r.run.id, personId: "U2", personText: "child correction" },
     scopeLabel: scope,
   });
   await r.sessions.releaseLease(lease);
@@ -2034,5 +2034,5 @@ test("a human correction in a delegated run takes precedence over its ancestor",
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
-  assert.ok(run!.request.text.includes("<from-the-person>\nchild correction\n</from-the-person>"));
+  assert.ok(run!.request.text.includes("From U2:\n<from-the-person>\nchild correction\n</from-the-person>"));
 });

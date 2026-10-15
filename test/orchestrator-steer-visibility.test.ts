@@ -53,7 +53,12 @@ for (const mode of ["retry", "handoff"] as const) {
       await recordSteerIntake(turn, {
         text: "Change of plan",
         ts: "steer-visible",
-        request: { ...request, origin: { kind: "human" }, text: "  The person's exact correction.  " },
+        request: {
+          ...request,
+          actor: { externalId: "U2" },
+          origin: { kind: "human" },
+          text: "  The person's exact correction.  ",
+        },
       });
       await turn.emit({
         type: "user",
@@ -69,7 +74,7 @@ for (const mode of ["retry", "handoff"] as const) {
       assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
       assert.equal((users[2]!.payload as { text?: string }).text, "Change of plan");
       assert.equal((users[2]!.payload as { personText?: string }).personText, "  The person's exact correction.  ");
-      assert.equal((users[2]!.payload as { personId?: string }).personId, "U1");
+      assert.equal((users[2]!.payload as { personId?: string }).personId, "U2");
       assert.notEqual((users[2]!.payload as { hidden?: boolean }).hidden, true);
       assert.equal((users[3]!.payload as { hidden?: boolean }).hidden, true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
