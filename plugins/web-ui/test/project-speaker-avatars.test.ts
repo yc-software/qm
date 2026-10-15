@@ -3,7 +3,13 @@ import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
 test("project speaker photos follow authenticated identity, not duplicate or reassigned names", async () => {
-  const session = { ...SESSION, scopeId: "group:project", threadRef: "web:project:chat" };
+  const session = {
+    ...SESSION,
+    type: "group" as const,
+    createdAt: 1000,
+    scopeId: "group:project",
+    threadRef: "web:project:chat",
+  };
   const speakers = [
     { name: "Alex", speakerId: "person-a" },
     { name: "Alex", speakerId: "person-b" },
