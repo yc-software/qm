@@ -515,6 +515,7 @@ export interface TurnOptions {
   effortLevel?: string;
   fastMode?: boolean;
   harness?: string;
+  model?: string;
   scopeId?: string | null;
   channelName?: string | null;
 }
@@ -1103,7 +1104,7 @@ function turnRequestBody(
     text,
     threadRef,
     ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
-    model: model.id,
+    model: turnOptions.model ?? model.id,
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
     ...(timezone ? { timezone } : {}),

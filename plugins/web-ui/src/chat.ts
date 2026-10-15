@@ -675,6 +675,7 @@ export function createChatSurface(
       ...(harnessSupportsEffort(harness) ? { effortLevel: ctx.composer.state.effortLevel } : {}),
       ...(harnessSupportsFastMode(harness) ? { fastMode: ctx.composer.state.fastMode } : {}),
       harness,
+      model: selected.model.id,
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
     };
