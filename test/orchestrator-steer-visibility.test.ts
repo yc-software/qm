@@ -50,7 +50,11 @@ for (const mode of ["retry", "handoff"] as const) {
       }
       assert.match(turn.input, /previous attempt|Runtime handoff completed/);
       await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
+      await recordSteerIntake(turn, {
+        text: "Change of plan",
+        ts: "steer-visible",
+        request: { ...request, origin: { kind: "human" }, text: "  The person's exact correction.  " },
+      });
       await turn.emit({
         type: "user",
         payload: { text: "private steer", steered: true, hidden: true },
@@ -64,6 +68,8 @@ for (const mode of ["retry", "handoff"] as const) {
       const users = session!.entries.filter((entry) => entry.type === "user");
       assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
       assert.equal((users[2]!.payload as { text?: string }).text, "Change of plan");
+      assert.equal((users[2]!.payload as { personText?: string }).personText, "  The person's exact correction.  ");
+      assert.equal((users[2]!.payload as { personId?: string }).personId, "U1");
       assert.notEqual((users[2]!.payload as { hidden?: boolean }).hidden, true);
       assert.equal((users[3]!.payload as { hidden?: boolean }).hidden, true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];

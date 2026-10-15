@@ -3299,3 +3299,24 @@ test(
     }
   },
 );
+
+test("pg session store selects the latest human correction for exactly one run", { skip }, async () => {
+  const store = createPostgresSessionStore(URL!);
+  const scope = scopeId("personal", "correction-test");
+  const session = await store.getOrCreateByThread(`correction-${randomUUID()}`, "dm", scope);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  for (const payload of [
+    { runId: "a", personId: "author", personText: "first" },
+    { runId: "a", personId: "author", personText: "latest" },
+    { runId: "b", personId: "author", personText: "other run" },
+    { runId: "a", text: "internal coordination" },
+  ])
+    await store.append(lease, { type: "user", payload, scopeLabel: scope });
+  assert.equal(
+    ((await store.latestHumanSteer(session.id, "a"))!.payload as { personText: string }).personText,
+    "latest",
+  );
+  assert.equal(await store.latestHumanSteer(session.id, "missing"), undefined);
+  await store.releaseLease(lease);
+});

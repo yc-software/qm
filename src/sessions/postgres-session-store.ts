@@ -1244,6 +1244,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return (await q(sql, params)).map(rowToEntry).reverse();
     },
 
+    async latestHumanSteer(sessionId, runId) {
+      const [row] = await q(
+        `SELECT * FROM session_entries WHERE session_id = $1 AND type = 'user'
+         AND payload::jsonb->>'runId' = $2 AND jsonb_typeof(payload::jsonb->'personText') = 'string'
+         AND jsonb_typeof(payload::jsonb->'personId') = 'string'
+         ORDER BY seq DESC LIMIT 1`,
+        [sessionId, runId],
+      );
+      return row ? rowToEntry(row) : undefined;
+    },
+
     async getContextWindow(sessionId) {
       const [meta, summary, memoryContext] = await Promise.all([
         q("SELECT count(*)::int AS total FROM session_entries WHERE session_id = $1", [sessionId]),

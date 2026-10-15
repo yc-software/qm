@@ -1,3 +1,4 @@
+import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
@@ -6,7 +7,7 @@ import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { ScopeId, SessionEntry, TurnRequest } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { goalWorkFromEntries } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
@@ -40,6 +41,7 @@ export type BridgedTool = {
 
 export interface SteerIntake {
   text: string;
+  request?: TurnRequest;
   prompt?: string;
   ts?: string;
   attachments?: HarnessTurnInput["attachments"];
@@ -58,10 +60,18 @@ export function imageRefs(images: HarnessTurnInput["images"]): { images?: Replay
 }
 
 export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerIntake): Promise<void> {
+  const origin = steer.request && resolveTurnOrigin(steer.request);
+  const human = origin?.kind === "human" || (origin?.kind === "ambient" && origin.live);
   await turn.emit({
     type: "user",
     payload: {
       text: steer.text,
+      ...(human
+        ? {
+            personText: steer.request!.displayText ?? steer.request!.text,
+            personId: steer.request!.actor.externalId,
+          }
+        : {}),
       ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.ts ? { ts: steer.ts } : {}),
       steered: true,

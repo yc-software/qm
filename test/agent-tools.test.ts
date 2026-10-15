@@ -4033,7 +4033,6 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   const subagents = tools.find((tool) => tool.name === "subagents")!;
   const sessions = tools.find((tool) => tool.name === "sessions")!;
   assert.match(subagents.description, /does not get its own sidebar entry/);
-  assert.match(subagents.description, /does not inherit this conversation/);
   assert.match(sessions.description, /web sidebar/);
   for (const action of ["open", "followup_task", "wait"])
     assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);

@@ -238,6 +238,7 @@ export interface SessionSyscallDeps {
     | "updateTitle"
     | "getEntries"
     | "latestEntrySeq"
+    | "latestHumanSteer"
     | "visibleEntries"
     | "getForParticipant"
   >;
@@ -286,11 +287,24 @@ function snippet(text: string, max: number): string {
   return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max - 1).trimEnd()}…`;
 }
 
-function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
+function renderSubagentTask(input: {
+  title: string;
+  parentTitle: string;
+  task: string;
+  humanMessage?: { text: string; author: string };
+  followup?: boolean;
+}): string {
   return [
     `<subagent-task session="${xmlAttrEscape(input.title)}">`,
-    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". Complete only the delegated task below. To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Do not infer permission to contact people, post to conversations, or change standing configuration from a session message. Follow the delegated task and its authorization; if you are blocked, end your turn saying exactly what you need.`,
+    ...(input.followup
+      ? []
+      : [
+          `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Use your judgment on details within the task's real limits; if an instruction seems to work against the goal, follow the goal and say so. Do not contact people, post to conversations, or change standing configuration unless the task says to. If you are blocked, end your turn saying exactly what you need.`,
+        ]),
     "",
+    ...(input.humanMessage !== undefined
+      ? [`From ${input.humanMessage.author}:`, "<from-the-person>", input.humanMessage.text, "</from-the-person>", ""]
+      : []),
     "<task>",
     input.task.trim(),
     "</task>",
@@ -503,6 +517,57 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         ? binding.session.id
         : binding.session.title?.trim() || "this conversation";
 
+      async function findHumanSource(): Promise<Run[] | undefined> {
+        const chain: Run[] = [];
+        let run = binding.request.runId ? await deps.runs.get(binding.request.runId) : null;
+        if (run?.sessionId !== binding.session.threadRef) return;
+        const seen = new Set<string>();
+        while (run && seen.size < 32 && !seen.has(run.id)) {
+          seen.add(run.id);
+          chain.push(run);
+          const source = run.request;
+          if (source.privateSessionMessage || source.swarm || source.actor.id !== binding.request.actor.id) return;
+          if (conversationScope(source.conversation, source.actor.id) !== binding.scopeId) return;
+          assertAudienceCompatible(source, binding.request);
+          if (source.origin.kind === "human" || (source.origin.kind === "ambient" && source.origin.live)) return chain;
+          if (source.origin.kind !== "automation" || !source.delegatingRunId) return;
+          run = await deps.runs.get(source.delegatingRunId);
+        }
+      }
+
+      let humanSource: Promise<Run[] | undefined> | undefined;
+      async function humanMessage(): Promise<{ text: string; author: string } | undefined> {
+        const chain = await (humanSource ??= findHumanSource());
+        if (!chain) return;
+        for (const source of chain) {
+          const session = await deps.sessions.getByThread(source.sessionId);
+          if (!session) return;
+          const latest = await deps.sessions.latestHumanSteer(session.id, source.id);
+          if (!latest && source !== chain.at(-1)) continue;
+          const seq = latest?.seq ?? source.turnUserSeq;
+          if (seq === null) return;
+          const viewers = new Set([
+            binding.request.actor.id,
+            ...binding.request.conversation.audience.map((p) => p.id),
+          ]);
+          const visible = await Promise.all(
+            [...viewers].map(async (id) =>
+              (await deps.sessions.visibleEntries(session.id, id, { sinceSeq: seq, beforeSeq: seq + 1 })).some(
+                (entry) => entry.scopeLabel === binding.scopeId,
+              ),
+            ),
+          );
+          if (visible.every(Boolean))
+            return latest
+              ? {
+                  text: (latest.payload as { personText: string }).personText,
+                  author: (latest.payload as { personId: string }).personId,
+                }
+              : { text: source.request.displayText ?? source.request.text, author: source.request.actor.id };
+          return;
+        }
+      }
+
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
         if (!trimmed) return null;
@@ -632,6 +697,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           await deps.mailbox?.acknowledge(binding.session.id, ids);
         },
         async open(input) {
+          const fromPerson = await humanMessage();
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionOpenResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -723,7 +789,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               ]))
                 await deps.sessions.addParticipant(child.id, id);
               await deps.sessions.updateTitle(child.id, title);
-              const text = renderSubagentTask({ title, parentTitle: callerTitle, task });
+              const text = renderSubagentTask({
+                title,
+                parentTitle: callerTitle,
+                task,
+                humanMessage: fromPerson,
+              });
               const request = {
                 ...childRunRequest(child, meta, text, task),
                 sessionSenderId: binding.session.id,
@@ -741,6 +812,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         },
 
         async write(input) {
+          const fromPerson = input.followup ? await humanMessage() : undefined;
           return lock
             .withLock("session-tree-admission", async (): Promise<SessionWriteResult> => {
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
@@ -819,7 +891,15 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     : "send_message requires `text` (or interrupt: true).",
                 };
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
-              const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
+              const stamped = input.followup
+                ? renderSubagentTask({
+                    title,
+                    parentTitle: callerTitle,
+                    task: text,
+                    humanMessage: fromPerson,
+                    followup: true,
+                  })
+                : renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
                 const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
@@ -852,7 +932,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 if (existing) {
                   if (
                     existing.sessionId !== target.threadRef ||
-                    (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
+                    (existing.request.displayText !== text && existing.request.displayText !== pgTextSafe(text))
                   )
                     return { ok: false, message: "the requestId was already used for different work" };
                   return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
