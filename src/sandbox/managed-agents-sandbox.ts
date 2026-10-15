@@ -324,8 +324,25 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
   };
   const procSessions = createExecProcessSessions(procIo);
 
-  const writeAbsBytes = (name: string, absPath: string, data: Uint8Array): Promise<void> =>
-    withSession(name, (session) => session.writeFileBytes(absPath, data));
+  const writeAbsBytes = async (name: string, absPath: string, data: Uint8Array): Promise<void> => {
+    if (absPath.startsWith(`/${WORKSPACE_BASENAME}/`)) {
+      await withSession(name, (session) => session.writeFileBytes(absPath, data));
+      return;
+    }
+    const staged = `${HOME_DIR}/.qm-upload-${randomUUID()}`;
+    await withSession(name, (session) => session.writeFileBytes(staged, data));
+    const moved = await execRaw(
+      name,
+      `mkdir -p ${shq(absPath.slice(0, absPath.lastIndexOf("/")) || "/")} && mv -f ${shq(staged)} ${shq(absPath)}`,
+      60,
+    );
+    if (moved.code !== 0) {
+      await execRaw(name, `rm -f ${shq(staged)}`, 30).catch(
+        swallowAs("managed-agents-sandbox: clean staged upload", undefined),
+      );
+      throw new Error(`do-managed-agents write ${absPath} failed: ${(moved.stderr || moved.stdout).slice(0, 200)}`);
+    }
+  };
   const readAbsBytes = (name: string, absPath: string): Promise<Uint8Array | null> =>
     withSession(name, (session) => session.readFileBytes(absPath));
   const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : null;

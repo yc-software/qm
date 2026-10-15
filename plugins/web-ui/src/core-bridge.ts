@@ -780,6 +780,95 @@ export function putUiState(
   return api("/api/ui-state", { method: "PUT", body: JSON.stringify({ key, value, updatedAt }), ...init });
 }
 
+const PIN_LATEST_PROMPT_KEY = "pin-latest-prompt";
+const ALWAYS_STEER_KEY = "always-steer";
+
+type ChatPrefKey = typeof PIN_LATEST_PROMPT_KEY | typeof ALWAYS_STEER_KEY;
+
+const CHAT_PREF_DEFAULTS: Record<ChatPrefKey, boolean> = {
+  [PIN_LATEST_PROMPT_KEY]: true,
+  [ALWAYS_STEER_KEY]: false,
+};
+
+const CHAT_PREF_CACHE_PREFIX = "chat-pref:";
+
+const chatPrefValues = new Map<ChatPrefKey, boolean>();
+const chatPrefTouched = new Set<ChatPrefKey>();
+const chatPrefListeners = new Set<() => void>();
+
+function cachedChatPref(key: ChatPrefKey): boolean {
+  try {
+    const raw = localStorage.getItem(CHAT_PREF_CACHE_PREFIX + key);
+    if (raw === "1") return true;
+    if (raw === "0") return false;
+  } catch {
+    void 0;
+  }
+  return CHAT_PREF_DEFAULTS[key];
+}
+
+function readChatPref(key: ChatPrefKey): boolean {
+  let value = chatPrefValues.get(key);
+  if (value === undefined) {
+    value = cachedChatPref(key);
+    chatPrefValues.set(key, value);
+  }
+  return value;
+}
+
+function applyChatPref(key: ChatPrefKey, value: boolean): void {
+  const changed = readChatPref(key) !== value;
+  chatPrefValues.set(key, value);
+  try {
+    if (value === CHAT_PREF_DEFAULTS[key]) localStorage.removeItem(CHAT_PREF_CACHE_PREFIX + key);
+    else localStorage.setItem(CHAT_PREF_CACHE_PREFIX + key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+  if (changed) for (const listener of chatPrefListeners) listener();
+}
+
+function writeChatPref(key: ChatPrefKey, value: boolean): void {
+  chatPrefTouched.add(key);
+  applyChatPref(key, value);
+  void putUiState(key, value, Date.now()).catch((error: unknown) => reportHandledError("web:save_chat_pref", error));
+}
+
+export function pinLatestPrompt(): boolean {
+  return readChatPref(PIN_LATEST_PROMPT_KEY);
+}
+
+export function alwaysSteer(): boolean {
+  return readChatPref(ALWAYS_STEER_KEY);
+}
+
+export function setPinLatestPrompt(value: boolean): void {
+  writeChatPref(PIN_LATEST_PROMPT_KEY, value);
+}
+
+export function setAlwaysSteer(value: boolean): void {
+  writeChatPref(ALWAYS_STEER_KEY, value);
+}
+
+export function onChatPrefsChange(listener: () => void): () => void {
+  chatPrefListeners.add(listener);
+  return () => chatPrefListeners.delete(listener);
+}
+
+export async function loadChatPrefs(): Promise<void> {
+  await Promise.all(
+    (Object.keys(CHAT_PREF_DEFAULTS) as ChatPrefKey[]).map(async (key) => {
+      try {
+        const rec = await fetchUiState(key);
+        if (chatPrefTouched.has(key)) return;
+        applyChatPref(key, typeof rec.value === "boolean" ? rec.value : CHAT_PREF_DEFAULTS[key]);
+      } catch (error) {
+        reportHandledError("web:load_chat_pref", error);
+      }
+    }),
+  );
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
   const text = await r.text();
@@ -1951,6 +2040,8 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
+  // Whether this turn already rendered its stopped state (a stopped partial reply).
+  let stoppedShown = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -1993,6 +2084,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     entrySeqs: number[] = [],
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
+    if (stopped) stoppedShown = true;
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
     const deliveredSilence = (a: ToolActivity): boolean => {
       if (a.type !== "tool_result") return false;
@@ -2111,6 +2203,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
+      if (!payload?.steered) stoppedShown = false;
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
@@ -2156,6 +2249,14 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
+      if ((e.payload as { kind?: unknown } | null)?.kind === "turn_stopped") {
+        // The stop record closes the turn: show the stopped state once, never as a message.
+        spillHeldPosts();
+        if (pending.length || !stoppedShown)
+          flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);
+        posted = false;
+        continue;
+      }
       const goalNote = goalCancelledPayload(e.payload);
       if (goalNote) {
         spillHeldPosts();

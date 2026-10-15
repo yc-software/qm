@@ -118,6 +118,8 @@ import {
   type TurnRuntime,
   type WorkBlock,
   fileContentUrl,
+  onChatPrefsChange,
+  pinLatestPrompt,
   switchedDefault,
 } from "./core-bridge";
 import {
@@ -275,7 +277,8 @@ export function createChatSurface(
     ctx.composer.state.error = message;
   });
   let pendingFork: { index: number } | null = null;
-  const transcriptViewport = createTranscriptViewport();
+  const transcriptViewport = createTranscriptViewport({ pinPrompt: pinLatestPrompt });
+  const stopPrefsWatch = onChatPrefsChange(() => transcriptViewport.refresh());
   let preserveConnectionScroll = isConnectionReturn();
   let connectionReturnMessageCount: number | null = null;
   const transcriptFetcher = dependencies.fetchTranscript ?? fetchTranscript;
@@ -787,6 +790,7 @@ export function createChatSurface(
 
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    stopPrefsWatch();
     teardownActiveChat();
   }
 

@@ -59,10 +59,14 @@ test("a mid-prompt cancel takes the stopped exit and persists the stopped partia
 
     assert.equal(result.stopped, true, "the cancelled turn reports itself stopped");
     assert.equal(result.reply, "(stopped)");
+    assert.equal(
+      sink.entries.filter((entry) => entry.type === "assistant").length,
+      0,
+      "no placeholder assistant reply is recorded when the model wrote nothing",
+    );
     const finalEntry = sink.entries.at(-1);
-    assert.equal(finalEntry?.type, "assistant");
-    assert.equal((finalEntry?.payload as { text?: unknown } | undefined)?.text, "(stopped)");
-    assert.equal((finalEntry?.payload as { stopped?: boolean } | undefined)?.stopped, true);
+    assert.equal(finalEntry?.type, "system");
+    assert.deepEqual(finalEntry?.payload, { kind: "turn_stopped", reason: "because the run was cancelled" });
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -204,7 +208,12 @@ test("Pi preserves the session's active goal when the worker cancels", async () 
     });
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.stopped, true);
-    assert.ok(!sink.entries.some((entry) => entry.type === "system"), "no goal snapshot entries");
+    assert.ok(
+      !sink.entries.some(
+        (entry) => entry.type === "system" && (entry.payload as { kind?: unknown } | null)?.kind !== "turn_stopped",
+      ),
+      "no goal snapshot entries",
+    );
     const { activeMs, ...persisted } = saved.at(-1)!;
     assert.deepEqual(persisted, goal);
     assert.ok(activeMs! >= 0 && activeMs! < 60_000, "the cancelled turn banks only its own running time");
@@ -266,7 +275,9 @@ for (const shutdown of [false, true]) {
       const entries = sink.entries as unknown as SessionEntry[];
       const types = entries.map((entry) => entry.type);
       assert.deepEqual(types.slice(0, 3), ["user", "tool_call", "tool_result"]);
-      const stoppedEntries = entries.filter((entry) => entry.type === "assistant");
+      const stoppedEntries = entries.filter(
+        (entry) => entry.type === "assistant" || (entry.payload as { kind?: unknown } | null)?.kind === "turn_stopped",
+      );
       const partial = findTrailingPartialTurn(entries, "do the thing");
       if (shutdown) {
         assert.deepEqual(stoppedEntries, [], "shutdown must not close the turn with a stop marker");
@@ -276,7 +287,7 @@ for (const shutdown of [false, true]) {
         assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
       } else {
         assert.equal(stoppedEntries.length, 1);
-        assert.equal((stoppedEntries[0]!.payload as { text?: unknown }).text, "(stopped)");
+        assert.equal(stoppedEntries[0]!.type, "system");
         assert.equal(partial, null, "a user-facing stop closes the turn");
       }
     } finally {

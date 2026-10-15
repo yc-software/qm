@@ -522,6 +522,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
     },
 
+    async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
+      const needle = query.trim();
+      if (needle.length < 2) return [];
+      const lower = needle.toLowerCase();
+      const ids = participants.get(principalId);
+      if (!ids) return [];
+      const out: Session[] = [];
+      for (const id of ids) {
+        const row = participantSession(id, principalId);
+        if (!row) continue;
+        if ((row.title ?? "").toLowerCase().includes(lower)) out.push(row);
+      }
+      return out
+        .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
+        .slice(0, Math.max(1, Math.min(Math.floor(limit), 100)));
+    },
+
     async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
       const terms = searchTerms(query);
       if (!terms.length) return [];

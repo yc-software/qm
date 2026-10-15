@@ -1,3 +1,4 @@
+import { isResumeNote } from "../core/turn-resume.ts";
 import {
   defineHarness,
   type Harness,
@@ -11,7 +12,7 @@ import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
-import { recordStoppedReply } from "./harness-shared.ts";
+import { recordStoppedTurn } from "./harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -181,7 +182,7 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!boom-always" || boomAlwaysSessions.has(turn.session.id)) {
           boomAlwaysSessions.add(turn.session.id);
           throw new Error("boom: simulated turn fault");
-        } else if (command0.startsWith("(system note:") && resumePostSessions.has(turn.session.id)) {
+        } else if (isResumeNote(command0) && resumePostSessions.has(turn.session.id)) {
           const msg = resumePostSessions.get(turn.session.id)!;
           resumePostSessions.delete(turn.session.id);
           await turn.emit({
@@ -197,7 +198,7 @@ export function createMockHarness(): Harness {
           });
           usedTool = true;
           reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
-        } else if (command0.startsWith("(system note:") && shutdownResumeSessions.has(turn.session.id)) {
+        } else if (isResumeNote(command0) && shutdownResumeSessions.has(turn.session.id)) {
           shutdownResumeSessions.delete(turn.session.id);
           reply = "finished after resume";
         } else if (command0 === "!work-until-shutdown") {
@@ -216,7 +217,7 @@ export function createMockHarness(): Harness {
             if (!turn.cancel || turn.cancel.aborted) resolve();
             else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
           });
-          await recordStoppedReply(turn, "(stopped)");
+          await recordStoppedTurn(turn, "");
           return { reply: "(stopped)", stopped: true, modelCalls: 1 };
         } else if (command0.startsWith("!post-lost-result ")) {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);

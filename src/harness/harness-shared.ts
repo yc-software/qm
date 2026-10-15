@@ -1,4 +1,4 @@
-import type { ReplayImageRef } from "./replay.ts";
+import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
@@ -73,13 +73,33 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 
-export async function recordStoppedReply(
+const STOPPED_FALLBACK_REASON = "unexpectedly";
+
+/**
+ * Records a stopped turn: whatever the model actually wrote before the stop (never a placeholder),
+ * then a system entry naming who or what stopped it. Replay shows the model that entry as a
+ * "[system] Turn stopped: …" message; it is never a user or assistant entry.
+ */
+export async function recordStoppedTurn(
   turn: HarnessTurnInput,
-  text: string,
+  partial: string,
+  reason: string = STOPPED_FALLBACK_REASON,
   replay: Record<string, unknown> = {},
 ): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
-  return turn.emit({ type: "assistant", payload: { text, stopped: true, ...replay }, scopeLabel: turn.scopeLabel });
+  const answer = partial.trim()
+    ? await turn.emit({
+        type: "assistant",
+        payload: { text: partial, stopped: true, ...replay },
+        scopeLabel: turn.scopeLabel,
+      })
+    : null;
+  const note = await turn.emit({
+    type: "system",
+    payload: { kind: TURN_STOPPED_KIND, reason },
+    scopeLabel: turn.scopeLabel,
+  });
+  return note ?? answer;
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {

@@ -795,7 +795,8 @@ export function createSwarmService(deps: {
           runIds.map(async (runId) => {
             if (await runs.withdraw(runId, { unstartedOnly: true }).catch(() => false)) return;
             const run = await runs.get(runId);
-            if (run?.status === "running") await deps.signals?.send(runId, { kind: "abort" }).catch(() => false);
+            if (run?.status === "running")
+              await deps.signals?.send(runId, { kind: "abort", reason: "by the swarm" }).catch(() => false);
           }),
         );
       }

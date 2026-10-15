@@ -48,7 +48,7 @@ for (const mode of ["retry", "handoff"] as const) {
           },
         };
       }
-      assert.match(turn.input, /previous attempt|Runtime handoff completed/);
+      assert.match(turn.input, /previous attempt|Runtime switched/);
       await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
       await turn.emit({

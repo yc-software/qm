@@ -596,3 +596,59 @@ test("reconstructMessagesFromHistory keeps parallel tool calls in one assistant 
     ["user", "a,b", "toolResult", "toolResult", "c", "toolResult", "text"],
   );
 });
+
+test("reconstructMessagesFromHistory replays a stopped turn as a system note in user voice, after the real partial", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "write the report" }, 1),
+    ent("assistant", { text: "Draft so far", stopped: true }, 2),
+    ent("system", { kind: "turn_stopped", reason: "by the parent agent" }, 3),
+    ent("user", { text: "carry on" }, 4),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "user", "user"],
+  );
+  assert.deepEqual(msgs[1]!.content, [{ type: "text", text: "Draft so far" }]);
+  assert.deepEqual(msgs[2]!.content, [{ type: "text", text: "[system] Turn stopped by the parent agent." }]);
+});
+
+test("a turn stopped while a tool call ran explains the stop in that call's result, once", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("system", { kind: "turn_stopped", reason: "by user" }, 3),
+    ent("user", { text: "what happened?" }, 4),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "toolResult", "user"],
+  );
+  assert.match(JSON.stringify(msgs[2]!.content), /Turn stopped by user while this call was running/);
+  assert.ok(!JSON.stringify(msgs).includes("[system] Turn stopped by user."), "no separate stop note");
+});
+
+test("overheard traffic between a cut-off call and the stop does not split the stop from that call", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("user", { overheard: true, ts: "3", name: "Alice", text: "lunch?" }, 3),
+    ent("system", { kind: "turn_stopped", reason: "by user" }, 4),
+  ];
+  const text = JSON.stringify(reconstructMessagesFromHistory(history));
+  assert.match(text, /Turn stopped by user while this call was running/);
+  assert.ok(!text.includes("[system] Turn stopped by user."), "no separate stop note");
+});
+
+test("a tool result cut off by a deploy says so in its replayed result", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("tool_result", { callId: "c1", result: "[exit 143]", interrupted: true, stop: { kind: "shutdown" } }, 3),
+  ];
+  const text = JSON.stringify(reconstructMessagesFromHistory(history));
+  assert.match(text, /A routine platform deploy interrupted this call/);
+});

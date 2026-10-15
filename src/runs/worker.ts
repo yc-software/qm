@@ -4,9 +4,9 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import { errorParks, type Run, type RunStore } from "./run-store.ts";
+import { errorParks, type Run, type RunStop, type RunStore } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
@@ -37,6 +37,7 @@ export async function processRun(
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
   let consecutiveLost = 0;
   let leaseLost = false;
   const beat = setInterval(() => {
@@ -76,11 +77,13 @@ export async function processRun(
     }
     if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
+    started = true;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
       attempt: run.attempts,
+      ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
       runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
@@ -112,6 +115,7 @@ export async function processRun(
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !isNonRetryable(err),
       retryAfterMs: retryDelay(run.errorAttempts),
+      stop: runStopFor(err),
     });
     throw err;
   } finally {
@@ -120,7 +124,7 @@ export async function processRun(
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
       await deps.runs
-        .releaseLease(run.id, token)
+        .releaseLease(run.id, token, started ? { kind: "shutdown" } : undefined)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
 }
@@ -272,4 +276,11 @@ export function createWorker(deps: WorkerDeps): Worker {
       await Promise.race([loopDone, sleep(drainMs, { unref: true })]);
     },
   };
+}
+
+/** What a resumed attempt is told about why this one failed: the typed provider code and status, never raw error text. */
+function runStopFor(err: unknown): RunStop {
+  if (err instanceof ProviderTurnError)
+    return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };
+  return { kind: "error" };
 }

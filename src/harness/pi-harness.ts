@@ -1,6 +1,6 @@
 import {
   recordSteerIntake,
-  recordStoppedReply,
+  recordStoppedTurn,
   imageRefs,
   resumeInterruptedToolCall,
   type BridgedTool,
@@ -2004,6 +2004,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return last?.stopReason;
           };
           let userAborted = false;
+          let abortReason: string | undefined;
           let recoveryDead = false;
           entry.ref.abortSignal = toolAbort.signal;
           const onCancel = (): void => {
@@ -2057,8 +2058,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                       }
                       return false;
                     },
-                    onAbort: async () => {
+                    onAbort: async (reason) => {
                       userAborted = true;
+                      abortReason ??= reason;
                       toolAbort.abort();
                       entry.agentSession.clearQueue();
                       await entry.agentSession.abort();
@@ -2334,7 +2336,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               await turn.saveGoal?.(g);
               if (g.status === "complete") entry.ref.goal = null;
             }
-            await recordStoppedReply(turn, reply, steps.closing(reply));
+            await recordStoppedTurn(
+              turn,
+              partial,
+              userAborted ? abortReason : "because the run was cancelled",
+              steps.closing(reply),
+            );
             const cacheUsage = sumCacheUsage(callStats);
             const base = {
               reply,

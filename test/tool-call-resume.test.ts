@@ -322,8 +322,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
   assert.ok(isResumeNote(turn.input));
-  assert.match(turn.input, /result of the tool call that was in flight is recorded above/);
-  assert.doesNotMatch(turn.input, /unknown outcome/);
+  assert.match(turn.input, /interrupted mid-turn/);
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
@@ -334,7 +333,7 @@ for (const [label, payload] of [
   ["unsafe", { tool: "history", query: "budget", callId: "c-budget", retrySafe: false }],
   ["unmarked", { tool: "history", query: "budget", callId: "c-budget" }],
 ] as const) {
-  test(`a retry whose dangling call is ${label} gets the routine-deploy interrupted note and no re-run`, async () => {
+  test(`a retry whose dangling call is ${label} records what happened as its result and does not re-run it`, async () => {
     const { orchestrator, sessions, runs, received, input } = buildScenario();
     const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
     const { sessionId, userSeq } = await seedDeadAttempt(sessions, payload);
@@ -346,11 +345,16 @@ for (const [label, payload] of [
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
     assert.ok(isResumeNote(turn.input));
-    assert.match(turn.input, /routine platform deploy/);
-    assert.match(turn.input, /almost never warrants mentioning|almost never worth mentioning/);
-    assert.match(turn.input, /unknown outcome/);
-    assert.match(turn.input, /check what actually happened before redoing anything with side effects/);
-    const types = (await sessions.getEntries(sessionId)).map((e) => e.type);
-    assert.deepEqual(types, ["user", "tool_call", "user", "assistant"], "the call stays open; nothing is re-run");
+    const entries = await sessions.getEntries(sessionId);
+    assert.deepEqual(
+      entries.map((e) => e.type),
+      ["user", "tool_call", "tool_result", "user", "assistant"],
+      "nothing is re-run; the call gets a recorded result",
+    );
+    const result = entries[2]!.payload as { callId?: string; isError?: boolean; result?: string };
+    assert.equal(result.callId, "c-budget");
+    assert.equal(result.isError, true);
+    assert.match(result.result ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
+    assert.ok(turn.historyTypes.includes("tool_result"), "the model sees the recorded result");
   });
 }

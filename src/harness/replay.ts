@@ -12,10 +12,55 @@ import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.
 import { deliveryNote } from "../core/attachments.ts";
 import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
-import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
+
+/** System entry kind recording that a turn was stopped and who or what stopped it. */
+export const TURN_STOPPED_KIND = "turn_stopped";
+
+/** How a stopped turn reads to the model on replay. `reason` reads after "Turn stopped", e.g. "by user". */
+function turnStoppedNote(reason: string): string {
+  return `[system] Turn stopped ${reason}.`;
+}
+
+/** The result of a tool call that was still running when its turn was stopped. */
+function stoppedToolResult(reason: string): string {
+  return `[system] Turn stopped ${reason} while this call was running; its outcome wasn't recorded. Check what happened before retrying.`;
+}
+
+/**
+ * For each stop record that cut off running tool calls, the stop explanation becomes those calls'
+ * results, and the stop record itself adds nothing more.
+ */
+function stoppedToolCalls(
+  history: readonly SessionEntry[],
+  resultByCallId: ReadonlyMap<string, SessionEntry>,
+): { results: Map<string, string>; folded: Set<SessionEntry> } {
+  const results = new Map<string, string>();
+  const folded = new Set<SessionEntry>();
+  let open: string[] = [];
+  for (const e of history) {
+    const p = (e.payload ?? {}) as {
+      callId?: unknown;
+      kind?: unknown;
+      reason?: unknown;
+      steered?: unknown;
+      overheard?: unknown;
+    };
+    // Steers and overheard channel traffic arrive mid-turn; only a new ask (or a hidden resume note) ends it.
+    if (e.type === "user" && p.steered !== true && p.overheard !== true) open = [];
+    else if (e.type === "tool_call" && typeof p.callId === "string" && !resultByCallId.has(p.callId))
+      open.push(p.callId);
+    else if (e.type === "system" && p.kind === TURN_STOPPED_KIND && typeof p.reason === "string") {
+      if (open.length) folded.add(e);
+      for (const callId of open) results.set(callId, stoppedToolResult(p.reason));
+      open = [];
+    }
+  }
+  return { results, folded };
+}
 
 export { INTERRUPTED_TOOL_RESULT };
 
@@ -224,13 +269,31 @@ function resultContent(content: StoredResultContent[]): ToolResultMessage["conte
   );
 }
 
-function toolResultMessage(call: ToolCall, re: SessionEntry | undefined, at: number): ToolResultMessage {
+function toolResultMessage(
+  call: ToolCall,
+  re: SessionEntry | undefined,
+  at: number,
+  missing: string = INTERRUPTED_TOOL_RESULT,
+): ToolResultMessage {
   const base = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name };
   const text = (value: string) => [{ type: "text" as const, text: value }];
-  if (!re) return { ...base, content: text(INTERRUPTED_TOOL_RESULT), isError: true, timestamp: at };
-  const p = (re.payload ?? {}) as { interrupted?: unknown; isError?: unknown; result?: unknown; wire?: ToolResultWire };
+  if (!re) return { ...base, content: text(missing), isError: true, timestamp: at };
+  const p = (re.payload ?? {}) as {
+    interrupted?: unknown;
+    stop?: { kind?: unknown };
+    isError?: unknown;
+    result?: unknown;
+    wire?: ToolResultWire;
+  };
   if (p.interrupted === true)
-    return { ...base, content: text(INTERRUPTED_TOOL_RESULT), isError: true, timestamp: re.createdAt };
+    return {
+      ...base,
+      content: text(
+        typeof p.stop?.kind === "string" ? unrecordedToolResult({ kind: p.stop.kind }) : INTERRUPTED_TOOL_RESULT,
+      ),
+      isError: true,
+      timestamp: re.createdAt,
+    };
   return {
     ...base,
     content: p.wire?.content ? resultContent(p.wire.content) : text(String(p.result ?? "")),
@@ -246,6 +309,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
     const cid = (e.payload as { callId?: unknown } | null)?.callId;
     if (typeof cid === "string" && cid) resultByCallId.set(cid, e);
   }
+  const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
   const steps = new Map<string, AssistantMessage>();
@@ -318,11 +382,13 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
     } else if (e.type === "system") {
       const revision = messageRevision(e);
-      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown };
+      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown; reason?: unknown };
       if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
       else if (p.kind === WAKE_KIND && typeof p.text === "string") raw.push(userMsg(p.text, e.createdAt));
       else if (p.kind === "goal_cancelled" && typeof p.objective === "string")
         raw.push(userMsg(goalCancelledNote(p.objective), e.createdAt));
+      else if (p.kind === TURN_STOPPED_KIND && typeof p.reason === "string" && !stopped.folded.has(e))
+        raw.push(userMsg(turnStoppedNote(p.reason), e.createdAt));
     } else if (e.type === "tool_call") {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const cid = typeof p.callId === "string" ? p.callId : "";
@@ -358,7 +424,8 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
     out.push(m);
     if (m.role !== "assistant") continue;
     for (const c of m.content)
-      if (c.type === "toolCall") out.push(toolResultMessage(c, resultByCallId.get(c.id), m.timestamp));
+      if (c.type === "toolCall")
+        out.push(toolResultMessage(c, resultByCallId.get(c.id), m.timestamp, stopped.results.get(c.id)));
   }
   if (out[0] && out[0].role !== "user")
     out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });

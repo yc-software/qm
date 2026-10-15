@@ -87,7 +87,14 @@ const upsertQueue = createKeyedQueue<string>();
 
 export function upsertSeedSkill(
   skills: SkillStore,
-  input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; reviewer: string; pack?: Skill["pack"] },
+  input: {
+    scopeId: ScopeId;
+    manifest: SkillManifest;
+    createdBy: string;
+    reviewer: string;
+    pack?: Skill["pack"];
+    respectArchived?: boolean;
+  },
 ): Promise<UpsertOutcome> {
   const run = () => upsertSeedSkillUnsafe(skills, input);
   return upsertQueue(`${input.scopeId}\0${input.manifest.name}`, () =>
@@ -97,7 +104,14 @@ export function upsertSeedSkill(
 
 async function upsertSeedSkillUnsafe(
   skills: SkillStore,
-  input: { scopeId: ScopeId; manifest: SkillManifest; createdBy: string; reviewer: string; pack?: Skill["pack"] },
+  input: {
+    scopeId: ScopeId;
+    manifest: SkillManifest;
+    createdBy: string;
+    reviewer: string;
+    pack?: Skill["pack"];
+    respectArchived?: boolean;
+  },
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
   const all = await skills.list();
@@ -105,6 +119,7 @@ async function upsertSeedSkillUnsafe(
     (s) => s.scopeId === scopeId && s.manifest.name === manifest.name && s.createdBy === createdBy,
   );
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, createdBy)) return "foreign";
+  if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
     const changed = !sameManifest(existing.manifest, manifest);
     if (!changed && existing.status === "published") return "skipped";
@@ -121,7 +136,7 @@ async function upsertSeedSkillUnsafe(
 
 export async function installSeedSkills(
   skills: SkillStore,
-  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string },
+  opts: { dir: string; scopeId: ScopeId; createdBy?: string; reviewer?: string; respectArchived?: boolean },
 ): Promise<SeedInstallResult> {
   if (!existsSync(opts.dir)) return { installed: [], updated: [], skipped: [] };
   const createdBy = opts.createdBy ?? "system:skills-seed";
@@ -134,7 +149,13 @@ export async function installSeedSkills(
     if (!existsSync(skillPath) || !statSync(skillPath).isFile()) continue;
     const manifest = parseSeedSkill(readFileSync(skillPath, "utf8"));
     manifest.files = readSkillFiles(skillDir);
-    const outcome = await upsertSeedSkill(skills, { scopeId: opts.scopeId, manifest, createdBy, reviewer });
+    const outcome = await upsertSeedSkill(skills, {
+      scopeId: opts.scopeId,
+      manifest,
+      createdBy,
+      reviewer,
+      ...(opts.respectArchived ? { respectArchived: true } : {}),
+    });
     result[outcome === "foreign" ? "skipped" : outcome].push(manifest.name);
   }
 

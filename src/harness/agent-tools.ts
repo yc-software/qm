@@ -387,7 +387,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
       sourceScopeId,
     });
-    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
+    if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload))
+      payload = { ...payload, interrupted: true, stop: { kind: "shutdown" } };
     await ref.emit({ type, payload, scopeLabel });
   };
 
@@ -1542,7 +1543,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "subagents",
     label: "subagents",
     description:
-      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry and does not inherit this conversation, so give it a complete standalone task with the context and authorization it needs. State only authorization that actually exists; never claim approval or consent nobody gave. Its final answer comes back to you as an internal message. " +
+      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry or see this conversation, so pass what it needs to know. Brief it as you would a colleague just as capable as you are, if not more so: the goal, why it matters, what you already know, and any real limits. Leave the approach to them; keep it short and state preferences as preferences. Its final answer comes back to you as an internal message. " +
       "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
       '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
       "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
@@ -1572,7 +1573,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       task: Type.Optional(
         Type.String({
-          description: "open and followup_task: the complete standalone instruction the subagent works from.",
+          description: "open and followup_task: the short task brief, with relevant context and real limits.",
         }),
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),

@@ -43,6 +43,7 @@ import {
   type CoreSession,
   type PendingApproval,
   type TranscriptPage,
+  loadChatPrefs,
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -1090,6 +1091,7 @@ export async function boot(): Promise<void> {
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
   const openNewChatFetch = loadOpenNewChat();
+  void loadChatPrefs();
 
   let r: Response;
   try {

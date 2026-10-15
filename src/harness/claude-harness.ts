@@ -45,7 +45,7 @@ import {
   oneShotModelUtilities,
   oneShotRunner,
   recordSteerIntake,
-  recordStoppedReply,
+  recordStoppedTurn,
   type SteerIntake,
   type HarnessToolPlumbing,
   withResumedToolCall,
@@ -468,8 +468,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       },
     });
     active.add(sdkQuery);
-    const interrupt = async (fromUser: boolean) => {
+    let stopReason: string | undefined;
+    const interrupt = async (fromUser: boolean, reason?: string) => {
       stopped ||= fromUser;
+      if (fromUser && reason) stopReason ??= reason;
       interrupted = true;
       queue.close();
       await sdkQuery.interrupt().catch(() => undefined);
@@ -492,7 +494,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             opts.signals,
             turn.runId,
             {
-              onAbort: async () => interrupt(true),
+              onAbort: async (reason) => interrupt(true, reason),
               onSteer: async (steer, ts, request, acknowledge) => {
                 if (ts && recordedMessageTimestamps(turn.history).has(ts)) return;
                 const prepared = await turn.prepareSteer?.(steer, request);
@@ -719,9 +721,8 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
-        if (reply && !terminal) {
-          await recordStoppedReply(turn, reply);
-        }
+        if (!terminal && (reply || stopped))
+          await recordStoppedTurn(turn, reply, stopped ? stopReason : "because the run was cancelled");
         return {
           reply,
           ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),

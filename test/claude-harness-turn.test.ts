@@ -758,7 +758,7 @@ test("Claude ignores continueTurn and still prompts the resume note as a user me
   assert.equal(result.reply, "picking up");
   assert.equal(entries[0]?.type, "user");
   assert.equal((entries[0]!.payload as { text: string }).text, note);
-  assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
+  assert.ok(prompted[0]!.includes("[system] Your previous attempt"), "the note reaches the model as a user prompt");
 });
 
 for (const shutdown of [false, true]) {
@@ -795,7 +795,7 @@ for (const shutdown of [false, true]) {
     assert.equal(result.stoppedByUser, undefined);
     assert.deepEqual(
       entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
-      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant"],
+      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "system"],
     );
     const partial = findTrailingPartialTurn(entries, turn.input);
     if (shutdown) {
@@ -803,7 +803,11 @@ for (const shutdown of [false, true]) {
       assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
       assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
     } else {
-      assert.deepEqual(entries.at(-1)!.payload, { text: "Visible partial", stopped: true });
+      assert.deepEqual(entries.at(-2)!.payload, { text: "Visible partial", stopped: true });
+      assert.deepEqual(entries.at(-1)!.payload, {
+        kind: "turn_stopped",
+        reason: "because the run was cancelled",
+      });
       assert.equal(partial, null);
     }
   });
