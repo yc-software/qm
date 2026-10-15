@@ -1,6 +1,6 @@
 ---
 name: browse
-description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins via the provider's managed auth (Kernel, Anchor, Browserbase, or Browser Use — picked by which API key you have). Use for ACTING on a site; to just read a page, use curl/wget first. Requires managed model access and a keychain grant for the browser provider key; follow the missing-key steps below.
+description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins kept in the person's browser profile (Kernel, Anchor, Browserbase, or Browser Use — picked by which API key you have). Use for ACTING on a site; to just read a page, use curl/wget first. Requires managed model access and a keychain grant for the browser provider key; follow the missing-key steps below.
 ---
 
 # Browse (the skill-based browser)

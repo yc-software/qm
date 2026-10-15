@@ -7,7 +7,16 @@ Provider names for the shared flow in SKILL.md: API key `KERNEL_API_KEY`, keycha
 export PROFILE_ENV=KERNEL_PROFILE PROFILE_SERVICE=kernel-profile
 ```
 
+In a DM, name three handles in `credentials`: the Kernel key (if it isn't org env), the
+person's `KERNEL_PROFILE`, and their `KERNEL_PROXY_ID` (see "The person's static IP").
+
 ## Profiles
+
+The person's profile is a Kernel browser profile whose name lives in their keychain
+(`KERNEL_PROFILE`). It holds their sign-ins: a browser launched with it starts signed in,
+and a browser launched with `save_changes: true` writes its cookies back when it is
+DELETED or times out (closing CDP does not save). No Managed Auth: the person signs in
+once on the live view and the profile keeps it.
 
 Kernel profiles must be pre-created at the API — a browser create naming a profile that
 doesn't exist 400s (that's the usual cause of a 400 here, not a Kernel outage). During
@@ -20,21 +29,60 @@ curl -fsS -X POST https://api.onkernel.com/profiles \
   -d "{\"name\":\"$KERNEL_PROFILE\"}" > /dev/null
 ```
 
-## Create the browser
+## The person's static IP
 
-In a DM, with the person's profile:
+Each person also gets their own Kernel ISP proxy: a static exit IP on a residential ISP,
+the same on every session. Sites that remember devices (LinkedIn especially) see one
+person on one connection instead of a new address every run, which is what keeps a
+saved sign-in from tripping verification. Its id lives in their keychain as
+`KERNEL_PROXY_ID` (service `kernel-proxy`); treat it like the profile name (it decides
+whose address the browser wears), so it comes only from the keychain, in a DM.
+
+If the manifest has no `KERNEL_PROXY_ID` handle, run the same existence check SKILL.md
+gives for the profile (`envKey == "KERNEL_PROXY_ID"`). Only when none exists, create one
+with the person's OK (it is a paid, per-person resource) and register it:
 
 ```bash
+PX=$(curl -fsS -X POST https://api.onkernel.com/proxies \
+  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
+  -d '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"service\":\"kernel-proxy\",\"envKey\":\"KERNEL_PROXY_ID\",\"secret\":\"$PX\"}" > /dev/null
+```
+
+ISP proxies exist in US, GB, FR, DE and SG; pick the person's country. Use the person's
+own `KERNEL_API_KEY` for this when they have one (the org's brokered Kernel credential
+only allows `/browsers` and `/profiles`). The first session from the new IP may ask the
+person to verify once on sites they were already signed in to elsewhere; after that it is
+stable. If a create fails on the proxy (`proxy_id` not found), check it with
+`POST /proxies/$KERNEL_PROXY_ID/check` and tell the person rather than silently launching
+without it.
+
+## Create the browser
+
+In a DM, with the person's profile and proxy. Only ONE browser may write to a profile at a
+time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
+profile, so a second writer silently clobbers the first. Check for a running browser on
+the profile first, and launch read-only when one exists:
+
+```bash
+SAVE=$(curl -fsS https://api.onkernel.com/browsers -H "Authorization: Bearer $KERNEL_API_KEY" \
+  | python3 -c "import sys,json,os;p=os.environ['KERNEL_PROFILE'];print('false' if any((b.get('profile') or {}).get('name')==p for b in json.load(sys.stdin)) else 'true')")
 CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
   -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"profile\":{\"name\":\"$KERNEL_PROFILE\"}}")
+  -d "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
 CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cdp_ws_url',''))")
 KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
 ```
 
-In a channel or group, OMIT the profile field entirely (per the DM-only rule) — never send
-an empty or personal profile name there:
+`CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
+when you report: anything this run signs in to won't be kept.
+
+In a channel or group, OMIT the profile AND `proxy_id` entirely (per the DM-only rule) —
+never send a personal profile name or proxy there:
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
@@ -43,12 +91,6 @@ CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
 ```
 
 then extract `CDP_URL` / `KERNEL_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
-
-The profile is the person's own browsing state — their sign-ins persist in it across runs,
-so every browser you launch this way starts already signed in to whatever they've connected.
-It loads read-only: state gets INTO it via the Managed Auth hosted flow (below), never from
-your browsing. (Kernel also supports `profile.save_changes: true` to write a session's
-cookies back on browser DELETE — don't use it; concurrent runs would race their writes.)
 
 ## Giving the browser a file
 
@@ -64,91 +106,37 @@ Then run the task with `BROWSE_FILES="/home/kernel/receipt.jpg"` per SKILL.md.
 
 ## Routing a sign-in wall
 
-The FULL Managed Auth flow is available against the person's profile — prefer it (the
-session persists for all their future runs; a live-view login lives only as long as this
-browser).
+The person signs in once on the live browser; the profile keeps it.
 
-**Pre-store the person's login at Kernel whenever they'll let you** — this is the reliable
-path, per Kernel's own guidance. Without a linked credential the hosted page discovers the
-login form live and on some sites stalls at "Discovering login requirements…" until the
-link times out (seen on doordash.com); with one, Kernel skips discovery, auto-fills, and
-can re-auth automatically when the session lapses (only an OTP still needs the person).
+1. Navigate the live browser to the wall URL (read from `/tmp/wall-url.txt`, never shell
+   source) so the person lands on the login page, then hand them `$LIVE_VIEW` in the DM —
+   bearer material, never open it yourself:
 
-1. **Get the login into their keychain** (skip to step 3's plain hosted link only if they
-   decline). Check `GET /v1/keychain/credentials` first — a credential whose service/name
-   matches the walled domain may already exist (use it via a grant; NEVER bind a login
-   registered for a different site). Otherwise mint a one-time secret-drop so the password
-   never transits chat, and ask which way they sign in — a Google-SSO site needs the
-   Google login, not a site password:
    ```bash
-   curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" -H "x-agent-capability: $AGENT_API_TOKEN" \
-     -H 'content-type: application/json' \
-     -d '{"service":"<domain>","fields":[{"key":"EMAIL","secret":false},{"key":"PASSWORD"}],"purpose":"sign in to <domain> in the managed browser"}'
+   cat > /tmp/k-nav.py <<'PY'
+   import os
+   from playwright.sync_api import sync_playwright
+   with sync_playwright() as p:
+       b = p.chromium.connect_over_cdp(os.environ["CDP_URL"])
+       ctx = b.contexts[0]
+       page = ctx.pages[0] if ctx.pages else ctx.new_page()
+       page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
+   PY
+   CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/k-nav.py
    ```
-   Hand over the returned `url` with the consent stated plainly: _filling it stores this
-   login with Kernel (our managed-browser provider) so it can sign in and re-sign-in for
-   you_ — that storage is the point, and it needs their explicit OK. Redemption fires a
-   wake back into this conversation, and since sign-ins are DM-only the person's own
-   credential is usable on that next turn by naming its handle in `credentials` (which sets
-   `EMAIL`/`PASSWORD` for that command — no grant dance needed).
-2. **Store the credential at Kernel, then create the connection WITH it linked.** Linking
-   only works at connection create — if an unlinked connection for the domain already
-   exists (the create 409s with `existing_id`), DELETE it first and re-create. Names must
-   be fresh per store (Kernel 409s on reuse — never a silent overwrite). Build bodies with
-   Python from env; the secret never rides shell source, and the temp file is removed:
-   ```bash
-   export CRED_NAME="<domain>-$(python3 -c 'import secrets;print(secrets.token_hex(4))')"
-   python3 -c 'import json,os,sys
-   domain, name, sso = sys.argv[1], sys.argv[2], os.environ.get("SSO_PROVIDER","")
-   body={"name":name,"domain":("accounts.google.com" if sso=="google" else domain),
-         **({"sso_provider":sso} if sso else {}),
-         "values":{"email":os.environ["EMAIL"],"password":os.environ["PASSWORD"]}}
-   print(json.dumps(body))' "<the walled domain>" "$CRED_NAME" > /tmp/cred-body.json
-   curl -fsS -X POST https://api.onkernel.com/credentials \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-     --data-binary @/tmp/cred-body.json > /dev/null && rm -f /tmp/cred-body.json
-   ```
-   (`SSO_PROVIDER=google` when they sign in with Google — the credential's domain is then
-   `accounts.google.com`, exactly as Kernel's docs prescribe.) Then the connection — read
-   the wall URL from `/tmp/wall-url.txt` (extracted in SKILL.md; it never transits shell
-   source) and let Python build the JSON. Pass the wall URL as `login_url` too (skips
-   discovery even without a credential):
-   ```bash
-   python3 -c 'import json,os,sys,urllib.parse
-   url=open("/tmp/wall-url.txt").read().strip()
-   cred=os.environ.get("CRED_NAME","")
-   print(json.dumps({"domain": urllib.parse.urlsplit(url).hostname or "", "profile_name": sys.argv[1],
-                     "login_url": url, **({"credential":{"name":cred}} if cred else {})}))' \
-     "$KERNEL_PROFILE" > /tmp/conn-body.json
-   CONN=$(curl -sS -X POST https://api.onkernel.com/auth/connections \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' --data-binary @/tmp/conn-body.json)
 
+   Use the existing context (`contexts[0]`): a new context doesn't carry the profile.
+2. They sign in, finish any 2FA, and say done. If the browser was launched with
+   `SAVE=false` (another browser holds the profile), stop that one first and relaunch, or
+   the sign-in is lost.
+3. DELETE the browser (that is what writes the profile), wait ~10s, create a fresh one
+   (it launches signed in) and re-run the task.
 
-   CONN_ID=$(printf '%s' "$CONN" | python3 -c "import sys,json;j=json.load(sys.stdin);print(j.get('id') or j.get('existing_id',''))")
-   ```
-3. **Start the login flow** (`record_session: true` so a stuck flow is reviewable) and hand
-   the person the hosted URL — single-use, expires in ~30 min, never open it yourself, and
-   mint a fresh one if they lose it:
-   ```bash
-   curl -sS -X POST "https://api.onkernel.com/auth/connections/$CONN_ID/login" \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-     -d '{"record_session":true}' \
-     | python3 -c "import sys,json;print(json.load(sys.stdin).get('hosted_url',''))"
-   ```
-   With a linked credential the hosted page auto-fills and usually only surfaces the OTP
-   step; without one the person types their login there. Expectation-setting: an SMS/email
-   OTP step always needs the person — including again on re-auth after the session lapses —
-   so 2FA-heavy sites are better, not hands-free. Avoid Kernel's programmatic login flow
-   (poll `/auth/connections/:id` and submit fields): it can loop forever on sites that
-   re-ask the same field (seen live on DoorDash's email step) — if you try it anyway, give
-   up after ~3 resubmits of the same fieldset and fall back to the hosted link.
-4. When they say they're done, confirm `status` is `AUTHENTICATED` via
-   `GET /auth/connections/$CONN_ID`, then DELETE the old browser, create a fresh one
-   (it launches with the now-signed-in profile), and re-run the task. If the flow instead
-   gets stuck at "Discovering login requirements…", delete the connection, get a credential
-   stored (step 1 — this is exactly the failure it prevents), and re-create linked.
-
-The profile is theirs alone, so signing in real accounts is fine — that's the point.
+Expectation-setting: the profile keeps session cookies; it can't re-answer challenges. A
+site that re-verifies on every visit (SMS/email OTP) will need the person again, and when
+a site eventually expires the session, the next run hits the wall and you repeat this.
+Don't use Kernel Managed Auth or stored Kernel credentials for this — the person's
+password never leaves them.
 
 ## Clean up
 
@@ -160,9 +148,6 @@ curl -fsS -X DELETE "https://api.onkernel.com/browsers/$KERNEL_SID" -H "Authoriz
 
 Read these instead of guessing when a call surprises you:
 
-- Managed Auth: https://www.kernel.sh/docs/api-reference/managed-auth/create-auth-connection
-  and https://www.kernel.sh/docs/api-reference/managed-auth/start-login-flow
-- Credentials (pre-store for auto-fill): https://www.kernel.sh/docs/auth/credentials
-- Programmatic login flows (SSO buttons, MFA options, flow states):
-  https://www.kernel.sh/docs/auth/programmatic
+- Profiles (save_changes, concurrency): https://www.kernel.sh/docs/browsers/profiles
+- ISP proxies (static exit IP): https://www.kernel.sh/docs/proxies/isp
 - Browsers (create/delete, profiles, live view, fs upload): https://www.kernel.sh/docs/api-reference/browsers
