@@ -54,6 +54,16 @@ import {
 } from "./core-bridge";
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
+  cachedTranscript,
+  clearTranscriptCache,
+  dropTranscript,
+  lastSeq,
+  mergeTranscriptDelta,
+  pageAnchor,
+  storeTranscript,
+} from "./transcript-cache";
+import { reportHandledError } from "./browser-errors";
+import {
   activityOf,
   automationRunLabel,
   chatBrowseStatusMatches,
@@ -203,6 +213,7 @@ export function resetSessionsState(): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
+  clearTranscriptCache();
   sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
@@ -1813,6 +1824,19 @@ export async function openSessionInto(
 
   refreshSessionsOnOpen();
 
+  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  if (cached) {
+    if (!isLiveConversation(conv)) return;
+    if (tracked) sessionsState.openingKey = null;
+    conv.resetChatState();
+    mountTranscript(conv, s, cached, null);
+    renderList();
+    void reconcileCachedTranscript(conv, s, cached, conv.transcriptAnchor()).catch((error: unknown) =>
+      reportHandledError("web:transcript_reconcile", error),
+    );
+    return;
+  }
+
   const opening = s.id;
   if (tracked) {
     sessionsState.openingKey = opening;
@@ -1840,23 +1864,65 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
+    dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }
 
-  const split = inheritedTranscript(s, entriesRes.entries ?? []);
-  const messages = entriesToMessages(split.current, transcriptModel());
-  const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
-  const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
-  if (continuable) {
-    attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
-    conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
-  } else {
-    conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
-  }
-  conv.setPins(entriesRes.pins ?? []);
+  storeTranscript(s.id, entriesRes);
+  mountTranscript(conv, s, entriesRes, approvalsRes?.approvals ?? []);
   renderList();
+}
+
+function mountTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  page: TranscriptPage,
+  approvals: PendingApproval[] | null,
+): void {
+  if (s.canContinue !== true) return conv.mountReadOnlyPage(s, page);
+  const split = inheritedTranscript(s, page.entries ?? []);
+  const messages = entriesToMessages(split.current, transcriptModel());
+  if (approvals) attachPendingApprovals(messages, approvals, transcriptModel());
+  conv.mountContinuable(
+    s.threadRef,
+    s.id,
+    s.scopeId,
+    messages,
+    s.channelName ?? null,
+    s,
+    entriesToMessages(split.inherited, transcriptModel()),
+  );
+  const rawEarlier = page.earlierEntries ?? 0;
+  conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
+  conv.setPins(page.pins ?? []);
+}
+
+async function catchUpTranscript(s: CoreSession, cached: TranscriptPage): Promise<TranscriptPage> {
+  try {
+    const delta = await fetchTranscript(s.id, { sinceSeq: lastSeq(cached) + 1 });
+    return mergeTranscriptDelta(cachedTranscript(s.id) ?? cached, delta);
+  } catch (error) {
+    reportHandledError("web:transcript_reconcile", error);
+    dropTranscript(s.id);
+    return fetchTranscript(s.id, { tailTurns: TAIL_TURNS });
+  }
+}
+
+async function reconcileCachedTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  cached: TranscriptPage,
+  mountedAnchor: number | null,
+): Promise<void> {
+  const [page, approvalsRes] = await Promise.all([
+    catchUpTranscript(s, cached),
+    s.canContinue === true ? fetchSessionApprovals(s.id) : Promise.resolve(null),
+  ]);
+  if (page !== cachedTranscript(s.id)) storeTranscript(s.id, page);
+  const approvals = approvalsRes?.approvals ?? null;
+  if (page === cached && !approvals?.length) return;
+  if (isLiveConversation(conv) && conv.state.sessionId === s.id)
+    conv.applyTranscript(s, page, approvals, mountedAnchor);
 }
