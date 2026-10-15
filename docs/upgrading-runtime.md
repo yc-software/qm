@@ -48,9 +48,10 @@ into `legacy_tape_steps` during startup migrations, then drops the tape. Stop ev
 older core and worker before starting the new release: a tape write after the copy
 starts makes the drop refuse, and that startup fails with the reset to run. The copy
 runs on the direct migration connection without a statement timeout and resumes
-after an interrupted startup. It takes seconds for typical installations; for a very
-large tape, run `node src/migrate-main.ts` with the release's configuration before starting
-the servers so readiness checks do not time out.
+after an interrupted startup. It walks every session at roughly 30 sessions per
+second, so a few thousand sessions take a couple of minutes; above that, run
+`node src/migrate-main.ts` with the release's configuration before starting the
+servers so readiness checks do not time out.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those
