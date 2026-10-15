@@ -13,7 +13,6 @@ import {
   type PersistedPeopleDirectoryUrl,
   type PersistedBrowseMaxSteps,
   type PersistedBrowseModel,
-  type PersistedTurnWallClock,
   type PersistedDeploymentIdentity,
 } from "../src/resolution/config-store.ts";
 import { settle } from "./support/settle.ts";
@@ -44,7 +43,6 @@ const TABLES = [
   "people_directory_urls",
   "browse_max_steps_configs",
   "browse_model_configs",
-  "turn_wall_clock_configs",
   "deployment_identity",
 ];
 
@@ -69,22 +67,7 @@ const maps = (f: PostgresArtifactMaps) => ({
   peopleDirectoryUrls: f.map<PersistedPeopleDirectoryUrl>("people_directory_urls"),
   browseMaxSteps: f.map<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
   browseModels: f.map<PersistedBrowseModel>("browse_model_configs"),
-  turnWallClocks: f.map<PersistedTurnWallClock>("turn_wall_clock_configs"),
   deploymentIdentity: f.map<PersistedDeploymentIdentity>("deployment_identity"),
-});
-
-test("turn wall-clock config hydrates after restart and a clear remains cleared", async () => {
-  const turnWallClocks = createMemoryMap<PersistedTurnWallClock>();
-  const writer = createMemoryConfigStore("default-org", { turnWallClocks });
-  const org = scopeId("org", "default-org");
-  await writer.setTurnWallClockSec(org, 600);
-  const restarted = createMemoryConfigStore("default-org", { turnWallClocks });
-  await restarted.hydrate?.();
-  assert.equal(await restarted.getTurnWallClockSecDurable(org), 600);
-  await restarted.setTurnWallClockSec(org, null);
-  const cleared = createMemoryConfigStore("default-org", { turnWallClocks });
-  await cleared.hydrate?.();
-  assert.equal(await cleared.getTurnWallClockSecDurable(org), null);
 });
 
 test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
@@ -338,7 +321,6 @@ test(
     a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
     a.setBrowseMaxSteps(ch, 120);
     a.setBrowseModel(ch, "claude-sonnet-4-6");
-    await a.setTurnWallClockSec(org, 600);
     await settle(
       async () =>
         (await m.souls.get(ch))?.version === version &&
@@ -350,8 +332,7 @@ test(
         (await m.baseModels.get(ch))?.modelId === "claude-opus-4-8" &&
         (await m.peopleDirectoryUrls.get(ch))?.url === "https://www.example.com/people" &&
         (await m.browseMaxSteps.get(ch))?.steps === 120 &&
-        (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6" &&
-        (await m.turnWallClocks.get(org))?.sec === 600,
+        (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
     );
 
     const b = createMemoryConfigStore("default-org", maps(f));
@@ -373,7 +354,6 @@ test(
     assert.equal(b.getPeopleDirectoryUrl(ch), "https://www.example.com/people", "the people-directory url survived");
     assert.equal(b.getBrowseMaxSteps(ch), 120, "the browse step limit survived");
     assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6", "the browse model survived");
-    assert.equal(await b.getTurnWallClockSecDurable(org), 600, "the turn wall-clock limit survived");
   },
 );
 
@@ -399,8 +379,6 @@ test(
     a.setBrowseMaxSteps(ch, null);
     a.setBrowseModel(ch, "claude-sonnet-4-6");
     a.setBrowseModel(ch, null);
-    await a.setTurnWallClockSec(scopeId("org", "default-org"), 600);
-    await a.setTurnWallClockSec(scopeId("org", "default-org"), null);
     await settle(
       async () =>
         (await m.souls.get(ch))?.content === "soul v8" &&
@@ -408,8 +386,7 @@ test(
         !(await m.baseModels.get(ch)) &&
         !(await m.peopleDirectoryUrls.get(ch)) &&
         !(await m.browseMaxSteps.get(ch)) &&
-        !(await m.browseModels.get(ch)) &&
-        !(await m.turnWallClocks.get(scopeId("org", "default-org"))),
+        !(await m.browseModels.get(ch)),
     );
 
     const b = createMemoryConfigStore("default-org", maps(f));

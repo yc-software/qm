@@ -147,18 +147,14 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
-test("org turn wall-clock governance reaches the harness and a per-turn cap only tightens", async (t) => {
+test("the deployment turn wall-clock reaches the harness and a per-turn cap replaces it", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const { app, config } = freshApp();
-  await config.setTurnWallClockSec(scopeId("org", "default-org"), 120);
+  const { app } = freshApp({ turnWallClockMs: 120_000 });
   assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:120000");
   assert.equal((await app.turn(dm("!wallclock", { turnWallClockMs: 70_000 }))).reply, "wallclock:70000");
-  assert.equal((await app.turn(dm("!wallclock", { turnWallClockMs: 500_000 }))).reply, "wallclock:120000");
+  assert.equal((await app.turn(dm("!wallclock", { turnWallClockMs: 500_000 }))).reply, "wallclock:500000");
   assert.equal((await app.turn(dm("!wallclock", { turnWallClockMs: 0 }))).reply, "wallclock:120000");
-  await config.setTurnWallClockSec(scopeId("org", "default-org"), 0);
-  assert.equal((await app.turn(dm("!wallclock", { turnWallClockMs: 70_000 }))).reply, "wallclock:70000");
-  await config.setTurnWallClockSec(scopeId("org", "default-org"), null);
-  assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:0");
+  assert.equal((await freshApp().app.turn(dm("!wallclock"))).reply, "wallclock:0");
 });
 
 test("inbound file problems ride a durable file_event entry — off the reply and the model context", async () => {

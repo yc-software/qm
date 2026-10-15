@@ -27,7 +27,6 @@ test("settings projections preserve values while excluding unrelated payloads", 
   const srv = start();
   t.after(srv.close);
   srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.config.setTurnWallClockSec("org:default-org", 120);
   await srv.built.config.flushScope("org:default-org");
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
@@ -56,7 +55,6 @@ test("settings projections preserve values while excluding unrelated payloads", 
     }
     if (view === "customize") {
       assert.equal(projected.branding.selfLabel, "Test assistant");
-      assert.equal("turnWallClockSec" in projected, false);
       assert.equal("orgAmbient" in projected, false);
       assert.equal("channelHeaderPinDefault" in projected, false);
       assert.equal("soulHistory" in projected, true);

@@ -3089,21 +3089,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
               }
             : undefined;
-        const requestedTurnWallClockMs =
-          typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 ? input.turnWallClockMs : undefined;
-        const configuredTurnWallClockSec = await deps.config?.getTurnWallClockSecDurable(resolution.orgScopeId);
-        const configuredTurnWallClockMs =
-          configuredTurnWallClockSec === null || configuredTurnWallClockSec === undefined
-            ? undefined
-            : configuredTurnWallClockSec * 1000;
-        let effectiveTurnWallClockMs =
-          configuredTurnWallClockMs ?? deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
-        if (requestedTurnWallClockMs !== undefined) {
-          effectiveTurnWallClockMs =
-            configuredTurnWallClockMs !== undefined && configuredTurnWallClockMs > 0
-              ? Math.min(requestedTurnWallClockMs, configuredTurnWallClockMs)
-              : requestedTurnWallClockMs;
-        }
+        const effectiveTurnWallClockMs =
+          typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0
+            ? input.turnWallClockMs
+            : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
         const runtimePurpose = turnRuntimePurpose(
           { surface: input.surface, triggered: automatedTurn },
           !!session.parentSessionId || !!swarmBinding?.member.parentId,

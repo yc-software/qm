@@ -131,65 +131,6 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
   }
 });
 
-test("turn wall-clock governance validates, round-trips, clears, and is org-admin-only", async () => {
-  const srv = start();
-  const url = `${srv.base}/v1/admin/scopes/org:default-org/turn-wall-clock`;
-  try {
-    assert.equal(
-      (
-        await fetch(url, {
-          method: "PUT",
-          headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
-          body: JSON.stringify({ sec: 60 }),
-        })
-      ).status,
-      403,
-    );
-    assert.equal(
-      (
-        await fetch(`${srv.base}/v1/admin/scopes/channel:C1/turn-wall-clock`, {
-          method: "PUT",
-          headers: ADMIN,
-          body: JSON.stringify({ sec: 60 }),
-        })
-      ).status,
-      400,
-    );
-    for (const sec of [59, 86_401, 60.5, "nope"]) {
-      assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec }) })).status, 400);
-    }
-    assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "120" }) })).status,
-      200,
-    );
-    let body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, 120);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: 0 }) })).status, 200);
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, 0);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "" }) })).status, 200);
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, null);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: 120 }) })).status, 200);
-    assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "  " }) })).status,
-      200,
-    );
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, null);
-  } finally {
-    await srv.close();
-  }
-});
-
 test("branding governance validates, round-trips through surface-config, clears, and is org-admin-only", async () => {
   const srv = start();
   const url = `${srv.base}/v1/admin/scopes/org:default-org/branding`;
