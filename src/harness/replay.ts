@@ -1,3 +1,4 @@
+import type { RunStop } from "../runs/run-store.ts";
 import type {
   AssistantMessage,
   ImageContent,
@@ -272,7 +273,7 @@ function toolResultMessage(
   if (!re) return { ...base, content: text(missing), isError: true, timestamp: at };
   const p = (re.payload ?? {}) as {
     interrupted?: unknown;
-    stop?: { kind?: unknown };
+    stop?: RunStop;
     isError?: unknown;
     result?: unknown;
     wire?: ToolResultWire;
@@ -280,7 +281,7 @@ function toolResultMessage(
   if (p.interrupted === true)
     return {
       ...base,
-      content: text(p.stop?.kind === "shutdown" ? unrecordedToolResult({ kind: "shutdown" }) : INTERRUPTED_TOOL_RESULT),
+      content: text(unrecordedToolResult(p.stop)),
       isError: true,
       timestamp: re.createdAt,
     };
