@@ -161,7 +161,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const meta = isObj(payload.slack) ? payload.slack : {};
     if (typeof meta.channelId !== "string" || typeof meta.ts !== "string") return;
     const previous = savedParticipants(payload);
-    const senderId = typeof meta.userId === "string" ? meta.userId : previous[0]?.id;
+    const senderId = typeof meta.userId === "string" ? meta.userId : undefined;
     if (!senderId || senderId.startsWith("bot:")) return;
     if (!previous.some((person) => person.id === senderId))
       previous.unshift({ id: senderId, name: typeof payload.from === "string" ? payload.from : senderId });
@@ -226,7 +226,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const saved = savedParticipants(payload);
     const sender =
       (waiting && messageParticipant(waiting)) ??
-      (typeof meta.userId === "string" ? { id: meta.userId, name: meta.userId } : saved[0]);
+      (typeof meta.userId === "string" ? { id: meta.userId, name: meta.userId } : undefined);
     const previous = new Map(saved.map((person) => [person.id, person]));
     for (const message of messages) {
       const person = messageParticipant(message);

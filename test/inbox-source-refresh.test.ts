@@ -589,6 +589,32 @@ test("unverified waiting senders never inherit another context author's avatar",
   );
 });
 
+test("saved participants do not supply a missing sender identity", async () => {
+  for (const mode of [undefined, "avatars"] as const) {
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
+    const saved = { id: "U1", name: "Previously saved sender" };
+    await items.annotate(item.id, { participants: [saved] });
+    const before = (await items.get(item.id))!;
+    const looked: string[] = [];
+    await createInboxSourceRefresh({
+      featureFlags,
+      items,
+      tokens,
+      directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, (id) => looked.push(id)),
+      fetchImpl: async (url) => {
+        assert.notEqual(mode, "avatars");
+        if (String(url).includes("conversations.info")) return json({ ok: true, channel: { is_im: true } });
+        return json({ ok: true, messages: [] });
+      },
+    })("owner", [before], mode);
+    const after = (await items.get(item.id))!;
+    assert.deepEqual(looked, []);
+    assert.deepEqual(after.sourcePayload!.participants, [saved]);
+    if (mode === "avatars") assert.deepEqual(after, before);
+    else assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 0);
+  }
+});
+
 test("profile failures retain diagnostics without exposing credentials", async () => {
   const { createErrorLog } = await import("../src/admin/error-log.ts");
   for (const mode of [undefined, "avatars"] as const) {
@@ -731,4 +757,22 @@ test("people outside the directory keep the profile Slack returned with their me
     { id: "U_EXT", name: "Pat Partner", avatarUrl: "https://avatars.slack-edge.com/pat.png" },
   ]);
   assert.equal((after.sourcePayload!.context as Array<{ author: string }>)[0]!.author, "Pat Partner");
+});
+
+test("people outside the directory without message profiles keep initials and never trigger profile API calls", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U_EXT" });
+  await createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      assert.ok(path.endsWith("conversations.replies"));
+      return json({ ok: true, messages: [{ ts: "1.0", user: "U_EXT", text: "Hello" }] });
+    },
+  })("owner", [item]);
+  assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [{ id: "U_EXT", name: "U_EXT" }]);
 });
