@@ -3024,6 +3024,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !syntheticPrompt && input.text.trim()
             ? {
                 text: input.text,
+                ...(humanTurn ? { speakerId: actor.id } : {}),
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
@@ -3222,6 +3223,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
                 Object.assign(payload, swarmEntryProvenance);
                 if (input.runId) payload.runId = input.runId;
+                delete payload.speakerId;
+                if (humanTurn && !syntheticPrompt && !continuation && !payload.steered && !payload.overheard)
+                  payload.speakerId = actor.id;
                 if (actor.displayName?.trim() && typeof payload.name !== "string")
                   payload.name = actor.displayName.trim();
                 if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")

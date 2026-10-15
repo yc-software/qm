@@ -531,16 +531,22 @@ test("a durable turn_failure entry renders like the live inline error (survives 
   assert.equal(err.errorMessage, "API integrators: you can reduce refusals…");
 });
 
-test("user entries carry the stored speaker name and slack ts onto the rebuilt message", () => {
+test("user entries carry the stored speaker identity, name and slack ts onto the rebuilt message", () => {
   const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "hi", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
+    {
+      type: "user",
+      payload: { text: "hi", name: "Alice Example", speakerId: "person-a", ts: "100.1" },
+      createdAt: 100,
+    },
     { type: "user", payload: { text: "anonymous web message" }, createdAt: 110 },
   ];
   const msgs = entriesToMessages(entries, MODEL);
-  const [slack, web] = msgs as Array<{ speaker?: string; ts?: string }>;
+  const [slack, web] = msgs as Array<{ speaker?: string; speakerId?: string; ts?: string }>;
   assert.equal(slack?.speaker, "Alice Example");
+  assert.equal(slack?.speakerId, "person-a");
   assert.equal(slack?.ts, "100.1");
   assert.equal(web?.speaker, undefined);
+  assert.equal(web?.speakerId, undefined);
   assert.equal(web?.ts, undefined);
 });
 

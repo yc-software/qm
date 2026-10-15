@@ -134,6 +134,25 @@ test("internal DM turn runs end-to-end and records the session", async () => {
   assert.deepEqual(types, ["user", "assistant"]);
 });
 
+test("human transcript entries retain authenticated identity across duplicate names and renames", async () => {
+  const { app } = freshApp();
+  for (const actor of [
+    { externalId: "U1", displayName: "Alex" },
+    { externalId: "U2", displayName: "Alex" },
+    { externalId: "U1", displayName: "New Name" },
+  ]) {
+    const result = await app.turn(channel("hello", { actor, liveActor: true }));
+    assert.equal(result.status, "ok", result.reason);
+    const found = await app.getSession(result.sessionId!);
+    const payload = found!.entries.filter((entry) => entry.type === "user").at(-1)!.payload as {
+      speakerId?: string;
+      name?: string;
+    };
+    assert.equal(payload.speakerId, actor.externalId);
+    assert.equal(payload.name, actor.displayName);
+  }
+});
+
 test("the persisted assistant entry carries authoritative turn timing for transcript rendering", async () => {
   const { app } = freshApp();
   const before = Date.now();
@@ -2228,6 +2247,7 @@ test("overheard messages are imported ONCE into the durable log, author-labeled,
   );
   assert.equal((ov1[1]!.payload as { sourceRole: string }).sourceRole, "agent");
   assert.equal((ov1[0]!.payload as { name: string }).name, "Alice");
+  assert.ok(ov1.every((entry) => (entry.payload as { speakerId?: string }).speakerId === undefined));
   assert.deepEqual((ov1[0]!.payload as { files: string[] }).files, ["cat.jpg"]);
 
   const r2 = await app.turn(
@@ -3996,7 +4016,10 @@ test("a failure before the harness records the user message back-fills it — no
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("use the fancy model", { model: "not-a-real-model" })), /not approved/);
+  await assert.rejects(
+    app.turn(dm("use the fancy model", { model: "not-a-real-model", liveActor: true })),
+    /not approved/,
+  );
 
   const found = await app.getSession(t1.sessionId!);
   const failureIdx = found!.entries.findIndex((e) => turnFailure(e));
@@ -4004,6 +4027,7 @@ test("a failure before the harness records the user message back-fills it — no
   const prior = found!.entries[failureIdx - 1]!;
   assert.equal(prior.type, "user", "the message that failed sits right above its error — not an orphan bubble");
   assert.equal((prior.payload as { text?: string }).text, "use the fancy model");
+  assert.equal((prior.payload as { speakerId?: string }).speakerId, "U1");
 
   const after = await app.turn(dm("!histcount"));
   assert.equal(after.status, "ok");

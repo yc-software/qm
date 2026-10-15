@@ -145,7 +145,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     if (path.startsWith("/api/runtime-config")) {
       if (opts.holdRuntimeConfig) await runtimeHeld;
       return Response.json({
-        scopeId: "personal:tester",
+        scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
         approvedHarnesses: [],
         modelsByHarness: {},
         modelCatalog: {},

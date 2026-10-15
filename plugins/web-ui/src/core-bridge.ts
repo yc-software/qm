@@ -1714,6 +1714,7 @@ interface HistoryUserMessage {
   attachments?: HistoryAttachment[];
   steered?: boolean;
   speaker?: string;
+  speakerId?: string;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -1873,6 +1874,7 @@ export function userEntryMessage(
     runId?: string;
     steered?: boolean;
     name?: string;
+    speakerId?: string;
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
@@ -1889,6 +1891,7 @@ export function userEntryMessage(
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),
     ...(payload?.steered ? { steered: true } : {}),
+    ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
     ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
     ...(attachments.length
