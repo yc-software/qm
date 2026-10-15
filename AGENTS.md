@@ -80,7 +80,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
   indexes, and constraints, and describe migrations or backfills and any rollout or
-  compatibility implications. Explain why the changes are needed. If either area is
+  compatibility implications. Quote the user's approval for any data migration or
+  historical accommodation (see Historylessness in the spec). Explain why the changes are needed. If either area is
   unchanged, say so explicitly; keep the disclosure proportional to the change.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
