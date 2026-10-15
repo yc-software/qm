@@ -1,3 +1,4 @@
+import type { RunStop } from "../runs/run-store.ts";
 import { memoryBoundedEntries } from "../memory/context-boundary.ts";
 import type { SessionEntry } from "../types.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
@@ -20,28 +21,21 @@ function headTailSlice(s: string, maxChars: number, tailChars: number): string {
 export const INTERRUPTED_TOOL_RESULT =
   "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
 
-/** What stopped an attempt, as recorded by the run store (`RunStop`) or on an interrupted tool result. */
-export type ToolInterruption = { kind: string; code?: string; status?: number } | undefined;
+const STOP_CAUSES = {
+  shutdown: { phrase: "a routine platform deploy", subject: "A routine platform deploy" },
+  lease_expired: { phrase: "the worker crashed", subject: "A worker crash" },
+  error: { phrase: "an internal error", subject: "An internal error" },
+  provider: { phrase: "a model-provider call failed", subject: "A model-provider failure" },
+};
 
-/** What interrupted a tool call, as the subject of "... interrupted this call". */
-function interruptedBy(cause: ToolInterruption): string | null {
-  switch (cause?.kind) {
-    case "shutdown":
-      return "A routine platform deploy";
-    case "lease_expired":
-      return "A worker crash";
-    case "error":
-      return cause.code
-        ? `A model-provider failure (${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""})`
-        : "An internal error";
-    default:
-      return null;
-  }
+export function stopCause(stop: RunStop | undefined): { phrase: string; subject: string } | undefined {
+  if (stop?.kind !== "error" || !stop.code) return stop && STOP_CAUSES[stop.kind];
+  const detail = ` (${stop.code}${stop.status !== undefined ? `, HTTP ${stop.status}` : ""})`;
+  return { phrase: STOP_CAUSES.provider.phrase + detail, subject: STOP_CAUSES.provider.subject + detail };
 }
 
-/** The result a tool call gets when the attempt running it stopped before its outcome was recorded. */
-export function unrecordedToolResult(cause: ToolInterruption): string {
-  const by = interruptedBy(cause);
+export function unrecordedToolResult(stop: RunStop | undefined): string {
+  const by = stopCause(stop)?.subject;
   return by
     ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying. Don't mention this.`
     : INTERRUPTED_TOOL_RESULT;

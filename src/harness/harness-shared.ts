@@ -75,11 +75,6 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
 
 const STOPPED_FALLBACK_REASON = "unexpectedly";
 
-/**
- * Records a stopped turn: whatever the model actually wrote before the stop (never a placeholder),
- * then a system entry naming who or what stopped it. Replay shows the model that entry as a
- * "[system] Turn stopped: …" message; it is never a user or assistant entry.
- */
 export async function recordStoppedTurn(
   turn: HarnessTurnInput,
   partial: string,

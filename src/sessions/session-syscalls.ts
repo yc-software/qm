@@ -277,7 +277,6 @@ function lastAssistantText(entries: readonly SessionEntry[]): string | undefined
     const e = entries[i]!;
     const stop = e.type === "system" ? (e.payload as { kind?: unknown; reason?: unknown } | null) : null;
     if (stop?.kind === TURN_STOPPED_KIND) {
-      // A partial reply recorded just before the stop is still the last thing said.
       const before = entries[i - 1];
       const partial = before?.type === "assistant" ? entryText(before) : "";
       return (

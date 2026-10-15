@@ -145,7 +145,7 @@ import {
   resumeStrategy,
   runtimeSwitchNote,
   turnAtSeq,
-  unrecordedToolResult,
+  unrecordedResultEntries,
 } from "./turn-resume.ts";
 import type { RecordedTurn } from "./turn-resume.ts";
 import {
@@ -2836,22 +2836,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
-          // A tool call's lost outcome is recorded as its result, so the model reads what happened to it there.
-          const unrecorded = resumePlan.calls;
+          const settle = resumePlan;
           const settled = await withManagedRosterVersion(() =>
-            deps.sessions.appendMany(
-              lease,
-              unrecorded.map((call) => ({
-                type: "tool_result" as const,
-                payload: {
-                  tool: call.tool,
-                  callId: call.callId,
-                  isError: true,
-                  result: unrecordedToolResult(input.resumeCause),
-                },
-                scopeLabel: scopeId,
-              })),
-            ),
+            deps.sessions.appendMany(lease, unrecordedResultEntries(settle, input.resumeCause, scopeId)),
           );
           visibleHistory = filterHistory(forModelContext([...rawEntries, ...settled]));
           resumePlan = resumeStrategy(visibleHistory, partial);
@@ -3267,6 +3254,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 if (input.displayText?.trim() && payload.text === input.text && typeof payload.display !== "string")
                   payload.display = input.displayText;
                 if ((syntheticPrompt || continuation) && payload.steered !== true) payload.hidden = true;
+                if ((partial || continuation) && !payload.steered && !payload.overheard) payload.resumeNote = true;
                 return { ...entry, payload };
               })();
               const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));

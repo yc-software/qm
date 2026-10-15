@@ -2,13 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   findTrailingPartialTurn,
-  isResumeNote,
   resumeNote,
   resumeStrategy,
   runtimeSwitchNote,
   turnAtSeq,
-  unrecordedToolResult,
 } from "../src/core/turn-resume.ts";
+import { unrecordedToolResult } from "../src/harness/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
@@ -18,6 +17,7 @@ function ent(type: SessionEntry["type"], payload: unknown, seq: number): Session
 const user = (text: string, seq: number) => ent("user", { text }, seq);
 const overheard = (text: string, seq: number) =>
   ent("user", { overheard: true, ts: String(seq), name: "Alice", text }, seq);
+const resumeEntry = (seq: number) => ent("user", { text: resumeNote(), hidden: true, resumeNote: true }, seq);
 const assistant = (text: string, seq: number) => ent("assistant", { text }, seq);
 const toolCall = (seq: number) => ent("tool_call", { tool: "execute", callId: `c${seq}`, command: "make build" }, seq);
 const toolResult = (seq: number) => ent("tool_result", { callId: `c${seq - 1}`, result: "ok" }, seq);
@@ -53,7 +53,7 @@ test("findTrailingPartialTurn returns null for empty input text and empty ledger
 });
 
 test("a trailing resume note from a prior dead resume is skipped, reaching the real user entry", () => {
-  const entries = [user("build and deploy the release", 1), toolCall(2), user(resumeNote(), 3), toolCall(4)];
+  const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3), toolCall(4)];
   const found = findTrailingPartialTurn(entries, "build and deploy the release");
   assert.deepEqual(found, { userSeq: 1, workEntries: 2 }, "the note itself is not work");
 });
@@ -64,7 +64,7 @@ test("an attempt that died before recording ANY work reports workEntries 0", () 
 });
 
 test("prior resume notes alone are NOT work — repeated no-work deaths still report 0", () => {
-  const entries = [user("build and deploy the release", 1), user(resumeNote(), 2)];
+  const entries = [user("build and deploy the release", 1), resumeEntry(2)];
   const found = findTrailingPartialTurn(entries, "build and deploy the release");
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
@@ -82,7 +82,10 @@ test("platform rails and render-only rows are NOT work — only tool rows replay
 });
 
 test("a prior no-work retry's restart note is skipped — later retries anchor on the human's entry", () => {
-  const entries = [user("build and deploy the release", 1), user(resumeNote({ strategy: { kind: "restart" } }), 2)];
+  const entries = [
+    user("build and deploy the release", 1),
+    ent("user", { text: resumeNote({ strategy: { kind: "restart" } }), resumeNote: true }, 2),
+  ];
   const found = findTrailingPartialTurn(entries, "build and deploy the release");
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 }, "provenance stays on the original, not attempt 2's prompt");
 });
@@ -112,30 +115,23 @@ test("an empty-reply completed turn still counts as completed (assistant entry w
   assert.equal(findTrailingPartialTurn(entries, "do the thing"), null);
 });
 
-test("resumeNote is recognized by isResumeNote and mentions background jobs only when offered", () => {
-  assert.ok(isResumeNote(resumeNote()));
-  assert.ok(isResumeNote(resumeNote({ backgroundJobs: true })));
+test("the resume note mentions background jobs only when offered", () => {
   assert.doesNotMatch(resumeNote(), /background/i);
   assert.match(resumeNote({ backgroundJobs: true }), /`background` list\/poll/);
-  assert.ok(isResumeNote(runtimeSwitchNote(undefined)));
-  assert.ok(isResumeNote(runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5" })));
-  assert.ok(!isResumeNote("build and deploy the release"));
 });
 
 test("the no-work wording promises nothing recorded, and neither wording re-sends the input", () => {
   const restart = resumeNote({ strategy: { kind: "restart" } });
-  assert.ok(isResumeNote(restart));
   assert.doesNotMatch(restart, /recorded work|Continue/);
   assert.match(restart, /Start the request now/);
   for (const note of [resumeNote(), restart]) assert.doesNotMatch(note, /build and deploy the release/);
 });
 
-test("isResumeNote recognizes the pre-rename notes recorded in existing ledgers", () => {
-  const legacy =
-    "(system note: the platform restarted mid-turn and interrupted your previous attempt at the request above. Continue.)";
-  assert.ok(isResumeNote(legacy));
-  const entries = [user("build and deploy the release", 1), toolCall(2), user(legacy, 3)];
+test("a resume note in the ledger is skipped by its flag, not its text", () => {
+  const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3)];
   assert.deepEqual(findTrailingPartialTurn(entries, "build and deploy the release"), { userSeq: 1, workEntries: 1 });
+  const typed = [user("build and deploy the release", 1), toolCall(2), user(resumeNote(), 3)];
+  assert.equal(findTrailingPartialTurn(typed, "build and deploy the release"), null, "typed text is a new request");
 });
 
 test("turnAtSeq carries the answer the attempt recorded, so a retry can replay it", () => {
@@ -163,7 +159,7 @@ test("turnAtSeq reads through the resume note and the overheard traffic of its o
     user("mine", 1),
     toolCall(2),
     overheard("chatter", 3),
-    user(resumeNote(), 4),
+    resumeEntry(4),
     toolCall(5),
     assistant("finished", 6),
   ];
@@ -258,14 +254,9 @@ test("resumeStrategy restarts when the dead attempt recorded no work", () => {
   assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
 });
 
-test("the resume notes state the recorded cause and are recognized as resume notes", () => {
-  const note = resumeNote();
-  assert.ok(isResumeNote(note));
-  assert.match(note, /cause not recorded/);
-  assert.match(note, /Don't mention this/);
-  assert.ok(
-    isResumeNote(resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } })),
-  );
+test("the resume note states the recorded cause", () => {
+  assert.match(resumeNote(), /cause not recorded/);
+  assert.match(resumeNote(), /Don't mention this/);
 });
 
 test("a tool call whose outcome was lost records the cause as its own result", () => {
@@ -312,7 +303,7 @@ test("resumeStrategy continues silently only when every call is answered and the
   assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), steer("also", 4)], partial), {
     kind: "note",
   });
-  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), user(resumeNote(), 4)], partial), {
+  assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3), resumeEntry(4)], partial), {
     kind: "note",
   });
   assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), killed(3)], partial), { kind: "note" });

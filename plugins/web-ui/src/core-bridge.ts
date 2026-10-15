@@ -2040,7 +2040,6 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
-  // Whether this turn already rendered its stopped state (a stopped partial reply).
   let stoppedShown = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
@@ -2250,7 +2249,6 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
       if ((e.payload as { kind?: unknown } | null)?.kind === "turn_stopped") {
-        // The stop record closes the turn: show the stopped state once, never as a message.
         spillHeldPosts();
         if (pending.length || !stoppedShown)
           flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);

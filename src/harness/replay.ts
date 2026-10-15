@@ -17,23 +17,16 @@ import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 
-/** System entry kind recording that a turn was stopped and who or what stopped it. */
 export const TURN_STOPPED_KIND = "turn_stopped";
 
-/** How a stopped turn reads to the model on replay. `reason` reads after "Turn stopped", e.g. "by user". */
 function turnStoppedNote(reason: string): string {
   return `[system] Turn stopped ${reason}.`;
 }
 
-/** The result of a tool call that was still running when its turn was stopped. */
 function stoppedToolResult(reason: string): string {
   return `[system] Turn stopped ${reason} while this call was running; its outcome wasn't recorded. Check what happened before retrying.`;
 }
 
-/**
- * For each stop record that cut off running tool calls, the stop explanation becomes those calls'
- * results, and the stop record itself adds nothing more.
- */
 function stoppedToolCalls(
   history: readonly SessionEntry[],
   resultByCallId: ReadonlyMap<string, SessionEntry>,
@@ -49,7 +42,6 @@ function stoppedToolCalls(
       steered?: unknown;
       overheard?: unknown;
     };
-    // Steers and overheard channel traffic arrive mid-turn; only a new ask (or a hidden resume note) ends it.
     if (e.type === "user" && p.steered !== true && p.overheard !== true) open = [];
     else if (e.type === "tool_call" && typeof p.callId === "string" && !resultByCallId.has(p.callId))
       open.push(p.callId);
@@ -288,9 +280,7 @@ function toolResultMessage(
   if (p.interrupted === true)
     return {
       ...base,
-      content: text(
-        typeof p.stop?.kind === "string" ? unrecordedToolResult({ kind: p.stop.kind }) : INTERRUPTED_TOOL_RESULT,
-      ),
+      content: text(p.stop?.kind === "shutdown" ? unrecordedToolResult({ kind: "shutdown" }) : INTERRUPTED_TOOL_RESULT),
       isError: true,
       timestamp: re.createdAt,
     };

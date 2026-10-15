@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { isResumeNote, type ResumableToolCall } from "../src/core/turn-resume.ts";
+import type { ResumableToolCall } from "../src/core/turn-resume.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
@@ -321,7 +321,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.ok(isResumeNote(turn.input));
+  assert.match(turn.input, /^\[system\] Your previous attempt/);
   assert.match(turn.input, /interrupted mid-turn/);
 
   const entries = await sessions.getEntries(sessionId);
@@ -344,7 +344,7 @@ for (const [label, payload] of [
     assert.equal(received.length, 1);
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
-    assert.ok(isResumeNote(turn.input));
+    assert.match(turn.input, /^\[system\] Your previous attempt/);
     const entries = await sessions.getEntries(sessionId);
     assert.deepEqual(
       entries.map((e) => e.type),

@@ -19,7 +19,6 @@ export interface RunDeliveryState {
   editRef?: string;
 }
 
-/** Why a run's previous attempt stopped, recorded when the run is handed back to the queue. */
 export type RunStop =
   { kind: "shutdown" } | { kind: "lease_expired" } | { kind: "error"; code?: string; status?: number };
 
@@ -41,7 +40,6 @@ export interface Run {
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
-  /** Why the previous attempt stopped; null on a run's first attempt. */
   lastStop?: RunStop | null;
 }
 
@@ -78,7 +76,6 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  /** Hands a running run back to the queue. `stop` records why the attempt ended; omit it when no attempt started. */
   releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;

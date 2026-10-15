@@ -15,7 +15,6 @@ export interface RunSignal {
   queuedRunId?: string;
   callId?: string;
   result?: ClientToolResult;
-  /** abort only: who or what stopped the run, in words, for the stopped session's record. */
   reason?: string;
 }
 

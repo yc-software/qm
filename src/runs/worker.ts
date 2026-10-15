@@ -278,7 +278,6 @@ export function createWorker(deps: WorkerDeps): Worker {
   };
 }
 
-/** What a resumed attempt is told about why this one failed: the typed provider code and status, never raw error text. */
 function runStopFor(err: unknown): RunStop {
   if (err instanceof ProviderTurnError)
     return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };

@@ -97,7 +97,6 @@ export interface OrchestratorInput extends Omit<
   origin: TurnOrigin;
   runId?: string;
   attempt?: number;
-  /** Why the previous attempt of this run stopped (recorded by the run store); absent on a first attempt. */
   resumeCause?: RunStop;
   runLeaseToken?: string;
 

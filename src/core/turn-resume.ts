@@ -1,17 +1,9 @@
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
-import { unrecordedToolResult } from "../harness/context-compaction.ts";
-
-export { unrecordedToolResult };
+import { stopCause, unrecordedToolResult } from "../harness/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
-import { entryDeliveryKey, isOverheardEntry } from "../sessions/session-store.ts";
-
-const RESUME_HEAD = "[system] Your previous attempt";
-const RUNTIME_HEAD = "[system] Runtime switched";
-const TRIMMED_HEAD = "[system] Context was trimmed";
-/** Resume notes written before the [system] wording; still present in stored history. */
-const LEGACY_NOTE_HEAD = "(system note:";
+import { entryDeliveryKey, isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";
 
 export interface PartialTurn {
   userSeq: number;
@@ -22,12 +14,10 @@ function entryText(e: SessionEntry): string {
   return String((e.payload as { text?: string } | null)?.text ?? "").trim();
 }
 
-export function isResumeNote(text: string): boolean {
-  const t = text.trimStart();
-  return [RESUME_HEAD, RUNTIME_HEAD, TRIMMED_HEAD, LEGACY_NOTE_HEAD].some((head) => t.startsWith(head));
+function isResumeNote(e: SessionEntry): boolean {
+  return (e.payload as { resumeNote?: unknown } | null)?.resumeNote === true;
 }
 
-/** A stop record closes its turn, like a final answer: a later attempt must not resume it. */
 function isTurnStoppedEntry(e: SessionEntry): boolean {
   return e.type === "system" && (e.payload as { kind?: unknown } | null)?.kind === TURN_STOPPED_KIND;
 }
@@ -47,8 +37,8 @@ export function findTrailingPartialTurn(entries: readonly SessionEntry[], inputT
     }
     if (e.type !== "user") continue;
     if (isOverheardEntry(e)) continue;
+    if (isResumeNote(e)) continue;
     const t = entryText(e);
-    if (isResumeNote(t)) continue;
     return t.startsWith(text) ? { userSeq: e.seq, workEntries } : null;
   }
   return null;
@@ -82,7 +72,7 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
       workEntries += 1;
       continue;
     }
-    if (isOverheardEntry(e) || isResumeNote(entryText(e))) continue;
+    if (isOverheardEntry(e) || isResumeNote(e)) continue;
     break;
   }
   return { userSeq, workEntries, ...(answer ? { answer } : {}) };
@@ -99,7 +89,6 @@ export type ResumeStrategy =
   | { kind: "note" }
   | { kind: "continue" }
   | { kind: "retry"; call: ResumableToolCall }
-  /** Tool calls whose outcome was never recorded: record what happened as their results, then continue. */
   | { kind: "settle"; calls: Array<{ callId: string; tool: string }> };
 
 export function resumeStrategy(entries: readonly SessionEntry[], partial: PartialTurn): ResumeStrategy {
@@ -120,8 +109,6 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
     const last = turn.findLast((e) => MODEL_TURN_ENTRY_TYPES.has(e.type) || isTurnStoppedEntry(e));
     return last?.type === "tool_result" ? { kind: "continue" } : { kind: "note" };
   }
-  // Calls with no result at all get one recording what happened; a call whose re-run was itself cut off
-  // already has a result, so it only gets the note.
   const unrecorded = dangling.flatMap((e) => {
     const p = e.payload as { callId?: unknown; tool?: unknown } | null;
     return typeof p?.callId === "string" && !withResult.has(p.callId)
@@ -151,38 +138,14 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   };
 }
 
-export type ResumeCause = RunStop;
-
-/** Why the previous attempt stopped, from the cause the run store recorded. Never guessed. */
-function causePhrase(cause: ResumeCause | undefined): string {
-  switch (cause?.kind) {
-    case "shutdown":
-      return "a routine platform deploy";
-    case "lease_expired":
-      return "the worker crashed";
-    case "error":
-      return cause.code ? `a model-provider call failed (${providerDetail(cause)})` : "an internal error";
-    default:
-      return "cause not recorded";
-  }
-}
-
-function providerDetail(cause: { code?: string; status?: number }): string {
-  return `${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""}`;
-}
-
 const QUIET = "Don't mention this.";
 
-export function resumeNote(opts?: {
-  strategy?: ResumeStrategy;
-  backgroundJobs?: boolean;
-  cause?: ResumeCause;
-}): string {
-  const why = causePhrase(opts?.cause);
+export function resumeNote(opts?: { strategy?: ResumeStrategy; backgroundJobs?: boolean; cause?: RunStop }): string {
+  const why = stopCause(opts?.cause)?.phrase ?? "cause not recorded";
   if (opts?.strategy?.kind === "restart")
-    return `${RESUME_HEAD} stopped before recording any work — ${why}. Start the request now. ${QUIET}`;
+    return `[system] Your previous attempt stopped before recording any work — ${why}. Start the request now. ${QUIET}`;
   return [
-    `${RESUME_HEAD} was interrupted mid-turn — ${why}. Continue from the recorded work; don't repeat completed steps. ${QUIET}`,
+    `[system] Your previous attempt was interrupted mid-turn — ${why}. Continue from the recorded work; don't repeat completed steps. ${QUIET}`,
     opts?.backgroundJobs
       ? "Background jobs on your computer kept running — check them with `background` list/poll."
       : "",
@@ -191,12 +154,23 @@ export function resumeNote(opts?: {
     .join(" ");
 }
 
-/** Told to the model when a task continues on a new runtime, or after its context was cut down. */
+export function unrecordedResultEntries(
+  strategy: Extract<ResumeStrategy, { kind: "settle" }>,
+  stop: RunStop | undefined,
+  scopeLabel: NewEntry["scopeLabel"],
+): NewEntry[] {
+  return strategy.calls.map((call) => ({
+    type: "tool_result",
+    payload: { tool: call.tool, callId: call.callId, isError: true, result: unrecordedToolResult(stop) },
+    scopeLabel,
+  }));
+}
+
 export function runtimeSwitchNote(choice: RuntimeChoice | undefined): string {
   const head = choice
-    ? `${RUNTIME_HEAD} to ${choice.modelId}${choice.fastMode ? " fast" : ""}${
+    ? `[system] Runtime switched to ${choice.modelId}${choice.fastMode ? " fast" : ""}${
         choice.effortLevel && choice.effortLevel !== "auto" ? `; effort ${choice.effortLevel}` : ""
       }.`
-    : `${TRIMMED_HEAD} without a new summary.`;
+    : "[system] Context was trimmed without a new summary.";
   return `${head} Continue from the recorded work; don't repeat completed actions or ask the user to restate.`;
 }

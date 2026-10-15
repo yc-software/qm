@@ -1,4 +1,3 @@
-import { isResumeNote } from "../src/core/turn-resume.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -298,7 +297,7 @@ test("a resume whose recorded work ends at a tool result asks the harness to con
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, true], "unchanged inventories preserve assistant continuation");
   assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
-  assert.ok(isResumeNote(turns[1]!), "the note still travels as the fallback input");
+  assert.match(turns[1]!, /^\[system\] Your previous attempt/, "the note still travels as the fallback input");
   assert.equal((await asks()).length, 1);
 });
 

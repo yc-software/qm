@@ -812,3 +812,25 @@ for (const shutdown of [false, true]) {
     }
   });
 }
+
+test("Claude records the stop when the worker cancels a turn before any output", async () => {
+  const waiting = Promise.withResolvers<void>();
+  const cancel = new AbortController();
+  currentScript = async function* () {
+    waiting.resolve();
+    await new Promise((resolve) => cancel.signal.addEventListener("abort", resolve, { once: true }));
+    yield* [];
+  };
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({ input: "go", cancel: cancel.signal });
+  const running = harness.turns.runTurn(turn);
+  await waiting.promise;
+  cancel.abort();
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.equal(result.reply, "");
+  assert.deepEqual(
+    entries.filter((e) => e.type !== "user").map((e) => e.payload),
+    [{ kind: "turn_stopped", reason: "because the run was cancelled" }],
+  );
+});
