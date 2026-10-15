@@ -3,7 +3,7 @@ import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import { brokerCredentialAuthHeader } from "./api/credential-broker.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, routeTurnRuntime } from "./decisions/hooks.ts";
+import { createDecisionHooks, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -1504,11 +1504,6 @@ export function buildApp(
   };
   const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
     await refreshModels();
-    if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-      if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-        throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-      return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-    }
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,
@@ -1519,17 +1514,22 @@ export function buildApp(
         hydrateModelCatalog,
         input.runtimePurpose,
       );
-    return resolve(
-      await routeTurnRuntime(input.runtime, input.continueTurn, () =>
-        decide("turn_start", input.input, {
-          ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-          scopeLabel: input.scopeLabel,
-          sessionId: input.session.id,
-          ...(input.runId ? { runId: input.runId } : {}),
-          ...(input.cancel ? { cancel: input.cancel } : {}),
-        }),
-      ),
-    );
+    const routed = (
+      await decide("turn_start", turnStartState(input), {
+        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+        scopeLabel: input.scopeLabel,
+        sessionId: input.session.id,
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.cancel ? { cancel: input.cancel } : {}),
+      })
+    )?.runtime;
+    if (routed) return resolve(routed);
+    if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+      if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+        throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+      return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
+    }
+    return resolve(input.runtime);
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {

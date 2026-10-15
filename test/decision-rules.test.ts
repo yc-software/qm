@@ -11,7 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
-import { routeTurnRuntime } from "../src/decisions/hooks.ts";
+import { turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -404,17 +404,24 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
   );
 });
 
-test("turn_start routing also applies when the turn already names a model", async () => {
-  const web = { harnessId: "claude", modelId: "claude-opus", effortLevel: "max" };
-  const routed = { modelId: "m-deep" };
-  assert.deepEqual(await routeTurnRuntime(web, false, async () => ({ runtime: routed })), routed);
-  assert.deepEqual(await routeTurnRuntime(web, false, async () => undefined), web);
-  assert.deepEqual(await routeTurnRuntime(undefined, false, async () => ({})), undefined);
-  let asked = false;
-  const kept = await routeTurnRuntime(web, true, async () => {
-    asked = true;
-    return { runtime: routed };
+test("turn_start rules see the turn's context alongside the message", () => {
+  const state = turnStartState({
+    input: "Audit our session cookies",
+    surfaceName: "web",
+    runtime: { harnessId: "claude", modelId: "claude-opus" },
+    runtimePinned: true,
+    continueTurn: true,
+    scopeLabel: "personal:someone@example.com",
   });
-  assert.equal(kept, web);
-  assert.equal(asked, false, "a continued turn is never reclassified");
+  for (const line of [
+    "- surface: web",
+    "- purpose: interactive",
+    "- scope: personal",
+    "- requested runtime: claude/claude-opus",
+    "- model account: the user's own provider account",
+    "- continued turn: yes",
+  ])
+    assert.ok(state.includes(line), line);
+  assert.ok(state.endsWith("Latest message:\nAudit our session cookies"));
+  assert.ok(turnStartState({ input: "hi", scopeLabel: "org:x" }).includes("- requested runtime: none"));
 });

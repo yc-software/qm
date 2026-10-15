@@ -4,13 +4,30 @@ import type { DecisionStore } from "./store.ts";
 
 const HOOK_TIMEOUT_MS = 5_000;
 
-export async function routeTurnRuntime<R extends object>(
-  requested: R | undefined,
-  continueTurn: boolean | undefined,
-  classify: () => Promise<{ runtime?: R } | undefined>,
-): Promise<R | undefined> {
-  if (continueTurn) return requested;
-  return (await classify())?.runtime ?? requested;
+export function turnStartState(turn: {
+  input: string;
+  surfaceName?: string;
+  runtimePurpose?: string;
+  runtime?: { harnessId?: string; modelId?: string };
+  runtimePinned?: boolean;
+  continueTurn?: boolean;
+  scopeLabel: string;
+}): string {
+  const requested = turn.runtime?.modelId
+    ? [turn.runtime.harnessId, turn.runtime.modelId].filter(Boolean).join("/")
+    : "none (org default applies)";
+  return [
+    "Turn context:",
+    `- surface: ${turn.surfaceName ?? "unknown"}`,
+    `- purpose: ${turn.runtimePurpose ?? "interactive"}`,
+    `- scope: ${turn.scopeLabel.split(":")[0]}`,
+    `- requested runtime: ${requested}`,
+    `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
+    `- continued turn: ${turn.continueTurn ? "yes, resuming after a recorded tool result" : "no"}`,
+    "",
+    "Latest message:",
+    turn.input,
+  ].join("\n");
 }
 
 export interface DecisionTurn {
