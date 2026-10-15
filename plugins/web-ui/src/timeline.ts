@@ -31,7 +31,6 @@ export interface ToolPayload {
   timedOut?: boolean;
   isError?: boolean;
   result?: string;
-  unscreened?: boolean;
   quarantined?: boolean;
   action?: string;
   process_id?: string;
