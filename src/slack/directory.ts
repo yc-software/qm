@@ -41,6 +41,7 @@ interface ChannelRow {
   name: string;
   isPrivate?: boolean;
   isExternal?: boolean;
+  hasGuests?: boolean;
 }
 interface ChannelMembershipRow {
   channelId: string;
@@ -297,10 +298,12 @@ export function createDirectory(deps: {
     channelMembers: ChannelMembershipRow[];
     channelRosterIds: string[];
     channelRevocations: ChannelMembershipRow[];
+    guestChannelIds: Set<string>;
   }> {
     const refs = [...publicChannels, ...privateChannels];
     const channelMembers: ChannelMembershipRow[] = [];
     const channelRosterIds: string[] = [];
+    const guestChannelIds = new Set<string>();
     const channelRevocations = [...invalidations].flatMap(([channelId, principalIds]) =>
       [...principalIds].map((principalId) => ({ channelId, principalId })),
     );
@@ -316,11 +319,12 @@ export function createDirectory(deps: {
       if (!internalIds) continue;
       const revoked = invalidations.get(channel.id);
       channelRosterIds.push(channel.id);
+      if (roster.actors.some((actor) => actor.isExternalGuest)) guestChannelIds.add(channel.id);
       for (const principalId of internalIds) {
         if (!revoked?.has(principalId)) channelMembers.push({ channelId: channel.id, principalId });
       }
     }
-    return { channelMembers, channelRosterIds, channelRevocations };
+    return { channelMembers, channelRosterIds, channelRevocations, guestChannelIds };
   }
 
   async function listBotGroupDms(client: any): Promise<string[]> {
@@ -382,21 +386,22 @@ export function createDirectory(deps: {
       console.error("[slack-plugin] channel list failed:", (err as Error).message);
       return null;
     }
-    const channels = [...listed.publicChannels, ...listed.privateChannels].map((channel) => ({
-      channelId: channel.id,
-      name: channel.name,
-      ...(channel.info.is_private ? { isPrivate: true } : {}),
-      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
-    }));
     const fullRefresh =
       !targetChannelIds?.size &&
       (lastFullRosterFetchAt === undefined || fetchedAt - lastFullRosterFetchAt >= CHANNEL_MEMBERS_TTL_MS);
-    const computed = await computeChannelMembership(
+    const { guestChannelIds, ...computed } = await computeChannelMembership(
       client,
       listed.publicChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
       listed.privateChannels.filter((channel) => fullRefresh || targetChannelIds?.has(channel.id)),
       invalidations,
     );
+    const channels = [...listed.publicChannels, ...listed.privateChannels].map((channel) => ({
+      channelId: channel.id,
+      name: channel.name,
+      ...(channel.info.is_private ? { isPrivate: true } : {}),
+      ...(isExternallyShared(channel.info) ? { isExternal: true } : {}),
+      ...(guestChannelIds.has(channel.id) ? { hasGuests: true } : {}),
+    }));
     let groups:
       | {
           groupMembers: GroupMembershipRow[];

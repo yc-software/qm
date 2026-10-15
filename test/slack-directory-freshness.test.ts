@@ -30,9 +30,10 @@ function fixture(t: TestContext) {
     };
     const pushes: Parameters<SlackCoreClient["pushDirectory"]>[0][] = [];
     const user = { id: "U_ONE", team_id: "T_TEST" };
+    const guest = { id: "U_GUEST", team_id: "T_TEST", is_restricted: true };
     const client = {
       async *paginate(method: string, args: { types?: string }) {
-        if (method === "users.list") yield { members: [user] };
+        if (method === "users.list") yield { members: [user, guest] };
         else if (method === "conversations.list") {
           if (state.failList) throw Error("list unavailable");
           yield { channels: args.types === "mpim" ? [] : state.channels };
@@ -42,7 +43,7 @@ function fixture(t: TestContext) {
           yield { members: state.memberIds };
         }
       },
-      users: { info: async () => ({ user }) },
+      users: { info: async ({ user: id }: { user: string }) => ({ user: id === guest.id ? guest : user }) },
     };
     const directory = createDirectory({
       core: {
@@ -105,6 +106,23 @@ test("a fresh listing discovers channels without replaying cached rosters", asyn
   assert.equal(pushed.groupMembers, undefined);
   assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
   assert.equal(a.state.memberCalls, 1);
+});
+
+test("a channel with a Slack guest keeps its roster but is not reported as all-internal", async (t) => {
+  const { core, advance, store } = fixture(t);
+  const a = core();
+  await a.refresh();
+  assert.equal((await store.conversationMembers("channel", "C_ONE"))?.length, 1);
+  advance(3_601_000);
+  a.state.memberIds = ["U_ONE", "U_GUEST"];
+  const pushed = await a.refresh();
+  assert.equal(pushed.channels?.[0]?.hasGuests, true);
+  assert.equal(await store.channelMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.channelMember("C_ONE", "U_GUEST"), false);
+  assert.equal(await store.conversationMembers("channel", "C_ONE"), undefined);
+  advance();
+  await a.refresh();
+  assert.equal(await store.conversationMembers("channel", "C_ONE"), undefined);
 });
 
 test("fresh listings update names and privacy while roster refresh is throttled", async (t) => {
