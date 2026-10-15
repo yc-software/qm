@@ -1907,8 +1907,6 @@ export function buildApp(
     statements: [
       "DROP TABLE IF EXISTS turn_wall_clock_configs",
       "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
-      // Let a rolled-back server recreate the empty table instead of failing its startup read.
-      `DELETE FROM qm_schema_migrations WHERE id = 'durable-map/turn_wall_clock_configs/0001'`,
     ],
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
