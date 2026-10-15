@@ -3,31 +3,36 @@ import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../
 import { createIntersectionBackend } from "../search/backends.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import type { Principal } from "../types.ts";
+import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
-function conversationBackend(app: App): SearchBackend {
+function conversationBackend(app: App, publicWebUrl: string | undefined): SearchBackend {
   return createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
     searchForPrincipal: async (principal, query, limit) =>
-      (await app.searchSessions(principal.id, query, limit)).map((hit) => ({
-        id: `${hit.sessionId}:${hit.seq}`,
-        type: "conversation" as const,
-        ...(hit.title ? { title: hit.title } : {}),
-        snippet: hit.snippet,
-        createdAt: hit.createdAt,
-        metadata: {
-          sessionId: hit.sessionId,
-          seq: hit.seq,
-          scopeId: hit.scopeId,
-          entryType: hit.entryType,
-          ...(hit.surface ? { surface: hit.surface } : {}),
-          ...(hit.channelName ? { channelName: hit.channelName } : {}),
-          ...(hit.author ? { author: hit.author } : {}),
-        },
-      })),
+      (await app.searchSessions(principal.id, query, limit)).map((hit) => {
+        const url = conversationWebUrl(publicWebUrl, hit.sessionId);
+        return {
+          id: `${hit.sessionId}:${hit.seq}`,
+          type: "conversation" as const,
+          ...(hit.title ? { title: hit.title } : {}),
+          snippet: hit.snippet,
+          ...(url ? { url } : {}),
+          createdAt: hit.createdAt,
+          metadata: {
+            sessionId: hit.sessionId,
+            seq: hit.seq,
+            scopeId: hit.scopeId,
+            entryType: hit.entryType,
+            ...(hit.surface ? { surface: hit.surface } : {}),
+            ...(hit.channelName ? { channelName: hit.channelName } : {}),
+            ...(hit.author ? { author: hit.author } : {}),
+          },
+        };
+      }),
   });
 }
 function searchableFile(mimetype: string, name: string): boolean {
@@ -140,7 +145,7 @@ export function createSearchMethods(
         error instanceof Error ? error.message : String(error),
       ),
   };
-  const conversationsBackend = conversationBackend(app);
+  const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
   const core = createCoreSearch(
     [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
     options,
