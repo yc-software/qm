@@ -310,7 +310,7 @@ import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts"
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
-import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
+import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
@@ -504,8 +504,6 @@ export interface BuiltApp {
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
-  browserModelGateway?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
@@ -1415,8 +1413,6 @@ export function buildApp(
     ...(await resolveModelProviderKeys()),
     ...(await resolveCompanySubscriptionKeys()),
   });
-  const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
-    includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
   const companyModelId = (id: string): string => {
     if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
     const subscription = codexSubscriptionModelId(id);
@@ -2914,8 +2910,6 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
-    browserModelGateway: gatewayTransport,
-    resolveBrowserCompanyKeys,
     modelGateway,
     modelCredentials,
     userModelCredentials,
@@ -3005,8 +2999,6 @@ export function serverDeps(
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
-    browserModelGateway: built.browserModelGateway,
-    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
     ...(built.backgroundOwnership

@@ -1,4 +1,3 @@
-import { browserModelRoutes } from "./browser-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
@@ -81,7 +80,6 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  ...browserModelRoutes,
   ...swarmRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,

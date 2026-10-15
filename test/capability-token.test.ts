@@ -229,7 +229,7 @@ test("no-expiry capabilities are restricted to sandbox audiences and retain sign
     assert.ok(await verifyCapabilityToken(token, SECRET, Number.MAX_SAFE_INTEGER));
     assert.equal(await verifyCapabilityToken(token, "rotated-secret"), null);
   }
-  for (const aud of [undefined, "browser-model", "blob-transfer", "secret-drop", "unknown"]) {
+  for (const aud of [undefined, "blob-transfer", "secret-drop", "unknown"]) {
     const token = await mintCapabilityToken(claims({ aud, exp: 0 }), SECRET);
     assert.equal(await verifyCapabilityToken(token, SECRET), null);
   }

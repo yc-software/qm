@@ -1015,7 +1015,7 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
   );
 });
 
-test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STEPS)", async () => {
+test("browse-lab receives model and configured step limit without managed model credentials", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -1030,7 +1030,14 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     return realProvision(layers, opts);
   };
 
-  const res = await app.turn(dm("!run echo steps"));
+  const executions: SandboxHandle[] = [];
+  const realRun = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    executions.push(handle);
+    return realRun(handle, command, opts);
+  };
+
+  const res = await app.turn(dm('!execute {"command":"echo steps"}'));
   assert.equal(res.status, "ok");
   assert.equal(
     captured?.env?.BROWSE_LAB_MAX_STEPS,
@@ -1042,13 +1049,18 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     "claude-opus-5",
     "with no override the browse model follows the deployment base model",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
   built.config.setBrowseMaxSteps("org:default-org", 120);
   built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
-  const res2 = await app.turn(dm("!run echo steps again"));
+  const res2 = await app.turn(dm('!execute {"command":"echo steps again"}'));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
+  const executionEnv = executions.at(-1)?.env;
+  assert.equal(executionEnv?.BROWSE_LAB_MAX_STEPS, "120");
+  assert.equal(executionEnv?.BROWSE_LAB_MODEL, "claude-opus-5");
+  assert.equal(executionEnv?.BROWSE_LAB_MODEL_PROVIDER, undefined);
+  assert.equal(executionEnv?.BROWSE_LAB_BASE_URL, undefined);
+  assert.equal(executionEnv?.BROWSE_LAB_MODEL_TOKEN, undefined);
   assert.equal(
     captured?.env?.BROWSE_LAB_MODEL,
     "claude-opus-5",
@@ -1056,7 +1068,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
 });
 
-test("a legacy browse-only model cannot strand managed default-model browsing", async () => {
+test("a legacy browse-only override does not change the browse-lab model name", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1080,10 +1092,9 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     "claude-opus-5",
     "the unresolvable override is ignored in favour of the base model, not propagated",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
-test("browse follows a live org base model change, not the process-start default", async () => {
+test("browse-lab model name follows a live org base model change, not the process-start default", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     signingSecret: "test-secret",
@@ -1110,10 +1121,9 @@ test("browse follows a live org base model change, not the process-start default
     "gpt-5.6-sol",
     "an admin changing the org base model moves browse too, without a restart",
   );
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed");
 });
 
-test("an OpenAI deployment provisions managed browser access without its provider key", async () => {
+test("an OpenAI deployment supplies the browse-lab model name without model access", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     orgId: "acme",
@@ -1133,11 +1143,10 @@ test("an OpenAI deployment provisions managed browser access without its provide
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:oa1" } }));
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "gpt-5.6-sol");
-  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "core selects the provider");
   assert.ok(!Object.values(captured?.env ?? {}).includes("openai-org-key"));
-  const claims = await verifyCapabilityToken(captured!.env!.BROWSE_LAB_MODEL_TOKEN!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims?.browserModel, "gpt-5.6-sol");
-  assert.equal(claims?.browserAccount, "company");
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, undefined);
+  assert.equal(captured?.env?.BROWSE_LAB_BASE_URL, undefined);
+  assert.equal(captured?.env?.BROWSE_LAB_MODEL_TOKEN, undefined);
 });
 
 test("turn timezone rides the prompt and control-plane capability token", async () => {

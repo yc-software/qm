@@ -22,8 +22,6 @@ export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
 
 export const SANDBOX_CAPABILITY_TTL_MS = parseSandboxCapabilityTtlMs(undefined);
 
-export const BROWSER_MODEL_AUD = "browser-model";
-
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
 export const CREDENTIAL_BROKER_AUD = "credential-broker";
@@ -41,8 +39,6 @@ type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; bl
 export interface CapabilityClaims {
   externalSlack?: true;
   actorId: string;
-  browserModel?: string;
-  browserAccount?: "company" | "personal" | "openai" | "anthropic";
   aud?: string;
   scopeId: ScopeId;
   scopeVersion?: string;
@@ -132,13 +128,6 @@ export async function verifyCapabilityToken(
   ) {
     return null;
   }
-  if (
-    claims.browserAccount !== undefined &&
-    !["company", "personal", "openai", "anthropic"].includes(claims.browserAccount)
-  )
-    return null;
-  if (claims.browserModel !== undefined && (typeof claims.browserModel !== "string" || !claims.browserModel))
-    return null;
   if (claims.timezone !== undefined && !isValidCapabilityTimezone(claims.timezone)) return null;
   if (claims.scopeVersion !== undefined && typeof claims.scopeVersion !== "string") return null;
   if (claims.destinations !== undefined && !Array.isArray(claims.destinations)) return null;
