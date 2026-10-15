@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
-import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord, type GoalRecord } from "../src/harness/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
@@ -179,7 +179,7 @@ test("a cancel landing after the turn completed takes the normal exit, not the s
   }
 });
 
-test("Pi rehydrates a durable receipt and preserves its active goal when the worker cancels", async () => {
+test("Pi preserves the session's active goal when the worker cancels", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
   const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
@@ -195,21 +195,17 @@ test("Pi rehydrates a durable receipt and preserves its active goal when the wor
   });
   goal.tokensUsed = 1234;
   try {
-    const turn = cancelTurn("cancel-rehydrated-goal", controller.signal, sink);
-    turn.history = [
-      {
-        type: "tool_result",
-        payload: { tool: "goal", action: "create", goal },
-        seq: 0,
-        sessionId: turn.session.id,
-        parentSeq: null,
-        createdAt: 1,
-        scopeLabel: turn.scopeLabel,
+    const saved: GoalRecord[] = [];
+    const turn = cancelTurn("cancel-rehydrated-goal", controller.signal, sink, {
+      goal: structuredClone(goal),
+      saveGoal: async (record) => {
+        saved.push(structuredClone(record));
       },
-    ];
+    });
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.stopped, true);
-    const { activeMs, ...persisted } = latestGoalRecord(sink.entries)!;
+    assert.ok(!sink.entries.some((entry) => entry.type === "system"), "no goal snapshot entries");
+    const { activeMs, ...persisted } = saved.at(-1)!;
     assert.deepEqual(persisted, goal);
     assert.ok(activeMs! >= 0 && activeMs! < 60_000, "the cancelled turn banks only its own running time");
   } finally {

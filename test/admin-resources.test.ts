@@ -53,7 +53,7 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("security flags are visible and legacy session taint can be released by an org admin", async () => {
+test("security flags are visible to an org admin", async () => {
   const srv = start();
   try {
     srv.built.auditLog.record({
@@ -78,29 +78,6 @@ test("security flags are visible and legacy session taint can be released by an 
         },
       ],
     });
-
-    const session = await srv.built.sessions.getOrCreateByThread("legacy-taint", "dm", "personal:U1");
-    const lease = (await srv.built.sessions.acquireLease(session.id)).lease!;
-    await srv.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "legacy", securityTainted: true },
-      scopeLabel: "personal:U1",
-    });
-    await srv.built.sessions.releaseLease(lease);
-    const denied = await fetch(`${srv.base}/v1/admin/security/release`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
-      body: JSON.stringify({ sessionId: session.id }),
-    });
-    assert.equal(denied.status, 403);
-    const released = await fetch(`${srv.base}/v1/admin/security/release`, {
-      method: "POST",
-      headers: ADMIN,
-      body: JSON.stringify({ sessionId: session.id }),
-    });
-    assert.equal(released.status, 200);
-    const payload = (await srv.built.sessions.getEntries(session.id))[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.securityTainted, undefined);
   } finally {
     await srv.close();
   }
@@ -126,65 +103,6 @@ test("GET /v1/admin/resources returns a manifest entry for every registered reso
     assert.equal(byId.get("service-credentials")?.target, "org");
     assert.equal(byId.get("service-credentials")?.secret, true);
     assert.equal(byId.has("import"), false);
-  } finally {
-    await srv.close();
-  }
-});
-
-test("turn wall-clock governance validates, round-trips, clears, and is org-admin-only", async () => {
-  const srv = start();
-  const url = `${srv.base}/v1/admin/scopes/org:default-org/turn-wall-clock`;
-  try {
-    assert.equal(
-      (
-        await fetch(url, {
-          method: "PUT",
-          headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
-          body: JSON.stringify({ sec: 60 }),
-        })
-      ).status,
-      403,
-    );
-    assert.equal(
-      (
-        await fetch(`${srv.base}/v1/admin/scopes/channel:C1/turn-wall-clock`, {
-          method: "PUT",
-          headers: ADMIN,
-          body: JSON.stringify({ sec: 60 }),
-        })
-      ).status,
-      400,
-    );
-    for (const sec of [59, 86_401, 60.5, "nope"]) {
-      assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec }) })).status, 400);
-    }
-    assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "120" }) })).status,
-      200,
-    );
-    let body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, 120);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: 0 }) })).status, 200);
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, 0);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "" }) })).status, 200);
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, null);
-    assert.equal((await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: 120 }) })).status, 200);
-    assert.equal(
-      (await fetch(url, { method: "PUT", headers: ADMIN, body: JSON.stringify({ sec: "  " }) })).status,
-      200,
-    );
-    body = (await (await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN })).json()) as {
-      turnWallClockSec: number | null;
-    };
-    assert.equal(body.turnWallClockSec, null);
   } finally {
     await srv.close();
   }

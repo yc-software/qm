@@ -16,7 +16,7 @@ async function seed(store: SessionStore, threadRef: string) {
   const add = (type: "user" | "assistant" | "system", payload: unknown) =>
     store.append(lease!, { type, payload, scopeLabel: scope });
   await add("user", { text: "ancient one" });
-  await add("user", { text: "ancient two", securityTainted: true });
+  await add("user", { text: "ancient two" });
   await add("system", { ...createContextSummaryPayload(0, "stale summary") });
   await add("user", { text: "middle" });
   const fresh = await add("system", { ...createContextSummaryPayload(3, "fresh summary") });
@@ -31,7 +31,6 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
   const window = await store.getContextWindow(session.id);
 
   assert.equal(window.totalEntries, 7, "full count preserved for guards");
-  assert.equal(window.hasSecurityTaint, true, "taint in the discarded prefix still surfaces");
   assert.deepEqual(
     window.entries.map((e) => e.seq),
     [freshSummarySeq, freshSummarySeq + 1, freshSummarySeq + 2],
@@ -40,14 +39,14 @@ async function exerciseWindow(store: SessionStore, threadRef: string) {
 
   const full = await store.getEntries(session.id);
   assert.deepEqual(
-    forModelContext(window.entries, { includeSecurityTainted: false }),
-    forModelContext(full, { includeSecurityTainted: false }),
+    forModelContext(window.entries),
+    forModelContext(full),
     "model context built from the window is identical to one built from the full history",
   );
 
   const untouched = await store.getOrCreateByThread(`${threadRef}-empty`, "channel", scopeId("channel", "C1"));
   const empty = await store.getContextWindow(untouched.id);
-  assert.deepEqual(empty, { entries: [], totalEntries: 0, hasSecurityTaint: false });
+  assert.deepEqual(empty, { entries: [], totalEntries: 0 });
 }
 
 test("memory store: context window slices at the latest summary and keeps guards whole-history", async () => {
@@ -64,7 +63,6 @@ test("memory store: sessions without a summary return the full history", async (
   const window = await store.getContextWindow(s.id);
   assert.equal(window.entries.length, 2);
   assert.equal(window.totalEntries, 2);
-  assert.equal(window.hasSecurityTaint, false);
 });
 
 test(

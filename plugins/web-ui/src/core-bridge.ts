@@ -15,6 +15,7 @@ import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 import { messageEntrySeqs } from "./message-link.ts";
+import type { GoalStripState } from "./goal-strip.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -255,7 +256,7 @@ export interface CoreProject {
   memberIds: string[];
   channelMemberIds?: string[];
   scopeId: string;
-  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
+  members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
   slackChannel?: { channelId: string; channelName: string; linkedBy?: string; linkedAt?: number };
   createdAt?: number;
   updatedAt?: number;
@@ -263,7 +264,7 @@ export interface CoreProject {
 
 export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): string | null {
   if (!workspaceUrl) return null;
-  const m = threadRef.match(/^(?:dm|ch):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
+  const m = threadRef.match(/^(?:dm|ch|grp):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
   if (!m) return null;
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
@@ -348,6 +349,8 @@ export interface TranscriptPage {
   entries: SessionEntry[];
   earlierEntries?: number;
   pins?: SessionPin[];
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
 }
 
 export async function fetchTranscript(
@@ -442,6 +445,19 @@ export interface WorkBlock {
   stale?: boolean;
   activity: ToolActivity[];
   pendingApprovals?: PendingApproval[];
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
+}
+
+export interface TurnRuntime {
+  harnessId: string;
+  modelId: string;
+  label?: string;
+  change?: { rule: string } | { agent: "task" | "scope" };
+}
+
+export function switchedDefault(runtime: TurnRuntime | null | undefined): boolean {
+  return !!runtime?.change && "agent" in runtime.change && runtime.change.agent === "scope";
 }
 
 export function workPausedForApproval(work: WorkBlock): boolean {
@@ -487,6 +503,8 @@ export type AssistantWork = AssistantMessage & {
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
   input?: {
     runId: string;
     seq: number | null;
@@ -1184,15 +1202,14 @@ function turnRequestBody(
   const { idempotencyKey, attachments = [] } = send;
   const turnOptions = getTurnOptions?.() ?? {};
   const thinkingLevel =
-    !turnOptions.harness || harnessSupportsEffort(turnOptions.harness)
+    turnOptions.harness && harnessSupportsEffort(turnOptions.harness)
       ? (turnOptions.effortLevel ?? agent.state.thinkingLevel ?? defaultEffortForModel(model))
       : undefined;
   const timezone = browserTimezone();
   return {
     text,
     threadRef,
-    ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
-    model: model.id,
+    ...(turnOptions.harness ? { harness: turnOptions.harness, model: model.id } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
@@ -1467,6 +1484,14 @@ function applyRun(
     notify?.();
   }
   setWorkStale(work, run.stale === true, notify);
+  if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
+    work.goal = run.goal;
+    notify?.();
+  }
+  if (work && run.runtime && JSON.stringify(run.runtime) !== JSON.stringify(work.runtime)) {
+    work.runtime = run.runtime;
+    notify?.();
+  }
   const p = typeof run.partial === "string" ? run.partial : "";
   const startOffset = run.partialStartOffset ?? 0;
   if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
@@ -1803,6 +1828,7 @@ interface HistoryUserMessage {
   attachments?: HistoryAttachment[];
   steered?: boolean;
   speaker?: string;
+  speakerId?: string;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -1924,9 +1950,9 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
 }
 
 function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
-  const p = payload as { kind?: unknown; cancelledBy?: unknown; goal?: { objective?: unknown } | null } | null;
-  if (p?.kind !== "goal" || typeof p.cancelledBy !== "string" || typeof p.goal?.objective !== "string") return null;
-  return { role: "system-note", note: "goal_cancelled", content: p.goal.objective };
+  const p = payload as { kind?: unknown; objective?: unknown } | null;
+  if (p?.kind !== "goal_cancelled" || typeof p.objective !== "string") return null;
+  return { role: "system-note", note: "goal_cancelled", content: p.objective };
 }
 
 function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
@@ -1962,6 +1988,7 @@ export function userEntryMessage(
     runId?: string;
     steered?: boolean;
     name?: string;
+    speakerId?: string;
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
@@ -1978,6 +2005,7 @@ export function userEntryMessage(
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),
     ...(payload?.steered ? { steered: true } : {}),
+    ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
     ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
     ...(attachments.length

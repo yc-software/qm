@@ -19,6 +19,13 @@ const providerCoverage: Record<SandboxBackendName, true> = {
 
 export const sandboxProviders = Object.keys(providerCoverage) as SandboxBackendName[];
 
+export function succeededWithStdout(p: Record<string, unknown>, stdout: string): boolean {
+  const structured = "code" in p || "timedOut" in p || "action" in p;
+  return (
+    p.isError === false && p.result === `${stdout}\n[exit 0]` && (!structured || (p.code === 0 && p.timedOut === false))
+  );
+}
+
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
   const calls = new Set<string>();
   let executed = false;
@@ -30,14 +37,7 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       calls.add(p.callId);
       continue;
     }
-    if (entry.type !== "tool_result" || !calls.has(p.callId) || p.isError !== false) continue;
-    const structured = "code" in p || "timedOut" in p || "stdout" in p || "action" in p;
-    if (
-      structured
-        ? p.background !== true && p.code === 0 && p.timedOut === false && p.stdout === stdout
-        : p.result === `${stdout}\n[exit 0]`
-    )
-      executed = true;
+    if (entry.type === "tool_result" && calls.has(p.callId) && succeededWithStdout(p, stdout)) executed = true;
   }
   assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
   assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);

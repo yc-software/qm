@@ -54,7 +54,7 @@ import {
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
-import { listSecurityFlags, releaseSecurityTaint } from "./admin/security.ts";
+import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
@@ -135,7 +135,6 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/errors", auth: "either", handle: listAdminErrors },
   { method: "GET", path: "/v1/admin/audit", auth: "either", handle: listAdminAudit },
   { method: "GET", path: "/v1/admin/security/flags", auth: "either", handle: listSecurityFlags },
-  { method: "POST", path: "/v1/admin/security/release", auth: "either", handle: releaseSecurityTaint },
   {
     match: (m, p) =>
       m === "GET" && (p === "/v1/admin/crons" || p === "/v1/admin/deployments" || p === "/v1/admin/skills"),

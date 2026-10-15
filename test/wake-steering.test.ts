@@ -206,7 +206,7 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
   assert.equal(
     (await built.signals.takePending(liveRunId)).length,
     0,
-    "tainted steer data never reaches the live harness",
+    "flagged steer data never reaches the live harness",
   );
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_block"));
 });

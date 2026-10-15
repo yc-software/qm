@@ -64,31 +64,45 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 
-  test(`batch appends keep recent-entry boundaries per session: ${backend}`, { skip }, async () => {
+  test(`session goals live on the session row behind its lease: ${backend}`, { skip }, async () => {
     const store =
       backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
     const scope = scopeId("personal", "batch");
+    const goal = (objective: string) => ({
+      objective,
+      status: "active" as const,
+      tokensUsed: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
     const ids: string[] = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
       ids.push(session.id);
-      const { lease } = await store.acquireLease(session.id);
-      assert.ok(lease);
-      const entries = await store.appendMany(
-        lease,
-        Array.from({ length: 5 }, (_, n) => ({
-          type: "user" as const,
-          payload: { text: `message ${n}` },
-          scopeLabel: scope,
-        })),
-      );
-      assert.equal(entries.length, 5);
-      await store.releaseLease(lease);
     }
-    const recent = await store.getRecentEntries([...ids, "missing", ids[0]!], 2);
-    for (const id of ids) assert.deepEqual(recent.get(id), await store.getEntries(id, { sinceSeq: 2 }));
-    assert.deepEqual(recent.get("missing"), []);
-    assert.deepEqual(await store.getRecentEntries([], 2), new Map());
+    for (const [i, id] of ids.slice(0, 2).entries()) {
+      const { lease } = await store.acquireLease(id);
+      assert.ok(lease);
+      await store.setGoal(lease, goal(`first ${i}`));
+      const notice = { type: "system" as const, payload: { kind: "goal_notice", n: i }, scopeLabel: scope };
+      await store.setGoal(lease, { ...goal(`goal ${i}`), status: "paused" }, [notice]);
+      await store.releaseLease(lease);
+      await assert.rejects(store.setGoal(lease, goal("stale lease"), [notice]), /valid session lease/);
+      assert.deepEqual(
+        (await store.getEntries(id)).map((entry) => entry.payload),
+        [notice.payload],
+        "the notice lands with the goal and not with a rejected write",
+      );
+    }
+    const found = await store.goals([...ids, "missing"]);
+    assert.deepEqual(
+      [...found.entries()].sort(([a], [b]) => ids.indexOf(a) - ids.indexOf(b)),
+      [
+        [ids[0], { ...goal("goal 0"), status: "paused" }],
+        [ids[1], { ...goal("goal 1"), status: "paused" }],
+      ],
+    );
+    assert.deepEqual(await store.goals([]), new Map());
   });
 
   test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {

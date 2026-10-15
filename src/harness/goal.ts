@@ -328,43 +328,11 @@ export function applyGovernorVerdict(goal: GoalRecord, verdict: GovernorVerdict,
   return effective;
 }
 
-export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
-  const floor = sanitizeFloor(goal.floor);
-  const capTokens = positiveInteger(goal.capTokens);
-  const activeMs = finitePositive(goal.activeMs);
-  const activeSince = finitePositive(goal.activeSince);
-  const {
-    floor: _floor,
-    capTokens: _capTokens,
-    activeMs: _activeMs,
-    activeSince: _activeSince,
-    verifierFeedback: _legacy,
-    ...rest
-  } = goal as GoalRecord & { verifierFeedback?: string };
-  return {
-    ...rest,
-    objective: String(goal.objective ?? ""),
-    tokensUsed: Math.floor(finitePositive(goal.tokensUsed) ?? 0),
-    ...(activeMs ? { activeMs } : {}),
-    ...(activeSince ? { activeSince } : {}),
-    ...(capTokens ? { capTokens } : {}),
-    ...(floor ? { floor } : {}),
-  };
-}
-
 export function goalIsOpen(goal: GoalRecord | null | undefined): goal is GoalRecord {
   return goal?.status === "active" || goal?.status === "paused";
 }
 
-/**
- * Recover the session's open goal from persisted history, newest snapshot
- * first. Only an open (active/paused) goal survives turns: a terminal
- * snapshot (complete, or a legacy blocked/stopped record) is the goal's final record, and reviving it
- * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
- * notice — on every later turn.
- */
-export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
-  const goal = latestGoalRecord(history);
+export function openGoal(goal: GoalRecord | null | undefined): GoalRecord | null {
   return goalIsOpen(goal) ? goal : null;
 }
 
@@ -376,29 +344,12 @@ export function cancelGoal(goal: GoalRecord, note: string, now = Date.now()): vo
   delete goal.governor;
 }
 
-export function goalCancelledNote(goal: GoalRecord): string {
-  return `[goal] The user cancelled this goal; it is no longer enforced and must not be pursued:\n<objective>\n${escapeTags(goal.objective)}\n</objective>`;
+export function goalCancelledPayload(goal: GoalRecord, cancelledBy: string) {
+  return { kind: "goal_cancelled", objective: goal.objective, cancelledBy };
 }
 
-export function latestGoalEntry<T extends { type: string; payload?: unknown }>(entries: ReadonlyArray<T>): T | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    if (e.type !== "system" && e.type !== "tool_result") continue;
-    const payload = e.payload as { kind?: string; tool?: string; goal?: GoalRecord | null } | null;
-    const carrier = e.type === "system" ? payload?.kind === "goal" : payload?.tool === "goal";
-    if (carrier && payload?.goal) return e;
-  }
-  return null;
-}
-
-export function latestGoalRecord(entries: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
-  const entry = latestGoalEntry(entries);
-  if (!entry) return null;
-  return reviveGoalRecord((entry.payload as { goal: GoalRecord }).goal);
-}
-
-export function goalSnapshotPayload(goal: GoalRecord): { kind: "goal"; goal: GoalRecord } {
-  return { kind: "goal", goal: structuredClone(goal) };
+export function goalCancelledNote(objective: string): string {
+  return `[goal] The user cancelled this goal; it is no longer enforced and must not be pursued:\n<objective>\n${escapeTags(objective)}\n</objective>`;
 }
 
 export function goalReport(goal: GoalRecord): string {

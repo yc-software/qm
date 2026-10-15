@@ -32,6 +32,7 @@ interface SlackMeta {
   ts: string;
   threadTs?: string;
   isDirectMessage?: boolean;
+  userId?: string;
 }
 
 function parseSlackMeta(v: unknown): SlackMeta | undefined {
@@ -41,11 +42,13 @@ function parseSlackMeta(v: unknown): SlackMeta | undefined {
   if (!channelId || !ts) return undefined;
   const channelLabel = clipOpt(v.channelLabel, 120);
   const threadTs = clipOpt(v.threadTs, 40);
+  const userId = clipOpt(v.userId, 40);
   return {
     channelId,
     ts,
     ...(channelLabel ? { channelLabel } : {}),
     ...(threadTs ? { threadTs } : {}),
+    ...(userId ? { userId } : {}),
     ...(typeof v.isDirectMessage === "boolean" ? { isDirectMessage: v.isDirectMessage } : {}),
   };
 }

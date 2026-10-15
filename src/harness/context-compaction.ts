@@ -1,6 +1,6 @@
 import { memoryBoundedEntries } from "../memory/context-boundary.ts";
 import type { SessionEntry } from "../types.ts";
-import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
+import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
 import { isObj } from "../util/objects.ts";
@@ -36,19 +36,12 @@ function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
   );
 }
 
-export function forModelContext(
-  entries: SessionEntry[],
-  opts: { includeSecurityTainted?: boolean } = {},
-): SessionEntry[] {
+export function forModelContext(entries: SessionEntry[]): SessionEntry[] {
   const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
-  const visible = replayable.filter((e) => opts.includeSecurityTainted || !entrySecurityTainted(e));
-  if (!latest) return visible;
+  if (!latest) return replayable;
   const throughSeq = contextSummaryPayload(latest)!.throughSeq;
-  return [
-    ...(visible.includes(latest) ? [latest] : []),
-    ...visible.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq),
-  ];
+  return [latest, ...replayable.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq)];
 }
 
 export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
@@ -59,7 +52,6 @@ export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
       e.type !== "tool_result" &&
       e.type !== "thinking" &&
       e.type !== "text" &&
-      !entrySecurityTainted(e) &&
       (!contextSummaryPayload(e) || e === latest),
   );
 }

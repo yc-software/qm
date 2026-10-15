@@ -11,6 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
+import { turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -48,6 +49,11 @@ const fixed = (p: Record<string, number> | Error, calls: string[][] = []): Decis
     if (p instanceof Error) throw p;
     return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
   },
+});
+
+test("decision questions can exceed 500 characters", () => {
+  const question = "A detailed classification criterion. ".repeat(30);
+  assert.deepEqual(parse({ ...route(), question }), { rule: { ...route(), question } });
 });
 
 test("parseDecisionRule validates hooks, options, actions, onError, provider and model catalog", () => {
@@ -334,7 +340,7 @@ test("most_confident hook points follow the likeliest enforced verdict and error
   assert.equal(failing.decisive?.action, "continue", "a failed classifier falls back to its onError option");
 });
 
-test("the decisions resource checks the model catalog and marks agent writes", async () => {
+test("the decisions resource checks the model catalog and lets an admin's agent enforce", async () => {
   const { ADMIN_RESOURCE_BY_ID } = await import("../src/api/routes/admin-resources.ts");
   const { selectableBaseModels } = await import("../src/model/pi-models.ts");
   const saved: DecisionRule[] = [];
@@ -343,7 +349,8 @@ test("the decisions resource checks the model catalog and marks agent writes", a
     rules: async () => saved,
     saveProvider: async () => {},
     removeProvider: async () => {},
-    saveRule: async (r: DecisionRule, by: { agent: boolean }) => void saved.push({ ...r, id: `${r.id}:${by.agent}` }),
+    saveRule: async (r: DecisionRule, by: { actorId: string }) =>
+      void saved.push({ ...r, id: `${r.id}:${by.actorId}` }),
     removeRule: async () => {},
   };
   const modelId = selectableBaseModels()[0]!.id;
@@ -361,13 +368,13 @@ test("the decisions resource checks the model catalog and marks agent writes", a
       "org:default-org",
     );
   assert.match(err(await apply({ rule: route() })), /m-deep is not in this deployment's model catalog/);
-  assert.deepEqual(await apply({ rule: { ...rule, mode: "observe" } }, { actorId: "admin@x.com" }), { ok: true });
-  assert.deepEqual(await apply({ rule }), { ok: true });
+  assert.deepEqual(await apply({ rule }, { actorId: "admin@x.com" }), { ok: true });
+  assert.deepEqual(await apply({ rule: { ...rule, mode: "observe" } }), { ok: true });
   assert.deepEqual(
     saved.map((r) => [r.id, r.mode]),
     [
-      ["router:true", "observe"],
-      ["router:false", "enforce"],
+      ["router:admin@x.com", "enforce"],
+      ["router:admin@x.com", "observe"],
     ],
   );
 });
@@ -400,5 +407,52 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
       sessionId: "s",
     }),
     undefined,
+  );
+});
+
+test("turn_start rules see the turn's context alongside the message", () => {
+  const state = turnStartState({
+    input: "Audit our session cookies",
+    surfaceName: "web",
+    runtime: { harnessId: "claude", modelId: "claude-opus" },
+    runtimePinned: true,
+    continueTurn: true,
+    scopeLabel: "personal:someone@example.com",
+  });
+  for (const line of [
+    "- surface: web",
+    "- purpose: interactive",
+    "- scope: personal",
+    "- requested runtime: claude/claude-opus",
+    "- model account: the user's own provider account",
+    "- continued turn: yes",
+  ])
+    assert.ok(state.includes(line), line);
+  assert.ok(state.endsWith("Latest message:\nAudit our session cookies"));
+  assert.ok(turnStartState({ input: "hi", scopeLabel: "org:x" }).includes("- requested runtime: none"));
+});
+
+test("a turn_start rule only counts as routing the turn when it changes the runtime", async () => {
+  const { routeTurnRuntime } = await import("../src/decisions/hooks.ts");
+  const opus = { harnessId: "pi", modelId: "claude-opus-5-5" };
+  const haiku = { harnessId: "pi", modelId: "claude-haiku-5-5" };
+  const verdict = {
+    ruleId: "hard-task",
+    option: "reroute",
+    action: "use_runtime" as const,
+    runtime: { modelId: haiku.modelId },
+    probabilities: { reroute: 0.9 },
+    mode: "enforce" as const,
+  };
+  const route = async (runtime: { modelId?: string }) => (runtime.modelId === haiku.modelId ? haiku : opus);
+
+  assert.deepEqual(await routeTurnRuntime(verdict, route, async () => opus), { choice: haiku, routedBy: "hard-task" });
+  assert.deepEqual(await routeTurnRuntime(verdict, route, async () => haiku), { choice: haiku });
+  assert.deepEqual(await routeTurnRuntime(undefined, route, async () => opus), { choice: opus });
+  assert.deepEqual(
+    await routeTurnRuntime(verdict, route, async () => {
+      throw new Error("unsupported pinned model");
+    }),
+    { choice: haiku },
   );
 });

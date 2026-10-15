@@ -56,6 +56,7 @@ export function renderConnectedAppsBlock(
     "## Connected apps",
     "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
   ];
+  if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (!availableProviders.length) {
     lines.push("No direct OAuth app connections are configured. Do not offer direct OAuth consent links.");
     if (!connected.length && !reconnect.length) return lines.join("\n");
@@ -70,7 +71,6 @@ export function renderConnectedAppsBlock(
       lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
     }
   }
-  if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (connected.length) {
     lines.push(`Connected: ${connected.join(", ")}. Use them directly; their auth is wired.`);
   }

@@ -10,7 +10,8 @@ import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { cancelGoal, goalSnapshotPayload, latestGoalRecord, rehydrateOpenGoal } from "../harness/goal.ts";
+import { cancelGoal, goalCancelledPayload, openGoal } from "../harness/goal.ts";
+import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
 import { processIsGone } from "../sandbox/process-poll.ts";
@@ -49,7 +50,6 @@ function coversTailWindow(entries: readonly { type: string }[], tailTurns: numbe
   return entries.filter((e) => e.type === "user").length >= tailTurns;
 }
 
-const GOAL_LOOKBACK_ENTRIES = 2000;
 const GOAL_CANCEL_LEASE_WAIT_MS = 30_000;
 
 export function createSessionMethods(
@@ -213,6 +213,33 @@ export function createSessionMethods(
     });
   };
 
+  /** Sessions whose title matches the query — the entry index only covers message text. */
+  const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
+    const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
+    if (!matches.length) return [];
+    const allowed = new Map(
+      await Promise.all(
+        [...new Set(matches.map((s) => s.scopeId))].map(
+          async (scope) => [scope, (await managedProjectMembership(scope, principalId)) !== false] as const,
+        ),
+      ),
+    );
+    return matches
+      .filter((s) => allowed.get(s.scopeId))
+      .map((s) => ({
+        sessionId: s.id,
+        title: s.title ?? null,
+        scopeId: s.scopeId,
+        ...(s.channelName ? { channelName: s.channelName } : {}),
+        ...(s.surface ? { surface: s.surface } : {}),
+        seq: 0,
+        entryType: "title",
+        snippet: s.title ?? s.id,
+        createdAt: s.lastActivityAt ?? s.createdAt,
+        ...(s.archived ? { archived: true } : {}),
+      }));
+  };
+
   return {
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
@@ -264,14 +291,18 @@ export function createSessionMethods(
       if (!found) return null;
       const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
       let limit = tailWindowLimit(window);
-      const [initialRead, pinRecords] = await Promise.all([
+      const [initialRead, pinRecords, goals, latestRuns] = await Promise.all([
         transcripts.forViewer(sessionId, principalId, {
           limit,
           beforeSeq: window?.beforeSeq,
           sinceSeq: window?.sinceSeq,
         }),
         deps.sessions.listPins(sessionId),
+        deps.sessions.goals([sessionId]),
+        window?.beforeSeq === undefined ? deps.runs.latestForThreads([found.threadRef]) : undefined,
       ]);
+      const goal = openGoal(goals.get(sessionId));
+      const runtime = latestRuns?.get(found.threadRef)?.result?.runtime;
       let read = initialRead;
       let visible = read.entries;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
@@ -287,6 +318,8 @@ export function createSessionMethods(
         entries: w.entries,
         ...(earlier > 0 ? { earlierEntries: earlier } : {}),
         ...(pins.length ? { pins } : {}),
+        ...(goal ? { goal: goalView(goal) } : {}),
+        ...(runtime ? { runtime } : {}),
       };
     },
 
@@ -453,12 +486,9 @@ export function createSessionMethods(
       const idleChildren = sessions.filter(
         (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
       );
-      const [latestRuns, recentEntries] = await Promise.all([
+      const [latestRuns, sessionGoals] = await Promise.all([
         deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
-        deps.sessions.getRecentEntries(
-          working.map((s) => s.id),
-          GOAL_LOOKBACK_ENTRIES,
-        ),
+        deps.sessions.goals(working.map((s) => s.id)),
       ]);
       const failedChildren = new Set<string>();
       for (const s of idleChildren) {
@@ -470,7 +500,7 @@ export function createSessionMethods(
         { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
       >();
       for (const s of working) {
-        const goal = latestGoalRecord(recentEntries.get(s.id) ?? []);
+        const goal = openGoal(sessionGoals.get(s.id));
         if (!goal) continue;
         const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
         if (goal.status === "active")
@@ -505,7 +535,8 @@ export function createSessionMethods(
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
       const capped = Math.max(1, Math.min(Math.floor(limit), 100));
       const hits = await deps.sessions.searchEntries(principalId, query, capped);
-      if (!hits.length) return [];
+      const titleHits = await titleSearchHits(principalId, query, capped);
+      if (!hits.length) return titleHits;
       const allowed = new Map(
         await Promise.all(
           [...new Set(hits.map((hit) => hit.scopeId))].map(
@@ -522,7 +553,7 @@ export function createSessionMethods(
       );
       const principal = { ...deps.identity.classify(principalId), teamIds: memberships.filter((id) => id !== null) };
       const terms = searchTerms(query);
-      return hits.flatMap((hit) => {
+      const entryHits: SessionSearchHit[] = hits.flatMap((hit) => {
         if (!allowed.get(hit.scopeId)) return [];
         if (!principalEntitledToScope(principal, hit.entryScopeLabel, hit.scopeId, scopeId("org", orgIdOf())))
           return [];
@@ -543,6 +574,8 @@ export function createSessionMethods(
           },
         ];
       });
+      const entryHitSessions = new Set(entryHits.map((hit) => hit.sessionId));
+      return [...titleHits.filter((hit) => !entryHitSessions.has(hit.sessionId)), ...entryHits].slice(0, capped);
     },
 
     async sessionBackground(sessionId, viewer) {
@@ -874,11 +907,8 @@ export function createSessionMethods(
     async cancelSessionGoal(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session || !(await mayWriteSession(principalId, session))) return null;
-      const openGoal = async () =>
-        rehydrateOpenGoal(
-          (await deps.sessions.getRecentEntries([session.id], GOAL_LOOKBACK_ENTRIES)).get(session.id) ?? [],
-        );
-      const before = await openGoal();
+      const currentGoal = async () => openGoal((await deps.sessions.goals([session.id])).get(session.id));
+      const before = await currentGoal();
       if (!before) return { cancelled: false as const, reason: "no_open_goal" as const };
       let { lease } = await deps.sessions.acquireLease(session.id, "backfill");
       if (!lease) {
@@ -889,14 +919,12 @@ export function createSessionMethods(
       }
       if (!lease) return { cancelled: false as const, reason: "busy" as const };
       try {
-        const goal = await openGoal();
+        const goal = await currentGoal();
         if (!goal) return { cancelled: false as const, reason: "no_open_goal" as const };
         cancelGoal(goal, "Cancelled from the goal bar.");
-        await deps.sessions.append(lease, {
-          type: "system",
-          payload: { ...goalSnapshotPayload(goal), cancelledBy: principalId },
-          scopeLabel: session.scopeId,
-        });
+        await deps.sessions.setGoal(lease, goal, [
+          { type: "system", payload: goalCancelledPayload(goal, principalId), scopeLabel: session.scopeId },
+        ]);
         return { cancelled: true as const };
       } finally {
         await deps.sessions.releaseLease(lease);
@@ -937,7 +965,7 @@ export function createSessionMethods(
           source.type,
           source.scopeId,
           source.channelName,
-          source.surface ?? "web",
+          "web",
         );
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),

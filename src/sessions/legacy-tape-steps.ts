@@ -273,6 +273,21 @@ END $batch$`,
   skippingProcedure(),
 ];
 
+export const PREPARE_TAPE_DROP_SQL = [
+  `DO $prepare_tape_drop$
+BEGIN
+  IF to_regclass('session_tape') IS NULL OR (SELECT done FROM legacy_tape_steps_progress) THEN
+    RETURN;
+  END IF;
+  IF (SELECT started_at FROM legacy_tape_steps_progress) IS NULL THEN
+    DELETE FROM session_tape t WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id);
+  END IF;
+  IF EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message') THEN
+    CALL prepare_legacy_tape_steps(50);
+  END IF;
+END $prepare_tape_drop$`,
+];
+
 export const DROP_SESSION_TAPE_SQL = [
   `SET LOCAL lock_timeout = '5s'`,
   `DO $tape_drop_gate$

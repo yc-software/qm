@@ -64,6 +64,47 @@ Anyone can check admin status (this is also how you answer "am I an admin?"):
 GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
 ```
 
+## Check connector sources
+
+During admin onboarding, check this silently before offering Slack bot setup or personal
+connections. A source is either Composio or the org's own OAuth apps. Never inspect
+deployment secrets.
+
+**Composio.** It is available when `GET /v1/composio/toolkits` succeeds. A
+`composio_unavailable` error only means it is not available to this person; the org may
+still have a key they are not granted. To check the org, read
+`GET /v1/admin/scopes/<org scope>?view=credentials`: a `serviceCredentials` entry with
+`enabled: true`, `hasSecret: true`, `delivery: "env"` and `envKey: "COMPOSIO_API_KEY"`
+means Composio is configured.
+
+**Own OAuth apps.** The live Connected apps block reflects the providers configured with
+client credentials, from Admin → Connectors or deployment secrets. The line "No direct
+OAuth app connections are configured" means none are, even if MCP apps appear under
+"Connected". Without that line, at least one provider is configured.
+`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
+Connectors, not ones set by deployment secrets, so it cannot prove absence.
+
+Composio is absent only when the toolkits read fails and the org check finds no such
+credential. If either source exists, skip silently. If the block is missing or a read
+fails, treat it as unknown, not absent, and do not offer setup. Only when both are
+confirmed absent, send one short message:
+
+- Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
+  as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
+  verification as described in QM's `docs/composio.md`. If they would rather paste the
+  key now, mint a one-time drop with `POST /v1/keychain/drops`
+  (`{"service":"composio","envKey":"COMPOSIO_API_KEY","purpose":"…"}`) and share its `url`.
+  A dropped key enables Composio only for them; teammates need the org credential.
+- Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
+  `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
+  shows.
+
+Links: the web origin is the origin of the Connection page URL in the Connected apps
+block (`<web origin>/keychain`). Link `<web origin>/admin/credentials` and
+`<web origin>/admin/connectors`. If that line is absent, name the pages without links and
+offer the drop link. Never invent URLs or ask for keys or client secrets in chat. Never
+ask regular users to configure a source.
+
 ## Guide Slack installation
 
 Check this silently before offering Slack bot setup during admin onboarding. It is

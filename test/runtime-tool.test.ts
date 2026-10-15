@@ -105,7 +105,7 @@ test("runtime recovery uses only durable decisions belonging to the same run and
     entry("other", "alice", "claude-sonnet-5"),
     entry("run", "bob", "claude-opus-5"),
   ];
-  assert.equal(recoveredRuntime(entries, "run", "alice")?.modelId, "gpt-6-astra");
+  assert.equal(recoveredRuntime(entries, "run", "alice")?.choice.modelId, "gpt-6-astra");
   assert.equal(recoveredRuntime(entries, "new", "alice"), undefined);
 });
 

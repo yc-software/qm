@@ -75,7 +75,7 @@ test("the opener defers Slack setup until status can be checked without requirin
   assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
   assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
   assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);
-  assert.match(PROACTIVE_OPENER_PROMPT, /do not ask them to create OAuth apps or supply project keys/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /Never ask regular users to create OAuth apps or supply project keys/);
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {

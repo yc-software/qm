@@ -799,31 +799,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "turn-wall-clock",
-    kind: "string",
-    target: "org",
-    clearable: true,
-    label:
-      "Maximum wall-clock time for a turn in seconds. Zero leaves turns uncapped; empty restores the deployment default.",
-    readKey: "turnWallClockSec",
-    get: (deps, scope) => deps.config!.getTurnWallClockSecDurable(scope),
-    apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the turn wall-clock limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { sec?: unknown }).sec;
-        const trimmed = typeof raw === "string" ? raw.trim() : raw;
-        if (trimmed === undefined || trimmed === null || trimmed === "") return { value: null };
-        const sec = typeof trimmed === "number" ? trimmed : Number(trimmed);
-        if (!Number.isInteger(sec) || (sec !== 0 && (sec < 60 || sec > 86_400))) {
-          return { error: "turn-wall-clock requires { sec: 0 or integer 60-86400 } (empty clears the override)" };
-        }
-        return { value: sec };
-      },
-      (deps, scope, sec) => deps.config!.setTurnWallClockSec(scope, sec),
-    ),
-  },
-  {
     id: "browse-model",
     kind: "enum",
     target: "org",

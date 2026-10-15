@@ -6,7 +6,6 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { estimateHistoryTokens, forModelContext } from "../src/harness/context-compaction.ts";
 
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { createGoalRecord, goalSnapshotPayload, latestGoalRecord } from "../src/harness/goal.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
@@ -69,49 +68,39 @@ async function refresh(f: Awaited<ReturnType<typeof fixture>>) {
   f.input.visibleHistory = forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries);
 }
 
-for (const status of ["active", "paused", "complete"] as const) {
-  test(`recent recovery preserves ${status} goal and a fitting saved summary without a model call`, async () => {
-    const f = await fixture();
-    const goal = { ...createGoalRecord({ objective: "verify result" }), status };
-    try {
-      await f.sessions.append(f.input.lease, {
-        type: "system",
-        payload: createContextSummaryPayload(11, "Saved work."),
-        scopeLabel: "personal:test",
-      });
-      await f.sessions.append(f.input.lease, {
-        type: "system",
-        payload: goalSnapshotPayload(goal),
-        scopeLabel: "personal:test",
-      });
-      await f.sessions.append(f.input.lease, {
-        type: "user",
-        payload: { text: "Continue verification." },
-        scopeLabel: "personal:test",
-      });
-      await refresh(f);
-      let calls = 0;
-      f.harness.models.compactHistory = async () => {
-        calls++;
-        return "unexpected";
-      };
-      const before = await f.sessions.getEntries(f.input.session.id);
-      const history = await f.compaction.compactRecent(f.input);
-      assert.equal(calls, 0);
-      assert.deepEqual(latestGoalRecord(history), goal);
-      assert.equal(history.filter((e) => latestGoalRecord([e])).length, 1);
-      assert.match(contextSummaryPayload(history[0]!)!.text, /without a new summary/);
-      assert.match(contextSummaryPayload(history[0]!)!.text, /Saved work/);
-      assert.ok(estimateHistoryTokens(history) <= 300);
-      const all = await f.sessions.getEntries(f.input.session.id);
-      assert.deepEqual(all.slice(0, before.length), before);
-      assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries), history);
-      assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
-}
+test("recent recovery preserves a fitting saved summary without a model call", async () => {
+  const f = await fixture();
+  try {
+    await f.sessions.append(f.input.lease, {
+      type: "system",
+      payload: createContextSummaryPayload(11, "Saved work."),
+      scopeLabel: "personal:test",
+    });
+    await f.sessions.append(f.input.lease, {
+      type: "user",
+      payload: { text: "Continue verification." },
+      scopeLabel: "personal:test",
+    });
+    await refresh(f);
+    let calls = 0;
+    f.harness.models.compactHistory = async () => {
+      calls++;
+      return "unexpected";
+    };
+    const before = await f.sessions.getEntries(f.input.session.id);
+    const history = await f.compaction.compactRecent(f.input);
+    assert.equal(calls, 0);
+    assert.match(contextSummaryPayload(history[0]!)!.text, /without a new summary/);
+    assert.match(contextSummaryPayload(history[0]!)!.text, /Saved work/);
+    assert.ok(estimateHistoryTokens(history) <= 300);
+    const all = await f.sessions.getEntries(f.input.session.id);
+    assert.deepEqual(all.slice(0, before.length), before);
+    assert.deepEqual(forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries), history);
+    assert.equal((history[0]!.payload as { mode: string }).mode, "recent");
+  } finally {
+    await f.sessions.releaseLease(f.input.lease);
+  }
+});
 
 for (const failure of ["throw", "empty", "oversized"] as const) {
   test(`foreground ${failure} summary uses deterministic recovery`, async () => {
@@ -211,17 +200,12 @@ test("oversized entries and orphaned parallel tool results cannot bypass the rec
   }
 });
 
-test("recent recovery cannot recover an unauthorized summary or goal", async () => {
+test("recent recovery cannot recover an unauthorized summary", async () => {
   const f = await fixture();
   try {
     await f.sessions.append(f.input.lease, {
       type: "system",
       payload: createContextSummaryPayload(11, "private sentinel"),
-      scopeLabel: "personal:other",
-    });
-    await f.sessions.append(f.input.lease, {
-      type: "system",
-      payload: goalSnapshotPayload(createGoalRecord({ objective: "private sentinel" })),
       scopeLabel: "personal:other",
     });
     await refresh(f);
@@ -232,22 +216,15 @@ test("recent recovery cannot recover an unauthorized summary or goal", async () 
       "org:test",
     );
     const history = await f.compaction.compactRecent(f.input);
-    assert.equal(latestGoalRecord(history), null);
     assert.doesNotMatch(JSON.stringify(history), /private sentinel/);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }
 });
 
-test("recent recovery drops an oversized request inside a completed turn and keeps the goal", async () => {
+test("recent recovery drops an oversized request inside a completed turn", async () => {
   const f = await fixture();
-  const goal = createGoalRecord({ objective: "verify result" });
   try {
-    await f.sessions.append(f.input.lease, {
-      type: "system",
-      payload: goalSnapshotPayload(goal),
-      scopeLabel: "org:test",
-    });
     await f.sessions.append(f.input.lease, {
       type: "user",
       payload: { text: "discarded oversized request ".repeat(1000) },
@@ -262,50 +239,44 @@ test("recent recovery drops an oversized request inside a completed turn and kee
     const history = await f.compaction.compactRecent(f.input);
     assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
     assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
-    assert.deepEqual(latestGoalRecord(history), goal);
-    assert.ok(history.at(-1)!.seq > last.seq);
+    assert.equal(history.at(-1)!.seq, last.seq);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }
 });
 
-for (const tainted of [false, true]) {
-  test(`a ${tainted ? "tainted" : "foreign"} summary still supplies the durable exclusion floor`, async () => {
-    const f = await fixture();
-    try {
-      await f.sessions.append(f.input.lease, {
-        type: "system",
-        payload: {
-          ...createContextSummaryPayload(11, "hidden summary sentinel"),
-          ...(tainted ? { securityTainted: true } : {}),
-        },
-        scopeLabel: tainted ? "personal:test" : "personal:other",
-      });
-      await f.sessions.append(f.input.lease, {
-        type: "user",
-        payload: { text: "Latest request." },
-        scopeLabel: "personal:test",
-      });
-      await refresh(f);
-      f.input.visibleHistory = filterHistoryForAudience(
-        f.input.visibleHistory,
-        [{ id: "test", type: "internal" }],
-        "personal:test",
-        "org:test",
-      );
-      const history = await f.compaction.compactRecent(f.input);
-      assert.equal(contextSummaryPayload(history[0]!)!.throughSeq, 11);
-      const reloaded = filterHistoryForAudience(
-        forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries),
-        [{ id: "test", type: "internal" }],
-        "personal:test",
-        "org:test",
-      );
-      assert.deepEqual(reloaded, history);
-      assert.ok(estimateHistoryTokens(reloaded) <= 300);
-      assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
-    } finally {
-      await f.sessions.releaseLease(f.input.lease);
-    }
-  });
-}
+test("a foreign summary still supplies the durable exclusion floor", async () => {
+  const f = await fixture();
+  try {
+    await f.sessions.append(f.input.lease, {
+      type: "system",
+      payload: createContextSummaryPayload(11, "hidden summary sentinel"),
+      scopeLabel: "personal:other",
+    });
+    await f.sessions.append(f.input.lease, {
+      type: "user",
+      payload: { text: "Latest request." },
+      scopeLabel: "personal:test",
+    });
+    await refresh(f);
+    f.input.visibleHistory = filterHistoryForAudience(
+      f.input.visibleHistory,
+      [{ id: "test", type: "internal" }],
+      "personal:test",
+      "org:test",
+    );
+    const history = await f.compaction.compactRecent(f.input);
+    assert.equal(contextSummaryPayload(history[0]!)!.throughSeq, 11);
+    const reloaded = filterHistoryForAudience(
+      forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries),
+      [{ id: "test", type: "internal" }],
+      "personal:test",
+      "org:test",
+    );
+    assert.deepEqual(reloaded, history);
+    assert.ok(estimateHistoryTokens(reloaded) <= 300);
+    assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
+  } finally {
+    await f.sessions.releaseLease(f.input.lease);
+  }
+});

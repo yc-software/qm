@@ -20,6 +20,20 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
 const featureFlags = { enabled: async () => true };
 const tokens = { connectorAccessToken: async () => "synthetic-token" };
 const json = (body: unknown) => Response.json(body);
+const ALEX = "https://avatars.slack-edge.com/alex.png";
+function directoryOf(
+  people: Record<string, { displayName: string; avatarUrl?: string }>,
+  onLookup?: (id: string) => unknown,
+) {
+  return {
+    getBySlackId: async (id: string) => {
+      await onLookup?.(id);
+      const person = people[id];
+      return person ? { principalId: `${id}@x.com`, slackId: id, type: "internal" as const, ...person } : null;
+    },
+  };
+}
+const directory = directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX }, U2: { displayName: "Taylor" } });
 
 test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes send-as aliases", async () => {
   const { items, item } = await fixture();
@@ -28,6 +42,7 @@ test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: async (url) => {
       reads++;
       assert.match(String(url), /threads\/t1\?format=metadata$/);
@@ -65,6 +80,7 @@ test("an old sent message or a newer inbound message does not close a Gmail item
       featureFlags,
       items,
       tokens,
+      directory,
       fetchImpl: async () => json({ messages }),
     })("owner", [item]);
     assert.equal((await items.get(item.id))!.status, "ready");
@@ -78,6 +94,7 @@ test("provider failure or missing connection preserves the item with an explicit
       featureFlags,
       items,
       tokens: { connectorAccessToken: async () => (connected ? "test" : null) },
+      directory,
       fetchImpl: async () => new Response("unavailable", { status: 503 }),
     })("owner", [item]);
     const after = (await items.get(item.id))!;
@@ -93,6 +110,7 @@ test("a new inbound message during a provider read wins over the older own reply
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: async () => {
       await items.ingest([
         {
@@ -148,6 +166,7 @@ test("top-level/private-channel mentions fetch just their root and replies, neve
       featureFlags,
       items,
       tokens,
+      directory,
       fetchImpl: slackFetch(calls),
     })("owner", [item]);
     const after = (await items.get(item.id))!;
@@ -169,6 +188,7 @@ test("Slack detects group DMs by conversation metadata, including C-prefixed IDs
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: slackFetch(calls, { direct: true, own: true }),
   })("owner", [item]);
   assert.ok(calls.some((p) => p.includes("conversations.history")));
@@ -181,6 +201,7 @@ test("a partial Slack thread is displayed as partial but cannot resolve an item"
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: slackFetch([], { partial: true, own: true }),
   })("owner", [item]);
   const after = (await items.get(item.id))!;
@@ -195,6 +216,7 @@ test("rate limiting is respected across different Slack items and never triggers
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: async (url) => {
       if (String(url).includes("conversations.info")) return json({ ok: true, channel: {} });
       reads++;
@@ -215,6 +237,7 @@ test("slow Gmail reads have a total batch budget and later cards are visited on 
     featureFlags,
     items,
     tokens,
+    directory,
     now: () => clock,
     fetchImpl: async () => {
       reads++;
@@ -231,150 +254,48 @@ test("slow Gmail reads have a total batch budget and later cards are visited on 
   assert.equal(reads, 12);
 });
 
-test("Slack avatars are durable, shared across concurrent cards, and refresh without reading conversations", async () => {
+test("Slack avatars come from the org directory without the owner's Slack login or conversation reads", async () => {
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-  await items.ingest([
-    {
-      loopId: "inbox",
-      dedupeKey: "second",
-      source: "slack",
-      sourceAt: 2000,
-      sourcePayload: { slack: { channelId: "D2", ts: "2.0", userId: "U1" } },
-    },
-  ]);
-  let reads = 0;
-  const fetchImpl: typeof fetch = async (url) => {
-    reads++;
-    assert.match(String(url), /users.info\?user=U1$/);
-    return json({
-      ok: true,
-      user: { profile: { display_name: "Alex", image_48: "https://avatars.slack-edge.com/alex.png" } },
-    });
-  };
-  const refresh = createInboxSourceRefresh({ featureFlags, items, tokens, fetchImpl });
-  await refresh("owner", await items.byLoop("inbox"), "avatars");
-  assert.equal(reads, 1);
+  const looked: string[] = [];
+  const refresh = createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens: { connectorAccessToken: async () => null },
+    directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, (id) => looked.push(id)),
+    fetchImpl: async () => assert.fail("no Slack reads"),
+  });
+  await refresh("owner", [item], "avatars");
   const after = (await items.get(item.id))!;
-  const people = [{ id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" }];
-  assert.deepEqual(after.sourcePayload?.participants, people);
+  assert.deepEqual(after.sourcePayload?.participants, [{ id: "U1", name: "Alex", avatarUrl: ALEX }]);
   assert.equal(after.inboxPreview?.participants, undefined);
-  assert.equal(after.status, item.status);
   assert.deepEqual(after.proposal, item.proposal);
   assert.deepEqual(after.sourcePayload?.context, item.sourcePayload?.context);
-  await createInboxSourceRefresh({ featureFlags, items, tokens, fetchImpl })(
-    "owner",
-    await items.byLoop("inbox"),
-    "avatars",
-  );
-  assert.equal(reads, 1);
-  await refresh("another-owner", [item], "avatars");
-  assert.equal(reads, 2);
+  await refresh("owner", [after], "avatars");
+  assert.deepEqual(looked, ["U1"]);
 });
 
-test("legacy Slack avatar lookup uses only the exact waiting message, including threaded replies", async () => {
-  for (const threadTs of [undefined, "0.5"]) {
-    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", ...(threadTs ? { threadTs } : {}) });
-    const calls: string[] = [];
-    await createInboxSourceRefresh({
-      featureFlags,
-      items,
-      tokens,
-      fetchImpl: async (url) => {
-        const u = new URL(String(url));
-        calls.push(u.pathname);
-        if (u.pathname.endsWith("users.info")) {
-          assert.equal(u.searchParams.get("user"), "U1");
-          return json({
-            ok: true,
-            user: { profile: { display_name: "Alex", image_72: "https://avatars.slack-edge.com/alex.png" } },
-          });
-        }
-        assert.equal(u.searchParams.get("oldest"), "1.0");
-        assert.equal(u.searchParams.get("latest"), "1.0");
-        assert.equal(u.searchParams.get("inclusive"), "true");
-        assert.equal(u.searchParams.get("limit"), "1");
-        assert.equal(u.searchParams.get("ts"), threadTs ?? null);
-        return json({
-          ok: true,
-          messages: [
-            { ts: "0.5", user: "U_ROOT" },
-            { ts: "1.0", user: "U1" },
-          ],
-        });
-      },
-    })("owner", [item], "avatars");
-    assert.match(calls[0]!, threadTs ? /conversations.replies$/ : /conversations.history$/);
-    assert.equal(calls.length, 2);
-    assert.deepEqual((await items.get(item.id))!.sourcePayload!.slack, item.sourcePayload!.slack);
-    assert.equal(
-      ((await items.get(item.id))!.sourcePayload!.participants as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
-      "https://avatars.slack-edge.com/alex.png",
-    );
-  }
-});
-
-test("avatar lookup failure and unavailable messages preserve Inbox content and retry limits", async () => {
-  for (const response of [
-    json({ ok: true, messages: [{ ts: "9.0", user: "WRONG" }] }),
-    new Response("limited", { status: 429 }),
-  ]) {
-    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
-    let reads = 0;
-    const refresh = createInboxSourceRefresh({
-      featureFlags,
-      items,
-      tokens,
-      fetchImpl: async () => {
-        reads++;
-        return response.clone();
-      },
-    });
-    await refresh("owner", [item], "avatars");
-    await refresh("owner", [item], "avatars");
-    assert.equal(reads, 1);
-    assert.deepEqual(await items.get(item.id), item);
-  }
-});
-
-test("missing or unsafe profile photos retain initials without repeating provider reads", async () => {
-  for (const image_48 of [undefined, "http://example.com/photo.png", "javascript:alert(1)"]) {
+test("missing or unsafe directory photos retain initials", async () => {
+  for (const avatarUrl of [undefined, "http://example.com/photo.png", "javascript:alert(1)"]) {
     const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
     await createInboxSourceRefresh({
       featureFlags,
       items,
       tokens,
-      fetchImpl: async () => json({ ok: true, user: { profile: { display_name: "Alex", image_48 } } }),
+      directory: directoryOf({ U1: { displayName: "Alex", ...(avatarUrl ? { avatarUrl } : {}) } }),
     })("owner", [item], "avatars");
     assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [{ id: "U1", name: "Alex" }]);
   }
 });
 
-test("avatar-only refresh does not suppress full Slack context refresh or reuse profiles across owners", async () => {
+test("avatar-only refresh does not suppress full Slack context refresh", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
-  const calls: string[] = [];
-  const sourceFetch = slackFetch(calls);
-  const refresh = createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    fetchImpl: async (url, init) => {
-      const response = await sourceFetch(url, init);
-      if (!String(url).includes("users.info")) return response;
-      const body = (await response.json()) as { user: { profile: { image_48?: string } } };
-      body.user.profile.image_48 = "https://avatars.slack-edge.com/alex.png";
-      return json(body);
-    },
-  });
+  const refresh = createInboxSourceRefresh({ featureFlags, items, tokens, directory, fetchImpl: slackFetch([]) });
   await refresh("owner", [item], "avatars");
   await refresh("owner", [(await items.get(item.id))!]);
   const after = (await items.get(item.id))!;
   assert.equal(after.sourcePayload?.sourceContextFetched, true);
   assert.equal((after.sourcePayload!.context as Array<{ authorId: string }>)[0]!.authorId, "U1");
-  assert.equal(
-    (after.sourcePayload!.context as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
-    "https://avatars.slack-edge.com/alex.png",
-  );
-  assert.equal(calls.filter((p) => p.includes("users.info")).length, 1);
+  assert.equal((after.sourcePayload!.context as Array<{ avatarUrl: string }>)[0]!.avatarUrl, ALEX);
   assert.equal(after.inboxPreview?.participants, undefined);
 });
 
@@ -384,8 +305,8 @@ test("a newer message during an avatar lookup cannot acquire the previous sender
     featureFlags,
     items,
     tokens,
-    fetchImpl: async () => {
-      await items.ingest([
+    directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, () =>
+      items.ingest([
         {
           loopId: "inbox",
           dedupeKey: "ask",
@@ -393,9 +314,8 @@ test("a newer message during an avatar lookup cannot acquire the previous sender
           sourceAt: 2000,
           sourcePayload: { slack: { channelId: "D1", ts: "2.0", userId: "U2" } },
         },
-      ]);
-      return json({ ok: true, user: { profile: { image_48: "https://avatars.slack-edge.com/old.png" } } });
-    },
+      ]),
+    ),
   })("owner", [item], "avatars");
   assert.equal((await items.get(item.id))!.sourcePayload?.participants, undefined);
 });
@@ -406,6 +326,7 @@ test("concurrent list and detail refreshes preserve the authoritative Slack thre
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: slackFetch([], { direct: true }),
   });
   await Promise.all([refresh("owner", [item]), refresh("owner", [item], "avatars")]);
@@ -418,55 +339,43 @@ test("partial profile failures keep saved photos and names while saving successf
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
   const saved = { id: "U2", name: "Taylor", avatarUrl: "https://avatars.slack-edge.com/taylor.png" };
   await items.annotate(item.id, { participants: [{ id: "U1", name: "Alex" }, saved] });
-  let clock = 1000;
-  const fetchImpl: typeof fetch = async (url) =>
-    String(url).includes("user=U2")
-      ? new Response("unavailable", { status: 503 })
-      : json({
-          ok: true,
-          user: { profile: { display_name: "Alex", image_512: "https://avatars.slack-edge.com/alex.png" } },
-        });
   await createInboxSourceRefresh({
     featureFlags,
     items,
     tokens,
-    fetchImpl,
-    now: () => clock,
+    directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, (id) => {
+      if (id === "U2") throw new Error("directory unavailable");
+    }),
+    now: () => 1000,
   })("owner", [(await items.get(item.id))!], "avatars");
   const after = (await items.get(item.id))!;
-  assert.deepEqual(after.sourcePayload!.participants, [
-    { id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" },
-    saved,
-  ]);
+  assert.deepEqual(after.sourcePayload!.participants, [{ id: "U1", name: "Alex", avatarUrl: ALEX }, saved]);
   assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 61_000);
   assert.deepEqual(after.proposal, item.proposal);
-  clock = 62_000;
-  let reads = 0;
+  const looked: string[] = [];
   await createInboxSourceRefresh({
     featureFlags,
     items,
     tokens,
-    now: () => clock,
-    fetchImpl: async (url) => {
-      reads++;
-      return fetchImpl(url);
-    },
+    directory: directoryOf({ U2: { displayName: "Taylor" } }, (id) => looked.push(id)),
+    now: () => 62_000,
   })("owner", [after], "avatars");
-  assert.equal(reads, 2);
+  assert.deepEqual(looked, ["U1", "U2"]);
 });
 
 test("opening a thread retains cached photos and author names when profile reads fail", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
-  const saved = { id: "U1", name: "Alex", avatarUrl: "https://avatars.slack-edge.com/alex.png" };
+  const saved = { id: "U1", name: "Alex", avatarUrl: ALEX };
   await items.annotate(item.id, { participants: [saved], slackAvatarsRefreshAt: 99_000_000 });
-  const sourceFetch = slackFetch([]);
   await createInboxSourceRefresh({
     featureFlags,
     items,
     tokens,
+    directory: directoryOf({}, () => {
+      throw new Error("directory unavailable");
+    }),
     now: () => 1000,
-    fetchImpl: async (url, init) =>
-      String(url).includes("users.info") ? new Response("unavailable", { status: 503 }) : sourceFetch(url, init),
+    fetchImpl: slackFetch([]),
   })("owner", [(await items.get(item.id))!]);
   const after = (await items.get(item.id))!;
   assert.deepEqual(after.sourcePayload!.participants, [saved]);
@@ -481,22 +390,21 @@ test("opening a thread retains cached photos and author names when profile reads
 test("thread profile limits prioritize the waiting sender and latest visible authors", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U1" });
   const lookedUp: string[] = [];
+  const people = Object.fromEntries(
+    Array.from({ length: 12 }, (_, i) => [
+      `U${i + 1}`,
+      { displayName: `U${i + 1}`, avatarUrl: `https://avatars.slack-edge.com/U${i + 1}.png` },
+    ]),
+  );
   await createInboxSourceRefresh({
     featureFlags,
     items,
     tokens,
+    directory: directoryOf(people, (id) => lookedUp.push(id)),
     fetchImpl: async (url) => {
       const u = new URL(String(url));
       if (u.pathname.endsWith("conversations.info")) return json({ ok: true, channel: {} });
       if (u.pathname.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
-      if (u.pathname.endsWith("users.info")) {
-        const user = u.searchParams.get("user")!;
-        lookedUp.push(user);
-        return json({
-          ok: true,
-          user: { name: user, profile: { image_24: `https://avatars.slack-edge.com/${user}.png` } },
-        });
-      }
       return json({
         ok: true,
         messages: Array.from({ length: 12 }, (_, i) => ({
@@ -515,79 +423,39 @@ test("thread profile limits prioritize the waiting sender and latest visible aut
   assert.ok(latest.every((message) => message.avatarUrl));
 });
 
-test("legacy sender caching does not overwrite Slack metadata or reread its message", async () => {
-  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", isDirectMessage: true });
-  const calls: string[] = [];
-  let clock = 1000;
-  const fetchImpl: typeof fetch = async (url) => {
-    const path = new URL(String(url)).pathname;
-    calls.push(path);
-    if (path.endsWith("users.info"))
+test("bot and external-user messages use profiles already returned by Slack", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+  await createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async (url) => {
+      const path = new URL(String(url)).pathname;
+      assert.ok(!path.endsWith("users.info") && !path.endsWith("bots.info"));
+      if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
       return json({
         ok: true,
-        user: { name: "Alex", profile: { image_original: "https://avatars.slack-edge.com/alex.png" } },
+        messages: [
+          {
+            ts: "1.0",
+            bot_id: "B1",
+            bot_profile: { name: "Build bot", icons: { image_48: "https://avatars.slack-edge.com/build.png" } },
+            text: "Build finished",
+          },
+        ],
       });
-    return json({ ok: true, messages: [{ ts: "1.0", user: "U1" }] });
-  };
-  await createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    fetchImpl,
-    now: () => clock,
-  })("owner", [item], "avatars");
-  let after = (await items.get(item.id))!;
-  assert.deepEqual(after.sourcePayload!.slack, { channelId: "D1", ts: "1.0", isDirectMessage: true });
-  clock += 86_400_001;
-  await createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    fetchImpl,
-    now: () => clock,
-  })("owner", [after], "avatars");
-  after = (await items.get(item.id))!;
-  assert.equal(calls.filter((path) => path.endsWith("conversations.history")).length, 1);
-  assert.equal(calls.filter((path) => path.endsWith("users.info")).length, 2);
-  assert.equal((after.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
-});
-
-test("bot messages use profile icons already returned by Slack without extra profile APIs", async () => {
-  for (const mode of [undefined, "avatars"] as const) {
-    const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
-    await createInboxSourceRefresh({
-      featureFlags,
-      items,
-      tokens,
-      fetchImpl: async (url) => {
-        const path = new URL(String(url)).pathname;
-        assert.ok(!path.endsWith("users.info") && !path.endsWith("bots.info"));
-        if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
-        if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
-        return json({
-          ok: true,
-          messages: [
-            {
-              ts: "1.0",
-              bot_id: "B1",
-              bot_profile: { name: "Build bot", icons: { image_48: "https://avatars.slack-edge.com/build.png" } },
-              text: "Build finished",
-            },
-          ],
-        });
-      },
-    })("owner", [item], mode);
-    const after = (await items.get(item.id))!;
-    assert.deepEqual(after.sourcePayload!.participants, [
-      { id: "bot:B1", name: "Build bot", avatarUrl: "https://avatars.slack-edge.com/build.png" },
-    ]);
-    if (mode === undefined) {
-      const message = (after.sourcePayload!.context as Array<Record<string, unknown>>)[0]!;
-      assert.equal(message.author, "Build bot");
-      assert.equal(message.authorId, "bot:B1");
-      assert.equal(message.avatarUrl, "https://avatars.slack-edge.com/build.png");
-    }
-  }
+    },
+  })("owner", [item]);
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [
+    { id: "bot:B1", name: "Build bot", avatarUrl: "https://avatars.slack-edge.com/build.png" },
+  ]);
+  const message = (after.sourcePayload!.context as Array<Record<string, unknown>>)[0]!;
+  assert.equal(message.author, "Build bot");
+  assert.equal(message.authorId, "bot:B1");
+  assert.equal(message.avatarUrl, "https://avatars.slack-edge.com/build.png");
 });
 
 test("a partial source page cannot replace the waiting sender with an unrelated author", async () => {
@@ -602,35 +470,11 @@ test("a partial source page cannot replace the waiting sender with an unrelated 
       if (!String(url).includes("conversations.history")) return response;
       return json({ ok: true, messages: [{ ts: "2.0", user: "U_OTHER", text: "Newer message" }] });
     };
-    await createInboxSourceRefresh({ featureFlags, items, tokens, fetchImpl })("owner", [(await items.get(item.id))!]);
+    await createInboxSourceRefresh({ featureFlags, items, tokens, directory, fetchImpl })("owner", [
+      (await items.get(item.id))!,
+    ]);
     assert.equal(((await items.get(item.id))!.sourcePayload!.participants as Array<{ id: string }>)[0]!.id, "U1");
   }
-});
-
-test("legacy sender and profile reads share one request deadline", { timeout: 1000 }, async () => {
-  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
-  let clock = 0;
-  let aborted = false;
-  await createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    now: () => clock,
-    fetchImpl: async (url, init) => {
-      if (String(url).includes("conversations.history")) {
-        clock = 2990;
-        return json({ ok: true, messages: [{ ts: "1.0", user: "U1" }] });
-      }
-      return new Promise<Response>((_resolve, reject) => {
-        init!.signal!.addEventListener("abort", () => {
-          aborted = true;
-          reject(init!.signal!.reason);
-        });
-      });
-    },
-  })("owner", [item], "avatars");
-  assert.equal(aborted, true);
-  assert.equal((await items.get(item.id))!.status, item.status);
 });
 
 test("cosmetic avatar refresh never waits for an in-flight full conversation refresh", async () => {
@@ -648,6 +492,7 @@ test("cosmetic avatar refresh never waits for an in-flight full conversation ref
     featureFlags,
     items,
     tokens,
+    directory,
     fetchImpl: async (url, init) => {
       if (String(url).includes("conversations.info")) {
         begin();
@@ -685,14 +530,13 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
     featureFlags,
     items,
     tokens,
-    fetchImpl: async () => {
-      begin();
-      await blocked;
-      return json({
-        ok: true,
-        user: { name: "Alex", profile: { image_48: "https://avatars.slack-edge.com/stale.png" } },
-      });
-    },
+    directory: directoryOf(
+      { U1: { displayName: "Stale", avatarUrl: "https://avatars.slack-edge.com/stale.png" } },
+      () => {
+        begin();
+        return blocked;
+      },
+    ),
   })("owner", [item], "avatars");
   await started;
   const sourceFetch = slackFetch([], { own: true });
@@ -701,6 +545,7 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
       featureFlags,
       items,
       tokens,
+      directory,
       fetchImpl: async (url, init) => {
         if (String(url).includes("auth.test")) return json({ ok: true, user_id: "OWNER" });
         return sourceFetch(url, init);
@@ -712,7 +557,7 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
   }
   const after = (await items.get(item.id))!;
   assert.deepEqual(after.sourcePayload!.participants, [
-    { id: "U1", name: "Alex" },
+    { id: "U1", name: "Alex", avatarUrl: ALEX },
     { id: "U2", name: "Taylor" },
   ]);
   assert.equal(after.sourcePayload!.sourceContextFetched, true);
@@ -721,22 +566,20 @@ test("a second core's full refresh wins over a stale cosmetic profile refresh", 
 
 test("unverified waiting senders never inherit another context author's avatar", async () => {
   const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
-  const source = createInboxSourceRefresh({
+  const people = directoryOf({
+    U_OTHER: { displayName: "Someone Else", avatarUrl: "https://avatars.slack-edge.com/other.png" },
+  });
+  await createInboxSourceRefresh({
     featureFlags,
     items,
     tokens,
+    directory: people,
     fetchImpl: async (url) => {
       if (String(url).includes("conversations.info")) return json({ ok: true, channel: { is_im: true } });
-      if (String(url).includes("users.info"))
-        return json({
-          ok: true,
-          user: { name: "Someone Else", profile: { image_48: "https://avatars.slack-edge.com/other.png" } },
-        });
       if (String(url).includes("auth.test")) return json({ ok: true, user_id: "OWNER" });
       return json({ ok: true, messages: [{ ts: "2.0", user: "U_OTHER", text: "Another message" }] });
     },
-  });
-  await source("owner", [item]);
+  })("owner", [item]);
   const after = (await items.get(item.id))!;
   assert.deepEqual(after.sourcePayload!.participants, []);
   assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 0);
@@ -744,50 +587,53 @@ test("unverified waiting senders never inherit another context author's avatar",
     (after.sourcePayload!.context as Array<{ avatarUrl: string }>)[0]!.avatarUrl,
     "https://avatars.slack-edge.com/other.png",
   );
-  let messageReads = 0;
-  await createInboxSourceRefresh({
-    featureFlags,
-    items,
-    tokens,
-    fetchImpl: async (url) => {
-      if (String(url).includes("conversations.history")) {
-        messageReads++;
-        return json({ ok: true, messages: [{ ts: "1.0", user: "U_SENDER" }] });
-      }
-      assert.match(String(url), /users.info\?user=U_SENDER$/);
-      return json({
-        ok: true,
-        user: { name: "Waiting Sender", profile: { image_48: "https://avatars.slack-edge.com/sender.png" } },
-      });
-    },
-  })("owner", [after], "avatars");
-  assert.equal(messageReads, 1);
-  assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
-    { id: "U_SENDER", name: "Waiting Sender", avatarUrl: "https://avatars.slack-edge.com/sender.png" },
-  ]);
 });
 
-test("profile failures retain provider diagnostics and cached avatars without exposing credentials", async () => {
-  const { createErrorLog } = await import("../src/admin/error-log.ts");
+test("saved participants do not supply a missing sender identity", async () => {
   for (const mode of [undefined, "avatars"] as const) {
-    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
-    const errors = createErrorLog();
-    const sourceFetch = slackFetch([]);
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0" });
+    const saved = { id: "U1", name: "Previously saved sender" };
+    await items.annotate(item.id, { participants: [saved] });
+    const before = (await items.get(item.id))!;
+    const looked: string[] = [];
     await createInboxSourceRefresh({
       featureFlags,
       items,
       tokens,
-      errors,
-      fetchImpl: async (url, init) => {
-        if (String(url).includes("users.info"))
-          return json({ ok: false, error: "missing_scope token=private-credential" });
-        return sourceFetch(url, init);
+      directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, (id) => looked.push(id)),
+      fetchImpl: async (url) => {
+        assert.notEqual(mode, "avatars");
+        if (String(url).includes("conversations.info")) return json({ ok: true, channel: { is_im: true } });
+        return json({ ok: true, messages: [] });
       },
+    })("owner", [before], mode);
+    const after = (await items.get(item.id))!;
+    assert.deepEqual(looked, []);
+    assert.deepEqual(after.sourcePayload!.participants, [saved]);
+    if (mode === "avatars") assert.deepEqual(after, before);
+    else assert.equal(after.sourcePayload!.slackAvatarsRefreshAt, 0);
+  }
+});
+
+test("profile failures retain diagnostics without exposing credentials", async () => {
+  const { createErrorLog } = await import("../src/admin/error-log.ts");
+  for (const mode of [undefined, "avatars"] as const) {
+    const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+    const errors = createErrorLog();
+    await createInboxSourceRefresh({
+      featureFlags,
+      items,
+      tokens,
+      directory: directoryOf({}, () => {
+        throw new Error("lookup failed token=xoxb-private-credential");
+      }),
+      errors,
+      fetchImpl: slackFetch([]),
     })("owner", [item], mode);
     const events = await errors.list();
     assert.ok(events.length > 0);
     assert.ok(events.every((event) => event.scopeLabel === "personal:owner"));
-    assert.match(events[0]!.message, /users.info: missing_scope/);
+    assert.match(events[0]!.message, /Slack profile U1: lookup failed/);
     assert.doesNotMatch(JSON.stringify(events), /private-credential/);
     assert.equal((await items.get(item.id))!.status, "ready");
   }
@@ -806,6 +652,7 @@ test("cosmetic refresh records ledger failures without rejecting the inbox reque
       },
     },
     tokens,
+    directory,
     errors,
     fetchImpl: async () => json({ ok: true, user: { name: "Alex" } }),
   })("owner", [item], "avatars");
@@ -835,6 +682,7 @@ test("Inbox source refresh checks the owner rollout before credentials, reads, o
           return "synthetic-token";
         },
       },
+      directory,
       fetchImpl: slackFetch(calls),
     });
     await refresh("owner", [item], mode);
@@ -843,8 +691,7 @@ test("Inbox source refresh checks the owner rollout before credentials, reads, o
     assert.deepEqual(await items.get(item.id), before);
     await flags.setEnabled("inbox_loops", "personal:owner", true, "admin");
     await refresh("owner", [item], mode);
-    assert.ok(credentials > 0);
-    assert.ok(calls.length > 0);
+    assert.equal(credentials > 0 && calls.length > 0, mode === undefined);
     const enriched = (await items.get(item.id))!;
     assert.ok(enriched.sourcePayload?.participants);
     await flags.setEnabled("inbox_loops", "personal:owner", false, "admin");
@@ -855,4 +702,77 @@ test("Inbox source refresh checks the owner rollout before credentials, reads, o
     assert.deepEqual(calls, []);
     assert.deepEqual(await items.get(item.id), enriched);
   }
+});
+
+test("Slack-id principals and items without a known sender use only the directory", async () => {
+  const { items, item } = await fixture("slack", { channelId: "D1", ts: "1.0", userId: "U1" });
+  const fetchImpl: typeof fetch = async () => assert.fail("no Slack reads");
+  const slackIdMode = {
+    getBySlackId: async (id: string) =>
+      id === "U1" ? { principalId: "U1", displayName: "Alex", type: "internal" as const, avatarUrl: ALEX } : null,
+  };
+  await createInboxSourceRefresh({ featureFlags, items, tokens, directory: slackIdMode, fetchImpl })(
+    "owner",
+    [item],
+    "avatars",
+  );
+  assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [
+    { id: "U1", name: "Alex", avatarUrl: ALEX },
+  ]);
+  const legacy = await fixture("slack", { channelId: "D2", ts: "1.0" });
+  await createInboxSourceRefresh({ featureFlags, items: legacy.items, tokens, directory, fetchImpl })(
+    "owner",
+    [legacy.item],
+    "avatars",
+  );
+  assert.deepEqual(await legacy.items.get(legacy.item.id), legacy.item);
+});
+
+test("people outside the directory keep the profile Slack returned with their message", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+  await createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      return json({
+        ok: true,
+        messages: [
+          {
+            ts: "1.0",
+            user: "U_EXT",
+            user_profile: { display_name: "Pat Partner", image_72: "https://avatars.slack-edge.com/pat.png" },
+            text: "Hello from Slack Connect",
+          },
+        ],
+      });
+    },
+  })("owner", [item]);
+  const after = (await items.get(item.id))!;
+  assert.deepEqual(after.sourcePayload!.participants, [
+    { id: "U_EXT", name: "Pat Partner", avatarUrl: "https://avatars.slack-edge.com/pat.png" },
+  ]);
+  assert.equal((after.sourcePayload!.context as Array<{ author: string }>)[0]!.author, "Pat Partner");
+});
+
+test("people outside the directory without message profiles keep initials and never trigger profile API calls", async () => {
+  const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0", userId: "U_EXT" });
+  await createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith("conversations.info")) return json({ ok: true, channel: {} });
+      if (path.endsWith("auth.test")) return json({ ok: true, user_id: "OWNER" });
+      assert.ok(path.endsWith("conversations.replies"));
+      return json({ ok: true, messages: [{ ts: "1.0", user: "U_EXT", text: "Hello" }] });
+    },
+  })("owner", [item]);
+  assert.deepEqual((await items.get(item.id))!.sourcePayload!.participants, [{ id: "U_EXT", name: "U_EXT" }]);
 });

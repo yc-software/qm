@@ -126,8 +126,6 @@ import {
   goalPausedNote,
   goalSteeringNote,
   meterGoalCall,
-  rehydrateOpenGoal,
-  goalSnapshotPayload,
   goalWorkDigest,
   type GovernorVerdict,
 } from "./goal.ts";
@@ -1762,6 +1760,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           pollFire: !!dispatched.pollFire,
           screenToolResult: dispatched.screenToolResult,
           governGoal: dispatched.governGoal,
+          saveGoal: dispatched.saveGoal,
           emit: dispatched.emit,
           scopeLabel: dispatched.scopeLabel,
           orgScopeId: dispatched.orgScopeId,
@@ -1813,7 +1812,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             );
           const grindMeter = createGrindMeter();
 
-          if (!entry.ref.goal) entry.ref.goal = rehydrateOpenGoal(turn.history);
+          entry.ref.goal = turn.goal ?? null;
           entry.ref.goalMeter = grindMeter;
           entry.ref.goalRound = turn.continueTurn ? 1 : 0;
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
@@ -2302,11 +2301,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (persistError) throw persistError;
             if (entry.ref.goal) {
               bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-              await turn.emit({
-                type: "system",
-                payload: goalSnapshotPayload(entry.ref.goal),
-                scopeLabel: turn.scopeLabel,
-              });
+              await turn.saveGoal?.(entry.ref.goal);
             }
             return {
               reply: "",
@@ -2336,11 +2331,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 g.status = "paused";
                 g.updatedAt = Date.now();
               }
-              await turn.emit({
-                type: "system",
-                payload: goalSnapshotPayload(g),
-                scopeLabel: turn.scopeLabel,
-              });
+              await turn.saveGoal?.(g);
               if (g.status === "complete") entry.ref.goal = null;
             }
             await recordStoppedReply(turn, reply, steps.closing(reply));
@@ -2357,11 +2348,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           if (entry.ref.goal) {
             const g = entry.ref.goal;
             bankGoalTurn(g, grindMeter.startedAt);
-            await turn.emit({
-              type: "system",
-              payload: goalSnapshotPayload(g),
-              scopeLabel: turn.scopeLabel,
-            });
+            await turn.saveGoal?.(g);
             if (g.status === "complete") entry.ref.goal = null;
           }
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");

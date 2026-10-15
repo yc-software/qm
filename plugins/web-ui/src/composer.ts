@@ -31,6 +31,7 @@ import {
   type PendingApproval,
   type QueuedRun,
   alwaysSteer,
+  switchedDefault,
 } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { browserRenderableImage, fieldSelect } from "./ui";
@@ -55,7 +56,7 @@ import { tip } from "./tooltip";
 import { isPhone } from "./viewport";
 import {
   LOADOUT_CAP,
-  ULTRAFAST_MODEL_ID,
+  isUltrafastModel,
   presetModelId,
   ultrafastChoice,
   loadLoadout,
@@ -351,6 +352,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return modelOptionFor(picked ?? defaultModelValue(scopeKey()), scopeKey());
   }
 
+  function followsDefault(): boolean {
+    const selected = currentModelOption();
+    const threadRef = ctx.chat.state.threadRef;
+    return (
+      !!selected &&
+      !(threadRef && threadModelPicks.has(threadRef)) &&
+      effortOverride === undefined &&
+      fastModeOverride === undefined &&
+      restoredLoadout?.value !== selected.value
+    );
+  }
+
   async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent, refresh = false): Promise<void> {
     const request = ++runtimeRequest;
     const actualScope = runtimeScopeKey(scopeId);
@@ -478,10 +491,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
           effortSelectionRevision === effortRevision &&
           fastSelectionRevision === fastRevision
         ) {
-          if (ctx.chat.state.threadRef) forgetThreadPick(ctx.chat.state.threadRef);
-          effortOverride = undefined;
-          fastModeOverride = undefined;
-          restoredLoadout = undefined;
+          clearChatSelection();
         }
       }
       syncRuntimeSelection(agent);
@@ -557,7 +567,14 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
 
     const compact = Boolean(ctx.pane) || isPhone();
-    const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked);
+    const turnRuntime = ctx.chat.turnRuntime();
+    const routed =
+      turnRuntime?.change &&
+      !switchedDefault(turnRuntime) &&
+      (turnRuntime.harnessId !== selectedModel.harnessId || turnRuntime.modelId !== selectedModel.model.id)
+        ? turnRuntime
+        : undefined;
+    const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked, routed);
     return html`
       <form
         class="composer-wrap ${compact ? "compact" : ""}"
@@ -1917,6 +1934,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     ctx.chat.drawActiveChat(agent);
   }
 
+  function clearChatSelection(): void {
+    if (ctx.chat.state.threadRef) forgetThreadPick(ctx.chat.state.threadRef);
+    effortOverride = undefined;
+    fastModeOverride = undefined;
+    restoredLoadout = undefined;
+  }
+
+  async function followScopeDefault(agent: Agent): Promise<void> {
+    clearChatSelection();
+    await refreshRuntimeSelection(ctx.chat.state.scopeId, agent, true);
+  }
+
   function selectModel(value: string, agent: Agent): void {
     const option = getModelOptions(scopeKey()).find((candidate) => candidate.value === value);
     if (!option) return;
@@ -1958,7 +1987,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   function toggleFastMode(agent: Agent): void {
     const selected = currentModelOption();
     if (ctx.chat.hasUnresolvedApproval() || ctx.chat.state.resolvingApprovals.size > 0) return;
-    if (selected?.model.id === ULTRAFAST_MODEL_ID) {
+    if (selected && isUltrafastModel(selected.model.id)) {
       const target = ultrafastChoice(getModelOptions(scopeKey()), selected);
       if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
       return;
@@ -2126,6 +2155,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     },
     resizeComposer,
     currentModelOption,
+    followsDefault,
+    followScopeDefault,
     carryModelPick,
     refreshRuntimeSelection,
     onDragEnter,

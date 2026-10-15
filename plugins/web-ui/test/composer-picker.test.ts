@@ -177,6 +177,7 @@ test("the personal-account picker preserves composer choices and saves context d
         },
         activePendingApprovals: () => [],
         hasUnresolvedApproval: () => false,
+        turnRuntime: () => null,
         hasLiveRun: () => false,
         drawActiveChat: draw,
       },
@@ -678,36 +679,80 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(updates.at(-1)?.effortLevel, "adaptive");
     assert.equal(context.contextModelState.config.effective.effortLevel, "adaptive");
-    config.modelsByHarness.pi.push("gpt-6-astra", "gpt-6-astra-ultrafast");
-    config.modelCatalog!["gpt-6-astra"] = model("gpt-6-astra", "Astra", "openai");
-    config.modelCatalog!["gpt-6-astra-ultrafast"] = model("gpt-6-astra-ultrafast", "Astra Ultrafast", "openai");
-    config.fastModeModelIds!.push("gpt-6-astra");
-    config.effective = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "high", fastMode: true };
-    ctx.chat.state.threadRef = "web:tester:ultrafast";
+    for (const [modelId, label] of [
+      ["gpt-6-astra", "Astra"],
+      ["gpt-6.1-sol", "Sol 6.1"],
+    ]) {
+      config.modelsByHarness.pi.push(modelId, `${modelId}-ultrafast`);
+      config.modelCatalog![modelId] = model(modelId, label, "openai");
+      config.modelCatalog![`${modelId}-ultrafast`] = model(`${modelId}-ultrafast`, `${label} Ultrafast`, "openai");
+      config.fastModeModelIds!.push(modelId);
+      config.effective = { harnessId: "pi", modelId: modelId, effortLevel: "high", fastMode: true };
+      ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast`;
+      localStorage.removeItem("web-ui:loadout");
+      await composer!.refreshRuntimeSelection(null, agent, true);
+      await mount();
+      button('[aria-label="Ultrafast"]').click();
+      assert.equal(button(".loadout-button").getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
+      assert.deepEqual(
+        saved().filter(({ value }) => value.startsWith(`pi:${modelId}`)),
+        [{ value: `pi:${modelId}-ultrafast`, effort: "high", fast: false }],
+      );
+      ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast-new-thread`;
+      await mount();
+      assert.match(button(".loadout-button").getAttribute("aria-label")!, /High effort, Ultrafast/);
+      button('[data-loadout-section="add"]').click();
+      assert.equal(host.querySelector(`[aria-label="Add ${label} Ultrafast to presets"]`), null);
+      button('button[aria-label="Fast"]').click();
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "true");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+      button('[aria-label="Ultrafast"]').click();
+      button('[aria-label="Ultrafast"]').click();
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+      assert.equal(composer!.state.effortLevel, "high");
+    }
+    config.effective = { harnessId: "pi", modelId: "gamma" };
     localStorage.removeItem("web-ui:loadout");
+    ctx.chat.state.threadRef = "web:tester:server-default";
     await composer!.refreshRuntimeSelection(null, agent, true);
     await mount();
-    button('[aria-label="Ultrafast"]').click();
-    assert.match(button(".loadout-button").getAttribute("aria-label")!, /Astra, High effort, Ultrafast/);
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
-    assert.deepEqual(
-      saved().filter(({ value }) => value.includes("astra")),
-      [{ value: "pi:gpt-6-astra-ultrafast", effort: "high", fast: false }],
+    assert.equal(composer!.followsDefault(), true, "a chat on the default leaves the model to the server");
+    const routed = { harnessId: "pi", modelId: "beta", label: "Beta", change: { rule: "hard-task" } };
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => routed;
+    draw();
+    assert.equal(host.querySelector(".loadout-button .menu-label")?.textContent?.trim(), "Beta");
+    assert.equal(
+      button(".loadout-button").getAttribute("aria-label"),
+      "Model: Beta, routed by hard-task for this turn; your setting is Gamma",
     );
-    ctx.chat.state.threadRef = "web:tester:ultrafast-new-thread";
+    localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picked", "pi:beta"]]));
+    window.dispatchEvent(new dom.window.StorageEvent("storage", { key: "web-ui:model-picks" }));
+    ctx.chat.state.threadRef = "web:tester:picked";
     await mount();
-    assert.match(button(".loadout-button").getAttribute("aria-label")!, /High effort, Ultrafast/);
-    button('[data-loadout-section="add"]').click();
-    assert.equal(host.querySelector('[aria-label="Add Astra Ultrafast to presets"]'), null);
-    button('button[aria-label="Fast"]').click();
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "true");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
-    button('[aria-label="Ultrafast"]').click();
-    button('[aria-label="Ultrafast"]').click();
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
-    assert.equal(composer!.state.effortLevel, "high");
+    assert.equal(composer!.followsDefault(), false, "an explicit pick is sent with each message");
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Beta, /);
+    ctx.chat.state.threadRef = "web:tester:server-default";
+    await mount();
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
+      harnessId: "pi",
+      modelId: "beta",
+      change: { agent: "task" },
+    });
+    draw();
+    assert.equal(
+      button(".loadout-button").getAttribute("aria-label"),
+      "Model: Beta, switched for this request; your setting is Gamma",
+    );
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
+      harnessId: "pi",
+      modelId: "beta",
+      change: { agent: "scope" },
+    });
+    draw();
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Gamma, /);
   } finally {
     resetContext?.();
     composer?.dispose();

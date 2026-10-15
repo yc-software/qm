@@ -186,9 +186,6 @@ export const adminOperations = {
     value: Type.Object({ action: Type.Literal("retire"), sandboxId: string }, { additionalProperties: false }),
   }),
   security_flags: operation("Read security screening flags.", "GET", "/security/flags", { limit }),
-  release_security: operation("Release a conversation's security taint. Confirm first.", "POST", "/security/release", {
-    value: Type.Object({ sessionId: string }, { additionalProperties: false }),
-  }),
   slack_installation: operation("Read Slack installation metadata, never tokens.", "GET", "/slack-installation"),
   slack_start: operation("Start Slack setup or installation. Confirm first.", "POST", "/slack-installation/start", {
     value: Type.Object(

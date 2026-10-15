@@ -158,7 +158,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     },
   ] as SessionEntry[];
   const restored = recoveredRuntime(entries, "run", "alice");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored, "cron"), {
+  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",

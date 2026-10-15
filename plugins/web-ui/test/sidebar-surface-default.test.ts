@@ -9,6 +9,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         id: "web",
         threadRef: "web:tester:one",
         scopeId: "personal:tester",
+        surface: "web",
         title: "Web chat",
         canContinue: true,
         createdAt: 3,
@@ -17,8 +18,31 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
         id: "slack",
         threadRef: "ch:C_TEAM:1700000000.000100",
         scopeId: "channel:C_TEAM",
+        surface: "slack",
         title: "Team chat",
         createdAt: 2,
+      },
+      {
+        id: "group",
+        threadRef: "grp:C_PRIVATE:1700000000.000200",
+        scopeId: "channel:C_PRIVATE",
+        surface: "slack",
+        title: "Private channel thread",
+        createdAt: 1.5,
+      },
+      {
+        id: "cron-run",
+        threadRef: "cron:c1:fire:abc",
+        scopeId: "personal:tester",
+        surface: "cron",
+        createdAt: 5,
+      },
+      {
+        id: "webhook-run",
+        threadRef: "agent:main:webhook:w1",
+        scopeId: "personal:tester",
+        surface: "webhook",
+        createdAt: 4,
       },
       { id: "child", threadRef: "web:tester:child", scopeId: "personal:tester", parentSessionId: "web", createdAt: 1 },
       {
@@ -52,17 +76,21 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       const rowIds = () =>
         [...document.querySelectorAll<HTMLElement>("#sidebar-body .session-row")].map((row) => row.dataset.sessionId);
       const slackRow = () => document.querySelector('[data-session-id="slack"]');
-      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack"]);
+      const groupRow = () => document.querySelector('[data-session-id="group"]');
+      assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group"]);
       if (stored !== "1") {
         assert.ok(slackRow()?.querySelector(".slack-logo"));
+        assert.ok(groupRow()?.querySelector(".slack-logo"));
         assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /slack/);
       }
       assert.equal(document.querySelector('[data-view="inbox"]'), null);
       assert.equal(document.querySelector('[data-view="calendar"]'), null);
       sidebar.setWebOnly(true);
       assert.deepEqual(rowIds(), ["web"]);
+      sidebar.revealSessionSurface(sessions.find((s) => s.id === "cron-run"));
+      assert.equal(sidebar.sessionsState.webOnly, true);
       sidebar.setWebOnly(false);
-      assert.deepEqual(rowIds(), ["web", "slack"]);
+      assert.deepEqual(rowIds(), ["web", "slack", "group"]);
       assert.ok(slackRow()?.querySelector(".slack-logo"));
       assert.equal(slackRow()?.querySelector(".ro-lock"), null);
       assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);

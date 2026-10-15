@@ -25,7 +25,7 @@ test("migrations drop an empty session_tape and the store keeps working without 
     const { lease } = await store.acquireLease(session.id);
     await store.append(lease!, {
       type: "user",
-      payload: { text: "before the drop", securityTainted: true },
+      payload: { text: "before the drop" },
       scopeLabel: scope,
     });
 
@@ -39,8 +39,6 @@ test("migrations drop an empty session_tape and the store keeps working without 
       (await store.visibleEntries(session.id, "alice")).map((entry) => (entry.payload as { text: string }).text),
       ["before the drop", "after the drop"],
     );
-    assert.equal(await store.clearSecurityTaint(session.id), true);
-    assert.deepEqual((await store.getEntries(session.id))[0]!.payload, { text: "before the drop" });
     await store.deleteSession(session.id);
     assert.equal(await store.get(session.id), null);
   } finally {

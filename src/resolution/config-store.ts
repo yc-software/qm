@@ -147,10 +147,6 @@ interface AutoFlaggerConfig {
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
-export interface PersistedTurnWallClock {
-  scopeId: ScopeId;
-  sec: number;
-}
 interface ScopeConfigPresence {
   soul: boolean;
   commandPolicy: boolean;
@@ -266,8 +262,6 @@ export interface ScopedConfigStore {
   setEmbeddingModel(modelId: string | null): Promise<void>;
   getAutoFlaggerConfig(): AutoFlaggerConfig | null;
   setAutoFlaggerConfig(config: AutoFlaggerConfig | null): void;
-  getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
-  setTurnWallClockSec(id: ScopeId, sec: number | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
@@ -306,7 +300,6 @@ export function createMemoryConfigStore(
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
     autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
-    turnWallClocks?: DurableMap<PersistedTurnWallClock>;
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
@@ -337,7 +330,6 @@ export function createMemoryConfigStore(
   const browseMaxSteps = new Map<ScopeId, number>();
   const browseModels = new Map<ScopeId, string>();
   let autoFlaggerConfig: AutoFlaggerConfig | null = null;
-  const turnWallClocks = new Map<ScopeId, number>();
   const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
   const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
   const commandPolicyStore = opts.commandPolicies ?? createMemoryMap<PersistedCommandPolicy>();
@@ -363,7 +355,6 @@ export function createMemoryConfigStore(
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
   const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
-  const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => reportFailureAs(`config: persist ${what}`, undefined);
   const writeQueue = createKeyedQueue();
@@ -579,7 +570,6 @@ export function createMemoryConfigStore(
                 rubric: storedAutoFlagger.rubric,
               }
             : null;
-          for (const r of await turnWallClockStore.all()) turnWallClocks.set(r.scopeId, r.sec);
         })();
       }
       return hydrated;
@@ -1133,14 +1123,6 @@ export function createMemoryConfigStore(
         );
       }
     },
-    getTurnWallClockSecDurable: async (id) => (await turnWallClockStore.get(id))?.sec ?? null,
-    async setTurnWallClockSec(id, sec) {
-      await writeQueue(`turnWallClock:${id}`, () =>
-        sec === null ? turnWallClockStore.delete(id) : turnWallClockStore.put(id, { scopeId: id, sec }),
-      );
-      if (sec === null) turnWallClocks.delete(id);
-      else turnWallClocks.set(id, sec);
-    },
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,
@@ -1311,7 +1293,6 @@ export function createMemoryConfigStore(
         `egress:${id}`,
         `externalSlack:${id}`,
         `model:${id}`,
-        `turnWallClock:${id}`,
         `branding:${id}`,
         ...(id === org
           ? [

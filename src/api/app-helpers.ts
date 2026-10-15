@@ -263,6 +263,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         return {
           principalId,
           displayName: member?.displayName?.trim() || principalId,
+          ...(member?.avatarUrl ? { avatarUrl: member.avatarUrl } : {}),
           ...(manual.has(principalId) ? {} : { viaChannel: true }),
         };
       }),

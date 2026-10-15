@@ -55,6 +55,7 @@ import {
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
   activityOf,
+  automationRunLabel,
   chatBrowseStatusMatches,
   bumpActivity,
   sidebarSessions,
@@ -63,6 +64,7 @@ import {
   recentProjectSeeds,
   reconcileSessions,
   rowIndicators,
+  surfaceOf,
   splitPinned,
   withPendingSession,
   withoutUnsentPending,
@@ -250,13 +252,6 @@ function listWhen(ms: number): string {
   return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export function surfaceOf(s: CoreSession): string {
-  if (s.threadRef.startsWith("web:")) return "web";
-  if (s.threadRef.startsWith("dm:") || s.threadRef.startsWith("ch:")) return "slack";
-  if (s.threadRef.startsWith("agent:main:subagent:") && s.surface) return s.surface;
-  return "core";
-}
-
 export function sessionSlackUrl(s: Pick<CoreSession, "threadRef">): string | null {
   return slackThreadUrl(appState.me?.slackWorkspaceUrl ?? null, s.threadRef);
 }
@@ -274,13 +269,15 @@ function projectMenuKey(scopeId: string): string {
 }
 
 export function defaultSessionTitle(s: CoreSession): string {
+  const automation = automationRunLabel(s);
+  if (automation) return automation;
   const project = projectName(s.scopeId);
   if (project) return project;
   const surface = surfaceOf(s);
   if (surface === "web") return "Web chat";
   if (s.type === "channel") return channelLabel(s) ?? "Channel";
   if (s.type === "group") return groupDmText(s.channelName) ?? s.channelName?.trim() ?? "Group DM";
-  return "Direct message";
+  return surface === "slack" ? "Direct message" : "Untitled chat";
 }
 
 function channelLabel(s: CoreSession): string | null {
@@ -1333,7 +1330,7 @@ export function setWebOnly(webOnly: boolean): void {
 }
 
 export function revealSessionSurface(s: CoreSession): void {
-  if (!sessionsState.webOnly || surfaceOf(s) === "web") return;
+  if (!sessionsState.webOnly || surfaceOf(s) === "web" || automationRunLabel(s)) return;
   setWebOnly(false);
 }
 
@@ -1861,5 +1858,7 @@ export async function openSessionInto(
     conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
   }
   conv.setPins(entriesRes.pins ?? []);
+  conv.setGoal(entriesRes.goal ?? null);
+  conv.setTurnRuntime(entriesRes.runtime ?? null);
   renderList();
 }

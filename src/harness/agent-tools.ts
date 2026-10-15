@@ -110,6 +110,7 @@ export interface ToolContextRef {
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
+  saveGoal?: (goal: GoalRecord) => Promise<void>;
   goalOpenedThisTurn?: boolean;
 
   goalRound?: number;
@@ -671,6 +672,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
+      const { stdout: _stdout, stderr: _stderr, ...execMeta } = r;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const reachedPrefix = r.reached ? `[ran on ${r.reached.label}'s computer]\n` : "";
       const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
@@ -680,7 +682,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : "";
       return recordResult(
         callId,
-        { tool: "execute", ...scopeNote, ...r },
+        { tool: "execute", ...scopeNote, ...execMeta },
         {
           content: [
             {
@@ -1540,7 +1542,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "subagents",
     label: "subagents",
     description:
-      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry and does not inherit this conversation, so give it a complete standalone task with the context and authorization it needs. Its final answer comes back to you as an internal message. " +
+      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry or see this conversation, so pass what it needs to know. Brief it as you would a colleague just as capable as you are, if not more so: the goal, why it matters, what you already know, and any real limits. Leave the approach to them; keep it short and state preferences as preferences. Its final answer comes back to you as an internal message. " +
       "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
       '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
       "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
@@ -1570,7 +1572,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       task: Type.Optional(
         Type.String({
-          description: "open and followup_task: the complete standalone instruction the subagent works from.",
+          description: "open and followup_task: the short task brief, with relevant context and real limits.",
         }),
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
@@ -1908,9 +1910,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
+      const { output: _output, ...startMeta } = r;
       return recordResult(
         callId,
-        { tool: "execute", background: true, ...r },
+        { tool: "execute", background: true, ...startMeta },
         {
           content: [
             {
@@ -2070,9 +2073,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
             });
+            const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,
-              { tool: "background", action: params.action, ...r },
+              { tool: "background", action: params.action, ...pollMeta },
               {
                 content: [
                   { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
@@ -3927,6 +3931,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       ref.goal = record;
       ref.goalOpenedThisTurn = true;
+      await ref.saveGoal?.(record);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -4016,6 +4021,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         cancelGoal(goal, p.note);
+        await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4050,6 +4056,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ref.goalOpenedThisTurn = true;
         delete goal.pauseReason;
         delete goal.governor;
+        await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4103,6 +4110,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           };
       if (verdict.verdict !== "complete") {
         const applied = applyGovernorVerdict(goal, verdict);
+        await ref.saveGoal?.(goal);
         let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
         if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
         if (applied.verdict === "pause")
@@ -4118,6 +4126,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
+      await ref.saveGoal?.(goal);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },

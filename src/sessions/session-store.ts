@@ -2,6 +2,7 @@ import { memoryContextPayload } from "../memory/context-boundary.ts";
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
+import type { GoalRecord } from "../harness/goal.ts";
 
 export function promptEnvelopeBody(envelope: unknown): { hash: string; body: string } | null {
   if (envelope == null) return null;
@@ -43,11 +44,6 @@ export function createContextSummaryPayload(throughSeq: number, text: string): C
 export interface ContextWindow {
   entries: SessionEntry[];
   totalEntries: number;
-  hasSecurityTaint: boolean;
-}
-
-export function entrySecurityTainted(entry: SessionEntry): boolean {
-  return (entry.payload as { securityTainted?: unknown } | null)?.securityTainted === true;
 }
 
 export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
@@ -61,7 +57,6 @@ export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow
         ? [...entries]
         : entries.filter((entry) => entry.seq > throughSeq || entry === memoryContext),
     totalEntries: entries.length,
-    hasSecurityTaint: entries.some(entrySecurityTainted),
   };
 }
 
@@ -587,13 +582,13 @@ export interface SessionStore {
 
   append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
   appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
-  getRecentEntries(sessionIds: readonly string[], lookback: number): Promise<Map<string, SessionEntry[]>>;
   getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
   countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
   getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
   latestEntrySeq(sessionId: string): Promise<number>;
-  clearSecurityTaint(sessionId: string): Promise<boolean>;
+  goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
+  setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
@@ -617,6 +612,9 @@ export interface SessionStore {
   visibleEntries(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
+
+  /** Sessions whose (participant or session) title contains the query — newest activity first. */
+  searchSessionTitles(principalId: string, query: string, limit?: number): Promise<Session[]>;
 
   appendSearchEntries(lease: Lease, rows: readonly NewSearchEntry[]): Promise<void>;
   searchIndexCoverage(sessionId: string): Promise<number>;

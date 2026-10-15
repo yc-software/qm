@@ -20,6 +20,7 @@ import type {
   SessionEntry,
   TurnRequest,
   TurnResult,
+  TurnRuntime,
 } from "../types.ts";
 import type { OutgoingAttachment } from "../types.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
@@ -33,7 +34,7 @@ import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
-import type { TurnStream } from "../runs/turn-stream.ts";
+import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
@@ -204,7 +205,7 @@ export type VisibleCron = Cron & { scopeName?: string };
 
 export type ProjectView = Project & {
   scopeId: ScopeId;
-  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
+  members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
 };
 
 type ProjectViewMutation =
@@ -297,6 +298,8 @@ export interface App {
       createdAt: number;
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
+    goal?: GoalView;
+    runtime?: TurnRuntime;
     partial?: string;
     partialStartOffset?: number;
     alive?: boolean;
@@ -337,7 +340,14 @@ export interface App {
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{
+    session: Session;
+    entries: TranscriptEntry[];
+    earlierEntries?: number;
+    pins?: SessionPinView[];
+    goal?: GoalView;
+    runtime?: TurnRuntime;
+  } | null>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,

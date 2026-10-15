@@ -395,3 +395,14 @@ test("process sessions stream output through the data plane exec path", async ()
   assert.match(output, /one/);
   assert.match(output, /two/);
 });
+
+test("layer tools install outside /workspace by staging inside it", async () => {
+  const target = join(mkdtempSync(join(tmpdir(), "managed-agents-bin-")), "tool");
+  sandbox = make({
+    layerToolFiles: () => [{ to: target, content: "#!/bin/sh\necho ok\n", mode: "755" }],
+  });
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, `${target}`);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stdout.trim(), "ok");
+});

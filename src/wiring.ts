@@ -3,7 +3,7 @@ import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
 import { brokerCredentialAuthHeader } from "./api/credential-broker.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks } from "./decisions/hooks.ts";
+import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
@@ -111,7 +111,6 @@ import {
   type PersistedBrowseMaxSteps,
   type PersistedBrowseModel,
   type PersistedAutoFlaggerConfig,
-  type PersistedTurnWallClock,
   type PersistedDeploymentIdentity,
 } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
@@ -704,7 +703,6 @@ export function buildApp(
     browseMaxSteps: artifactMap<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
     browseModels: artifactMap<PersistedBrowseModel>("browse_model_configs"),
     autoFlaggerConfigs: artifactMap<PersistedAutoFlaggerConfig>("auto_flagger_configs"),
-    turnWallClocks: artifactMap<PersistedTurnWallClock>("turn_wall_clock_configs"),
     deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
@@ -1502,13 +1500,8 @@ export function buildApp(
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input) => {
+  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input, routedBy) => {
     await refreshModels();
-    if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-      if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-        throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-      return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-    }
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,
@@ -1519,17 +1512,23 @@ export function buildApp(
         hydrateModelCatalog,
         input.runtimePurpose,
       );
-    if (input.runtime?.modelId || input.continueTurn) return resolve(input.runtime);
-    const routed = (
-      await decide("turn_start", input.input, {
-        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-        scopeLabel: input.scopeLabel,
-        sessionId: input.session.id,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.cancel ? { cancel: input.cancel } : {}),
-      })
-    )?.runtime;
-    return resolve(routed ? { ...input.runtime, ...routed } : input.runtime);
+    const decision = await decide("turn_start", turnStartState(input), {
+      ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
+      scopeLabel: input.scopeLabel,
+      sessionId: input.session.id,
+      ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.cancel ? { cancel: input.cancel } : {}),
+    });
+    const routed = await routeTurnRuntime(decision, resolve, async () => {
+      if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+        if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+        return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
+      }
+      return resolve(input.runtime);
+    });
+    if (routed.routedBy) routedBy(routed.routedBy);
+    return routed.choice;
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
@@ -1904,6 +1903,13 @@ export function buildApp(
     },
   };
   pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/turn_wall_clock_configs/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS turn_wall_clock_configs",
+      "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
+    ],
+  });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
@@ -3130,6 +3136,7 @@ export function serverDeps(
             items: built.loops.items,
             errors: built.errors,
             tokens: built.keychain,
+            directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),
         }

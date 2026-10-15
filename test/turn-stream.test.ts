@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTurnStream, goalViewFromEntry } from "../src/runs/turn-stream.ts";
+import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -403,29 +403,29 @@ test("turn-stream: noteGoal/goal snapshots", () => {
   assert.equal(stream.goal("r1")?.status, "complete");
 });
 
-test("goalViewFromEntry extracts goal snapshots from tool results and system entries", () => {
+test("goalView renders a goal record's status and floor", () => {
   const record = {
     objective: "work for a while",
-    status: "active",
+    status: "active" as const,
     floor: { minMs: 1_800_000, minTurns: 3 },
+    tokensUsed: 0,
     createdAt: 10,
     updatedAt: 20,
   };
-  const fromTool = goalViewFromEntry("tool_result", { tool: "goal", action: "create", goal: record });
-  assert.equal(fromTool?.objective, "work for a while");
-  assert.equal(fromTool?.status, "active");
-  assert.equal(fromTool?.floor, "30m, 3 turns");
-  const fromSystem = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "complete" } });
-  assert.equal(fromSystem?.status, "complete");
-  const paused = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "paused" } });
-  assert.equal(paused?.status, "paused");
-  assert.equal(goalViewFromEntry("tool_result", { tool: "execute", goal: record }), null);
-  assert.equal(goalViewFromEntry("tool_result", { tool: "get_goal", goal: null }), null);
-  assert.equal(goalViewFromEntry("system", { kind: "compaction" }), null);
-  assert.equal(
-    goalViewFromEntry("tool_result", { tool: "update_goal", goal: { objective: "", status: "active" } }),
-    null,
-  );
+  assert.deepEqual(goalView(record), {
+    objective: "work for a while",
+    status: "active",
+    floor: "30m, 3 turns",
+    createdAt: 10,
+    updatedAt: 20,
+  });
+  const { floor: _floor, ...bare } = record;
+  assert.deepEqual(goalView({ ...bare, status: "paused" }), {
+    objective: "work for a while",
+    status: "paused",
+    createdAt: 10,
+    updatedAt: 20,
+  });
 });
 
 test("monitor wakes persist engagement after the reply gate", async () => {

@@ -8,7 +8,7 @@ import {
 } from "../security/security-posture.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromEntries, rehydrateOpenGoal } from "./goal.ts";
+import { goalWorkFromEntries } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
@@ -91,8 +91,9 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     pausedOnApproval: false,
     silentRequested: false,
     pollFire: Boolean(turn.pollFire),
-    goal: turn.goal ?? rehydrateOpenGoal(turn.history),
-    ...(turn.goal || turn.continueTurn ? { goalRound: 1 } : {}),
+    goal: turn.goal ?? null,
+    ...(turn.goalContinuation || turn.continueTurn ? { goalRound: 1 } : {}),
+    saveGoal: turn.saveGoal,
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,

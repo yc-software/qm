@@ -76,10 +76,9 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
       name?: unknown;
       sourceRole?: unknown;
       hidden?: unknown;
-      securityTainted?: unknown;
     } | null;
     if (p?.ts !== ts) continue;
-    if (p.hidden === true || p.securityTainted === true) return null;
+    if (p.hidden === true) return null;
     found = {
       text: typeof p.text === "string" ? p.text : "",
       ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),

@@ -147,18 +147,20 @@ test("shared harness security screens use auxiliary coordinates", async () => {
   assert.equal(recorded[0]!.model, "claude-oneshot");
 });
 
-test("harness adapters rehydrate the open goal from history into the tool context", async () => {
+test("harness adapters hand the session goal and its saver to the tool context, ignoring legacy snapshots", async () => {
   const { createGoalRecord } = await import("../src/harness/goal.ts");
   const goal = createGoalRecord({ objective: "carry the goal across turns" });
   const history = [
     { type: "system", payload: { kind: "goal", goal }, seq: 0 },
   ] as unknown as HarnessTurnInput["history"];
-  assert.equal(harnessToolContext({ history } as unknown as HarnessTurnInput).goal?.objective, goal.objective);
-  const handed = { ...goal, objective: "handed in directly" };
-  assert.equal(harnessToolContext({ history, goal: handed } as unknown as HarnessTurnInput).goal, handed);
-  const done = { ...goal, status: "complete" as const };
-  const closed = [
-    { type: "system", payload: { kind: "goal", goal: done }, seq: 0 },
-  ] as unknown as HarnessTurnInput["history"];
-  assert.equal(harnessToolContext({ history: closed } as unknown as HarnessTurnInput).goal, null);
+  assert.equal(harnessToolContext({ history } as unknown as HarnessTurnInput).goal, null);
+  const saveGoal = async () => {};
+  const ref = harnessToolContext({ history: [], goal, saveGoal } as unknown as HarnessTurnInput);
+  assert.equal(ref.goal, goal);
+  assert.equal(ref.saveGoal, saveGoal);
+  assert.equal(ref.goalRound, undefined);
+  assert.equal(
+    harnessToolContext({ history: [], goal, goalContinuation: true } as unknown as HarnessTurnInput).goalRound,
+    1,
+  );
 });

@@ -29,8 +29,22 @@ export function activityOf(s: CoreSession): number {
 
 export type ChatBrowseStatus = "active" | "waiting" | "archived";
 
+export function surfaceOf(s: Pick<CoreSession, "surface">): "web" | "slack" | "core" {
+  return s.surface === "web" || s.surface === "slack" ? s.surface : "core";
+}
+
+const AUTOMATION_RUN_LABELS: Record<string, string> = {
+  cron: "Cron run",
+  webhook: "Webhook run",
+  loop: "Loop run",
+};
+
+export function automationRunLabel(s: Pick<CoreSession, "surface">): string | null {
+  return (s.surface && AUTOMATION_RUN_LABELS[s.surface]) || null;
+}
+
 export function sidebarSessions(sessions: readonly CoreSession[]): CoreSession[] {
-  return sessions.filter((session) => !session.parentSessionId);
+  return sessions.filter((session) => !session.parentSessionId && !automationRunLabel(session));
 }
 
 export function splitPinned<T extends Pick<CoreSession, "pinned">>(sessions: readonly T[]): { pinned: T[]; rest: T[] } {
@@ -264,7 +278,7 @@ export function shouldStartProactiveOpener(state: {
   scopeId: string | null;
   messageCount: number;
   loaded: boolean;
-  sessions: readonly Pick<CoreSession, "id" | "threadRef">[];
+  sessions: readonly Pick<CoreSession, "id" | "surface">[];
 }): boolean {
   return (
     !state.started &&
@@ -272,7 +286,7 @@ export function shouldStartProactiveOpener(state: {
     state.scopeId === null &&
     state.messageCount === 0 &&
     state.loaded &&
-    !state.sessions.some((session) => session.id && !session.threadRef.startsWith("cron:"))
+    !state.sessions.some((session) => session.id && !automationRunLabel(session))
   );
 }
 

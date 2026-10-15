@@ -75,10 +75,10 @@ test("non-human entries carry no author label (assistant/tool are self-evident b
   assert.match(searchSessionEntries(entries, "q2.md")[0]!, /^tool_call#2 \([^)]+\): /);
 });
 
-test("search view keeps compacted-away entries and the latest summary, but never securityTainted or superseded-summary ones", () => {
+test("search view keeps compacted-away entries and the latest summary, but never superseded-summary ones", () => {
   const entries: SessionEntry[] = [
     entry(1, "user", { text: "the venue is Fort Mason" }),
-    entry(2, "tool_result", { text: "venue gate code 4417", securityTainted: true }),
+    entry(2, "tool_result", { text: "venue gate code 4417" }),
     entry(3, "thinking", { text: "pondering the venue" }),
     entry(4, "system", createContextSummaryPayload(3, "earlier: venue is Fort Mason, gate pending")),
     entry(5, "user", { text: "correction: the venue is Pier 27" }),
@@ -146,16 +146,6 @@ test("openSessionEntry elides only the middle of an oversized entry", () => {
   assert.match(opened, /HEAD/);
   assert.match(opened, /TAIL$/);
   assert.match(opened, /chars total; middle elided/);
-});
-
-test("openSessionEntry through the search view cannot reach securityTainted entries", () => {
-  const entries: SessionEntry[] = [
-    entry(1, "user", { text: "the venue is Fort Mason" }),
-    entry(2, "tool_result", { text: "venue gate code 4417", securityTainted: true }),
-  ];
-  const view = forSearchView(entries);
-  assert.match(openSessionEntry(view, 1)!, /Fort Mason/);
-  assert.equal(openSessionEntry(view, 2), null);
 });
 
 test("history tool seq mode reopens an entry, reports a missing seq, and rejects a call with neither param", async () => {

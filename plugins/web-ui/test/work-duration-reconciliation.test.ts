@@ -64,7 +64,7 @@ test("work duration survives a transcript refresh — persisted turn timing wins
     { type: "tool_call", payload: { tool: "execute", command: "ls" }, createdAt: 112_000, seq: 2, parentSeq: 1 },
     {
       type: "tool_result",
-      payload: { tool: "execute", code: 0, stdout: "a" },
+      payload: { tool: "execute", code: 0, result: "a" },
       createdAt: 112_000,
       seq: 3,
       parentSeq: 2,

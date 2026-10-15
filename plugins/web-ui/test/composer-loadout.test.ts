@@ -4,6 +4,8 @@ import {
   compatibleHarnessOptions,
   effortLevelsForHarness,
   loadoutModelId,
+  loadoutActions,
+  ultrafastChoice,
   modelLoadoutOptions,
   parseLoadout,
   reconcileLoadout,
@@ -237,12 +239,32 @@ test("native reasoning choices require model and harness metadata and always off
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
 });
 
-test("Astra speed variants share a preset and preserve a saved tier", () => {
-  const base = option("pi:gpt-6-astra");
-  const ultra = option("pi:gpt-6-astra-ultrafast");
-  const saved = entry(ultra.value, "high");
-  assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
-  assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
-  assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
-  assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
-});
+for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
+  test(`${modelId} speed variants share a preset and preserve a saved tier`, () => {
+    const base = option(`pi:${modelId}`);
+    const ultra = option(`pi:${modelId}-ultrafast`);
+    const saved = entry(ultra.value, "high");
+    assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
+    assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
+    assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
+    assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
+    assert.deepEqual(parseLoadout(JSON.stringify([saved, entry(base.value)])), [saved]);
+    assert.equal(ultrafastChoice([base, ultra], base), ultra);
+    assert.equal(ultrafastChoice([base, ultra], ultra), base);
+    assert.equal(ultrafastChoice([base], base), undefined);
+    assert.equal(ultrafastChoice([base, ultra], option(`claude:${modelId}`)), undefined);
+    let current = saved;
+    const actions = loadoutActions(
+      () => [base, ultra],
+      () => current,
+      (_, next) => {
+        current = next;
+      },
+      (id) => id === modelId,
+    );
+    actions.toggleFastMode();
+    assert.deepEqual(current, entry(base.value, "high", true));
+    actions.toggleFastMode();
+    assert.deepEqual(current, entry(base.value, "high", false));
+  });
+}
