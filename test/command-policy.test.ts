@@ -197,6 +197,9 @@ test("quotes, comments, and line continuations are read the way the shell reads 
     "rm -r\\\nf /tmp/x",
     "sudo psql -c 'drop table t'",
     "printf 'rm -rf /tmp/x' | bash > log",
+    "psql <<< 'drop table users'",
+    "pgcli app <<EOF\ndrop table users;\nEOF",
+    `echo 'import os; os.system("rm -rf /")' | python3`,
   ]) {
     assert.equal(evaluateCommand(command, p).decision, "require_approval", command);
   }

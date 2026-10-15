@@ -70,8 +70,10 @@ await Parser.init();
 const parser = new Parser();
 parser.setLanguage(await Language.load(require.resolve("tree-sitter-bash/tree-sitter-bash.wasm")));
 
+const MAX_DEPTH = 8;
 const SHELLS = new Set(["bash", "sh", "dash", "zsh", "ksh"]);
-const INTERPRETERS = new Set(["psql", "mysql", "mariadb", "sqlite", "sqlite3", "sqlcmd", "node", "perl", "ruby"]);
+const SHELL_VALUE_OPTIONS = ["-O", "-o", "--rcfile", "--init-file"];
+const SCRIPT_INTERPRETERS = new Set(["node", "perl", "ruby"]);
 const STDIN_SCRIPTS = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 const WRAPPER_OPTIONS: Record<string, string[]> = {
   sudo: [
@@ -87,7 +89,11 @@ const WRAPPER_OPTIONS: Record<string, string[]> = {
     "--chdir",
     "-T",
     "--command-timeout",
-  ].concat(["-R", "--chroot", "-t", "--type"]),
+    "-R",
+    "--chroot",
+    "-t",
+    "--type",
+  ],
   exec: ["-a"],
   nice: ["-n", "--adjustment"],
   time: ["-o", "--output", "-f", "--format"],
@@ -121,17 +127,30 @@ export interface CommandEvaluation {
   approvalKey?: string;
 }
 
+interface Executed {
+  scripts: string[];
+  code: string[];
+}
+
 export function scannableCommand(command: string): string {
   return scanLines(command, 0).join("\n");
 }
 
+function parse(command: string) {
+  const tree = parser.parse(command);
+  if (!tree) throw new Error("tree-sitter-bash produced no syntax tree");
+  return tree;
+}
+
 function scanLines(command: string, depth: number): string[] {
-  const tree = parser.parse(command.replaceAll("\\\n", ""));
-  if (!tree) return [command];
+  const tree = parse(command);
   try {
-    const executed = new Set<number>();
-    const payloads = depth < 8 ? executedPayloads(tree.rootNode, executed) : [];
-    return [render(tree.rootNode, executed), ...payloads.flatMap((payload) => scanLines(payload, depth + 1))];
+    const executed = depth < MAX_DEPTH ? executedPayloads(tree.rootNode) : { scripts: [], code: [] };
+    return [
+      render(tree.rootNode),
+      ...executed.code,
+      ...executed.scripts.flatMap((script) => scanLines(script, depth + 1)),
+    ];
   } finally {
     tree.delete();
   }
@@ -147,13 +166,17 @@ function unescape(text: string): string {
   return out;
 }
 
+function gapBetween(parent: Node, left: Node, right: Node): string {
+  return parent.text.slice(left.endIndex - parent.startIndex, right.startIndex - parent.startIndex);
+}
+
 function substitutions(node: Node): Node[] {
   return node.namedChildren.filter(
     (child): child is Node => child?.type === "command_substitution" || child?.type === "process_substitution",
   );
 }
 
-function render(node: Node, executed: Set<number>): string {
+function render(node: Node): string {
   switch (node.type) {
     case "raw_string":
       return bareWord(node.text.slice(1, -1)) ?? "''";
@@ -161,7 +184,7 @@ function render(node: Node, executed: Set<number>): string {
       return bareWord(decodeAnsiC(node.text.slice(2, -1))) ?? "''";
     case "string": {
       const subs = substitutions(node);
-      if (subs.length) return subs.map((sub) => render(sub, executed)).join(" ");
+      if (subs.length) return subs.map(render).join(" ");
       return bareWord(literal(node)) ?? '""';
     }
     case "word":
@@ -169,20 +192,17 @@ function render(node: Node, executed: Set<number>): string {
     case "comment":
       return "";
     case "heredoc_body":
-      return executed.has(node.id)
-        ? node.text
-        : substitutions(node)
-            .map((sub) => render(sub, executed))
-            .join(" ");
+      return substitutions(node).map(render).join(" ");
   }
   let out = "";
-  let at = node.startIndex;
+  let previous: Node | undefined;
   for (const child of node.children) {
     if (!child) continue;
-    out += node.text.slice(at - node.startIndex, child.startIndex - node.startIndex) + render(child, executed);
-    at = child.endIndex;
+    const gap = previous ? gapBetween(node, previous, child) : node.text.slice(0, child.startIndex - node.startIndex);
+    out += (gap === "\\\n" ? "" : gap) + render(child);
+    previous = child;
   }
-  return out + node.text.slice(at - node.startIndex);
+  return out + (previous ? node.text.slice(previous.endIndex - node.startIndex) : node.text);
 }
 
 function literal(node: Node): string {
@@ -212,28 +232,41 @@ function variableName(node: Node): string | undefined {
   return expansion && only.type === "variable_name" ? only.text : undefined;
 }
 
-function commandWords(command: Node): Node[] {
+function commandWords(command: Node): Node[][] {
   const name = command.childForFieldName("name");
-  const words = command.childrenForFieldName("argument").filter((word): word is Node => word !== null);
-  return name ? [name.firstNamedChild ?? name, ...words] : [];
+  if (!name) return [];
+  const words: Node[][] = [];
+  for (const word of [name.firstNamedChild ?? name, ...command.childrenForFieldName("argument")]) {
+    if (!word) continue;
+    const group = words.at(-1);
+    if (group && gapBetween(command, group.at(-1)!, word) === "\\\n") group.push(word);
+    else words.push([word]);
+  }
+  return words;
+}
+
+function argvOf(command: Node): string[] {
+  return commandWords(command).map((group) => group.map(literal).join(""));
 }
 
 function basename(word: string): string {
   return word.split("/").pop() ?? word;
 }
 
-function skipOptions(args: string[], start: number, valueOptions: readonly string[]): number {
-  let i = start;
+function skipOptions(args: string[], valueOptions: readonly string[]): number {
+  let i = 0;
   for (; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--") return i + 1;
     if (!arg.startsWith("-") || arg === "-") return i;
-    if (valueOptions.includes(arg.split("=")[0]!) && !arg.includes("=")) i++;
+    if (valueOptions.includes(arg) && !arg.includes("=")) i++;
   }
   return i;
 }
 
-function envSplitPayload(args: string[]): string | undefined {
+function envSplitPayload(argv: string[]): string | undefined {
+  if (basename(argv[0] ?? "") !== "env") return undefined;
+  const args = argv.slice(1);
   const split = args.findIndex((arg) => arg.startsWith("-S") || arg.startsWith("--split-string"));
   if (split < 0) return undefined;
   const arg = args[split]!;
@@ -246,36 +279,37 @@ function wrappedCommand(argv: string[]): string[] | undefined {
   const executable = basename(argv[0] ?? "");
   const args = argv.slice(1);
   if (executable === "env") {
-    const split = envSplitPayload(args);
+    const split = envSplitPayload(argv);
     if (split !== undefined) return parsedWords(split);
-    let next = skipOptions(args, 0, ["-u", "--unset", "-C", "--chdir"]);
+    let next = skipOptions(args, ["-u", "--unset", "-C", "--chdir"]);
     while (next < args.length && /^[A-Za-z_]\w*=/.test(args[next]!)) next++;
     return args.slice(next);
   }
   if (executable === "command" || executable === "builtin") {
-    if (args.some((arg, i) => i < skipOptions(args, 0, []) && (arg === "-v" || arg === "-V"))) return undefined;
-    return args.slice(skipOptions(args, 0, []));
+    const next = skipOptions(args, []);
+    return args.slice(0, next).some((arg) => arg === "-v" || arg === "-V") ? undefined : args.slice(next);
   }
-  if (executable === "timeout") return args.slice(skipOptions(args, 0, ["-s", "--signal", "-k", "--kill-after"]) + 1);
+  if (executable === "timeout") return args.slice(skipOptions(args, ["-s", "--signal", "-k", "--kill-after"]) + 1);
   const options = WRAPPER_OPTIONS[executable];
-  return options ? args.slice(skipOptions(args, 0, options)) : undefined;
+  return options ? args.slice(skipOptions(args, options)) : undefined;
+}
+
+function wrapperChain(argv: string[]): string[][] {
+  const chain = [argv];
+  for (let inner = wrappedCommand(argv); inner?.length && chain.length < MAX_DEPTH; inner = wrappedCommand(inner))
+    chain.push(inner);
+  return chain;
 }
 
 function innermost(argv: string[]): string[] {
-  for (let depth = 0; depth < 8; depth++) {
-    const inner = wrappedCommand(argv);
-    if (!inner?.length) return argv;
-    argv = inner;
-  }
-  return argv;
+  return wrapperChain(argv).at(-1)!;
 }
 
 function parsedWords(text: string): string[] {
-  const tree = parser.parse(text);
-  if (!tree) return [];
+  const tree = parse(text);
   try {
     const command = tree.rootNode.descendantsOfType("command")[0];
-    return command ? commandWords(command).map(literal) : [];
+    return command ? argvOf(command) : [];
   } finally {
     tree.delete();
   }
@@ -286,50 +320,42 @@ function shellCommandString(argv: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--" || !arg.startsWith("-")) return undefined;
-    if (["-O", "-o", "--rcfile", "--init-file"].includes(arg)) i++;
+    if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
     else if (!arg.startsWith("--") && arg.includes("c")) return args[i + 1];
   }
   return undefined;
 }
 
-function consumesShellStdin(argv: string[]): boolean {
-  argv = innermost(argv);
-  if (!SHELLS.has(basename(argv[0] ?? ""))) return false;
-  const args = argv.slice(1);
+function consumesShellStdin(inner: string[]): boolean {
+  if (!SHELLS.has(basename(inner[0] ?? ""))) return false;
+  const args = inner.slice(1);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "-s") return true;
     if (arg === "--") return args[i + 1] === undefined || STDIN_SCRIPTS.has(args[i + 1]!);
-    if (["-O", "-o", "--rcfile", "--init-file"].includes(arg)) i++;
+    if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
     else if (!arg.startsWith("-") || arg === "-") return STDIN_SCRIPTS.has(arg);
     else if (!arg.startsWith("--") && arg.includes("c")) return false;
   }
   return true;
 }
 
-function interpretsStdin(argv: string[]): boolean {
-  const executable = basename(innermost(argv)[0] ?? "");
-  return INTERPRETERS.has(executable) || executable.startsWith("python");
+function stdinReader(argv: string[]): "shell" | "code" | undefined {
+  const inner = innermost(argv);
+  const executable = basename(inner[0] ?? "");
+  if (consumesShellStdin(inner)) return "shell";
+  if (sqlClientSpec(inner) || SCRIPT_INTERPRETERS.has(executable) || executable.startsWith("python")) return "code";
+  return undefined;
 }
 
 function shellPayloads(argv: string[]): string[] {
-  const payloads: string[] = [];
-  for (let wrapped: string[] | undefined = argv, depth = 0; wrapped?.length && depth < 8; depth++) {
-    const split = basename(wrapped[0]!) === "env" ? envSplitPayload(wrapped.slice(1)) : undefined;
-    if (split !== undefined) payloads.push(split);
-    wrapped = wrappedCommand(wrapped);
-  }
-  return [...payloads, ...ownPayloads(innermost(argv))];
-}
-
-function ownPayloads(inner: string[]): string[] {
+  const chain = wrapperChain(argv);
+  const inner = chain.at(-1)!;
+  const splits = chain.map(envSplitPayload).filter((split) => split !== undefined);
   const executable = basename(inner[0] ?? "");
-  if (executable === "eval") return inner.length > 1 ? [inner.slice(1).join(" ")] : [];
-  if (SHELLS.has(executable)) {
-    const script = shellCommandString(inner);
-    return script === undefined ? [] : [script];
-  }
-  return sqlClientPayloads(inner);
+  if (executable === "eval") return [...splits, ...(inner.length > 1 ? [inner.slice(1).join(" ")] : [])];
+  const script = SHELLS.has(executable) ? shellCommandString(inner) : undefined;
+  return [...splits, ...(script === undefined ? [] : [script])];
 }
 
 function literalProducerPayload(argv: string[]): string | undefined {
@@ -365,20 +391,25 @@ function commandOf(node: Node | null): Node | undefined {
   return node?.type === "redirected_statement" ? commandOf(node.childForFieldName("body")) : undefined;
 }
 
-function heredocReceivers(statement: Node, redirect: Node): Node[] {
+function heredocReceivers(statement: Node, redirect: Node): string[][] {
   const continuation = redirect.namedChildren.filter((child) => child?.type !== "heredoc_body");
   return [
     statement.childForFieldName("body"),
     ...continuation.flatMap((child) => child?.descendantsOfType("command") ?? []),
   ]
     .map(commandOf)
-    .filter((command) => command !== undefined);
+    .filter((command) => command !== undefined)
+    .map(argvOf);
 }
 
-function executedPayloads(root: Node, executed: Set<number>): string[] {
-  const payloads: string[] = [];
+function executedPayloads(root: Node): Executed {
+  const executed: Executed = { scripts: [], code: [] };
   const variables = new Map<string, string>();
-  const argvOf = (command: Node) => commandWords(command).map(literal);
+  const feed = (text: string, readers: string[][]) => {
+    const kinds = readers.map(stdinReader);
+    if (kinds.includes("shell")) executed.scripts.push(text);
+    else if (kinds.includes("code")) executed.code.push(text);
+  };
   const visit = (node: Node) => {
     if (node.type === "variable_assignment") {
       const value = node.childForFieldName("value");
@@ -387,40 +418,33 @@ function executedPayloads(root: Node, executed: Set<number>): string[] {
     }
     if (node.type === "command") {
       const words = commandWords(node);
-      const argv = words.map(literal);
-      payloads.push(...shellPayloads(argv));
-      const inner = innermost(argv);
-      const position = argv.length - inner.length;
-      const variable = words[position] && variableName(words[position]);
+      const argv = argvOf(node);
+      executed.scripts.push(...shellPayloads(argv), ...sqlClientPayloads(innermost(argv)));
+      const position = argv.length - innermost(argv).length;
+      const word = words[position];
+      const variable = word?.length === 1 ? variableName(word[0]!) : undefined;
       const value = variable === undefined ? undefined : variables.get(variable);
       if (value !== undefined)
-        payloads.push([...argv.slice(0, position), value, ...argv.slice(position + 1)].join(" "));
-      const herestring = node.namedChildren.find((child) => child?.type === "herestring_redirect");
-      const herestringBody = herestring?.lastNamedChild;
-      if (herestringBody && consumesShellStdin(argv)) payloads.push(literal(herestringBody));
+        executed.scripts.push([...argv.slice(0, position), value, ...argv.slice(position + 1)].join(" "));
+      const herestring = node.namedChildren.find((child) => child?.type === "herestring_redirect")?.lastNamedChild;
+      if (herestring) feed(literal(herestring), [argv]);
     }
     for (const redirect of node.type === "redirected_statement" ? node.childrenForFieldName("redirect") : []) {
       const body = redirect?.namedChildren.find((child) => child?.type === "heredoc_body");
-      if (!body) continue;
-      const receivers = heredocReceivers(node, redirect!).map(argvOf);
-      if (receivers.some(consumesShellStdin)) payloads.push(body.text);
-      else if (receivers.some(interpretsStdin)) executed.add(body.id);
+      if (body) feed(body.text, heredocReceivers(node, redirect!));
     }
     if (node.type === "pipeline") {
       const stages = node.namedChildren.map(commandOf);
       for (let i = 1; i < stages.length; i++) {
         const [producer, consumer] = [stages[i - 1], stages[i]];
-        if (!producer || !consumer) continue;
-        const argv = argvOf(consumer);
-        if (!consumesShellStdin(argv) && !sqlClientSpec(argv)) continue;
-        const payload = literalProducerPayload(argvOf(producer));
-        if (payload) payloads.push(payload);
+        const payload = producer && consumer ? literalProducerPayload(argvOf(producer)) : undefined;
+        if (payload) feed(payload, [argvOf(consumer!)]);
       }
     }
     for (const child of node.children) if (child) visit(child);
   };
   visit(root);
-  return payloads;
+  return executed;
 }
 
 function decodeAnsiC(value: string): string {
@@ -443,6 +467,7 @@ const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?
   mariadb: { options: ["-e", "--execute"] },
   mycli: { options: ["-e", "--execute"] },
   sqlite3: { options: ["-cmd"], sqlPositionalsAfter: 1 },
+  sqlcmd: { options: ["-Q", "-q"] },
   duckdb: { options: ["-c", "-s", "--command"], sqlPositionalsAfter: 1 },
   "clickhouse-client": { options: ["-q", "--query"] },
 };
