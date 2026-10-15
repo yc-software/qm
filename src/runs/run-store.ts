@@ -21,9 +21,7 @@ export interface RunDeliveryState {
 
 /** Why a run's previous attempt stopped, recorded when the run is handed back to the queue. */
 export type RunStop =
-  | { kind: "shutdown" }
-  | { kind: "lease_expired" }
-  | { kind: "error"; code?: string; status?: number };
+  { kind: "shutdown" } | { kind: "lease_expired" } | { kind: "error"; code?: string; status?: number };
 
 export interface Run {
   id: string;
