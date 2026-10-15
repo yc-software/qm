@@ -30,6 +30,7 @@ test("migrations drop an empty session_tape and the store keeps working without 
     });
 
     assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
+    assert.equal((await raw.query("SELECT started_at FROM legacy_tape_steps_progress")).rows[0].started_at, null);
     await applyPgMigrations(raw, registeredPgMigrations(url.toString()));
     assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
 

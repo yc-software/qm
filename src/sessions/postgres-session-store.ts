@@ -39,7 +39,12 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { DROP_SESSION_TAPE_SQL, LEGACY_TAPE_STEPS_SIZE_GUARD_SQL, LEGACY_TAPE_STEPS_SQL } from "./legacy-tape-steps.ts";
+import {
+  DROP_SESSION_TAPE_SQL,
+  LEGACY_TAPE_STEPS_SIZE_GUARD_SQL,
+  LEGACY_TAPE_STEPS_SQL,
+  PREPARE_TAPE_DROP_SQL,
+} from "./legacy-tape-steps.ts";
 import {
   cronIdOf,
   legacyOriginPattern,
@@ -814,6 +819,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0031-drop-session-tape",
+        prepare: PREPARE_TAPE_DROP_SQL,
         statements: DROP_SESSION_TAPE_SQL,
       },
     ],

@@ -273,6 +273,17 @@ END $batch$`,
   skippingProcedure(),
 ];
 
+export const PREPARE_TAPE_DROP_SQL = [
+  `DO $prepare_tape_drop$
+BEGIN
+  IF to_regclass('session_tape') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message')
+     AND NOT (SELECT done FROM legacy_tape_steps_progress) THEN
+    CALL prepare_legacy_tape_steps(50);
+  END IF;
+END $prepare_tape_drop$`,
+];
+
 export const DROP_SESSION_TAPE_SQL = [
   `SET LOCAL lock_timeout = '5s'`,
   `DO $tape_drop_gate$
