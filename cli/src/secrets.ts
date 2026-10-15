@@ -190,6 +190,13 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
   },
   {
+    name: "FREESTYLE_API_KEY",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "freestyle" } },
+    description: "Freestyle API key for persistent VM agent computers.",
+    generate: "create an API key at https://dash.freestyle.sh or with freestyle tokens create",
+  },
+  {
     name: "AGENT37_API_KEY",
     service: "core",
     required: {

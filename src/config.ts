@@ -199,6 +199,7 @@ export interface Config {
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
+  freestyleSandbox: FreestyleSandboxEnv;
   agent37Sandbox: Agent37SandboxEnv;
   superserveSandbox: SuperserveSandboxEnv;
   e2bSandbox: E2bSandboxEnv;
@@ -669,6 +670,24 @@ interface Agent37SandboxEnv {
   defaultTimeoutSec?: number;
 }
 
+interface FreestyleSandboxEnv {
+  apiKey?: string;
+  snapshotId?: string;
+  namePrefix?: string;
+  defaultTimeoutSec?: number;
+}
+
+function freestyleSandboxEnv(env: NodeJS.ProcessEnv): FreestyleSandboxEnv {
+  return {
+    ...(env.FREESTYLE_API_KEY ? { apiKey: env.FREESTYLE_API_KEY } : {}),
+    ...(env.FREESTYLE_SNAPSHOT_ID ? { snapshotId: env.FREESTYLE_SNAPSHOT_ID } : {}),
+    ...(env.FREESTYLE_NAME_PREFIX ? { namePrefix: env.FREESTYLE_NAME_PREFIX } : {}),
+    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
+      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
+      : {}),
+  };
+}
+
 function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
   return {
     ...(env.AGENT37_API_KEY ? { apiKey: env.AGENT37_API_KEY } : {}),
@@ -1025,6 +1044,7 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
+    freestyle: Boolean(config.freestyleSandbox?.apiKey),
     agent37: Boolean(config.agent37Sandbox?.apiKey),
     superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
@@ -1048,6 +1068,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
     backend === "local" ||
     backend === "sprites" ||
     backend === "smolmachines" ||
+    backend === "freestyle" ||
     backend === "e2b" ||
     backend === "modal" ||
     backend === "agent37" ||
@@ -1057,7 +1078,7 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, or do-managed-agents, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, freestyle, e2b, modal, porter, agent37, superserve, or do-managed-agents, or unset it.`,
   );
 }
 
@@ -1308,7 +1329,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, freestyle, e2b, modal, porter, agent37, superserve, do-managed-agents, aws, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
@@ -1672,6 +1693,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
+    freestyleSandbox: freestyleSandboxEnv(env),
     agent37Sandbox: agent37SandboxEnv(env),
     superserveSandbox: superserveSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),

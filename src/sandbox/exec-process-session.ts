@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { shq } from "../util/shell.ts";
+import { execFailureDetail } from "./sandbox.ts";
 import type {
   ExecOptions,
   ExecResult,
@@ -99,7 +100,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
       ].join("\n");
       const r = await io.run(handle, script, { timeoutMs: 20_000 });
       if (r.code !== 0 || !r.stdout.includes("OK")) {
-        throw new Error(`startProcess failed (code ${r.code}): ${r.stderr.trim() || r.stdout.trim()}`);
+        throw new Error(`startProcess failed (code ${r.code}): ${execFailureDetail(r, 20).slice(0, 200)}`);
       }
       return { processId };
     },
@@ -132,6 +133,10 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `echo ""`,
       ].join("\n");
       const r = await io.run(handle, script, { timeoutMs: waitMs + 20_000 });
+      if (r.code !== 0)
+        throw new Error(
+          `readProcess failed (code ${r.code}): ${execFailureDetail(r, (waitMs + 20_000) / 1000).slice(0, 200)}`,
+        );
       const out = r.stdout;
       if (/MISSING=1/.test(out)) throw new Error(`no such process session: ${processId}`);
       const cur = /CURSOR=(\d+)/.exec(out);
@@ -153,7 +158,10 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `printf '%s' '${b64(data)}' | base64 -d > "$P/in"`,
       ].join("\n");
       const r = await io.run(handle, script, { timeoutMs: 15_000 });
-      if (r.code !== 0) throw new Error(`writeStdin failed for ${processId}: ${r.stderr.trim() || "no such session"}`);
+      if (r.code !== 0)
+        throw new Error(
+          `writeStdin failed for ${processId} (code ${r.code}): ${execFailureDetail(r, 15).slice(0, 200)}`,
+        );
     },
 
     async signalProcess(handle, processId, signal): Promise<void> {
@@ -170,7 +178,9 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `kill -${sig} -"$pid" 2>/dev/null || kill -${sig} "$pid" 2>/dev/null || true`,
         sentinelLine,
       ].join("\n");
-      await io.run(handle, script, { timeoutMs: 15_000 });
+      const r = await io.run(handle, script, { timeoutMs: 15_000 });
+      if (r.code !== 0)
+        throw new Error(`signalProcess failed (code ${r.code}): ${execFailureDetail(r, 15).slice(0, 200)}`);
     },
 
     async listProcesses(handle): Promise<ProcessSession[]> {
@@ -189,6 +199,8 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `done`,
       ].join("\n");
       const r = await io.run(handle, script, { timeoutMs: 15_000 });
+      if (r.code !== 0)
+        throw new Error(`listProcesses failed (code ${r.code}): ${execFailureDetail(r, 15).slice(0, 200)}`);
       const sessions: ProcessSession[] = [];
       for (const line of r.stdout.split("\n")) {
         const parts = line.split("|");

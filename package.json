@@ -92,6 +92,7 @@
     "e2b": "^2.51.0",
     "emoji-datasource": "^16.0.0",
     "fastify": "^5.12.5",
+    "freestyle": "^0.2.20",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "modal": "^0.10.1",

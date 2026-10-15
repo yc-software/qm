@@ -194,6 +194,15 @@ test("the Agent37 key is required for either sandbox route", () => {
   }
 });
 
+test("the Freestyle key is required when Freestyle is the sandbox backend", () => {
+  for (const target of ["docker", "fly", "aws"] as const) {
+    assert.equal(
+      secretByName(makeConfig({ target, sandbox: { backend: "freestyle" } }), "FREESTYLE_API_KEY").required,
+      true,
+    );
+  }
+});
+
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
   for (const [provider, key] of [
     ["anthropic", "ANTHROPIC_API_KEY"],

@@ -153,6 +153,12 @@ operator's own cloud account; initialization does not generate or enable deploym
 and this repository has no production deployment workflow. See
 [`deployment.md`](./deployment.md) for the details.
 
+For long-running, demanding agent work, Freestyle is QM's most powerful sandbox
+option: each scope gets a persistent Linux VM with room for complex tools and
+background processes. Set `sandbox.backend` to `"freestyle"` and provide
+`FREESTYLE_API_KEY` to use it with a Docker, Fly, or AWS hosted core. See the
+[Freestyle sandbox guide](./docs/freestyle-sandbox.md).
+
 ## Contributing
 
 We take contributions as _human-written_ text, not code — see

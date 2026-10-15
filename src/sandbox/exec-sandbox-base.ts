@@ -46,6 +46,7 @@ export interface ExecSandboxBaseDeps {
   workspace: WorkspaceStore;
   label: string;
   prefix: string;
+  scopeName?: (prefix: string, id: string) => string;
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
@@ -80,6 +81,7 @@ export interface ExecSandboxBase {
 
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
   const { workspace, label, prefix, homeDir, defaultTimeoutSec } = deps;
+  const scopeName = deps.scopeName ?? sandboxScopeName;
   if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
     throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
   }
@@ -90,7 +92,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   const activeScratch = new Map<string, number>();
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    const name = scopeName(`${prefix}-scratch`, key);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -168,7 +170,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix, scope);
+      name = scopeName(prefix, scope);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
     }
