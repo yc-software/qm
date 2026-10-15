@@ -37,6 +37,7 @@ export async function processRun(
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
   let consecutiveLost = 0;
   let leaseLost = false;
   const beat = setInterval(() => {
@@ -76,6 +77,7 @@ export async function processRun(
     }
     if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
+    started = true;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
@@ -122,7 +124,7 @@ export async function processRun(
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
       await deps.runs
-        .releaseLease(run.id, token)
+        .releaseLease(run.id, token, started ? { kind: "shutdown" } : undefined)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
 }
@@ -276,12 +278,9 @@ export function createWorker(deps: WorkerDeps): Worker {
   };
 }
 
-const STOP_MESSAGE_MAX = 300;
-
-/** What a resumed attempt is told about why this one failed: the typed provider code when there is one. */
+/** What a resumed attempt is told about why this one failed: the typed provider code and status, never raw error text. */
 function runStopFor(err: unknown): RunStop {
-  const message = errMessage(err).slice(0, STOP_MESSAGE_MAX);
   if (err instanceof ProviderTurnError)
-    return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}), message };
-  return { kind: "error", message };
+    return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };
+  return { kind: "error" };
 }

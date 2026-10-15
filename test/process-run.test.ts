@@ -194,6 +194,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
   const requeued = await runs.get(run!.id);
   assert.equal(requeued?.status, "pending", "an ordinary failure goes back on the queue");
   assert.equal(requeued?.attempts, 1);
+  assert.deepEqual(requeued?.lastStop, { kind: "error" }, "an untyped error records no message, only that it failed");
 
   assert.equal(await runs.claim("w2", 9_000), null);
   t.mock.timers.tick(30_000);
@@ -220,6 +221,7 @@ test("a retryable turn failure requeues the run, rethrows, and stops the heartbe
     2,
     "the retry carries its attempt number so the orchestrator can resume the interrupted turn",
   );
+  assert.deepEqual(seen[0]?.resumeCause, { kind: "error" }, "the retry is told why the last attempt stopped");
 });
 
 test("finalAttempt marks the attempt whose error would park the run, from the claim-time budget", async (t) => {
@@ -450,6 +452,7 @@ for (const rejects of [false, true]) {
     assert.equal(handedBack.errorAttempts, 0);
     assert.equal(handedBack.result, null);
     assert.equal(handedBack.leaseToken, null);
+    assert.deepEqual(handedBack.lastStop, { kind: "shutdown" });
     assert.ok(await runs.claim("replacement", 5_000));
   });
 }
@@ -505,5 +508,6 @@ test("a claim that lands after shutdown began is handed back without starting a 
   assert.equal(handedBack.status, "pending");
   assert.equal(handedBack.errorAttempts, 0);
   assert.equal(handedBack.leaseToken, null);
+  assert.equal(handedBack.lastStop ?? null, null, "a turn that never started records no stop cause");
   assert.ok(await runs.claim("replacement", 5_000));
 });

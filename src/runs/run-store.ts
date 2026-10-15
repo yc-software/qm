@@ -23,7 +23,7 @@ export interface RunDeliveryState {
 export type RunStop =
   | { kind: "shutdown" }
   | { kind: "lease_expired" }
-  | { kind: "error"; code?: string; status?: number; message?: string };
+  | { kind: "error"; code?: string; status?: number };
 
 export interface Run {
   id: string;
@@ -80,7 +80,8 @@ export interface RunStore {
 
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string): Promise<boolean>;
+  /** Hands a running run back to the queue. `stop` records why the attempt ended; omit it when no attempt started. */
+  releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 

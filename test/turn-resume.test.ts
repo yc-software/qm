@@ -300,23 +300,17 @@ test("resumeStrategy continues silently only when every call is answered and the
 
 test("resume notes name exactly the cause the run store recorded", () => {
   const deploy = resumeNote({ cause: { kind: "shutdown" } });
-  assert.match(deploy, /restarted for a routine platform deploy/);
-  assert.doesNotMatch(deploy, /runtime tool/);
+  assert.match(deploy, /handed the run back \(usually a routine platform deploy\)/);
+  assert.match(deploy, /usually not worth mentioning to the user/);
 
-  const provider = resumeNote({
-    cause: { kind: "error", code: "transient", status: 503, message: "BedrockException - service unavailable" },
-  });
-  assert.match(provider, /model provider call failed \(transient, HTTP 503\): BedrockException - service unavailable/);
-  assert.match(provider, /switching to another model with your runtime tool/);
+  const provider = resumeNote({ cause: { kind: "error", code: "transient", status: 503 } });
+  assert.match(provider, /model provider call failed \(transient, HTTP 503\)/);
   assert.doesNotMatch(provider, /deploy/);
 
   const crashed = resumeNote({ strategy: { kind: "restart" }, cause: { kind: "lease_expired" } });
   assert.match(crashed, /before it recorded any work — the worker running it stopped responding/);
   assert.doesNotMatch(crashed, /deploy/);
 
-  const harnessError = resumeNote({ cause: { kind: "error", message: "sandbox exec failed" } });
-  assert.match(harnessError, /it failed with an error: sandbox exec failed/);
-  assert.doesNotMatch(harnessError, /runtime tool/);
-
+  assert.match(resumeNote({ cause: { kind: "error" } }), /it failed with an internal error/);
   assert.match(resumeNote({ cause: { kind: "runtime_change" } }), /the runtime was switched/);
 });

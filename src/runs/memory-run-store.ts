@@ -106,14 +106,14 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       return true;
     },
 
-    async releaseLease(runId, leaseToken) {
+    async releaseLease(runId, leaseToken, stop) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
       run.status = "pending";
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.workerId = null;
-      run.lastStop = { kind: "shutdown" };
+      if (stop) run.lastStop = stop;
       return true;
     },
 

@@ -270,13 +270,18 @@ for (const backend of backends) {
     assert.equal((await runs.get(r.id))?.lastStop ?? null, null, "a fresh run has no stop cause");
 
     const first = await runs.claim("w1", 60_000);
-    await runs.releaseLease(r.id, first!.leaseToken!);
+    await runs.releaseLease(r.id, first!.leaseToken!, { kind: "shutdown" });
     assert.deepEqual((await runs.get(r.id))?.lastStop, { kind: "shutdown" });
 
     const second = await runs.claim("w1", 60_000);
-    const stop = { kind: "error" as const, code: "transient", status: 503, message: "BedrockException" };
+    const stop = { kind: "error" as const, code: "transient", status: 503 };
     await runs.fail(r.id, second!.leaseToken!, "boom", { retry: true, stop });
     assert.deepEqual((await runs.get(r.id))?.lastStop, stop);
+
+    await sleep(5);
+    const unstarted = await runs.claim("w1", 60_000);
+    await runs.releaseLease(r.id, unstarted!.leaseToken!);
+    assert.deepEqual((await runs.get(r.id))?.lastStop, stop, "a handback before the attempt started keeps the cause");
 
     await sleep(5);
     const third = await runs.claim("w1", 1);

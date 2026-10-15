@@ -127,22 +127,21 @@ export type ResumeCause = RunStop | { kind: "runtime_change" };
 function causePhrase(cause: ResumeCause | undefined): string {
   switch (cause?.kind) {
     case "shutdown":
-      return "the server running it restarted for a routine platform deploy";
+      return "the server handed the run back (usually a routine platform deploy)";
     case "lease_expired":
       return "the worker running it stopped responding (a crash or forced restart)";
     case "runtime_change":
       return "the runtime was switched";
-    case "error": {
-      const detail = cause.message ? `: ${cause.message}` : "";
-      if (!cause.code) return `it failed with an error${detail}`;
-      return `the model provider call failed (${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""})${detail}`;
-    }
+    case "error":
+      return cause.code
+        ? `the model provider call failed (${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""})`
+        : "it failed with an internal error";
     default:
       return "it stopped before finishing (cause not recorded)";
   }
 }
 
-const PROVIDER_HINT = "If the same model keeps failing, consider switching to another model with your runtime tool.";
+const QUIET = "This is usually not worth mentioning to the user unless it affected the result.";
 
 export function resumeNote(opts?: {
   strategy?: ResumeStrategy;
@@ -151,7 +150,7 @@ export function resumeNote(opts?: {
 }): string {
   const strategy = opts?.strategy ?? { kind: "note" };
   const why = causePhrase(opts?.cause);
-  const hint = opts?.cause?.kind === "error" && opts.cause.code ? PROVIDER_HINT : "";
+  const hint = opts?.cause?.kind === "runtime_change" ? "" : QUIET;
   if (strategy.kind === "restart") {
     return [
       `${NOTE_HEAD} your previous attempt at the request above stopped before it recorded any work — ${why}.`,
