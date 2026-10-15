@@ -643,7 +643,7 @@ test("overheard traffic between a cut-off call and the stop does not split the s
   assert.ok(!text.includes("[system] Turn stopped by user."), "no separate stop note");
 });
 
-test("a call killed by a Stop has the stop explained as its result, once", () => {
+test("a call killed by a Stop keeps its output and carries the stop in its result, once", () => {
   const history: SessionEntry[] = [
     ent("user", { text: "deploy it" }, 1),
     ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
@@ -657,8 +657,13 @@ test("a call killed by a Stop has the stop explained as its result, once", () =>
     msgs.map((m) => m.role),
     ["user", "assistant", "toolResult", "user"],
   );
-  assert.match(JSON.stringify(msgs[2]!.content), /Turn stopped by user while this call was running/);
-  assert.ok(!JSON.stringify(msgs).includes("[system] Turn stopped by user."), "no separate stop note");
+  const result = msgs[2] as { content: unknown[] };
+  assert.deepEqual(
+    result.content.map((c) => (c as { text: string }).text),
+    ["[stderr]\nKilled\n\n[exit 137]", "[system] Turn stopped by user."],
+    "the recorded output is kept and the stop is part of that call's result",
+  );
+  assert.equal(JSON.stringify(msgs).split("Turn stopped by user").length, 2, "the stop appears once");
 });
 
 test("a result recorded while a Stop fired keeps its text when no stop was recorded", () => {

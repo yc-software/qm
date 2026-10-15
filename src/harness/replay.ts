@@ -35,8 +35,8 @@ function cutOffByStop(result: SessionEntry | undefined): boolean {
 function stoppedToolCalls(
   history: readonly SessionEntry[],
   resultByCallId: ReadonlyMap<string, SessionEntry>,
-): { results: Map<string, string>; folded: Set<SessionEntry> } {
-  const results = new Map<string, string>();
+): { reasons: Map<string, string>; folded: Set<SessionEntry> } {
+  const reasons = new Map<string, string>();
   const folded = new Set<SessionEntry>();
   let open: string[] = [];
   for (const e of history) {
@@ -52,11 +52,11 @@ function stoppedToolCalls(
       open.push(p.callId);
     else if (e.type === "system" && p.kind === TURN_STOPPED_KIND && typeof p.reason === "string") {
       if (open.length) folded.add(e);
-      for (const callId of open) results.set(callId, stoppedToolResult(p.reason));
+      for (const callId of open) reasons.set(callId, p.reason);
       open = [];
     }
   }
-  return { results, folded };
+  return { reasons, folded };
 }
 
 export { INTERRUPTED_TOOL_RESULT };
@@ -420,12 +420,14 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
     if (m.role !== "assistant") continue;
     for (const c of m.content) {
       if (c.type !== "toolCall") continue;
-      const stopNote = stopped.results.get(c.id);
-      out.push(
-        stopNote
-          ? toolResultMessage(c, undefined, m.timestamp, stopNote)
-          : toolResultMessage(c, resultByCallId.get(c.id), m.timestamp),
-      );
+      const reason = stopped.reasons.get(c.id);
+      const re = resultByCallId.get(c.id);
+      if (reason === undefined) out.push(toolResultMessage(c, re, m.timestamp));
+      else if (!re) out.push(toolResultMessage(c, undefined, m.timestamp, stoppedToolResult(reason)));
+      else {
+        const result = toolResultMessage(c, re, m.timestamp);
+        out.push({ ...result, content: [...result.content, { type: "text", text: turnStoppedNote(reason) }] });
+      }
     }
   }
   if (out[0] && out[0].role !== "user")
