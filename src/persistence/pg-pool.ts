@@ -243,9 +243,13 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         await client.query("SET statement_timeout = 0");
         try {
           for (const statement of migration.prepare) await client.query(statement);
-        } finally {
-          await client.query("RESET statement_timeout");
+        } catch (error) {
+          await client
+            .query("RESET statement_timeout")
+            .catch(swallowAs(`pg-pool: reset statement timeout after preparing ${migration.id}`, undefined));
+          throw error;
         }
+        await client.query("RESET statement_timeout");
       }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
         if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
