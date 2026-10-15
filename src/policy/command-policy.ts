@@ -160,6 +160,17 @@ function bareWord(value: string): string | undefined {
   return /^[\w@%+=:,./-]*$/.test(value) ? value : undefined;
 }
 
+function unescapeDoubleQuoted(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const next = text.charAt(i + 1);
+    if (text.charAt(i) !== "\\" || !'$`"\\\n'.includes(next)) out += text.charAt(i);
+    else if (next !== "\n") out += text.charAt(++i);
+    else i++;
+  }
+  return out;
+}
+
 function unescape(text: string): string {
   let out = "";
   for (let i = 0; i < text.length; i++) out += text.charAt(text.charAt(i) === "\\" ? ++i : i);
@@ -199,7 +210,7 @@ function render(node: Node): string {
   for (const child of node.children) {
     if (!child) continue;
     const gap = previous ? gapBetween(node, previous, child) : node.text.slice(0, child.startIndex - node.startIndex);
-    out += (gap === "\\\n" ? "" : gap) + render(child);
+    out += gap.replaceAll("\\\n", "") + render(child);
     previous = child;
   }
   return out + (previous ? node.text.slice(previous.endIndex - node.startIndex) : node.text);
@@ -216,7 +227,7 @@ function literal(node: Node): string {
     case "string":
       return node.children
         .slice(1, -1)
-        .map((child) => (child?.type === "string_content" ? unescape(child.text) : (child?.text ?? "")))
+        .map((child) => (child?.type === "string_content" ? unescapeDoubleQuoted(child.text) : (child?.text ?? "")))
         .join("");
     case "concatenation":
       return node.children.map((child) => (child ? literal(child) : "")).join("");
@@ -315,35 +326,24 @@ function parsedWords(text: string): string[] {
   }
 }
 
-function shellCommandString(argv: string[]): string | undefined {
-  const args = argv.slice(1);
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === "--" || !arg.startsWith("-")) return undefined;
-    if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
-    else if (!arg.startsWith("--") && arg.includes("c")) return args[i + 1];
-  }
-  return undefined;
-}
-
-function consumesShellStdin(inner: string[]): boolean {
-  if (!SHELLS.has(basename(inner[0] ?? ""))) return false;
+function shellInvocation(inner: string[]): { script?: string; readsStdin: boolean } | undefined {
+  if (!SHELLS.has(basename(inner[0] ?? ""))) return undefined;
   const args = inner.slice(1);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "-s") return true;
-    if (arg === "--") return args[i + 1] === undefined || STDIN_SCRIPTS.has(args[i + 1]!);
+    if (arg === "-s") return { readsStdin: true };
+    if (arg === "--") return { readsStdin: args[i + 1] === undefined || STDIN_SCRIPTS.has(args[i + 1]!) };
     if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
-    else if (!arg.startsWith("-") || arg === "-") return STDIN_SCRIPTS.has(arg);
-    else if (!arg.startsWith("--") && arg.includes("c")) return false;
+    else if (!arg.startsWith("-") || arg === "-") return { readsStdin: STDIN_SCRIPTS.has(arg) };
+    else if (!arg.startsWith("--") && arg.includes("c")) return { script: args[i + 1], readsStdin: false };
   }
-  return true;
+  return { readsStdin: true };
 }
 
 function stdinReader(argv: string[]): "shell" | "code" | undefined {
   const inner = innermost(argv);
   const executable = basename(inner[0] ?? "");
-  if (consumesShellStdin(inner)) return "shell";
+  if (shellInvocation(inner)?.readsStdin) return "shell";
   if (sqlClientSpec(inner) || SCRIPT_INTERPRETERS.has(executable) || executable.startsWith("python")) return "code";
   return undefined;
 }
@@ -354,7 +354,7 @@ function shellPayloads(argv: string[]): string[] {
   const splits = chain.map(envSplitPayload).filter((split) => split !== undefined);
   const executable = basename(inner[0] ?? "");
   if (executable === "eval") return [...splits, ...(inner.length > 1 ? [inner.slice(1).join(" ")] : [])];
-  const script = SHELLS.has(executable) ? shellCommandString(inner) : undefined;
+  const script = shellInvocation(inner)?.script;
   return [...splits, ...(script === undefined ? [] : [script])];
 }
 
@@ -419,7 +419,8 @@ function executedPayloads(root: Node): Executed {
     if (node.type === "command") {
       const words = commandWords(node);
       const argv = argvOf(node);
-      executed.scripts.push(...shellPayloads(argv), ...sqlClientPayloads(innermost(argv)));
+      executed.scripts.push(...shellPayloads(argv));
+      executed.code.push(...sqlClientPayloads(innermost(argv)));
       const position = argv.length - innermost(argv).length;
       const word = words[position];
       const variable = word?.length === 1 ? variableName(word[0]!) : undefined;
@@ -448,16 +449,13 @@ function executedPayloads(root: Node): Executed {
 }
 
 function decodeAnsiC(value: string): string {
-  return value
-    .replace(/\\x([0-9a-fA-F]{1,2})/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/\\U([0-9a-fA-F]{8})/g, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/\\([0-7]{1,3})/g, (_, octal: string) => String.fromCodePoint(Number.parseInt(octal, 8)))
-    .replace(
-      /\\([\\'"abefnrtv])/g,
-      (_, escape: string) =>
-        ({ a: "\x07", b: "\b", e: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" })[escape] ?? escape,
-    );
+  const named: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
+  return value.replace(/\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|.)/g, (_, escape: string) => {
+    const kind = escape.charAt(0);
+    if ("xuU".includes(kind) && escape.length > 1) return String.fromCodePoint(Number.parseInt(escape.slice(1), 16));
+    if ("01234567".includes(kind)) return String.fromCodePoint(Number.parseInt(escape, 8));
+    return named[escape] ?? ("\\'\"".includes(escape) ? escape : `\\${escape}`);
+  });
 }
 
 const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?: number }> = {
@@ -472,17 +470,14 @@ const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?
   "clickhouse-client": { options: ["-q", "--query"] },
 };
 
-function sqlClientSpec(
-  words: string[],
-): { spec: { options: string[]; sqlPositionalsAfter?: number }; args: string[] } | undefined {
-  const spec = SQL_CLIENT_SPECS[basename(words[0] ?? "").toLowerCase()];
-  return spec ? { spec, args: words.slice(1) } : undefined;
+function sqlClientSpec(words: string[]): { options: string[]; sqlPositionalsAfter?: number } | undefined {
+  return SQL_CLIENT_SPECS[basename(words[0] ?? "").toLowerCase()];
 }
 
 function sqlClientPayloads(words: string[]): string[] {
-  const found = sqlClientSpec(words);
-  if (!found) return [];
-  const { spec, args } = found;
+  const spec = sqlClientSpec(words);
+  if (!spec) return [];
+  const args = words.slice(1);
   const payloads: string[] = [];
   const positionals: string[] = [];
   for (let i = 0; i < args.length; i++) {
