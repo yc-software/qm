@@ -279,6 +279,9 @@ BEGIN
   IF to_regclass('session_tape') IS NOT NULL
      AND EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message')
      AND NOT (SELECT done FROM legacy_tape_steps_progress) THEN
+    IF (SELECT started_at FROM legacy_tape_steps_progress) IS NULL THEN
+      DELETE FROM session_tape t WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id);
+    END IF;
     CALL prepare_legacy_tape_steps(50);
   END IF;
 END $prepare_tape_drop$`,

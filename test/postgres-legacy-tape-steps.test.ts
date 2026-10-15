@@ -92,27 +92,33 @@ const tapeState = async (raw: import("pg").Pool) => ({
   done: (await raw.query("SELECT done FROM legacy_tape_steps_progress")).rows[0].done,
 });
 
-test("pg migrations copy legacy tape steps on their own before dropping the tape", { skip }, async () => {
-  await withSchema(async (raw, url) => {
-    await toolCallSession(raw, "legacy");
-    await seedSession(raw, "tapeless", [], [["user", { text: "hi" }]]);
-    const pg = (await import("pg")).default;
-    const timed = new globalThis.URL(url);
-    timed.searchParams.set("options", `${timed.searchParams.get("options")} -c statement_timeout=4321`);
-    const startup = new pg.Pool({ connectionString: timed.toString(), max: 1 });
-    try {
-      await applyPgMigrations(startup, registeredPgMigrations(url));
-      assert.equal((await startup.query("SHOW statement_timeout")).rows[0].statement_timeout, "4321ms");
-    } finally {
-      await startup.end();
-    }
-    assert.deepEqual(await tapeState(raw), {
-      tape: null,
-      steps: [{ session_id: "legacy", wire: { argumentsJson: '{"z":"legacy","a":1}' } }],
-      done: true,
+test(
+  "pg migrations copy legacy tape steps on their own before dropping the tape, past deleted sessions",
+  { skip },
+  async () => {
+    await withSchema(async (raw, url) => {
+      await toolCallSession(raw, "legacy");
+      await toolCallSession(raw, "zdeleted");
+      await raw.query("DELETE FROM sessions WHERE id = 'zdeleted'");
+      await seedSession(raw, "tapeless", [], [["user", { text: "hi" }]]);
+      const pg = (await import("pg")).default;
+      const timed = new globalThis.URL(url);
+      timed.searchParams.set("options", `${timed.searchParams.get("options")} -c statement_timeout=4321`);
+      const startup = new pg.Pool({ connectionString: timed.toString(), max: 1 });
+      try {
+        await applyPgMigrations(startup, registeredPgMigrations(url));
+        assert.equal((await startup.query("SHOW statement_timeout")).rows[0].statement_timeout, "4321ms");
+      } finally {
+        await startup.end();
+      }
+      assert.deepEqual(await tapeState(raw), {
+        tape: null,
+        steps: [{ session_id: "legacy", wire: { argumentsJson: '{"z":"legacy","a":1}' } }],
+        done: true,
+      });
     });
-  });
-});
+  },
+);
 
 test("pg migrations resume an interrupted tape copy once when two instances start together", { skip }, async () => {
   await withSchema(async (raw, url) => {
