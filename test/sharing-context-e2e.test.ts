@@ -167,7 +167,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
       request: {
         ...parent.request,
         conversation: { ...parent.request.conversation, threadRef: child.threadRef },
-        origin: { kind: "automation", screenData: text },
+        origin: parent.request.origin,
         delegatingRunId: parent.id,
         sessionSenderId: parentSession.id,
         text,
@@ -192,7 +192,7 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.liveAuthor, true);
   assert.equal(delegatedClaims?.liveActor, true);
-  assert.equal(delegatedClaims?.triggered, true);
+  assert.equal(delegatedClaims?.triggered, undefined);
   await b.config.setSharingPosture("personal:U1", "isolated");
   assert.match(await childTurn(read), /no file/);
   await b.config.clearSharingPosture("personal:U1");

@@ -374,8 +374,13 @@ export function createTurnMethods(
         surface: req.surface,
         ...(req.slackSource ? { slackSource: req.slackSource } : {}),
         ...(req.externalSlack ? { externalSlack: req.externalSlack } : {}),
+        ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),
+        ...(req.spawned && req.delegatingRunId ? { delegatingRunId: req.delegatingRunId } : {}),
         ...(sameApprovedMessage && approvedRequest?.sessionSenderId
           ? { sessionSenderId: approvedRequest.sessionSenderId }
+          : {}),
+        ...(sameApprovedMessage && approvedRequest?.delegatingRunId
+          ? { delegatingRunId: approvedRequest.delegatingRunId }
           : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),

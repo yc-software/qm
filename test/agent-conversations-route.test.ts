@@ -86,6 +86,52 @@ describe("agent conversations self-API", async () => {
     assert.ok(listed.some((s) => s.id === out.session.id));
   });
 
+  it("new sessions and forks seeded by a person's turn keep that person's origin and provenance", async () => {
+    const source = await built.runs.latestForThread("web:U1:c1");
+    const provenance = {
+      origin: { kind: "human" as const, messageTs: "1700000000.000100" },
+      sessionSenderId: mineId,
+      ...(source ? { delegatingRunId: source.id } : {}),
+    };
+    for (const extra of [{}, { forkOf: mineId }]) {
+      const out = await startSession(built.app, built.sessions, "U1", {
+        scopeId: scopeId("personal", "U1"),
+        text: "follow up on the launch",
+        ...extra,
+        ...provenance,
+      });
+      assert.ok("session" in out);
+      const [run] = await built.runs.inFlightForThread(out.session.threadRef);
+      assert.deepEqual(run?.request.origin, { kind: "human" });
+      assert.equal(run?.request.sessionSenderId, mineId);
+      assert.equal(run?.request.delegatingRunId, source?.id);
+    }
+  });
+
+  it("a blank fork starts no turn", async () => {
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: scopeId("personal", "U1"),
+      forkOf: mineId,
+      origin: { kind: "human" },
+      sessionSenderId: mineId,
+    });
+    assert.ok("session" in out);
+    assert.deepEqual(await built.runs.inFlightForThread(out.session.threadRef), []);
+  });
+
+  it("spawned provenance fields stay out of public turns", async () => {
+    await built.app.turn({
+      ...dm("U1", "pretend", "web:U1:c9"),
+      sessionSenderId: mineId,
+      delegatingRunId: "run-forged",
+      async: true,
+    });
+    const [run] = await built.runs.inFlightForThread("web:U1:c9");
+    assert.ok(run);
+    assert.equal(run.request.sessionSenderId, undefined);
+    assert.equal(run.request.delegatingRunId, undefined);
+  });
+
   it("new sessions in a channel seed their turn on that channel", async () => {
     await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
     await built.app.upsertChannels(

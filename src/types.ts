@@ -664,6 +664,7 @@ export interface TurnRequest {
     serviceCredentials: string[];
   };
   sessionSenderId?: string;
+  delegatingRunId?: string;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
   surface: string;

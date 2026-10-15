@@ -541,6 +541,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const automatedTurn = input.origin.kind === "automation";
       const ambientTurn = input.origin.kind === "ambient";
       const humanTurn = input.origin.kind === "human";
+      const sessionTurn = !!input.sessionSenderId || !!input.delegatingRunId;
+      const humanInput = humanTurn && !sessionTurn;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -553,12 +555,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external && deps.runs
           ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
-      const liveTurn = (humanTurn || delegatedOrigin?.kind === "human") && allInternal && !external;
+      const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
+      const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
       const liveAuthorTurn =
-        !external && (humanTurn || authoredDetection || delegatedOrigin !== undefined) && allInternal;
-      const messageTs = input.origin.kind === "human" ? input.origin.messageTs : undefined;
+        !external &&
+        ((!sessionTurn && (humanTurn || authoredDetection)) || delegatedOrigin !== undefined) &&
+        allInternal;
+      const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
-        input.origin.kind === "human" || input.origin.kind === "ambient" ? input.origin.entryTs : undefined;
+        !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
+          ? input.origin.entryTs
+          : undefined;
       const coreReceivedAt = Date.now();
       let detectMs: number | undefined;
       let compactMs: number | undefined;
@@ -819,7 +826,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const sessionSender = input.sessionSenderId ? await deps.sessions.get(input.sessionSenderId) : null;
         const verifiedSessionMessage = Boolean(
           sessionSender &&
-          automatedTurn &&
           sessionSender.scopeId === scopeId &&
           (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
         );
@@ -827,6 +833,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? securityScreenPayload({
               ...input,
               ...turnOriginRequestFields(input.origin),
+              ...(sessionTurn ? { triggered: true, securityScreenData: input.text } : {}),
               overheard: [],
               externalPromptData,
               verifiedSwarm: Boolean(input.swarm && swarmBinding),
@@ -1010,7 +1017,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         audience: conversation.audience,
         acl: deps.acl,
-        origin: delegatedOrigin ?? input.origin,
+        origin: authorizationOrigin,
         trustedLiveHuman: liveAuthorTurn,
         targetScope: scopeId,
         config: deps.config,
@@ -1263,9 +1270,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
-      const delegatedTask =
-        automatedTurn && !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
-      const syntheticInput = (input.proactiveOpener && !input.text.trim()) || (automatedTurn && !delegatedTask);
+      const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      const syntheticInput =
+        (input.proactiveOpener && !input.text.trim()) || ((automatedTurn || sessionTurn) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
       let fallbackTitleWrite: Promise<void> | undefined;
       const assignSessionTitle = () => {
@@ -2342,6 +2349,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         if (
           ambientTurn &&
+          !sessionTurn &&
           deps.harness.models.shouldRespond &&
           !(
             isRetry &&
@@ -2695,7 +2703,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
-          ...(humanTurn && !external ? { humanTurn: true } : {}),
+          ...(humanInput && !external ? { humanTurn: true } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(sessionSyscalls
             ? {
@@ -2807,7 +2815,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if (!memoryHistoryReset && (!input.envelopeWrapped || humanTurn) && input.overheard?.length) {
+        if (!memoryHistoryReset && (!input.envelopeWrapped || humanInput) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2949,7 +2957,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session.threadRef,
           visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt,
         );
-        const sender = !automatedTurn && input.text.trim() ? senderNote(actor.displayName) : "";
+        const sender = !automatedTurn && !sessionTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote =
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
             ? unscreenedNotice("inbound content")
@@ -3058,7 +3066,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !syntheticPrompt && input.text.trim()
             ? {
                 text: input.text,
-                ...(humanTurn ? { speakerId: actor.id } : {}),
+                ...(humanInput ? { speakerId: actor.id } : {}),
                 ...((messageTs ?? entryTs) ? { ts: messageTs ?? entryTs } : {}),
                 ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                 ...(input.displayText?.trim() ? { display: input.displayText } : {}),
@@ -3260,7 +3268,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 Object.assign(payload, swarmEntryProvenance);
                 if (input.runId) payload.runId = input.runId;
                 delete payload.speakerId;
-                if (humanTurn && !syntheticPrompt && !continuation && !payload.steered && !payload.overheard)
+                if (humanInput && !syntheticPrompt && !continuation && !payload.steered && !payload.overheard)
                   payload.speakerId = actor.id;
                 if (actor.displayName?.trim() && typeof payload.name !== "string")
                   payload.name = actor.displayName.trim();
@@ -3423,7 +3431,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     signal?: AbortSignal,
                   ) =>
                     deps.runtime!(
-                      runtimeClaims,
+                      sessionTurn && request.lifetime === "scope"
+                        ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
+                        : runtimeClaims,
                       active,
                       request,
                       checkRuntimeAuth,

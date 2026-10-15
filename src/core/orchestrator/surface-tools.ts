@@ -100,7 +100,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   const deliveries = deps.deliveries;
   const currentDestination = defaultDestination;
   const rateLimitRecipient =
-    input.origin?.kind === "human" && currentDestination.type === "slack" && currentDestination.target
+    input.origin?.kind === "human" &&
+    !input.sessionSenderId &&
+    !input.delegatingRunId &&
+    currentDestination.type === "slack" &&
+    currentDestination.target
       ? { rateLimitRecipient: { target: currentDestination.target, user: actor.id } }
       : {};
   let editRefConsumed = false;

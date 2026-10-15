@@ -1178,9 +1178,9 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
   return { ...r, parent: parent.run, child, run, api };
 }
 
-test("delegated live authority follows immutable provenance without changing automation origin", async () => {
+test("delegated human origin retains one-hop authority boundaries", async () => {
   const r = await delegatedHumanRig();
-  assert.equal(r.run.request.origin.kind, "automation");
+  assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorizationOrigin(r.run.request, r))?.kind, "human");
   for (const patch of [
     { actor: { ...actor, id: "other" } },
@@ -1279,7 +1279,7 @@ test("a later participant cannot change a completion's actor, rollout, destinati
   assert.equal(wake.request.actor.id, actor.id);
   assert.equal(wake.request.deliveryTarget, "slack:C1:task");
   assert.equal(wake.request.unattendedGrants, undefined);
-  assert.deepEqual(wake.request.origin, { kind: "automation", screenData: wake.request.text });
+  assert.deepEqual(wake.request.origin, { kind: "human" });
 });
 
 test("completion wakes preserve live authorization for subsequent delegated steps", async () => {
@@ -1297,7 +1297,7 @@ test("completion wakes preserve live authorization for subsequent delegated step
   );
   const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
   assert.ok(wake);
-  assert.equal(wake.request.origin.kind, "automation");
+  assert.equal(wake.request.origin.kind, "human");
   assert.equal(wake.request.addressed, true);
   assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
   const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
@@ -1493,7 +1493,7 @@ for (const addressed of [true, false]) {
     assert.equal(wake.request.surfaceTools, true);
     assert.equal(wake.request.delegatingRunId, r.parent.id);
     assert.equal(wake.request.sessionSenderId, r.child.id);
-    assert.equal(wake.request.origin.kind, "automation");
+    assert.equal(wake.request.origin.kind, "human");
     assert.match(wake.request.text, /delegated task finished/i);
     assert.equal(wake.request.displayText, "Delegated task completed");
     assert.equal(wake.request.envelopeWrapped, true);
@@ -1830,8 +1830,8 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   assert.equal((await live.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
   assert.equal((await live.start!({ fork: true })).ok, true);
   assert.deepEqual(started, [
-    { scopeId: scope, text: "hello", title: "fresh" },
-    { scopeId: scope, forkOf: room.id },
+    { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, text: "hello", title: "fresh" },
+    { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, forkOf: room.id },
   ]);
   const child = await sessions.getOrCreateByThread("agent:main:subagent:w", "dm", scope, undefined, "web");
   await sessions.updateTitle(child.id, "worker");
@@ -1936,3 +1936,25 @@ test("stopping a session tree tells every stopped run who stopped it", async () 
     ],
   );
 });
+
+for (const origin of [{ kind: "human" }, { kind: "ambient", live: true }, { kind: "automation" }] as const) {
+  test(`nested tasks and followups inherit ${origin.kind} origin`, async () => {
+    const r = await delegatedHumanRig({ origin });
+    const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+      session: r.child,
+      scopeId: scope,
+      request: { ...r.run.request, runId: r.run.id },
+    });
+    const opened = await childApi.open({ task: "inspect nested" });
+    assert.ok(opened.ok);
+    const child = (await r.sessions.get(opened.sessionId))!;
+    const nested = (await r.runs.latestForThread(child.threadRef))!;
+    assert.equal(nested.request.origin.kind, origin.kind);
+    assert.equal(nested.request.delegatingRunId, r.run.id);
+    assert.equal(nested.request.sessionSenderId, r.child.id);
+    assert.ok((await childApi.write({ target: child.id, followup: true, text: "inspect again" })).ok);
+    const followup = (await r.runs.latestForThread(child.threadRef))!;
+    assert.equal(followup.request.origin.kind, origin.kind);
+    assert.equal(followup.request.delegatingRunId, r.run.id);
+  });
+}
