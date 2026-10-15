@@ -291,6 +291,7 @@ export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
         sessionType: s?.type ?? null,
         threadRef: r.sessionId,
         attempts: r.attempts,
+        handbacks: r.handbacks,
         maxAttempts: r.maxAttempts,
         workerId: r.workerId,
         leaseExpiresAt: r.leaseExpiresAt,

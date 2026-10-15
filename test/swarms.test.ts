@@ -923,6 +923,23 @@ test("durable worker rejects excessive swarm claims before calling the harness",
   assert.equal((await runs.get(claimed.id))!.status, "failed");
 });
 
+test("durable worker does not spend the swarm claim budget on graceful handbacks", async () => {
+  const { service, caller, runs } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work" });
+  await service.sweep();
+  const pending = (await runs.list()).find((item) => item.request.swarm)!;
+  const claimed = (await runs.claimById(pending.id, "test", 60_000))!;
+  let called = false;
+  const orchestrator = {
+    handleTurn: async () => {
+      called = true;
+      return { status: "silent" as const };
+    },
+  } as unknown as Orchestrator;
+  await processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, { ...claimed, attempts: 9, handbacks: 6 });
+  assert.equal(called, true);
+});
+
 test("swarm work cancellation has a hard worker deadline independent of the harness", async (context) => {
   const { service, caller, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });

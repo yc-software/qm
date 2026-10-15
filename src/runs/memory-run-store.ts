@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
-import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
+import { crashClaims, isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
@@ -66,6 +66,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         turnUserSeq: null,
         dedupKey: dedupKey ?? null,
         attempts: 0,
+        handbacks: 0,
         errorAttempts: 0,
         maxAttempts,
         leaseToken: null,
@@ -113,6 +114,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.workerId = null;
+      run.handbacks += 1;
       return true;
     },
 
@@ -373,7 +375,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.leaseExpiresAt = null;
     run.workerId = null;
     if (opts?.countsAsError) run.errorAttempts += 1;
-    const overClaimed = run.attempts >= maxClaims;
+    const overClaimed = crashClaims(run) >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
       retryAfter.set(run.id, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0));
@@ -382,7 +384,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.status = "failed";
     const reason =
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
+        ? `run parked after ${crashClaims(run)} claims without completing (suspected crash loop)`
         : error;
     run.result = { status: "failed", sessionId: run.sessionId, reason };
     run.finishedAt = Date.now();

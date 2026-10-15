@@ -176,7 +176,7 @@ if (built.backgroundOwnership) {
 }
 
 let shuttingDown = false;
-function shutdown(signal: string): void {
+function shutdown(signal: string, crashed = false): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
@@ -191,13 +191,13 @@ function shutdown(signal: string): void {
     {
       async stop() {
         await backgroundController?.stop();
-        await built.runtime.stop();
+        await built.runtime.stop(crashed);
       },
-      releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
+      releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(crashed),
     },
     config.shutdownDrainMs,
     "qm",
-    () => server.closeAllConnections(),
+    { beforeExit: () => server.closeAllConnections(), crashed },
   );
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

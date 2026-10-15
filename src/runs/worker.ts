@@ -6,7 +6,7 @@ import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import { errorParks, type Run, type RunStore } from "./run-store.ts";
+import { crashClaims, errorParks, type Run, type RunStore } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
@@ -23,6 +23,8 @@ export interface ProcessDeps {
 export const LEASE_LOST_CONSECUTIVE = 3;
 
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
+
+export const CRASH_SHUTDOWN = Symbol("crash shutdown");
 
 export async function processRun(
   deps: ProcessDeps,
@@ -74,7 +76,7 @@ export async function processRun(
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
     }
-    if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    if (run.request.swarm && crashClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
@@ -118,7 +120,7 @@ export async function processRun(
     clearTimeout(workDeadline);
     stopBeat();
     opts?.shutdown?.removeEventListener("abort", onShutdown);
-    if (opts?.shutdown?.aborted)
+    if (opts?.shutdown?.aborted && opts.shutdown.reason !== CRASH_SHUTDOWN)
       await deps.runs
         .releaseLease(run.id, token)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
@@ -138,7 +140,7 @@ export interface Worker {
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
-  releaseInFlight(): Promise<void>;
+  releaseInFlight(crashed?: boolean): Promise<void>;
 }
 
 const STOP_DRAIN_MS = 2_000;
@@ -258,11 +260,11 @@ export function createWorker(deps: WorkerDeps): Worker {
         loopDone = null;
       });
     },
-    async releaseInFlight() {
+    async releaseInFlight(crashed = false) {
       await stopClaims();
       const held = inFlight;
       if (!held) return;
-      held.shutdown.abort();
+      held.shutdown.abort(crashed ? CRASH_SHUTDOWN : undefined);
       await held.done;
     },
     stopClaims,
