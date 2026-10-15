@@ -1576,9 +1576,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (needle.length < 2) return [];
       const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const rows = await q(
-        participantSessionsSql(" AND (COALESCE(p.title, s.title) ILIKE $2 OR s.id = $3)") +
-          " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $4",
-        [principalId, like, needle, Math.max(1, Math.min(Math.floor(limit), 100))],
+        participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
+          " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
+        [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.map(rowToParticipantSession);

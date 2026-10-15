@@ -733,7 +733,7 @@ export function drawChatsPage(): void {
 
 function chatMatches(s: CoreSession, q: string): boolean {
   const context = sharedContextLabel(s.scopeId, s.channelName ?? null) ?? "Personal";
-  return [sessionTitle(s), s.channelName ?? "", context, s.id].join(" ").toLowerCase().includes(q);
+  return [sessionTitle(s), s.channelName ?? "", context].join(" ").toLowerCase().includes(q);
 }
 
 export const syncWorkingPulse = (el?: Element): void => {

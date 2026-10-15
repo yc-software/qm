@@ -131,7 +131,7 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
 });
 
-test("app.searchSessions finds sessions by title and by exact id", async () => {
+test("app.searchSessions finds sessions by title", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "search-"));
   const { app, sessions } = buildApp(testConfig({ dataDir }));
 
@@ -141,12 +141,6 @@ test("app.searchSessions finds sessions by title and by exact id", async () => {
 
   const byTitle = await app.searchSessions("U1", "roadmap");
   assert.ok(byTitle.some((h) => h.sessionId === id && h.entryType === "title"));
-
-  const byId = await app.searchSessions("U1", id);
-  assert.ok(
-    byId.some((h) => h.sessionId === id),
-    "an exact session id finds the session",
-  );
 
   assert.deepEqual(await app.searchSessions("U2", "roadmap"), [], "title matches respect participation");
 });

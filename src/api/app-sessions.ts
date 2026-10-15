@@ -213,7 +213,7 @@ export function createSessionMethods(
     });
   };
 
-  /** Sessions whose title (or exact id) matches the query — the entry index only covers message text. */
+  /** Sessions whose title matches the query — the entry index only covers message text. */
   const titleSearchHits = async (principalId: string, query: string, capped: number): Promise<SessionSearchHit[]> => {
     const matches = await deps.sessions.searchSessionTitles(principalId, query, capped);
     if (!matches.length) return [];

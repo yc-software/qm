@@ -532,7 +532,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       for (const id of ids) {
         const row = participantSession(id, principalId);
         if (!row) continue;
-        if (row.id === needle || (row.title ?? "").toLowerCase().includes(lower)) out.push(row);
+        if ((row.title ?? "").toLowerCase().includes(lower)) out.push(row);
       }
       return out
         .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
