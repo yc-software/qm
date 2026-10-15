@@ -49,7 +49,6 @@ export function parseDeepLink(
   if (pathView === "projects") {
     projectItem = projectKind ? decodeSegment(segments[2] ?? "") : decodeSegment(segments[1] ?? "");
   }
-  // "sessions" is a legacy/hand-written alias for "s"; accept it so stale links still resolve.
   const sessionRoute = pathView === "s" || pathView === "c" || pathView === "sessions";
   const sessionSeg = sessionRoute ? decodeSegment(segments[1] ?? "") : null;
   const viewFor = (): string | null => {
