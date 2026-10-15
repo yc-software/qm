@@ -147,6 +147,7 @@ function scanLines(command: string, depth: number): string[] {
   try {
     const executed = depth < MAX_DEPTH ? executedPayloads(tree.rootNode) : { scripts: [], code: [] };
     return [
+      ...(tree.rootNode.hasError ? [command] : []),
       render(tree.rootNode),
       ...executed.code,
       ...executed.scripts.flatMap((script) => scanLines(script, depth + 1)),
