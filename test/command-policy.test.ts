@@ -203,6 +203,8 @@ test("quotes, comments, and line continuations are read the way the shell reads 
     "rm \\\n  -rf /tmp/x",
     'bash -c "r\\\nm -rf /tmp/x"',
     "psql -c 'select 1 # 2; drop table t'",
+    "ba\\\n\\\nsh -c 'rm -rf /tmp/x'",
+    "echo 'rm -rf /tmp/x' | ba\\\n\\\nsh",
   ]) {
     assert.equal(evaluateCommand(command, p).decision, "require_approval", command);
   }

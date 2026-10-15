@@ -177,8 +177,8 @@ function unescape(text: string): string {
   return out;
 }
 
-function gapBetween(parent: Node, left: Node, right: Node): string {
-  return parent.text.slice(left.endIndex - parent.startIndex, right.startIndex - parent.startIndex);
+function sourceBetween(node: Node, from: number, to: number): string {
+  return node.text.slice(from - node.startIndex, to - node.startIndex).replaceAll("\\\n", "");
 }
 
 function substitutions(node: Node): Node[] {
@@ -206,14 +206,13 @@ function render(node: Node): string {
       return substitutions(node).map(render).join(" ");
   }
   let out = "";
-  let previous: Node | undefined;
+  let at = node.startIndex;
   for (const child of node.children) {
     if (!child) continue;
-    const gap = previous ? gapBetween(node, previous, child) : node.text.slice(0, child.startIndex - node.startIndex);
-    out += gap.replaceAll("\\\n", "") + render(child);
-    previous = child;
+    out += sourceBetween(node, at, child.startIndex) + render(child);
+    at = child.endIndex;
   }
-  return out + (previous ? node.text.slice(previous.endIndex - node.startIndex) : node.text);
+  return out + sourceBetween(node, at, node.endIndex);
 }
 
 function literal(node: Node): string {
@@ -250,7 +249,7 @@ function commandWords(command: Node): Node[][] {
   for (const word of [name.firstNamedChild ?? name, ...command.childrenForFieldName("argument")]) {
     if (!word) continue;
     const group = words.at(-1);
-    if (group && gapBetween(command, group.at(-1)!, word) === "\\\n") group.push(word);
+    if (group && sourceBetween(command, group.at(-1)!.endIndex, word.startIndex) === "") group.push(word);
     else words.push([word]);
   }
   return words;
