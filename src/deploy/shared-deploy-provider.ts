@@ -22,7 +22,6 @@ const APP_LOG_PATH = "/tmp/qm-app.log";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** A version's declared env, keeping only names a shell can export, with `platform` variables taking precedence. */
 export function appEnv(
   declared: Record<string, string> | undefined,
   platform: Record<string, string> = {},
@@ -35,7 +34,6 @@ export const exportEnv = (env: Record<string, string>): string =>
     .map(([k, v]) => `export ${k}=${shq(v)}`)
     .join("; ");
 
-/** Stops the previously launched app's process group, if any, and forgets its pid. */
 export const STOP_APP = [
   `old=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
   `if [ -n "$old" ]; then kill -TERM "-$old" 2>/dev/null || true; sleep 0.5; kill -KILL "-$old" 2>/dev/null || true; fi`,
@@ -47,7 +45,6 @@ export async function bundleEntries(dir: string): Promise<Array<{ path: string; 
   return files.map((f) => ({ path: normalizeRelPath(f.path), data: f.data }));
 }
 
-/** Unpacks an uploaded tar into `guestDir` and deletes it, exiting with tar's status. */
 export const extractBundle = (bundle: string, guestDir: string, cleanup = ""): string =>
   `mkdir -p ${shq(guestDir)} && tar -xmf ${shq(bundle)} -C ${shq(guestDir)}; rc=$?; rm -f ${shq(bundle)}; ${cleanup ? `${cleanup}; ` : ""}exit $rc`;
 

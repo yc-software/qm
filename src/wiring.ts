@@ -934,8 +934,6 @@ export function buildApp(
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
-  // One E2B client config for agent computers and published apps. Apps get their own idle
-  // timeout, and stay off the agent egress pin, since the client applies both to every sandbox.
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey)

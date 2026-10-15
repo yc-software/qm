@@ -76,10 +76,6 @@ export interface StoredE2bSandbox {
   homeDirty?: boolean;
 }
 
-/**
- * Tools the QM E2B template (`deploy/e2b/e2b.Dockerfile`) adds over E2B's stock image. Listed whenever
- * `E2B_TEMPLATE_ID` is set, which assumes it names a build of that template.
- */
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
 export interface E2bSandboxOptions extends BlobStagingOptions {

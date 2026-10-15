@@ -121,7 +121,6 @@ const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
 export const E2B_EXEC_MARGIN_MS = 60_000;
 
-/** Runs a shell script on the session under a guest-side `timeout`; exit 124 is reported as a timeout. */
 export async function runE2bScript(session: E2bSession, script: string, timeoutSec: number): Promise<ExecResult> {
   const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
     timeoutMs: timeoutSec * 1000 + 30_000,

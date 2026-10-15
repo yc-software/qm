@@ -118,7 +118,6 @@ export interface DeploymentGrantee {
 const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
-/** Making an app public is refused: no apps domain can serve signed-out visitors. */
 export class PublicLinksUnavailableError extends Error {
   constructor() {
     super(PUBLIC_LINKS_UNAVAILABLE);
@@ -129,7 +128,6 @@ export class PublicLinksUnavailableError extends Error {
 export interface DeployServiceDeps {
   deliveries?: DeliveryStore;
   deployAppsDomain?: string;
-  /** False when no apps domain can serve signed-out visitors, so making an app public is refused. */
   publicLinksAvailable?: boolean;
   publicWebUrl?: string;
   deployStore: DeployStore;
