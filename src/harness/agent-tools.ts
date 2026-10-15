@@ -1909,9 +1909,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
+      const { output: _output, ...startMeta } = r;
       return recordResult(
         callId,
-        { tool: "execute", background: true, ...r },
+        { tool: "execute", background: true, ...startMeta },
         {
           content: [
             {
@@ -2071,9 +2072,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
             });
+            const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,
-              { tool: "background", action: params.action, ...r },
+              { tool: "background", action: params.action, ...pollMeta },
               {
                 content: [
                   { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },

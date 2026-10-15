@@ -764,6 +764,34 @@ test("execute stores its output once and replays exactly what the model saw", as
   assert.equal(replayed.isError, false);
 });
 
+test("background start and poll store their output only in result", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, { sandboxResources: true });
+  await call(
+    tools.find((t) => t.name === "execute"),
+    { command: "serve", purpose: "Start server", background: true },
+  );
+  await call(
+    tools.find((t) => t.name === "background"),
+    { action: "poll", process_id: "bg-1" },
+  );
+  const [started, polled] = emitted.filter((e) => e.type === "tool_result").map((e) => e.payload);
+  assert.deepEqual(
+    { output: started.output, cursor: started.cursor, result: started.result },
+    { output: undefined, cursor: 7, result: "started bg-1\nstarted serve\n[cursor 7 | running]" },
+  );
+  assert.equal(polled.chunks, undefined);
+  assert.equal(polled.cursor, 18);
+  assert.match(polled.result, /^more output\n\[cursor 18 \| /);
+});
+
 test("Auto can quarantine a tool result before the model or durable replay sees it", async () => {
   const emitted: Emitted[] = [];
   const tc = {
