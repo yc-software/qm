@@ -9,7 +9,7 @@ import { openSession, refreshSessions, sessionsState, sessionTitle } from "./ses
 import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
-import { icon } from "./ui";
+import { icon } from "./icons";
 
 interface ChatSearchHit {
   sessionId: string;

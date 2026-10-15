@@ -48,6 +48,38 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
       FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
       ],
     },
+    {
+      id: "acl/grants/0003-file-ids",
+      statements: [
+        `DO $migrate$
+      BEGIN
+        LOCK TABLE acl_grants IN SHARE ROW EXCLUSIVE MODE;
+        CREATE TEMP TABLE acl_file_grant_ids ON COMMIT DROP AS
+          SELECT g.owner_scope_id, g.path, g.grantee_scope_id, g.permission, g.granted_by, NULL::text AS file_id
+          FROM acl_grants g
+          WHERE g.path NOT LIKE 'skill:%' AND g.path NOT LIKE 'deployment:%'
+            AND g.path NOT LIKE 'cron:%' AND g.path NOT LIKE 'service-cred:%';
+        IF to_regclass('file_artifacts') IS NOT NULL THEN
+          DELETE FROM acl_file_grant_ids t USING file_artifacts f
+          WHERE f.id = t.path AND f.owner_scope_id = t.owner_scope_id AND f.enabled;
+          UPDATE acl_file_grant_ids t SET file_id = (
+            SELECT f.id FROM file_artifacts f
+            WHERE f.owner_scope_id = t.owner_scope_id AND f.path = t.path AND f.enabled
+            ORDER BY f.created_at DESC, f.id DESC LIMIT 1
+          );
+        END IF;
+        DELETE FROM acl_grants g USING acl_file_grant_ids t
+        WHERE g.owner_scope_id = t.owner_scope_id AND g.path = t.path
+          AND g.grantee_scope_id = t.grantee_scope_id AND g.permission = t.permission;
+        INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)
+          SELECT owner_scope_id, file_id, grantee_scope_id, permission, granted_by
+          FROM acl_file_grant_ids WHERE file_id IS NOT NULL
+          ORDER BY owner_scope_id, path, grantee_scope_id, permission
+          ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission) DO NOTHING;
+      END
+      $migrate$`,
+      ],
+    },
   ]);
   const { q } = db;
   let cache: { v: string; grants: readonly Grant[] } | null = null;

@@ -95,9 +95,8 @@ for (const change of ["source", "audience"] as const)
     const memory: MemoryService = {
       read: async () => content,
       query: async () => [content],
-      recall: async () => content,
+      recall: async () => [{ text: content, score: 0.2 }],
       capture: async () => 0,
-      replace: async () => {},
     };
     const seen: HarnessTurnInput[] = [];
     const reopened: unknown[] = [];
@@ -137,10 +136,10 @@ for (const change of ["source", "audience"] as const)
         text: "PRIVATE_SENTINEL summarized",
       },
     });
-    await sessions.appendTape(lease, {
-      kind: "message",
+    await sessions.append(lease, {
+      type: "assistant",
       scopeLabel: session.scopeId,
-      payload: { role: "assistant", content: [{ type: "text", text: "PRIVATE_SENTINEL" }] },
+      payload: { text: "PRIVATE_SENTINEL" },
     });
     await sessions.releaseLease(lease);
     content = "";
@@ -154,7 +153,6 @@ for (const change of ["source", "audience"] as const)
     assert.doesNotMatch(seen[1]!.environment ?? "", /PRIVATE_SENTINEL/);
     const retained = JSON.stringify({
       history: seen[1]!.history,
-      tape: seen[1]!.tape,
       priorTurns: seen[1]!.priorTurns,
     });
     if (change === "source") {
@@ -182,9 +180,8 @@ for (const operation of ["read", "search"] as const)
     const memory: MemoryService = {
       read: async () => content,
       query: async () => [content],
-      recall: async () => content,
+      recall: async () => [{ text: content, score: 0.2 }],
       capture: async () => 0,
-      replace: async () => {},
     };
     const base = createMockHarness();
     const seen: HarnessTurnInput[] = [];
@@ -255,9 +252,8 @@ test("a failed audience reset is retried before recording the new checkpoint", a
   const memory: MemoryService = {
     read: async () => "",
     query: async () => [],
-    recall: async () => "",
+    recall: async () => [],
     capture: async () => 0,
-    replace: async () => {},
   };
   const base = createMockHarness();
   let resets = 0;

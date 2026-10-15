@@ -27,7 +27,9 @@ function nearWindow(usage: ContextUsage | undefined): boolean {
   return !!contextWindow && !!lastInputTokens && lastInputTokens >= contextWindow * NEAR_WINDOW_RATIO;
 }
 
-function providerErrorCode(failed: AssistantMessage, usage?: ContextUsage): ProviderErrorCode {
+type ProviderFailure = Pick<AssistantMessage, "providerError" | "rawStopReason" | "errorMessage">;
+
+function providerErrorCode(failed: ProviderFailure, usage?: ContextUsage): ProviderErrorCode {
   if (failed.rawStopReason === "refusal") return "refusal";
   const { status, type, code } = failed.providerError ?? {};
   if (type === "model_unavailable") return "model_unavailable";
@@ -51,7 +53,7 @@ function providerBodyMessage(body: unknown): string | undefined {
   return typeof nested.message === "string" && nested.message.trim() ? nested.message.trim() : undefined;
 }
 
-export function providerTurnError(failed: AssistantMessage, usage?: ContextUsage): ProviderTurnError {
+export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage): ProviderTurnError {
   const raw = failed.errorMessage?.trim() ?? "";
   const code = providerErrorCode(failed, usage);
   const status = failed.providerError?.status;

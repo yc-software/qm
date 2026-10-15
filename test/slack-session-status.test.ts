@@ -358,9 +358,7 @@ test("core engagement is signaled once for local or durable replies, never quiet
         },
       },
       turnStream: stream,
-      tasks: { list: async () => [] },
       app: { getRun: async () => ({ result: { status: "silent" } }) },
-      agentRequests: createMemoryMap(),
     } as unknown as SlackCoreClientDeps);
     await core.waitRun("r1", {
       onReplying: () => {

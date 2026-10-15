@@ -12,7 +12,7 @@ export function loadGeneratedActivities(me: Me, onChange?: () => void): Promise<
     for (let attempt = 0; attempt < 19; attempt++) {
       const response = await api<{ activities: unknown; pending?: boolean }>("/api/suggested-activities", {
         method: "POST",
-        body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, poll: attempt > 0 }),
       });
       me.suggestedActivities = parseSuggestedActivities(JSON.stringify(response.activities));
       onChange?.();

@@ -7,20 +7,19 @@ import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/har
 import { getRequiredModel, modelSupportedByHarness, resolveModel } from "../src/model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 
-// Short- and long-context USD for the same token mix at standard and Ultrafast rates.
-const VARIANTS = [
-  { id: "gpt-6-astra-ultrafast", base: "gpt-6-astra", standard: [0.3, 6.35], ultrafast: [1.8, 38.1] },
-  { id: "gpt-6.1-sol-ultrafast", base: "gpt-6.1-sol", standard: [0.055, 1.26], ultrafast: [0.33, 7.56] },
-] as const;
+for (const [baseId, shortCost, longCost] of [
+  ["gpt-6-astra", 0.3, 6.35],
+  ["gpt-6.1-sol", 0.055, 1.26],
+] as const) {
+  const id = `${baseId}-ultrafast`;
 
-for (const { id, base, standard: standardUsd, ultrafast: ultrafastUsd } of VARIANTS) {
-  test(`${id} is an explicit API-only Pi choice with its own full pricing card`, () => {
+  test(`${baseId} Ultrafast is an explicit API-only Pi choice with its own full pricing card`, () => {
     const model = getRequiredModel(id);
     assert.equal(model.provider, "openai");
     assert.equal(model.api, "openai-responses");
     assert.equal(wantsFastMode(true, id), false);
     assert.equal(modelSupportedByHarness(id, "pi"), true);
-    for (const harness of ["codex", "claude", "opencode"]) assert.equal(modelSupportedByHarness(id, harness), false);
+    assert.equal(modelSupportedByHarness(id, "claude"), false);
     assert.equal(resolveModel(`codex/${id}`), undefined);
     for (const tokens of [
       { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000 },
@@ -28,30 +27,28 @@ for (const { id, base, standard: standardUsd, ultrafast: ultrafastUsd } of VARIA
     ]) {
       const standardUsage = { ...zeroUsage(), ...tokens };
       const ultrafastUsage = { ...zeroUsage(), ...tokens };
-      calculateCost(getRequiredModel(base), standardUsage);
+      calculateCost(getRequiredModel(baseId), standardUsage);
       calculateCost(model, ultrafastUsage);
-      const standard = piUsageToCallUsage(standardUsage, getRequiredModel(base), false)!;
+      const standard = piUsageToCallUsage(standardUsage, getRequiredModel(baseId), false)!;
       const ultrafast = piUsageToCallUsage(ultrafastUsage, model, false)!;
-      const tier = tokens.input === 10_000 ? 0 : 1;
-      assert.ok(Math.abs(standard.costUsd - standardUsd[tier]) < 1e-9);
-      assert.ok(Math.abs(ultrafast.costUsd - ultrafastUsd[tier]) < 1e-9);
+      assert.ok(Math.abs(standard.costUsd - (tokens.input === 10_000 ? shortCost : longCost)) < 1e-9);
       assert.ok(Math.abs(ultrafast.costUsd - standard.costUsd * 6) < 1e-9);
     }
     const oauth = { kind: "oauth", oauth: { accessToken: "test" } } as never;
-    for (const harness of ["pi", "codex"]) assert.equal(resolveIndividualAuthRouting(null, oauth, id, harness), null);
+    assert.equal(resolveIndividualAuthRouting(null, oauth, id), null);
     const apiKey = { kind: "apikey", apiKey: "test" } as never;
-    assert.equal(resolveIndividualAuthRouting(null, apiKey, id, "pi")?.model, id);
-    assert.equal(resolveIndividualAuthRouting(apiKey, null, id, "pi"), null);
+    assert.equal(resolveIndividualAuthRouting(null, apiKey, id)?.model, id);
+    assert.equal(resolveIndividualAuthRouting(apiKey, null, id), null);
   });
 
   for (const gateway of [false, true]) {
-    test(`${id} reaches the wire across every runtime call path (${gateway ? "gateway" : "direct"})`, async (t) => {
+    test(`${baseId} Ultrafast reaches the wire across every runtime call path (${gateway ? "gateway" : "direct"})`, async (t) => {
       const config = gateway
         ? {
             url: "https://gateway.example.test/v1",
             apiKey: "gateway-key",
             apiKeyHeader: "api-key",
-            models: { [id]: `router/${base}` },
+            models: { [id]: `router/${baseId}` },
           }
         : undefined;
       const runtime = await buildModelRuntime({ openai: "test-key" }, config);
@@ -85,7 +82,7 @@ for (const { id, base, standard: standardUsd, ultrafast: ultrafastUsd } of VARIA
         );
         const response = "result" in result ? await result.result() : await result;
         assert.ok(request, `${method}: ${response.errorMessage}`);
-        assert.equal(request.body.model, gateway ? `router/${base}` : base);
+        assert.equal(request.body.model, gateway ? `router/${baseId}` : baseId);
         assert.equal(request.body.service_tier, "ultrafast");
         assert.deepEqual(request.body.metadata, { preserved: "yes" });
         assert.equal(response.model, id);

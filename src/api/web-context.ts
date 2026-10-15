@@ -1,6 +1,6 @@
 import type { SessionEntry, SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
+import { createTranscriptSource } from "../sessions/transcript-source.ts";
 
 const WEB_CONTEXT_MESSAGE_CHARS = 600;
 const WEB_CONTEXT_READ_CAP = 500;
@@ -78,7 +78,12 @@ export function webConversationWindow(
 export async function answerWebContextRequest(
   sessions: Pick<
     SessionStore,
-    "sessionsByThreadRefs" | "visibleEntries" | "getEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
+    | "sessionsByThreadRefs"
+    | "visibleEntries"
+    | "getEntries"
+    | "countEntriesBefore"
+    | "latestEntrySeq"
+    | "participantWindowsOf"
   >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {

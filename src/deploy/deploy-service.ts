@@ -86,7 +86,7 @@ export interface DeployService {
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
-  keepAlwaysOnWarm(): Promise<number>;
+  maintainDeployments(): Promise<number>;
   reachDeployment(idOrName: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
@@ -246,6 +246,17 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     });
   };
 
+  const rotateDeployment = (id: string): Promise<void> =>
+    withDeployLock(id, async () => {
+      const cur = await deps.deployStore.get(id);
+      if (!cur || cur.status !== "running" || !(await deps.provider.rotationDue?.(cur))) return;
+      const v = currentVersionOf(cur);
+      if (!v) return;
+      const endpoint = await applyVersion(cur.id, v, cur.appliedVersion ?? cur.currentVersion);
+      await markVersionRunning(cur.id, v.version, endpoint);
+      await deps.provider.park?.(cur).catch((e) => swallow("deploy: park rotated app", e));
+    });
+
   const deploymentRef = (id: string): string => encodeRef(deployRef(id));
   const grantsOn = (d: Deployment): Promise<Grant[]> => deps.acl.grantsFor(d.ownerScopeId, deploymentRef(d.id));
 
@@ -306,7 +317,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
+      const id = randomUUID();
+      if (input.createdInScope && parseScopeId(input.createdInScope).kind === "channel") {
+        await deps.acl.grant({
+          ownerScopeId: input.ownerScopeId,
+          ref: deploymentRef(id),
+          granteeScopeId: input.createdInScope,
+          permission: "read",
+          grantedBy: input.createdBy,
+        });
+      }
       const d = await deps.deployStore.create({
+        id,
         ownerScopeId: input.ownerScopeId,
         createdBy: input.createdBy,
         entrypoint: input.entrypoint,
@@ -522,21 +544,26 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return (await deps.deployStore.get(d.id))!;
     },
 
-    async keepAlwaysOnWarm() {
+    async maintainDeployments() {
       const result = await leaderLease.hold("deployments:keep-warm", async () => {
-        let warmed = 0;
+        let maintained = 0;
         for (const d of await deps.deployStore.list()) {
-          if (!d.alwaysOn || d.status !== "running") continue;
+          if (d.status !== "running") continue;
           try {
             const cur = await deps.deployStore.get(d.id);
-            if (!cur?.alwaysOn || cur.status !== "running") continue;
-            await liveEndpoint(cur);
-            warmed++;
+            if (!cur || cur.status !== "running") continue;
+            if (await deps.provider.rotationDue?.(cur)) {
+              await rotateDeployment(cur.id);
+              maintained++;
+            } else if (cur.alwaysOn) {
+              await liveEndpoint(cur);
+              maintained++;
+            }
           } catch (e) {
-            console.error("%s", `[deploy] keep-warm failed for ${d.name ?? d.id}:`, errMessage(e));
+            console.error("%s", `[deploy] maintenance failed for ${d.name ?? d.id}:`, errMessage(e));
           }
         }
-        return warmed;
+        return maintained;
       });
       return result ?? 0;
     },

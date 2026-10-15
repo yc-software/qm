@@ -71,6 +71,7 @@ export interface PersistedScopedFlag {
 }
 export interface PersistedBaseModel {
   scopeId: ScopeId;
+  embeddingModelId?: string;
   modelId?: string;
   cronRuntime?: RuntimeSelection;
   subagentRuntime?: RuntimeSelection;
@@ -145,10 +146,6 @@ interface AutoFlaggerConfig {
 }
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
-}
-export interface PersistedTurnWallClock {
-  scopeId: ScopeId;
-  sec: number;
 }
 interface ScopeConfigPresence {
   soul: boolean;
@@ -261,10 +258,10 @@ export interface ScopedConfigStore {
   setBrowseMaxSteps(id: ScopeId, steps: number | null): void;
   getBrowseModel(id: ScopeId): string | null;
   setBrowseModel(id: ScopeId, modelId: string | null): void;
+  getEmbeddingModelDurable(): Promise<string | null>;
+  setEmbeddingModel(modelId: string | null): Promise<void>;
   getAutoFlaggerConfig(): AutoFlaggerConfig | null;
   setAutoFlaggerConfig(config: AutoFlaggerConfig | null): void;
-  getTurnWallClockSecDurable(id: ScopeId): Promise<number | null>;
-  setTurnWallClockSec(id: ScopeId, sec: number | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
@@ -303,7 +300,6 @@ export function createMemoryConfigStore(
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
     browseModels?: DurableMap<PersistedBrowseModel>;
     autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
-    turnWallClocks?: DurableMap<PersistedTurnWallClock>;
     deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
@@ -334,7 +330,6 @@ export function createMemoryConfigStore(
   const browseMaxSteps = new Map<ScopeId, number>();
   const browseModels = new Map<ScopeId, string>();
   let autoFlaggerConfig: AutoFlaggerConfig | null = null;
-  const turnWallClocks = new Map<ScopeId, number>();
   const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
   const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
   const commandPolicyStore = opts.commandPolicies ?? createMemoryMap<PersistedCommandPolicy>();
@@ -360,7 +355,6 @@ export function createMemoryConfigStore(
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
   const browseModelStore = opts.browseModels ?? createMemoryMap<PersistedBrowseModel>();
   const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
-  const turnWallClockStore = opts.turnWallClocks ?? createMemoryMap<PersistedTurnWallClock>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const persistWarn = (what: string) => reportFailureAs(`config: persist ${what}`, undefined);
   const writeQueue = createKeyedQueue();
@@ -402,6 +396,7 @@ export function createMemoryConfigStore(
   const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
     id === org
       ? {
+          ...(row?.embeddingModelId ? { embeddingModelId: row.embeddingModelId } : {}),
           ...(row?.cronRuntime ? { cronRuntime: row.cronRuntime } : {}),
           ...(row?.subagentRuntime ? { subagentRuntime: row.subagentRuntime } : {}),
           ...(row?.fallbackRuntime ? { fallbackRuntime: row.fallbackRuntime } : {}),
@@ -575,7 +570,6 @@ export function createMemoryConfigStore(
                 rubric: storedAutoFlagger.rubric,
               }
             : null;
-          for (const r of await turnWallClockStore.all()) turnWallClocks.set(r.scopeId, r.sec);
         })();
       }
       return hydrated;
@@ -1106,6 +1100,18 @@ export function createMemoryConfigStore(
         persist(`browseModel:${id}`, "browse model", () => browseModelStore.put(id, { scopeId: id, modelId }));
       }
     },
+    getEmbeddingModelDurable: async () => (await baseModelStore.get(org))?.embeddingModelId ?? null,
+    setEmbeddingModel: async (modelId) => {
+      await writeQueue(`model:${org}`, async () => {
+        const saved = await updateBaseModelRow(org, (current) => {
+          const row: PersistedBaseModel = { ...current, scopeId: org };
+          if (modelId) row.embeddingModelId = modelId;
+          else delete row.embeddingModelId;
+          return row;
+        });
+        cacheBaseModel(org, saved);
+      });
+    },
     getAutoFlaggerConfig: () => autoFlaggerConfig,
     setAutoFlaggerConfig(config) {
       autoFlaggerConfig = config;
@@ -1116,14 +1122,6 @@ export function createMemoryConfigStore(
           autoFlaggerStore.put(org, { scopeId: org, ...config }),
         );
       }
-    },
-    getTurnWallClockSecDurable: async (id) => (await turnWallClockStore.get(id))?.sec ?? null,
-    async setTurnWallClockSec(id, sec) {
-      await writeQueue(`turnWallClock:${id}`, () =>
-        sec === null ? turnWallClockStore.delete(id) : turnWallClockStore.put(id, { scopeId: id, sec }),
-      );
-      if (sec === null) turnWallClocks.delete(id);
-      else turnWallClocks.set(id, sec);
     },
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
@@ -1295,7 +1293,6 @@ export function createMemoryConfigStore(
         `egress:${id}`,
         `externalSlack:${id}`,
         `model:${id}`,
-        `turnWallClock:${id}`,
         `branding:${id}`,
         ...(id === org
           ? [

@@ -84,7 +84,7 @@ test("ownership controls require both source and distinct deployment credentials
   } finally {
     await srv.close();
   }
-  for (const secret of ["short", sourceSecret, "", " ".repeat(32)]) {
+  for (const secret of ["short", sourceSecret, "", " ".repeat(32), `${controlSecret}\n`]) {
     const disabled = await fixture(secret);
     try {
       assert.equal((await disabled.request("GET")).status, 503);

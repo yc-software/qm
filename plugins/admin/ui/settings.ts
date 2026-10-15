@@ -13,13 +13,17 @@ export {
 import { mountProviders } from "./settings-providers.ts";
 export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";
 import { mountFlags } from "./settings-flags.ts";
+import { mountDecisions } from "./settings-decisions.ts";
 export { configureFlags, loadFlags } from "./settings-flags.ts";
+export { configureDecisions, loadDecisions } from "./settings-decisions.ts";
 import { brandingCard } from "./settings-branding.ts";
+import { mountRuntimes } from "./settings-runtimes.ts";
+export { configureRuntimes } from "./settings-runtimes.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 
-type Model = { id: string; name?: string; effortLevels?: string[] };
+type Model = { id: string; name?: string };
 type Data = Record<string, any>;
 const runtimeKeys = ["runtime", "cron-runtime", "subagent-runtime", "fallback-runtime"];
 const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
@@ -36,12 +40,10 @@ export class SettingsState extends SettingState {
       const { inherit: _inherit, ...selection } = this.draft;
       return structuredClone(selection);
     }
+    if (this.key === "memory-embedding-model") return { modelId: this.draft.modelId || null };
     if (this.key === "branding")
       return Object.fromEntries(Object.entries(this.draft).map(([key, value]) => [key, String(value).trim()]));
     return structuredClone(this.draft);
-  }
-  get models(): Model[] {
-    return this.context.modelsByHarness?.[this.draft.harnessId] || this.context.baseModelOptions || [];
   }
   get catalog(): Model[] {
     return [
@@ -49,34 +51,8 @@ export class SettingsState extends SettingState {
       ...(this.context.baseModelOptions || []),
     ].filter((m: any, i, all) => m?.id && all.findIndex((x: any) => x?.id === m.id) === i) as Model[];
   }
-  get harnesses(): string[] {
-    return this.context.harnessOptions?.length ? this.context.harnessOptions : [this.context.harnessDefault || "pi"];
-  }
-  get efforts(): string[] {
-    const advertised = this.models.find((model) => model.id === this.draft.modelId)?.effortLevels;
-    const levels: string[] = advertised ?? this.context.thinkingLevelsByHarness?.[this.draft.harnessId] ?? [];
-    const choices = levels.filter(
-      (level) => level !== "auto" && (advertised || (level !== "adaptive" && level !== "default")),
-    );
-    return this.draft.effortLevel === "auto" || !choices.length ? ["auto", ...choices] : choices;
-  }
-  get fastCapable() {
-    return (
-      (this.context.fastModeHarnessIds || []).includes(this.draft.harnessId) &&
-      (this.context.fastModeModelIds || []).includes(this.draft.modelId)
-    );
-  }
-  normalize() {
-    if (!runtimeKeys.includes(this.key)) return;
-    if (!this.harnesses.includes(this.draft.harnessId)) this.draft.harnessId = this.harnesses[0];
-    if (!this.models.some((m) => m.id === this.draft.modelId)) this.draft.modelId = this.models[0]?.id || "";
-    if (!this.efforts.includes(this.draft.effortLevel))
-      this.draft.effortLevel = this.efforts.includes("auto") ? "auto" : this.efforts[0];
-    if (!this.fastCapable) this.draft.fastMode = false;
-  }
   change(field: string, value: unknown) {
     this.draft[field] = value;
-    this.normalize();
     this.changed();
   }
   changed() {
@@ -100,7 +76,10 @@ export class SettingsState extends SettingState {
   }
 }
 export const states = new Map(
-  [...runtimeKeys, "webui-models", "soul", "branding"].map((key) => [key, new SettingsState(key)]),
+  [...runtimeKeys, "webui-models", "memory-embedding-model", "soul", "branding"].map((key) => [
+    key,
+    new SettingsState(key),
+  ]),
 );
 export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Data, scope: string, only?: string) {
@@ -116,6 +95,13 @@ export function load(data: Data, scope: string, only?: string) {
         markUrl: data.branding?.markUrl || "",
       };
       s.available = scope.startsWith("org:") && "branding" in data;
+      s.saving = false;
+      capture(key);
+      continue;
+    }
+    if (key === "memory-embedding-model") {
+      s.draft = { modelId: data.memoryEmbeddingModel || "" };
+      s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
       s.saving = false;
       capture(key);
       continue;
@@ -143,7 +129,6 @@ export function load(data: Data, scope: string, only?: string) {
           fastMode: runtime?.fastMode === true,
         }
       : { ids: (data.webuiModels || []).filter(Boolean) };
-    s.normalize();
     s.saving = false;
     s.selected = "";
     capture(key);
@@ -155,23 +140,6 @@ export function updateCatalog(data: Data) {
     s.render();
   }
 }
-const harnessLabels: Record<string, string> = {
-  pi: "pi (default)",
-  opencode: "OpenCode",
-  codex: "Codex",
-  claude: "Claude Code",
-};
-const effortLabels: Record<string, string> = {
-  auto: "Default",
-  adaptive: "Auto",
-  default: "Provider default",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra high",
-  max: "Max",
-  ultracode: "Ultracode",
-};
 const value = (event: Event) => (event.target as HTMLInputElement).value;
 const label = (s: SettingsState, id: string) => {
   const m = s.catalog.find((x) => x.id === id);
@@ -180,112 +148,6 @@ const label = (s: SettingsState, id: string) => {
 function card(s: SettingsState) {
   if (s.key === "soul") return soulCard(s);
   if (s.key === "branding") return brandingCard(s);
-  if (runtimeKeys.includes(s.key)) {
-    const prefix = s.key === "runtime" ? "base" : s.key;
-    const purpose = s.key !== "runtime";
-    const [title, description] = {
-      runtime: ["Conversation runtime", "The default runtime for conversations unless overridden."],
-      "cron-runtime": ["Cron runtime", "Used for scheduled jobs without a per-job runtime override."],
-      "subagent-runtime": ["Sub-agent runtime", "Used for new sub-agents unless explicitly overridden."],
-      "fallback-runtime": [
-        "Fallback runtime",
-        "Retries a turn or compaction when the model refuses it or is unavailable.",
-      ],
-    }[s.key]!;
-    return html`<section
-      class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
-      id=${s.key === "runtime" ? "card-base-model" : `card-${s.key}`}
-    >
-      <div class="head">
-        <h2>${title}</h2>
-        <p>${description}</p>
-      </div>
-      <div class="body">
-        ${
-          purpose
-            ? html`<label class="setting-toggle">
-                <input
-                  type="checkbox"
-                  id=${`${prefix}-inherit`}
-                  .checked=${!!s.draft.inherit}
-                  @change=${(e: Event) => s.change("inherit", (e.target as HTMLInputElement).checked)}
-                />
-                <span class="setting-switch" aria-hidden="true"></span>
-                <span class="setting-copy"
-                  ><strong>Use existing fallback</strong
-                  ><small
-                    >${
-                      {
-                        "cron-runtime": "Use the job's scope default.",
-                        "subagent-runtime": "Use the child’s scope default.",
-                        "fallback-runtime": "Use the built-in Claude fallback.",
-                      }[s.key]
-                    }</small
-                  ></span
-                >
-              </label>`
-            : null
-        }
-        <div class="model-runtime-fields">
-          <div>
-            <label for=${`${prefix}-harness`}>Harness</label
-            ><select
-              id=${`${prefix}-harness`}
-              ?disabled=${purpose && s.draft.inherit}
-              .value=${s.draft.harnessId || ""}
-              @change=${(e: Event) => s.change("harnessId", value(e))}
-            >
-              ${s.harnesses.map((id) => html`<option value=${id} ?selected=${id === s.draft.harnessId}>${harnessLabels[id] || id}</option>`)}
-            </select>
-          </div>
-          <div>
-            <label for=${`${prefix}-model`}>Model</label
-            ><select
-              id=${`${prefix}-model`}
-              ?disabled=${purpose && s.draft.inherit}
-              .value=${s.draft.modelId || ""}
-              @change=${(e: Event) => s.change("modelId", value(e))}
-            >
-              ${repeat(
-                s.models,
-                (m) => m.id,
-                (m) => html`<option value=${m.id} ?selected=${m.id === s.draft.modelId}>${m.name} (${m.id})</option>`,
-              )}
-            </select>
-          </div>
-          <div>
-            <label for=${`${prefix}-effort`}>Reasoning level</label
-            ><select
-              id=${`${prefix}-effort`}
-              ?disabled=${purpose && s.draft.inherit}
-              .value=${s.draft.effortLevel || "auto"}
-              @change=${(e: Event) => s.change("effortLevel", value(e))}
-            >
-              ${repeat(
-                s.efforts,
-                (id) => id,
-                (id) =>
-                  html`<option value=${id} ?selected=${id === s.draft.effortLevel}>${effortLabels[id] || id}</option>`,
-              )}
-            </select>
-          </div>
-        </div>
-        <label class="setting-toggle" id=${`${prefix}-fast-mode-control`} style=${s.fastCapable ? "" : "display: none"}
-          ><input
-            type="checkbox"
-            id=${`${prefix}-fast-mode`}
-            .checked=${!!s.draft.fastMode}
-            ?disabled=${!s.fastCapable || (purpose && s.draft.inherit)}
-            @change=${(e: Event) => s.change("fastMode", (e.target as HTMLInputElement).checked)}
-          /><span class="setting-switch" aria-hidden="true"></span
-          ><span class="setting-copy"
-            ><strong>Fast mode</strong><small>Only available for supported models.</small></span
-          ></label
-        >
-      </div>
-      ${saveFooter(s)}
-    </section>`;
-  }
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
   return html`<section
@@ -346,24 +208,15 @@ function card(s: SettingsState) {
 }
 export function mountCards() {
   mountFlags();
+  mountDecisions();
   mountProviders();
   mountCredentials();
-  const renderRuntimes = mountTemplate('template[data-settings-card="card-base-model"]', () =>
-    runtimeKeys.map((key) => card(states.get(key)!)),
-  );
+  mountRuntimes();
   for (const [key, s] of states) {
-    if (runtimeKeys.includes(key)) {
-      s.render = renderRuntimes;
-      continue;
-    }
     const id = (
-      {
-        soul: "card-soul",
-        branding: "card-branding",
-        "webui-models": "card-webui-models",
-      } as Record<string, string>
+      { soul: "card-soul", branding: "card-branding", "webui-models": "card-webui-models" } as Record<string, string>
     )[key];
-    s.render = mountTemplate(`template[data-settings-card="${id}"]`, () => card(s));
+    if (id) s.render = mountTemplate(`template[data-settings-card="${id}"]`, () => card(s));
   }
 }
 

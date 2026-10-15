@@ -1,3 +1,4 @@
+import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
@@ -35,9 +36,18 @@ function price(value: unknown): number | undefined {
     : undefined;
 }
 
-function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | undefined {
+function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): GatewayModel | EmbeddingModel | undefined {
   const info = record(value);
   if (!info || !modelId(info.model_group) || !allowed.has(info.model_group)) return undefined;
+  if (info.mode === "embedding") {
+    return {
+      kind: "embedding",
+      id: GATEWAY_MODEL_PREFIX + info.model_group,
+      name: info.model_group,
+      provider: GATEWAY_PROVIDER,
+      baseUrl,
+    };
+  }
   if (info.mode !== "chat" || info.supports_function_calling !== true) return undefined;
   const contextWindow = tokens(info.max_input_tokens);
   const maxTokens = tokens(info.max_output_tokens);
@@ -174,7 +184,8 @@ export function createGatewayCatalog(
           models.map((model) => [model.id, model.id.slice(GATEWAY_MODEL_PREFIX.length)]),
         );
         for (const [id, target] of Object.entries(config.models)) {
-          if (allowed.has(target)) next[id] = target;
+          if (allowed.has(target) && !models.some((m) => m.id === GATEWAY_MODEL_PREFIX + target && isEmbeddingModel(m)))
+            next[id] = target;
         }
         routes = next;
         discovered = true;

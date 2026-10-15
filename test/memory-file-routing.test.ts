@@ -63,7 +63,6 @@ function harness(opts: { memoryStart?: string; recall?: boolean } = {}) {
     memory,
     memoryScopeId: personal,
     memoryAccess: { write: personal, read: opts.recall === false ? [] : [personal] },
-    persistWritesToStore: { excludeDirs: [] },
   });
   return { ctx, wsWrites, sandboxFiles, getDurable: () => durable };
 }

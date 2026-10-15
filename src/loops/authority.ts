@@ -15,8 +15,7 @@ export async function boundLoopCron(
     !cron ||
     (firingCronId !== undefined && firingCronId !== cron.id) ||
     cron.owner !== loop.owner ||
-    cron.ownerScopeId !== loop.ownerScopeId ||
-    (cron.runAs ?? "owner") !== (loop.runAs ?? "owner")
+    cron.ownerScopeId !== loop.ownerScopeId
   ) {
     throw new Error("loop cron authority binding mismatch");
   }

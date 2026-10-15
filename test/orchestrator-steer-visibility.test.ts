@@ -25,7 +25,7 @@ mock.module("../src/harness/mock-harness.ts", {
 const { buildApp } = await import("../src/wiring.ts");
 
 for (const mode of ["retry", "handoff"] as const) {
-  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries, tape, or activity`, async () => {
+  test(`a ${mode} hides its synthetic trigger but not real steer intake in entries or activity`, async () => {
     const built = buildApp(testConfig());
     const request: TurnRequest = {
       surface: "test",
@@ -49,35 +49,12 @@ for (const mode of ["retry", "handoff"] as const) {
         };
       }
       assert.match(turn.input, /previous attempt|Runtime handoff completed/);
-      const trigger = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-      await turn.tape!({
-        kind: "message",
-        harness: "pi",
-        payload: { role: "user", content: turn.input },
-        scopeLabel: turn.scopeLabel,
-        entrySeq: trigger.seq,
-        meta: { bareText: turn.input, entryCreatedAt: trigger.createdAt },
-      });
-      const stamp = await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await turn.tape!({
-        kind: "message",
-        harness: "pi",
-        payload: { role: "user", content: "Change of plan" },
-        scopeLabel: turn.scopeLabel,
-        ...stamp,
-      });
-      const privateEntry = await turn.emit({
+      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
+      await turn.emit({
         type: "user",
         payload: { text: "private steer", steered: true, hidden: true },
         scopeLabel: turn.scopeLabel,
-      });
-      await turn.tape!({
-        kind: "message",
-        harness: "pi",
-        payload: { role: "user", content: "private steer" },
-        scopeLabel: turn.scopeLabel,
-        entrySeq: privateEntry.seq,
-        meta: { bareText: "private steer", entryCreatedAt: privateEntry.createdAt },
       });
     };
     try {
@@ -95,12 +72,6 @@ for (const mode of ["retry", "handoff"] as const) {
       );
       assert.ok(liveSteer);
       assert.notEqual((liveSteer.payload as { hidden?: boolean }).hidden, true);
-      const tape = await built.sessions.getTape(result.sessionId!);
-      for (const entry of users.slice(1)) {
-        const row = tape.find((row) => row.kind === "message" && row.entrySeq === entry.seq);
-        assert.ok(row);
-        assert.equal(row.meta?.hidden === true, (entry.payload as { hidden?: boolean }).hidden === true);
-      }
     } finally {
       exercise = undefined;
     }

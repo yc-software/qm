@@ -12,7 +12,6 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
-import { withTapedEntryMirrors } from "./harness-shared.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
@@ -22,8 +21,11 @@ import {
   goalSnapshotPayload,
   latestGoalRecord,
   rehydrateOpenGoal,
-  verifyGoalCompletion,
+  governGoal,
+  goalWorkFromEntries,
+  type GoalGovernorInput,
   type GoalRecord,
+  type GovernorVerdict,
 } from "./goal.ts";
 
 const GOAL_ROUND_MIN_WALL_MS = 30_000;
@@ -79,6 +81,17 @@ async function runTurnEnforcingGoal(
     outcome: blocked() ? "halted" : "ok",
     ok: "ok",
     blocked,
+    ...(input.governGoal
+      ? {
+          govern: (previous: GovernorVerdict | undefined) =>
+            input.governGoal!({
+              objective: goal.objective,
+              trigger: "checkpoint",
+              recentWork: goalWorkFromEntries([...input.history.slice(-40), ...emitted]),
+              ...(previous ? { previous } : {}),
+            }),
+        }
+      : {}),
     beforePrompt: () => {
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
     },
@@ -289,15 +302,13 @@ export function createHarnessRouter(
             : input.tools,
           ...(judge
             ? {
-                verifyGoal: (objective: string, evidence: string) =>
-                  verifyGoalCompletion(judge, objective, evidence, input.cancel),
+                governGoal: (goalInput: GoalGovernorInput) => governGoal(judge, goalInput, input.cancel),
               }
             : {}),
         };
-        const taped = adapter.profile.capabilities.has("native-tape") ? dispatched : withTapedEntryMirrors(dispatched);
         return adapter.profile.capabilities.has("goal-enforcement")
-          ? adapter.turns.runTurn(taped)
-          : runTurnEnforcingGoal(adapter, taped, choice.harnessId);
+          ? adapter.turns.runTurn(dispatched)
+          : runTurnEnforcingGoal(adapter, dispatched, choice.harnessId);
       },
       async resetSession(sessionId) {
         lastHarness.delete(sessionId);

@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { layoutNeedsSessionList, MAX_TILES, paneNeedsSessionList, v1PaneSeeds } from "../src/split-layout.ts";
 
 const leaf = (sessionId: string | null = null, threadRef: string | null = null): object => ({
@@ -37,18 +36,6 @@ test("v1PaneSeeds normalizes non-string ids to null", () => {
     { sessionId: null, threadRef: null },
     { sessionId: "s2", threadRef: null },
   ]);
-});
-
-test("a conversation can be dropped onto a pane's tab strip to become a tab", () => {
-  const splitTs = readFileSync(new URL("../src/split.ts", import.meta.url), "utf8");
-  assert.match(splitTs, /class StripDrop implements IHeaderActionsRenderer/, "no strip drop target");
-  assert.match(splitTs, /^class StripDrop[\s\S]*?tabIntoPane\(/m, "the strip drop must join the pane");
-  const edges = new Set([...splitTs.matchAll(/zoneTpl\("([a-z]+)"/g)].map((m) => m[1]));
-  assert.deepEqual(
-    edges,
-    new Set(["center", "left", "right", "top", "bottom"]),
-    "the body zones must not restate the strip",
-  );
 });
 
 test("a pane needs the session list only when it remembers a thread but not its session", () => {

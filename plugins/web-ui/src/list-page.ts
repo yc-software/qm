@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { ArrowLeft, Plus, Search } from "lucide";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { scopeFilterControl } from "./contexts";
 
 export function listBackLink(label: string, onBack: () => void): TemplateResult {

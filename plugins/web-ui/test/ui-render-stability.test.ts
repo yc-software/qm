@@ -18,7 +18,8 @@ for (const key of [
   Object.defineProperty(globalThis, key, { value: dom.window[key], configurable: true });
 }
 const { html, render } = await import("lit");
-const { icon, waveLoader, workingWave, setFormMenuValue } = await import("../src/ui.ts");
+const { waveLoader, workingWave, setFormMenuValue } = await import("../src/ui.ts");
+const { icon } = await import("../src/icons.ts");
 
 test("unchanged icon templates keep their DOM while separate placements remain independent", () => {
   const host = document.createElement("div");

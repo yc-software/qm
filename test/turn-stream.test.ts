@@ -74,7 +74,8 @@ test("caps a run's buffer at maxChars", () => {
   const s = createTurnStream({ maxChars: 5 });
   s.publish("r1", "abc");
   s.publish("r1", "defghij");
-  assert.equal(s.snapshot("r1"), "abcde", "buffer stops growing past the cap");
+  assert.equal(s.snapshot("r1"), "ij", "buffer retains the newest text past the cap");
+  assert.equal(s.startOffset("r1"), 8);
 });
 
 test("end() evicts a finished run's buffer after the grace period", async () => {
@@ -166,35 +167,6 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   } finally {
     await built.runtime.stop();
   }
-});
-
-test("getRun projects durable tasks for its surface poller", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "ts-")),
-      workers: 0,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "task-view" },
-    text: "hello",
-    async: true,
-  });
-  await built.tasks.create({
-    id: "task-1",
-    sessionId: "task-view",
-    originRunId: ack.runId!,
-    title: "research",
-    status: "in_progress",
-  });
-
-  assert.deepEqual((await built.app.getRun(ack.runId!))?.tasks, [
-    { id: "task-1", title: "research", status: "in_progress" },
-  ]);
 });
 
 test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {

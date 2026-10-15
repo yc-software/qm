@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { splitLinks, splitMentions } from "../src/linkify.ts";
 
 test("plain text stays a single text segment", () => {
@@ -77,39 +76,4 @@ test("several mentions each become their own segment", () => {
 
 test("a lone @ is left as text", () => {
   assert.deepEqual(splitMentions("meet @ 3pm"), [{ kind: "text", text: "meet @ 3pm" }]);
-});
-
-const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
-
-test("expanded pinned items render text and preview through the linkifier", () => {
-  assert.match(
-    chat,
-    /pinned-item-text">\$\{linkifiedText\(p\.text \?\? p\.preview \?\? `entry #\$\{p\.entrySeq\}`\)\}/,
-  );
-  assert.match(chat, /pinned-item-preview">\$\{linkifiedText\(p\.preview\)\}/);
-});
-
-test("pinned links open in a new tab without an opener", () => {
-  assert.match(chat, /target="_blank"\s+rel="noreferrer noopener"/);
-});
-
-test("the collapsed peek is linkified and lives outside the toggle button", () => {
-  assert.match(chat, /pinned-strip-peek"\s*>\$\{linkifiedText\(first\.text \?\? first\.preview/);
-  assert.match(chat, /<div class="pinned-strip-head" @click=\$\{togglePins\}>/);
-  assert.match(chat, /class="pinned-strip-toggle"/);
-});
-
-test("clicking a pin link follows the link instead of toggling the strip", () => {
-  assert.match(
-    chat,
-    /function togglePins\(e: Event\): void \{\s*if \(\(e\.target as Element \| null\)\?\.closest\("a"\)\) return;/,
-  );
-});
-
-const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-
-test("pinned strip links are styled as links (colored + underlined)", () => {
-  const rule = css.match(/\.pinned-strip a \{[^}]*\}/)?.[0] ?? "";
-  assert.match(rule, /color: var\(--primary\)/);
-  assert.match(rule, /text-decoration: underline/);
 });

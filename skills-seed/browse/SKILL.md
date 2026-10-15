@@ -23,11 +23,15 @@ org credential delivered as sandbox env (admin UI → Service credentials → de
 env"), and it rides into every all-internal conversation — nothing here is deploy config. A
 person's own keychain key overrides the org one. Keys you may see today:
 
-- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `skills/browse/providers/kernel.md`.
-- `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `skills/browse/providers/anchor.md`.
+Use the absolute directory reported by the skill read for all `providers/` paths below.
+Keep the same explicit `sandbox_id` for the skill read and every `execute` command
+in this flow, including the runner.
+
+- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `providers/kernel.md`.
+- `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
-  `skills/browse/providers/browserbase.md`.
-- Another `*_API_KEY` alongside a `skills/browse/providers/<name>.md` doc → that provider;
+  `providers/browserbase.md`.
+- Another `*_API_KEY` alongside a `providers/<name>.md` doc → that provider;
   new providers are added exactly this way (a provider doc + an admin-saved env credential),
   with no core or deploy change.
 - Several set → the first in the order above, unless the person asks for another or the
@@ -73,51 +77,42 @@ becoming the default):
   nothing at another — never register one provider's profile under another's env key.
 
 **Check your environment first**: on most deployments the org configures the browser provider key,
-so that key is already set in your shell — skip
-straight to the profile check below. Only when one is absent do the keys go through the
-keychain: materialize your grant (your keychain manifest shows the grant id), then source it:
+so that key is already set in every shell — skip straight to the profile check below. A
+person's own provider key and their profile name never arrive in your env by default: find
+their handles in your keychain manifest and name them in `credentials` on every `execute`
+(including `background:true`) that needs them. Never echo the values.
 
-```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/keychain/use" -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H 'content-type: application/json' -d '{"grant":"<grantId>"}' -o /tmp/keychain.env && . /tmp/keychain.env
-```
-
-**If the browser provider key is still missing after sourcing, don't
-dead-end on "no grant"** — the keychain has a path for every case, and a person-typed turn
-can use all of them (asks and drops are refused only on trigger-fired turns). Never echo the
-values.
+**If the browser provider key is in neither your env nor your handles, don't dead-end on
+"no grant"** — the keychain has a path for every case, and a person-typed turn can use all
+of them (asks and drops are refused only on trigger-fired turns).
 
 1. See whether the credential is already registered to a participant:
    ```bash
    curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN"
    ```
-2. **Registered to the person themselves** → in their DM, load it directly with
-   `POST /v1/keychain/use` and `{"credential":"<id>"}`, then re-source. Anywhere else, send an ask
-   (step 3); they approve it on the card.
+2. **Registered to the person themselves** → in their DM, its handle is already usable in
+   `credentials`. Anywhere else, send an ask (step 3); they approve it on the card.
 3. **Registered to someone else** (the provider key usually lives with whoever set it up) →
    send an ask: `POST /v1/keychain/asks` with the credential id and the person's words as
    the purpose. Core DMs the owner and wakes this conversation when they answer; tell the
-   person whose approval you're waiting on.
+   person whose approval you're waiting on. The approved grant's handle then works in
+   `credentials`.
 4. **Not registered anywhere** → the person can supply their own keys on the spot: mint a
    drop link per key (`POST /v1/keychain/drops` with
    `{"service":"<your provider doc's keychain service>","envKey":"<the provider key name>","purpose":"browse"}`)
    and hand the link over — the secret lands in
    their keychain, never in chat.
 
-**If the profile env key is missing from your env, do NOT jump to bootstrapping** — a
+**If the profile has no handle in your manifest, do NOT jump to bootstrapping** — a
 duplicate profile silently orphans every sign-in saved in the real one. First check whether
 the credential already exists:
 
 ```bash
 curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
-  | python3 -c "import sys,json;print(json.dumps([c['id'] for c in json.load(sys.stdin)['credentials'] if c.get('envKey')==sys.argv[1]]))" "$PROFILE_ENV"
+  | python3 -c "import sys,json;print(json.dumps([c.get('credentialHandle') for c in json.load(sys.stdin)['credentials'] if c.get('envKey')==sys.argv[1]]))" "$PROFILE_ENV"
 ```
 
-- **Credential exists but wasn't in your sourced env** → in their DM, load it with
-  `POST /v1/keychain/use` and `{"credential":"<id>"}` to a NEW file and fold it in
-  (`-o /tmp/keychain2.env && . /tmp/keychain2.env && cat /tmp/keychain2.env >> /tmp/keychain.env`)
-  so a later background re-source of `/tmp/keychain.env` still has everything.
-  Never bootstrap in this case.
+- **Credential exists** → use that handle in `credentials`. Never bootstrap in this case.
 - **No credential at all** → first-time setup below, with the person's OK.
 
 **First-time profile setup (only when the check above found no credential).** Mint the
@@ -207,13 +202,11 @@ PY
 (The `tee` matters: the outcome JSON lands in `/tmp/browse-out.txt`, which is how a wall URL
 gets into later commands as data instead of being pasted into shell source.)
 
-For a task likely to run past a couple of minutes, launch it with the `background` tool and
-poll its output instead of blocking `execute`. The background shell does NOT inherit your
-`execute` shell's env — prefix the background command with
-`[ -f /tmp/keychain.env ] && . /tmp/keychain.env;` so keychain-granted keys are re-sourced
-there (org-configured keys are already in every shell's env; a run without its keys fails
-every step with "Could not resolve authentication method", which looks exactly like the
-flaky-auth race but isn't).
+For a task likely to run past a couple of minutes, launch it with `execute(background:true)` and
+use `background` action `poll` with its `process_id` instead of blocking `execute`. Pass the same `credentials` handles to the
+execute call: org-configured keys are already in every shell's env, but a run without
+its keychain keys fails every step with "Could not resolve authentication method", which
+looks exactly like the flaky-auth race but isn't.
 
 Browser-use 0.12.9
 has two known warts you'll see in logs and should read past: a flaky per-step client-auth race

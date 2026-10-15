@@ -259,7 +259,7 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
   const url = (password: string): string => `postgres://postgres:${password}@pg:5432/qm`;
 
   if (dryRun) {
-    step(`Postgres: would run ${pgName} (image postgres:16, volume ${pgVolume(ctx)})`);
+    step(`Postgres: would run ${pgName} (image pgvector/pgvector:0.8.1-pg16, volume ${pgVolume(ctx)})`);
     return url(readDeploymentState(ctx.config.orgId)?.pgPassword ?? "<generated>");
   }
   return withDeploymentLock(ctx.config.orgId, () => {
@@ -306,7 +306,7 @@ function ensurePostgres(ctx: DockerCtx, dryRun: boolean): string {
           "POSTGRES_DB=qm",
           "-v",
           `${pgVolume(ctx)}:/var/lib/postgresql/data`,
-          "postgres:16",
+          "pgvector/pgvector:0.8.1-pg16",
         ]);
       } finally {
         secretFile.cleanup();

@@ -101,6 +101,10 @@ static_resources:
                               local h, _ = handle:httpCall("egress_authz", check, nil, 10000)
                               return h[":status"], h["x-egress-upstream-address"]
                             end)
+                            if ok and status == "407" then
+                              handle:respond({ [":status"] = "407", ["proxy-authenticate"] = "Basic realm=\"egress\"" }, "proxy authentication required\n")
+                              return
+                            end
                             if not ok or status ~= "200" then
                               handle:respond({ [":status"] = "403" }, "egress denied by policy\n")
                               return

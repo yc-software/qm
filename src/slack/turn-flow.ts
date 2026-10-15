@@ -1,8 +1,8 @@
 import { swallow } from "../util/errors.ts";
-import { sleep, createInFlightThreadMap, type GoalNoticeView, type RunTaskView } from "./lib.ts";
+import { sleep, createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
-import { GENERIC_FAILURE_CLAUSE, GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
+import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";
 
 class SlackTurnFailure extends Error {
   constructor(message: string, cause: unknown) {
@@ -14,10 +14,6 @@ export function slackFailureText(err: unknown): string {
   return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_TEXT;
 }
 
-export function slackFailureClause(err: unknown): string {
-  return err instanceof SlackTurnFailure ? err.message : GENERIC_FAILURE_CLAUSE;
-}
-
 export type CoreTurnBody = Omit<TurnRequest, "surface">;
 
 interface TurnHooks {
@@ -27,7 +23,6 @@ interface TurnHooks {
   onReplying?: () => void;
   onFirstBlock?: (text: string) => void;
   onSurfacePosted?: () => void;
-  onTasks?: (tasks: RunTaskView[]) => void;
   onGoal?: (goal: GoalNoticeView) => void;
 }
 
@@ -114,7 +109,6 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
         ...(hooks.onReplying ? { onReplying: hooks.onReplying } : {}),
         ...(hooks.onFirstBlock ? { onFirstBlock: hooks.onFirstBlock } : {}),
         ...(hooks.onSurfacePosted ? { onSurfacePosted: hooks.onSurfacePosted } : {}),
-        ...(hooks.onTasks ? { onTasks: hooks.onTasks } : {}),
         ...(hooks.onGoal ? { onGoal: hooks.onGoal } : {}),
       });
     } catch (err) {

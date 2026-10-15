@@ -124,7 +124,14 @@ for (const [name, tool] of [
         entries: [
           {
             type: "tool_result",
-            payload: { tool, action: "exec", code: 0, isError: false, timedOut: false, stdout: `${output}\n` },
+            payload: {
+              tool,
+              action: "exec",
+              code: 0,
+              isError: false,
+              timedOut: false,
+              result: `${output}\n\n[exit 0]`,
+            },
           },
         ],
       }),

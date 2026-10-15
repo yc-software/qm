@@ -7,8 +7,6 @@ import {
   contextSummaryPayload,
   createContextSummaryPayload,
   entrySecurityTainted,
-  tapeCheckpointPayload,
-  tapeEntryMirrorRecord,
 } from "../../sessions/session-store.ts";
 import {
   COMPACT_HARD_FRACTION,
@@ -23,7 +21,6 @@ import {
   recentEntryCountWithinBudget,
 } from "../../harness/context-compaction.ts";
 import { goalSnapshotPayload, latestGoalEntry, latestGoalRecord } from "../../harness/goal.ts";
-import { coverageImportEvent } from "../../harness/replay.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
@@ -156,7 +153,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     lease: Lease;
     summarized: Summarized;
     goalSource: SessionEntry | null;
-    recent?: SessionEntry[];
   }): Promise<{ summary: SessionEntry; goalEntry?: SessionEntry }> {
     const { text, summaryLabel, throughSeq, securityTainted, mode } = input.summarized;
     const goal = latestGoalRecord(input.goalSource ? [input.goalSource] : []);
@@ -171,7 +167,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
             scopeLabel: input.goalSource.scopeLabel,
           })
         : undefined;
-    if (goalEntry) await deps.sessions.appendTape(input.lease, tapeEntryMirrorRecord(goalEntry));
     const summary = await deps.sessions.append(input.lease, {
       type: "system",
       payload: {
@@ -181,29 +176,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       },
       scopeLabel: summaryLabel,
     });
-    const covered = (await deps.sessions.tapeCoverage(input.session.id)) === (goalEntry?.seq ?? summary.seq) - 1;
-    const recoveredCoverage = covered ? summary.seq : undefined;
-    await deps.sessions.appendTape(input.lease, {
-      kind: "context_event",
-      payload: mode
-        ? { ...coverageImportEvent([...(input.recent ?? []), ...(goalEntry ? [goalEntry] : []), summary]), mode }
-        : { event: "compaction", text },
-      scopeLabel: summaryLabel as ScopeId,
-      entrySeq: summary.seq,
-      coversEntrySeq: mode ? recoveredCoverage : throughSeq,
-      meta: {
-        entryCreatedAt: summary.createdAt,
-        ...(securityTainted ? { securityTainted: true } : {}),
-      },
-    });
-    if (covered) {
-      await deps.sessions.appendTape(input.lease, {
-        kind: "annotation",
-        payload: tapeCheckpointPayload("turnEnd"),
-        scopeLabel: summaryLabel as ScopeId,
-        entrySeq: summary.seq,
-      });
-    }
     await deps.harness.turns.resetSession?.(input.session.id);
     return { summary, goalEntry };
   }
@@ -323,7 +295,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         mode: "recent",
       },
       goalSource: goalSource && !recent.includes(goalSource) ? goalSource : null,
-      recent,
     });
     return [summary, ...recent, ...(goalEntry ? [goalEntry] : [])];
   }

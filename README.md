@@ -26,8 +26,8 @@ Each person and each room has its own scoped memory, files, keychain view, permi
 crons, web apps, and durable sandbox.
 
 It's built with open source in mind. Pick your own harness and model and switch between
-them. Pi, OpenCode, Codex, and Claude Code all drive the same core, so a deployment
-isn't tied to any single vendor.
+them. Pi and Claude Code both drive the same core, and Pi runs models from many
+providers, so a deployment isn't tied to any single vendor.
 
 ## Setup
 
@@ -67,7 +67,7 @@ flowchart LR
 
   subgraph CORE["Headless core"]
     API["API · identity · policy · scheduler"]
-    LOOP["Agent loop<br/>(Pi, OpenCode, Claude Code)"]
+    LOOP["Agent loop<br/>(Pi, Claude Code)"]
     API <--> LOOP
   end
 

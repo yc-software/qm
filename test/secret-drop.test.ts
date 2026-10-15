@@ -25,6 +25,7 @@ import {
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { materializeGrant } from "./support/materialize-grant.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 
@@ -96,7 +97,7 @@ describe("fireDropResolution", () => {
     run,
   });
 
-  it("resumes the channel as the owner with the grant use command, exactly once", async () => {
+  it("resumes the channel as the owner with the credential handle, exactly once", async () => {
     const seen: TurnRequest[] = [];
     const deps = depsWith(async (req) => {
       seen.push(req);
@@ -111,13 +112,14 @@ describe("fireDropResolution", () => {
       threadRef: "ch:C1-t",
       destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
       grantId: "g1",
+      credentialHandle: "kc_stripe",
       granted: true,
     };
     await fireDropResolution(deps, drop);
     assert.equal(seen.length, 1);
     assert.equal(seen[0]!.conversation.kind, "channel");
     assert.equal(seen[0]!.actor.externalId, "U_A", "the resume runs as the owner who supplied the key");
-    assert.match(seen[0]!.text, /g1/, "the channel resume hands over the grant's use command");
+    assert.match(seen[0]!.text, /kc_stripe/, "the channel resume hands over the credential handle");
 
     await fireDropResolution(deps, drop);
     assert.equal(seen.length, 1, "the drop:<id> fireKey dedupes a double fire");
@@ -158,6 +160,7 @@ describe("fireDropResolution", () => {
       audienceScopeId: scopeId("channel", "C1"),
       destination,
       grantId: "g1",
+      credentialHandle: "kc_stripe",
       granted: true,
     });
     const fb = (await deliveries.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
@@ -179,11 +182,12 @@ describe("fireDropResolution", () => {
       audienceScopeId: scopeId("channel", "C1"),
       destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
       grantId: "gA",
+      credentialHandle: "kc_alpha",
       granted: true,
       pendingSiblings: ["betasvc"],
     });
     assert.equal(seen.length, 1, "every redeem wakes the conversation — it must hear each grant's load command");
-    assert.match(seen[0]!.text, /gA/, "the intermediate wake still hands over its own grant");
+    assert.match(seen[0]!.text, /kc_alpha/, "the intermediate wake still hands over its own handle");
     assert.match(seen[0]!.text, /`betasvc`.*haven't been filled/, "the wake names the outstanding sibling links");
     assert.match(seen[0]!.text, /keep waiting/);
     assert.doesNotMatch(seen[0]!.text, /Pick the task back up/, "no resume order while credentials are outstanding");
@@ -337,7 +341,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
     const g = grants.find((x) => x.credential.id === credential.id);
     assert.ok(g, "a standing grant for the asking channel was minted on redeem");
-    const m = await built.keychain!.materialize(g!.grant.id, scopeId("channel", "C1"), "U_A");
+    const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env" && m.env[0]!.value === "sk_test_alice");
 
     assert.equal((await redeem(dropId, { secret: "sk_test_again" }, "U_A", t)).status, 404);
@@ -366,7 +370,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     );
   });
 
-  it("a Project roster change invalidates an unredeemed drop", async () => {
+  it("a Project roster change refuses an unredeemed drop on every attempt", async () => {
     await built.app.upsertDirectory([
       { principalId: "U_PROJECT_OWNER", displayName: "Owner", type: "internal" },
       { principalId: "U_PROJECT_MEMBER", displayName: "Member", type: "internal" },
@@ -381,15 +385,43 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
 
     assert.equal((await built.app.addProjectMember(project.id, "U_PROJECT_OWNER", "U_PROJECT_MEMBER")).status, "ok");
-    assert.equal(
-      (await redeem(dropId, { secret: "must-not-save" }, "U_PROJECT_OWNER", linkToken(formPath))).status,
-      409,
-    );
+    for (let attempt = 0; attempt < 2; attempt++)
+      assert.equal(
+        (await redeem(dropId, { secret: "must-not-save" }, "U_PROJECT_OWNER", linkToken(formPath))).status,
+        409,
+      );
+    assert.ok((await built.secretDrops.peek(dropId)).ok);
+
     assert.ok(
       !(await built.keychain!.listByOwner("U_PROJECT_OWNER")).some(
         (credential) => credential.service === "project-stale",
       ),
     );
+  });
+
+  it("a membership lookup outage leaves the drop link usable for a retry", async () => {
+    const minted = await post(
+      "/v1/keychain/drops",
+      { service: "outage-drop", purpose: "survive a membership outage" },
+      await capFor("U_A", scopeId("channel", "C1")),
+    );
+    const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
+    const directory = built.directory as unknown as Record<string, unknown>;
+    const originals = Object.fromEntries(
+      ["channelMember", "channelMembership", "channelPrivacy", "get"].map((name) => [name, directory[name]]),
+    );
+    for (const name of Object.keys(originals))
+      directory[name] = async () => {
+        throw new Error("membership store unavailable");
+      };
+    try {
+      const failed = await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath));
+      assert.equal(failed.status, 409);
+      assert.ok((await built.secretDrops.peek(dropId)).ok);
+    } finally {
+      Object.assign(directory, originals);
+    }
+    assert.equal((await redeem(dropId, { secret: "sk_outage" }, "U_A", linkToken(formPath))).status, 200);
   });
 
   it("an agent-declared fields[] drop renders each input, saves them all, and materializes them in order", async () => {
@@ -431,7 +463,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
     const grants = await built.keychain!.grantsForScope(scopeId("channel", "C1"));
     const g = grants.find((x) => x.credential.id === credential.id);
-    const m = await built.keychain!.materialize(g!.grant.id, scopeId("channel", "C1"), "U_A");
+    const m = await materializeGrant(built.keychain!, g!.grant.id, scopeId("channel", "C1"), "U_A");
     assert.ok(m.kind === "env");
     assert.deepEqual(m.kind === "env" ? m.env : [], [
       { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },

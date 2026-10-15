@@ -14,9 +14,17 @@ const providerCoverage: Record<SandboxBackendName, true> = {
   porter: true,
   agent37: true,
   superserve: true,
+  "do-managed-agents": true,
 };
 
 export const sandboxProviders = Object.keys(providerCoverage) as SandboxBackendName[];
+
+export function succeededWithStdout(p: Record<string, unknown>, stdout: string): boolean {
+  const structured = "code" in p || "timedOut" in p || "action" in p;
+  return (
+    p.isError === false && p.result === `${stdout}\n[exit 0]` && (!structured || (p.code === 0 && p.timedOut === false))
+  );
+}
 
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
   const calls = new Set<string>();
@@ -24,22 +32,15 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
   for (const entry of entries) {
     if (!isObj(entry) || !isObj(entry.payload)) continue;
     const p = entry.payload;
-    if (p.tool !== "sandbox" || typeof p.callId !== "string") continue;
-    if (entry.type === "tool_call" && p.action === "exec" && p.sandbox_id === sandboxId) {
+    if (p.tool !== "execute" || p.background === true || typeof p.callId !== "string") continue;
+    if (entry.type === "tool_call" && p.background !== true && p.sandbox_id === sandboxId) {
       calls.add(p.callId);
       continue;
     }
-    if (entry.type !== "tool_result" || !calls.has(p.callId) || p.isError !== false) continue;
-    const structured = "code" in p || "timedOut" in p || "stdout" in p || "action" in p;
-    if (
-      structured
-        ? p.action === "exec" && p.code === 0 && p.timedOut === false && p.stdout === stdout
-        : p.result === `${stdout}\n[exit 0]`
-    )
-      executed = true;
+    if (entry.type === "tool_result" && calls.has(p.callId) && succeededWithStdout(p, stdout)) executed = true;
   }
-  assert.ok(calls.size, `no sandbox exec call targeted ${sandboxId}`);
-  assert.ok(executed, `no successful sandbox exec result with exact stdout on ${sandboxId}`);
+  assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
+  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);
 }
 
 export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backend) => ({
@@ -67,7 +68,7 @@ export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backen
       const left = randomUUID();
       const right = randomUUID();
       const root = await ch.mention(
-        `Use the sandbox tool with action exec and sandbox_id ${sandbox.id} to run exactly this command: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result. Do not use another sandbox or a background process.`,
+        `Use the execute tool with sandbox_id ${sandbox.id} to run exactly this command: printf '%s%s\\n' '${left}' '${right}'. Set timeout_seconds to 30. Report the result. Do not use another sandbox or a background process.`,
       );
       await ch.waitForBotReply(root, { timeoutMs: 3 * 60_000 });
       const session = await core.findSessionByThread(ch.id, root);

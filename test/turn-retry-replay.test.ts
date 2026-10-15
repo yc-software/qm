@@ -50,9 +50,11 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario() {
+function buildScenario(interruptAfterToolResult = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
+  const environments: Array<string | undefined> = [];
+  const sandbox = fakeSandbox();
   const harness = defineHarness(
     {
       id: "pi",
@@ -65,36 +67,30 @@ function buildScenario() {
       async runTurn(turn) {
         turns.push(turn.input);
         continued.push(turn.continueTurn);
-        const userEntry = await turn.emit({
+        environments.push(turn.environment);
+        await turn.emit({
           type: "user",
           payload: { text: turn.input },
           scopeLabel: turn.scopeLabel,
         });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
-        });
+        if (interruptAfterToolResult && turns.length === 1) {
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", callId: "c1", command: "ls" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "c1", result: "a.txt" },
+            scopeLabel: turn.scopeLabel,
+          });
+          throw new Error("interrupted after recording a tool result");
+        }
         const reply = "it runs on this conversation's computer";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
+        await turn.emit({
           type: "assistant",
           payload: { text: reply },
           scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { subturnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
         });
         return { reply, modelCalls: 1 };
       },
@@ -111,12 +107,11 @@ function buildScenario() {
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     runs,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
+    sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
@@ -146,7 +141,7 @@ function buildScenario() {
       (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -288,19 +283,41 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
 });
 
 test("a resume whose recorded work ends at a tool result asks the harness to continue the assistant turn", async () => {
-  const { orchestrator, sessions, runs, turns, continued, input, asks } = buildScenario();
+  const { orchestrator, runs, turns, continued, environments, input, asks } = buildScenario(true);
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
-    { type: "tool_result", payload: { callId: "c1", result: "a.txt" } },
-  ]);
-  await runs.noteTurnUserSeq(run.id, marker);
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after recording a tool result/,
+  );
+  const original = (await asks())[0]!;
+  assert.ok((original.payload as { environmentSnapshot?: unknown }).environmentSnapshot);
+  assert.match(environments[0]!, /## Where you are/);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
-  assert.deepEqual(continued, [true], "the harness is told the tape ends at a recorded tool result");
-  assert.match(turns[0]!, /^\(system note:/, "the note still travels as the fallback input");
+  assert.deepEqual(continued, [undefined, true], "unchanged inventories preserve assistant continuation");
+  assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
+  assert.match(turns[1]!, /^\(system note:/, "the note still travels as the fallback input");
+  assert.equal((await asks()).length, 1);
+});
+
+test("a changed inventory on retry reaches the model instead of continuing past the update", async () => {
+  const { orchestrator, runs, continued, environments, sandbox, input, asks } = buildScenario(true);
+  sandbox.profile.spec = { os: "Old Linux" };
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after recording a tool result/,
+  );
+  assert.match(environments[0]!, /Old Linux/);
+  sandbox.profile.spec = { os: "New Linux" };
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, undefined], "the new user message carries changed inventory");
+  assert.match(environments[1]!, /Environment changes/);
+  assert.match(environments[1]!, /New Linux/);
+  assert.doesNotMatch(environments[1]!, /Old Linux|## Where you are/);
   assert.equal((await asks()).length, 1);
 });
 

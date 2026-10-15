@@ -30,7 +30,6 @@ import {
   modelSupportsFastMode,
 } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
-import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId } from "../types.ts";
 import { swallow } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
@@ -45,11 +44,9 @@ import {
   harnessToolOptions,
   oneShotModelUtilities,
   oneShotRunner,
-  tapeReplyCheckpoint,
   recordSteerIntake,
   recordStoppedReply,
   type SteerIntake,
-  transitionTask,
   type HarnessToolPlumbing,
   withResumedToolCall,
 } from "./harness-shared.ts";
@@ -58,6 +55,7 @@ import {
   reconstructMessagesFromHistory,
   seedPriorTurns,
   zeroUsage,
+  OMITTED_IMAGE_TEXT,
   type PiReplayMessage,
 } from "./replay.ts";
 
@@ -75,7 +73,6 @@ export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
    */
   authEnv?: () => Promise<NodeJS.ProcessEnv>;
   signals?: RunSignalStore;
-  tasks?: TaskStore;
 }
 
 export function claudeHarnessConfigOptions(config: Config): ClaudeHarnessOptions {
@@ -205,11 +202,11 @@ export function claudeReplayTranscript(messages: readonly PiReplayMessage[]): st
         spoken = [];
       };
       for (const part of message.content) {
-        if (isDeliveryNote(part.text)) {
+        if (part.type === "text" && isDeliveryNote(part.text)) {
           flushSpoken();
           lines.push(part.text);
         } else {
-          spoken.push(part.text);
+          spoken.push(part.type === "text" ? part.text : OMITTED_IMAGE_TEXT);
         }
       }
       flushSpoken();
@@ -217,13 +214,14 @@ export function claudeReplayTranscript(messages: readonly PiReplayMessage[]): st
     }
     if (message.role === "toolResult") {
       lines.push(
-        `Tool result (${message.toolName}, call ${message.toolCallId}${message.isError ? ", error" : ""}): ${message.content.map((part) => part.text).join("\n")}`,
+        `Tool result (${message.toolName}, call ${message.toolCallId}${message.isError ? ", error" : ""}): ${message.content.map((part) => (part.type === "text" ? part.text : OMITTED_IMAGE_TEXT)).join("\n")}`,
       );
       continue;
     }
     for (const part of message.content) {
       if (part.type === "text") lines.push(`Assistant: ${part.text}`);
-      else lines.push(`Assistant tool call (${part.name}, call ${part.id}): ${JSON.stringify(part.arguments)}`);
+      else if (part.type === "toolCall")
+        lines.push(`Assistant tool call (${part.name}, call ${part.id}): ${JSON.stringify(part.arguments)}`);
     }
   }
   return [
@@ -286,18 +284,6 @@ function streamDelta(message: SDKMessage): { text?: string; textStart?: boolean 
   )
     return { text: event.delta.text };
   return {};
-}
-
-export function stripClaudeImageBytes(message: SDKMessage): unknown {
-  return JSON.parse(
-    JSON.stringify(message, function (key, value) {
-      if (value && typeof value === "object" && value.type === "document")
-        return { type: "text", text: "[document omitted; restored from attachments]" };
-      return key === "data" && typeof value === "string" && (this as { type?: unknown }).type === "base64"
-        ? "[image omitted]"
-        : value;
-    }),
-  );
 }
 
 function effort(level: string | undefined): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
@@ -404,7 +390,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       for (const value of thinking.splice(0))
         await turn.emit({ type: "thinking", payload: { thinking: value }, scopeLabel: turn.scopeLabel });
     };
-    const taskStates = new Map<string, { callId: string; status: TaskStatus; resultEmitted: boolean }>();
+    const taskStates = new Map<string, { callId: string; resultEmitted: boolean }>();
     const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
     let stepCallIds = new Set<string>();
     let recordedSteps = 0;
@@ -414,39 +400,21 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let streamedText = "";
     let initialUserEchoSkipped = false;
     const seenUserMessages = new Set<string>();
-    const appendTape = async (
-      payload: unknown,
-      trigger = false,
-      stamp?: Awaited<ReturnType<typeof recordSteerIntake>>,
-    ) => {
-      if (!turn.tape) return;
-      await turn.tape({
-        kind: "message",
-        harness: "claude",
-        payload,
-        scopeLabel: turn.scopeLabel,
-        ...stamp,
-        ...(trigger
-          ? {
-              entrySeq: userEntry.seq,
-              meta: {
-                bareText: turn.input,
-                ...((turn.triggerTs ?? turn.entryTs) ? { ts: (turn.triggerTs ?? turn.entryTs)! } : {}),
-              },
-            }
-          : {}),
-      });
-    };
     const authEnv = opts.authEnv ? await opts.authEnv() : undefined;
     const sdkQuery = query({
       prompt: queue,
       options: {
         abortController: controller,
         cwd: jail,
-        env: perUserClaudeEnv(
-          claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
-          turn.claudeOauthToken,
-        ),
+        env: {
+          ...perUserClaudeEnv(
+            claudeChildEnv(authEnv ? { ...opts.env, ...authEnv } : (opts.env ?? {}), jail),
+            turn.claudeOauthToken,
+          ),
+          ...(turn.timezone
+            ? { TZ: new Intl.DateTimeFormat("en-US", { timeZone: turn.timezone }).resolvedOptions().timeZone }
+            : {}),
+        },
         tools: allowSubagents ? ["Agent"] : [],
         skills: [],
         settingSources: [],
@@ -610,7 +578,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     };
     try {
       await sdkQuery.initializationResult();
-      await appendTape(stripClaudeImageBytes(userMessage(text, turn.images)), true);
       queue.push(initial);
       const consume = (async () => {
         for await (const message of sdkQuery) {
@@ -643,50 +610,36 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 entryCount: turn.history.length,
               });
           }
-          if (message.type === "assistant" || message.type === "user") {
-            let tapeMessage: SDKMessage = message;
-            let stamp: Awaited<ReturnType<typeof recordSteerIntake>> | undefined;
-            if (message.type === "user" && !message.parent_tool_use_id) {
-              if (message.uuid && seenUserMessages.has(message.uuid)) continue;
-              if (message.uuid) seenUserMessages.add(message.uuid);
-              const content = message.message.content;
-              const echoedText =
-                typeof content === "string" ? content : content.find((block) => block.type === "text")?.text;
-              if (
-                !initialUserEchoSkipped &&
-                (message.uuid === initial.uuid || (!message.uuid && echoedText === promptText(turn)))
-              ) {
-                initialUserEchoSkipped = true;
-                continue;
-              }
-              const index = steerPrompts.findIndex(
-                ({ message: prompt }) =>
-                  prompt.uuid === message.uuid ||
-                  (!message.uuid &&
-                    Array.isArray(prompt.message.content) &&
-                    prompt.message.content.some((block) => block.type === "text" && block.text === echoedText)),
-              );
-              if (index >= 0) {
-                const [steer] = steerPrompts.splice(index, 1);
-                await flushThinking();
-                stamp = await recordSteerIntake(turn, steer!.intake);
-                tapeMessage = { ...message, message: { ...message.message, content: steer!.message.message.content } };
-              }
+          if (message.type === "user" && !message.parent_tool_use_id) {
+            if (message.uuid && seenUserMessages.has(message.uuid)) continue;
+            if (message.uuid) seenUserMessages.add(message.uuid);
+            const content = message.message.content;
+            const echoedText =
+              typeof content === "string" ? content : content.find((block) => block.type === "text")?.text;
+            if (
+              !initialUserEchoSkipped &&
+              (message.uuid === initial.uuid || (!message.uuid && echoedText === promptText(turn)))
+            ) {
+              initialUserEchoSkipped = true;
+              continue;
             }
-            await appendTape(stripClaudeImageBytes(tapeMessage), false, stamp);
+            const index = steerPrompts.findIndex(
+              ({ message: prompt }) =>
+                prompt.uuid === message.uuid ||
+                (!message.uuid &&
+                  Array.isArray(prompt.message.content) &&
+                  prompt.message.content.some((block) => block.type === "text" && block.text === echoedText)),
+            );
+            if (index >= 0) {
+              const [steer] = steerPrompts.splice(index, 1);
+              await flushThinking();
+              await recordSteerIntake(turn, steer!.intake);
+            }
           }
           if (message.type === "system" && message.subtype === "task_started") {
             const callId = message.tool_use_id ?? message.task_id;
             if (!taskStates.has(message.task_id)) {
-              if (opts.tasks)
-                await opts.tasks.create({
-                  id: message.task_id,
-                  sessionId: turn.session.id,
-                  originRunId: turn.runId ?? turn.session.id,
-                  title: message.description || message.prompt || "subagent task",
-                  status: "in_progress",
-                });
-              taskStates.set(message.task_id, { callId, status: "in_progress", resultEmitted: false });
+              taskStates.set(message.task_id, { callId, resultEmitted: false });
               if (!message.skip_transcript) {
                 await turn.emit({
                   type: "tool_call",
@@ -701,25 +654,9 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               }
             }
           }
-          if (message.type === "system" && message.subtype === "task_updated") {
-            const tracked = taskStates.get(message.task_id);
-            let next: TaskStatus | undefined;
-            if (message.patch.status === "completed") next = "completed";
-            else if (message.patch.status === "failed" || message.patch.status === "killed") next = "failed";
-            else if (message.patch.status === "running") next = "in_progress";
-            if (tracked && next && next !== tracked.status) {
-              await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
-              tracked.status = next;
-            }
-          }
           if (message.type === "system" && message.subtype === "task_notification") {
             const tracked = taskStates.get(message.task_id);
             if (tracked) {
-              const next: TaskStatus = message.status === "completed" ? "completed" : "failed";
-              if (tracked.status !== next) {
-                await transitionTask(opts.tasks, message.task_id, tracked.status, next, turn.runId ?? turn.session.id);
-                tracked.status = next;
-              }
               if (!tracked.resultEmitted && !message.skip_transcript) {
                 tracked.resultEmitted = true;
                 await turn.emit({
@@ -750,8 +687,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
-            const finalEntry = await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
-            await tapeReplyCheckpoint(turn, finalEntry);
+            await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
           }
           streamedText = "";
           pendingPrompts = Math.max(0, pendingPrompts - 1);
@@ -784,8 +720,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (reply && !terminal) {
-          const finalEntry = await recordStoppedReply(turn, reply);
-          if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
+          await recordStoppedReply(turn, reply);
         }
         return {
           reply,
@@ -870,11 +805,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       queue.close();
       if (!signalsStopped) await stopSignals?.();
       turn.cancel?.removeEventListener("abort", onCancel);
-      for (const [taskId, task] of taskStates) {
-        if (task.status === "pending" || task.status === "in_progress") {
-          await transitionTask(opts.tasks, taskId, task.status, "failed", turn.runId ?? turn.session.id);
-        }
-      }
       active.delete(sdkQuery);
       sdkQuery.close();
       rmSync(jail, { recursive: true, force: true });

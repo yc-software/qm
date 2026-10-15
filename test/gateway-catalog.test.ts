@@ -104,7 +104,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupportedByHarness(id, "pi"), true);
-  for (const harness of ["opencode", "claude", "codex"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  assert.equal(modelSupportedByHarness(id, "claude"), false);
   assert.equal(modelServiceable(id, { anthropic: true, openai: true, openrouter: true }), false);
   assert.equal(
     modelServiceable(id, { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) }),
@@ -128,7 +128,13 @@ test("only models present in both responses with valid chat capabilities are sel
   ]);
   f.listing(["vendor/new-model", "embed", "no-tools", "no-context", "bad-price", "bad-output"]);
   await f.catalog.refresh();
-  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model"]);
+  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model", "gateway/embed"]);
+  assert.deepEqual(
+    builtInModelCatalog()
+      .filter((m) => m.id.startsWith("gateway/"))
+      .map((m) => m.id),
+    ["gateway/vendor/new-model"],
+  );
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {

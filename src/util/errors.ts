@@ -54,3 +54,17 @@ export async function httpFailure(res: Response, bodyChars = 200): Promise<strin
   const body = (await res.text().catch(() => "")).slice(0, bodyChars);
   return withRequestId(`http ${res.status} ${body}`, res.headers);
 }
+
+export async function withCleanup<T>(work: () => Promise<T>, cleanup: () => Promise<void>): Promise<T> {
+  let result: T;
+  try {
+    result = await work();
+  } catch (error) {
+    await cleanup().catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], errMessage(error), { cause: error });
+    });
+    throw error;
+  }
+  await cleanup();
+  return result;
+}

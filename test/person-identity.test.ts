@@ -8,7 +8,7 @@ import {
   samePersonMatcher,
 } from "../src/directory/person.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { canAdministerCron, canAdministerWebhook, resolveRunAsChange } from "../src/api/control-service.ts";
+import { canAdministerCron, canAdministerWebhook } from "../src/api/control-service.ts";
 import type { Cron, Webhook } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -71,10 +71,10 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
 
   function appOver(dir = createDirectoryStore()) {
     return {
+      isCurrentSharedScopeMember: async () => false,
+      artifactGrantPermission: async () => null,
       membershipControlsScope: async () => false,
       managesScope: async () => false,
-      isCurrentSharedScopeMember: async () => false,
-      isOpenScopeMember: async () => false,
       samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b),
     };
   }
@@ -115,15 +115,9 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
     ]);
     const slackOwned = cron({ owner: "U-jordan", ownerScopeId: scopeId("personal", "U-jordan") });
     const isJordan = await samePersonMatcher(dir, "jordan@acme.test");
-    assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test", undefined, isJordan), true);
+    assert.equal(await canAdministerCron(appOver(dir), slackOwned, "jordan@acme.test", isJordan), true);
     assert.equal(
-      await canAdministerCron(
-        appOver(dir),
-        cron({ owner: "casey@acme.test" }),
-        "jordan@acme.test",
-        undefined,
-        isJordan,
-      ),
+      await canAdministerCron(appOver(dir), cron({ owner: "casey@acme.test" }), "jordan@acme.test", isJordan),
       false,
     );
   });
@@ -154,48 +148,5 @@ describe("samePersonMatcher: one roster read answers many owner checks", () => {
     assert.equal(await isJordan("casey@acme.test"), false);
     const noRoster = await samePersonMatcher(createDirectoryStore(), "U-jordan");
     assert.equal(await noRoster("jordan@acme.test"), false, "no roster row anywhere — fail closed");
-  });
-});
-
-describe("resolveRunAsChange: the owner gate is same-person, not raw id equality", () => {
-  const shared = (over: Partial<Cron> = {}): Cron =>
-    ({
-      id: "c2",
-      owner: "U-jordan",
-      ownerScopeId: scopeId("channel", "C1"),
-      schedule: { everyMs: 1 },
-      createdAt: 0,
-      runAs: "scopeFloor",
-      members: [{ id: "jordan@acme.test", type: "internal" }],
-      ...over,
-    }) as Cron;
-  const capability = {
-    actorId: "jordan@acme.test",
-    scopeId: scopeId("channel", "C1"),
-    members: [{ id: "jordan@acme.test", type: "internal" as const }],
-  };
-
-  it("a U-id owner with a roster bridge can change runAs as the email actor", async () => {
-    const dir = createDirectoryStore();
-    await dir.replace([
-      { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
-    ]);
-    const app = {
-      isOpenScopeMember: async () => false,
-      samePerson: (a: string, b: string) => samePersonInDirectory(dir, a, b),
-    };
-    const r = await resolveRunAsChange(app, shared(), "owner", capability);
-    assert.equal(r.ok, true);
-    if (r.ok) assert.equal(r.patch.runAs, "owner");
-  });
-
-  it("without the roster the bridge fails closed — forbidden", async () => {
-    const app = {
-      isOpenScopeMember: async () => false,
-      samePerson: (a: string, b: string) => samePersonInDirectory(createDirectoryStore(), a, b),
-    };
-    const r = await resolveRunAsChange(app, shared(), "owner", capability);
-    assert.equal(r.ok, false);
-    if (!r.ok) assert.equal(r.code, "forbidden");
   });
 });

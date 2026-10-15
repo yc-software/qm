@@ -10,7 +10,7 @@ interface HeaderPinWire {
   default?: boolean;
 }
 
-export const channelHeaderState = {
+const channelHeaderState = {
   scope: null as string | null,
   loading: false,
   saving: false,
@@ -25,7 +25,7 @@ export const channelHeaderState = {
 let loadSeq = 0;
 let redraw: () => void = () => {};
 
-export function channelHeaderApplies(scopeId: string): boolean {
+function channelHeaderApplies(scopeId: string): boolean {
   return scopeId.startsWith("channel:");
 }
 

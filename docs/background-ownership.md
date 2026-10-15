@@ -6,12 +6,12 @@ Production runs two core deployments (blue and green) against one PostgreSQL dat
 
 Configure every core replica with:
 
-| Variable                    | Requirement                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `BACKGROUND_DEPLOYMENT_ID`  | An immutable identity shared by replicas of one deployment revision, distinct from every other deployment revision.       |
-| `DEPLOYMENT_CONTROL_SECRET` | At least 32 characters, distinct from `CORE_SIGNING_SECRET`; distribute only to core and the trusted deployment operator. |
-| `CORE_SIGNING_SECRET`       | The normal source request signing secret.                                                                                 |
-| `DATABASE_URL`              | The shared PostgreSQL database.                                                                                           |
+| Variable                    | Requirement                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKGROUND_DEPLOYMENT_ID`  | An immutable identity shared by replicas of one deployment revision, distinct from every other deployment revision.                                      |
+| `DEPLOYMENT_CONTROL_SECRET` | At least 32 characters without surrounding whitespace, distinct from `CORE_SIGNING_SECRET`; distribute only to core and the trusted deployment operator. |
+| `CORE_SIGNING_SECRET`       | The normal source request signing secret.                                                                                                                |
+| `DATABASE_URL`              | The shared PostgreSQL database.                                                                                                                          |
 
 With `BACKGROUND_DEPLOYMENT_ID` set, `BACKGROUND_WORK_ENABLED` is ignored: the owner record alone decides. A fresh database has no owner, so no deployment runs background work until an operator sets one. Without `BACKGROUND_DEPLOYMENT_ID`, the process follows `BACKGROUND_WORK_ENABLED` as before and the legacy build-heartbeat supersession applies.
 

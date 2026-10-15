@@ -1,7 +1,7 @@
 import { html, nothing, render } from "lit";
 import { X } from "lucide";
 import { webFetch } from "./core-bridge";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { markdown } from "./message-markdown";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { errMessage } from "../../chassis/src/errors";

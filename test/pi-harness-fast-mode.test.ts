@@ -469,24 +469,24 @@ test("a refusal fallback prices each step on its actual model and tier", async (
   assertUsd(rows[1]!.usage!.costUsd, 0.15);
 });
 
-for (const [modelId, wireModel, costUsd] of [
-  ["gpt-6-astra-ultrafast", "gpt-6-astra", 1.8],
-  ["gpt-6.1-sol-ultrafast", "gpt-6.1-sol", 0.33],
+for (const [baseId, cost] of [
+  ["gpt-6-astra", 1.8],
+  ["gpt-6.1-sol", 0.33],
 ] as const) {
   for (const gateway of [true, false]) {
-    test(`${modelId} prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
+    test(`${baseId} Ultrafast prices a successful turn exactly once through ${gateway ? "gateway" : "direct"}`, async () => {
       const { rows, payloads } = await runTurn(
-        `${modelId}-${gateway}`,
-        modelId,
+        `${baseId}-ultrafast-${gateway}`,
+        `${baseId}-ultrafast`,
         false,
         () => responsesReply("done", ASTRA_WIRE_USAGE, "ultrafast"),
         gateway,
       );
-      assert.equal(payloads[0]?.model, gateway ? `openai/${wireModel}` : wireModel);
+      assert.equal(payloads[0]?.model, gateway ? `openai/${baseId}` : baseId);
       assert.equal(payloads[0]?.service_tier, "ultrafast");
       assert.equal(rows.length, 1);
-      assertUsd(rows[0]!.usage!.costUsd, costUsd);
-      assert.equal(rows[0]!.model, modelId);
+      assertUsd(rows[0]!.usage!.costUsd, cost);
+      assert.equal(rows[0]!.model, `${baseId}-ultrafast`);
     });
   }
 }

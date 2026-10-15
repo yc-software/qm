@@ -1,8 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, session as electronSession } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogin, loginCallback } from "./login.mjs";
+import { startUpdates } from "./updates.mjs";
+import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -153,8 +155,14 @@ async function showInstance(url) {
   mainWindow = window;
   const origin = new URL(url).origin;
   const session = window.webContents.session;
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
+  const canWriteClipboard = (permission, requestingUrl) =>
+    permission === "clipboard-sanitized-write" && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
+  session.setPermissionRequestHandler((_contents, permission, callback, details) =>
+    callback(canWriteClipboard(permission, details.requestingUrl)),
+  );
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    canWriteClipboard(permission, requestingOrigin),
+  );
   let handedOff = false;
   const children = new Set();
   const configureNavigation = (page) => {
@@ -180,6 +188,12 @@ async function showInstance(url) {
     page.webContents.on("will-navigate", navigate);
     page.webContents.on("will-redirect", navigate);
     page.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    page.webContents.on("before-input-event", (event, input) => {
+      const step = tabStep(input);
+      if (!step) return;
+      event.preventDefault();
+      page.webContents.send("qm:cycle-tab", step);
+    });
     page.webContents.setWindowOpenHandler(({ url: destination }) => {
       if (!active()) return { action: "deny" };
       if (browserLoginUrl(destination, origin)) signIn(destination);
@@ -240,6 +254,37 @@ async function start() {
     if (error.code !== "ENOENT") dialog.showErrorBox("QM settings could not be read", error.message);
   }
   if (process.env.QM_DESKTOP_URL) target = instanceUrl(process.env.QM_DESKTOP_URL);
+  const saveInstance = async (url) => {
+    await writeFile(`${configPath}.tmp`, JSON.stringify({ url }), { mode: 0o600 });
+    await rename(`${configPath}.tmp`, configPath);
+  };
+  const checkForUpdates = startUpdates(
+    async () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(false);
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        const ready = await page.webContents.executeJavaScript(`(() => {
+        const event = new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } });
+        return window.dispatchEvent(event) && event.detail.ready;
+      })()`);
+        if (!ready) return false;
+      }
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
+        page.webContents.session.flushStorageData();
+        await page.webContents.session.cookies.flushStore();
+      }
+      if (target) {
+        const current = mainWindow?.webContents.getURL();
+        await saveInstance(loginDestination(target, target, current));
+      }
+      return true;
+    },
+    () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(true);
+    },
+  );
   const assertSetup = (event) => {
     if (event.sender !== setupWindow?.webContents || event.senderFrame?.url !== setupUrl) {
       throw new Error("Untrusted settings request");
@@ -274,7 +319,7 @@ async function start() {
     assertSetup(event);
     try {
       const url = instanceUrl(value);
-      await writeFile(configPath, JSON.stringify({ url }), { mode: 0o600 });
+      await saveInstance(url);
       target = url;
       void showInstance(url);
       setupWindow.close();
@@ -289,6 +334,7 @@ async function start() {
         label: "QM",
         submenu: [
           { role: "about" },
+          { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
           { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
           {
             label: "Open in Browser",

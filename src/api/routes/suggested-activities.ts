@@ -33,7 +33,11 @@ export const suggestedActivityRoutes: Route[] = [
       } catch {
         return sendJson(res, 400, { error: "bad_request" });
       }
-      return sendJson(res, 200, await deps.suggestedActivities.get(body.principalId, seeds, timezone));
+      return sendJson(
+        res,
+        200,
+        await deps.suggestedActivities.get(body.principalId, seeds, timezone, body.poll === true),
+      );
     },
   },
 ];

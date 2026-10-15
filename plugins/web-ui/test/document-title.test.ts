@@ -1,14 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import { activeSessionForDocumentTitle, documentTitle, PRODUCT_TITLE } from "../src/document-title.ts";
 
-const index = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-
 test("page titles retain the static product title", () => {
-  assert.ok(index.includes(`<title>${PRODUCT_TITLE}</title>`));
   assert.equal(documentTitle("chats", "Quarterly planning", true), `Quarterly planning · ${PRODUCT_TITLE}`);
   assert.equal(documentTitle(), PRODUCT_TITLE);
 });
@@ -82,8 +78,20 @@ test("document title follows session switches, split-pane focus, and sign-out", 
     const { mainConversation } = await vite.ssrLoadModule("/src/conversations.ts");
     const { openSession, refreshSessions, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { mountRestoredCanvas, beginSessionDrag } = await vite.ssrLoadModule("/src/split.ts");
-    const oldSession = { id: "old", threadRef: "web:old", scopeId: "personal:tester", title: "Old title" };
-    const newSession = { id: "new", threadRef: "web:new", scopeId: "personal:tester", title: "New title" };
+    const oldSession = {
+      id: "old",
+      threadRef: "web:old",
+      scopeId: "personal:tester",
+      surface: "web",
+      title: "Old title",
+    };
+    const newSession = {
+      id: "new",
+      threadRef: "web:new",
+      scopeId: "personal:tester",
+      surface: "web",
+      title: "New title",
+    };
     sessionsState.list = [oldSession, newSession];
     appState.me = { user: "tester", org: "test" };
     appState.currentView = "chats";

@@ -1,3 +1,4 @@
+import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { InviteMailer } from "../admin/invite-email.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
@@ -38,7 +39,6 @@ import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
-import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
 import type { ModelGateway } from "../model/model-gateway.ts";
 import type { ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
@@ -298,6 +298,7 @@ export interface App {
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
     partial?: string;
+    partialStartOffset?: number;
     alive?: boolean;
     stale?: boolean;
     replying?: boolean;
@@ -305,7 +306,6 @@ export interface App {
     firstBlock?: string;
     firstBlockClosed?: boolean;
     surfacePosted?: boolean;
-    tasks?: Array<{ id: string; title: string; status: TaskStatus }>;
     activity?: RunActivityEntry[];
     startedAt: number | null;
     finishedAt: number | null;
@@ -360,6 +360,7 @@ export interface App {
     principalId: string,
     query: string,
   ): Promise<{ hits: ResourceSearchHit[]; failed: string[]; limited: string[] }>;
+  searchConversations: App["search"];
   searchSessions(principalId: string, query: string, limit?: number): Promise<SessionSearchHit[]>;
   search(
     query: string,
@@ -388,12 +389,15 @@ export interface App {
       archived?: boolean;
       pinned?: boolean;
       color?: string | null;
-      status?: Session["status"];
+      readAt?: number;
     },
   ): Promise<Session | null>;
   regenerateTitle(sessionId: string, principalId: string): Promise<{ title: string | null } | null>;
   detachSession(sessionId: string, principalId: string): Promise<{ detached: true } | null>;
-  adoptSession(sessionId: string, parentSessionId: string, principalId: string): Promise<{ adopted: true } | null>;
+  cancelSessionGoal(
+    sessionId: string,
+    principalId: string,
+  ): Promise<{ cancelled: true } | { cancelled: false; reason: "no_open_goal" | "busy" } | null>;
   spawnSession(principalId: string, opts: { scopeId: ScopeId; title?: string }): Promise<{ session: Session } | null>;
   discardSession(sessionId: string, principalId: string): Promise<boolean>;
   forkSession(
@@ -421,6 +425,7 @@ export interface App {
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
   canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string): Promise<boolean>;
+  artifactGrantPermission(ownerScopeId: ScopeId, ref: string, principalId: string): Promise<Permission | null>;
   getArtifactHome(type: ArtifactType, idOrName: string): Promise<ArtifactHome | null>;
   moveArtifactHome(type: ArtifactType, id: string, toScope: ScopeId, movedBy: string): Promise<void>;
   getSoul(scopeId: ScopeId): {
@@ -457,6 +462,7 @@ export interface App {
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
+  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   setWebhookRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
@@ -578,7 +584,7 @@ export interface App {
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
-  keepAlwaysOnWarm(): Promise<number>;
+  maintainDeployments(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
     id: string,
@@ -635,7 +641,6 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  tasks?: TaskStore;
   modelGateway: ModelGateway;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
@@ -659,6 +664,7 @@ export interface AppDeps {
   webhooks: WebhookStore;
   deliveries: DeliveryStore;
   directory: DirectoryStore;
+  teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];
   projects?: ProjectStore;
   deploy: DeployService;

@@ -1,3 +1,5 @@
+import type { TeamChange } from "../../teams/teams.ts";
+import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -9,11 +11,14 @@ import {
   fastModeModelIds,
   harnessSupportsFastMode,
   HARNESS_IDS,
+  harnessIdOrPi,
   isHarnessId,
   modelSupportedByHarness,
   modelServiceable,
   modelProviderAvailabilityFor,
   resolveModel,
+  resolveEmbeddingModel,
+  embeddingModelCatalog,
   thinkingLevelsForHarness,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
@@ -44,7 +49,6 @@ import {
 } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
-import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
 import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
@@ -58,7 +62,7 @@ const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
 
 /** The flagger a deployment falls back to when nothing is configured. */
 export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "baseModelDefault">): AutoFlaggerDraft {
-  const harnessId = (isHarnessId(deps.harnessId ?? "") ? deps.harnessId : "pi") as HarnessId;
+  const harnessId = harnessIdOrPi(deps.harnessId);
   return {
     harnessId,
     modelId: defaultModelForHarness(harnessId, deps.baseModelDefault),
@@ -137,17 +141,6 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
 
-const credentialServices = async (
-  deps: Pick<ServerDeps, "credentialServices" | "brokeredServices" | "deviceFlowCutover">,
-  scope: ScopeId,
-): Promise<string[]> => [
-  ...new Set([
-    ...(deps.credentialServices?.() ?? []),
-    ...(deps.brokeredServices?.() ?? []),
-    ...((await deps.deviceFlowCutover?.listServices(scope)) ?? []),
-  ]),
-];
-
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
 
@@ -219,6 +212,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       return { ok: true };
     },
   },
+  decisionsResource,
   {
     id: "approval-grant-modes",
     kind: "custom",
@@ -376,56 +370,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "device-flow-cutover",
+    id: "teams",
     kind: "custom",
-    target: "any",
-    readKey: "deviceFlowCutover",
+    target: "org",
+    readKey: "teams",
     label:
-      "Credential-file migration by service. legacy restores resident files; prefer_ephemeral retains resident files without capturing replacements; ephemeral_only quarantines the stored legacy copy without deleting it; inherit clears a scope override.",
-    get: async (deps, scope) => {
-      if (!deps.deviceFlowCutover) return undefined;
-      const out: Record<string, unknown> = {};
-      for (const service of await credentialServices(deps, scope)) {
-        out[service] = {
-          configured: await deps.deviceFlowCutover.get(scope, service),
-          effective: await deps.deviceFlowCutover.resolve(scope, service),
-        };
-      }
-      return out;
-    },
+      "Teams. Each team is a team:<id> scope shared by its members. Send { id, name?, isolatedInOpen?, addMembers?, addAdmins?, drop?, addRooms?, dropRooms? } or { id, remove: true }. Rooms are channel or group scopes where the team stays available; isolatedInOpen keeps it isolated when the org posture is Open.",
+    get: (deps) => deps.teams?.list(),
     apply: async (ctx, actor, scope) => {
-      if (!ctx.deps.deviceFlowCutover) return { error: "not available on this deployment", status: 404 };
-      const body = (ctx.body ?? {}) as { service?: unknown; mode?: unknown };
-      if (typeof body.service !== "string" || !body.service.trim()) {
-        return {
-          error: "device-flow-cutover requires { service: string, mode: legacy | prefer_ephemeral | ephemeral_only }",
-        };
-      }
-      const service = body.service;
-      if (body.mode !== "inherit" && !(await credentialServices(ctx.deps, scope)).includes(service)) {
-        return { error: `device-flow-cutover has no credential paths for service: ${service}` };
-      }
-      const beforeConfigured = await ctx.deps.deviceFlowCutover.get(scope, service);
-      const beforeEffective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-      if (body.mode === "inherit") {
-        await ctx.deps.deviceFlowCutover.clear(scope, service);
-        const effective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-        audit(ctx.deps, {
-          principalId: actor.id,
-          action: "credential.cutover.update",
-          resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->inherit/${effective}`,
-          scopeLabel: scope,
-        });
-        return { ok: true };
-      }
-      if (typeof body.mode !== "string" || !(DEVICE_FLOW_CUTOVER_MODES as readonly string[]).includes(body.mode)) {
-        return { error: `device-flow-cutover mode must be one of: ${DEVICE_FLOW_CUTOVER_MODES.join(", ")}, inherit` };
-      }
-      await ctx.deps.deviceFlowCutover.set(scope, service, body.mode as DeviceFlowCutoverMode, actor.id);
+      if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
+      const change = parseTeamChange(ctx.body);
+      if ("error" in change) return change;
+      await ctx.deps.teams.apply(change, actor.id);
       audit(ctx.deps, {
         principalId: actor.id,
-        action: "credential.cutover.update",
-        resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->${body.mode}/${body.mode}`,
+        action: change.remove ? "team.remove" : "team.update",
+        resource: `team:${change.id}`,
         scopeLabel: scope,
       });
       return { ok: true };
@@ -553,6 +513,30 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "memory-embedding-model",
+    kind: "enum",
+    target: "org",
+    clearable: true,
+    readKey: "memoryEmbeddingModel",
+    get enumValues() {
+      return embeddingModelCatalog();
+    },
+    get: (deps) => deps.config!.getEmbeddingModelDurable(),
+    apply: async (ctx, _actor, scope) => {
+      const bad = orgOnly(scope, "the memory embedding model is org-wide");
+      if (bad) return bad;
+      const { modelId } = ctx.body as { modelId?: unknown };
+      if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
+        return { error: "Provide an embedding modelId, or null to disable semantic recall" };
+      if (modelId !== null) {
+        await ctx.deps.refreshModels?.();
+        if (!resolveEmbeddingModel(modelId as string)) return { error: "Unknown or unverified embedding model" };
+      }
+      await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
+      return { ok: true };
+    },
+  },
+  {
     id: "base-model",
     kind: "enum",
     target: "any",
@@ -597,7 +581,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             : {}),
         });
       } else {
-        const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
+        const harnessId = harnessIdOrPi(ctx.deps.harnessId);
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
           harnessId,
           modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
@@ -813,31 +797,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
     },
-  },
-  {
-    id: "turn-wall-clock",
-    kind: "string",
-    target: "org",
-    clearable: true,
-    label:
-      "Maximum wall-clock time for a turn in seconds. Zero leaves turns uncapped; empty restores the deployment default.",
-    readKey: "turnWallClockSec",
-    get: (deps, scope) => deps.config!.getTurnWallClockSecDurable(scope),
-    apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the turn wall-clock limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { sec?: unknown }).sec;
-        const trimmed = typeof raw === "string" ? raw.trim() : raw;
-        if (trimmed === undefined || trimmed === null || trimmed === "") return { value: null };
-        const sec = typeof trimmed === "number" ? trimmed : Number(trimmed);
-        if (!Number.isInteger(sec) || (sec !== 0 && (sec < 60 || sec > 86_400))) {
-          return { error: "turn-wall-clock requires { sec: 0 or integer 60-86400 } (empty clears the override)" };
-        }
-        return { value: sec };
-      },
-      (deps, scope, sec) => deps.config!.setTurnWallClockSec(scope, sec),
-    ),
   },
   {
     id: "browse-model",
@@ -1269,4 +1228,35 @@ export function adminResourceManifest(): AdminResourceManifestEntry[] {
     ...(r.label ? { label: r.label } : {}),
     ...(r.enumValues ? { enumValues: r.enumValues } : {}),
   }));
+}
+
+const TEAM_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const TEAM_LISTS = ["addMembers", "addAdmins", "drop", "addRooms", "dropRooms"] as const;
+
+function parseTeamChange(body: unknown): TeamChange | { error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.id !== "string" || !TEAM_ID.test(b.id))
+    return { error: "teams requires id: lowercase letters, digits, -" };
+  if (b.remove === true) return { id: b.id, remove: true };
+  const lists: Partial<Record<(typeof TEAM_LISTS)[number], string[]>> = {};
+  for (const key of TEAM_LISTS) {
+    const v = b[key] ?? [];
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.trim()))
+      return { error: `${key} must be an array of non-empty strings` };
+    lists[key] = [...new Set(v as string[])];
+  }
+  const isRoom = (r: string) => {
+    const { kind, ref } = parseScopeId(r as ScopeId);
+    return (kind === "channel" || kind === "group") && !!ref;
+  };
+  if (![...lists.addRooms!, ...lists.dropRooms!].every(isRoom))
+    return { error: "rooms must be channel:<id> or group:<id> scopes" };
+  return {
+    id: b.id,
+    ...(typeof b.name === "string" && b.name.trim() ? { name: b.name.trim() } : {}),
+    ...(typeof b.isolatedInOpen === "boolean" ? { isolatedInOpen: b.isolatedInOpen } : {}),
+    ...lists,
+    addRooms: lists.addRooms as ScopeId[],
+    dropRooms: lists.dropRooms as ScopeId[],
+  };
 }

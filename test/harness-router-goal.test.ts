@@ -4,6 +4,8 @@ import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/ha
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
@@ -49,9 +51,9 @@ function stubTurn(emitted: SessionEntry[], extra: Partial<HarnessTurnInput> = {}
 }
 
 function router(harness: Harness): Harness {
-  return createHarnessRouter(new Map([["codex", harness]]), createMockHarness(), async () => ({
-    harnessId: "codex",
-    modelId: "gpt-5.6-codex",
+  return createHarnessRouter(new Map([["claude", harness]]), createMockHarness(), async () => ({
+    harnessId: "claude",
+    modelId: "claude-opus-5-5",
   }));
 }
 
@@ -171,7 +173,7 @@ test("rounds without progress never waive the goal; only a user stop ends it", a
   assert.equal(latestGoalRecord(emitted)?.status, "paused");
 });
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} preserves an active goal on infrastructure cancellation and resumes after reload`, async () => {
     const emitted: SessionEntry[] = [];
     const cancel = new AbortController();
@@ -199,7 +201,7 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
   });
 }
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
     const signals = createMemoryRunSignalStore();
     const cancel = new AbortController();
@@ -231,3 +233,68 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
   });
 }
+
+function goalTools(turn: HarnessTurnInput) {
+  const ref = harnessToolContext(turn);
+  ref.current = { humanTurn: true } as ToolContextRef["current"];
+  const goal = createAgentTools(ref).find((tool) => tool.name === "goal")!;
+  const call = (id: string, params: Record<string, unknown>) =>
+    (goal.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text?: string }> }>)(id, params);
+  return { ref, call };
+}
+
+function earlierGoal(objective: string): SessionEntry[] {
+  const goal = createGoalRecord({ objective });
+  return [
+    { type: "system", payload: { kind: "goal", goal }, sessionId: "s1", seq: 0, parentSeq: null, createdAt: 1 },
+  ] as unknown as SessionEntry[];
+}
+
+test("a person's message cancels the goal and registers a replacement, which the router then enforces", async () => {
+  const emitted: SessionEntry[] = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      const { call } = goalTools(turn);
+      await call("c1", { action: "update", status: "cancel", note: "user: cancel the old goal, start the new one" });
+      await call("c2", { action: "create", objective: "broader research and sending" });
+      return { reply: "replaced" };
+    }
+    assert.match(turn.input, /broader research and sending/);
+    if (round > 1) return { reply: "", stopped: true };
+    return { reply: "working" };
+  });
+
+  await router(harness).turns.runTurn(
+    stubTurn(emitted, { history: earlierGoal("old outreach goal"), turnWallClockMs: 600_000 }),
+  );
+
+  assert.ok(calls.length >= 2, "the replacement goal is enforced in the same turn");
+  const goals = emitted.flatMap((e) => {
+    const g = (e.payload as { goal?: { objective: string; status: string } }).goal;
+    return g ? [`${g.objective}:${g.status}`] : [];
+  });
+  assert.deepEqual(goals.slice(0, 2), ["old outreach goal:cancelled", "broader research and sending:active"]);
+  assert.equal(latestGoalRecord(emitted)?.objective, "broader research and sending");
+  assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
+});
+
+test("the agent cannot cancel its goal from a keep-going round", async () => {
+  const emitted: SessionEntry[] = [];
+  const refusals: string[] = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) return { reply: "starting" };
+    const { call } = goalTools(turn);
+    const result = await call(`c${round}`, { action: "update", status: "cancel", note: "this is hopeless" });
+    refusals.push(result.content.map((c) => c.text ?? "").join(""));
+    if (round > 1) return { reply: "", stopped: true };
+    return { reply: "giving up" };
+  });
+
+  await router(harness).turns.runTurn(
+    stubTurn(emitted, { history: earlierGoal("ship the migration"), turnWallClockMs: 600_000 }),
+  );
+
+  assert.equal(calls.length, 3, "the goal keeps going after the refused cancel");
+  assert.match(refusals[0]!, /Only the user's own message can cancel/);
+  assert.equal(latestGoalRecord(emitted)?.status, "paused", "only the stop paused it; it was never cancelled");
+});

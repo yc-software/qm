@@ -20,6 +20,7 @@ async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTai
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm test",
     purpose: "Run regression tests",
@@ -89,6 +90,7 @@ test("watch refuses a job from another scope and an unknown job", async () => {
   await registry.register({
     processId: "p-other",
     scopeId: "personal:U2",
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: x",
     ttlMs: 60_000,

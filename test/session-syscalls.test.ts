@@ -113,7 +113,7 @@ for (const explicit of [
 ]) {
   test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
     const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
-    let defaults = { model: "old-default", harness: "codex", thinkingLevel: "low", fastMode: true };
+    let defaults = { model: "old-default", harness: "pi", thinkingLevel: "low", fastMode: true };
     const preparedInputs: OrchestratorInput[] = [];
     const r = await rig({
       prepareRequest: async (request) => {
@@ -251,7 +251,7 @@ test("write refuses self, cross-scope, and nonparticipant targets", async () => 
   assert.match(nonSubagent.message, /participant/);
 });
 
-test("read lists children with status and renders a child's recent tape", async () => {
+test("read lists children with status and renders a child's recent transcript", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
@@ -269,9 +269,9 @@ test("read lists children with status and renders a child's recent tape", async 
   assert.equal(list.children[0]!.status, "pending");
   assert.match(list.children[0]!.lastSaid ?? "", /3 call sites/);
 
-  const tape = await syscalls.read({ target: "research_callers" });
-  assert.ok(tape.ok && tape.mode === "tape");
-  assert.match(tape.rendered, /found 3 call sites/);
+  const transcript = await syscalls.read({ target: "research_callers" });
+  assert.ok(transcript.ok && transcript.mode === "transcript");
+  assert.match(transcript.rendered, /found 3 call sites/);
 });
 
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
@@ -349,7 +349,7 @@ test("a detached child sends no mail; any in-scope session can still be read", a
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 
   const read = await r.syscallsFor(r.room).read({ target: child.id });
-  assert.ok(read.ok && read.mode === "tape");
+  assert.ok(read.ok && read.mode === "transcript");
 });
 
 test("mail envelope attributes stay well-formed and machine-parseable when the title holds quotes", () => {
@@ -398,7 +398,7 @@ test("session reads hide history outside the viewer's participant tenure", async
   await r.sessions.releaseLease(lease);
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
-  assert.ok(view.ok && view.mode === "tape");
+  assert.ok(view.ok && view.mode === "transcript");
   assert.doesNotMatch(view.rendered, /hidden-before-membership/);
 });
 
@@ -432,7 +432,7 @@ test("shared session reads require every audience member to see each entry", asy
     },
   });
   const view = await tool.read({ target: shared.id });
-  assert.ok(view.ok && view.mode === "tape");
+  assert.ok(view.ok && view.mode === "transcript");
   assert.doesNotMatch(view.rendered, /private-only/);
   assert.match(view.rendered, /shared-visible/);
 });
@@ -707,7 +707,7 @@ test("completion cannot expand the finished run's audience and retries after its
   await recover();
   assert.equal(attempts, 2);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
-  assert.deepEqual(await r.runs.pendingReturns(), []);
+  assert.ok(await r.runs.getByDedupKey(`subagent-return:${run!.id}`));
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -1026,7 +1026,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
       actor,
       conversation,
       surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true, ownerResourcesRequireOpen: true },
+      origin: { kind: "automation", useOwnerKeychain: true },
       unattendedGrants: ["admin.sessions.read"],
     },
   });
@@ -1037,7 +1037,6 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
-  assert.equal(queued.request.origin.ownerResourcesRequireOpen, true);
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", followup: true })).ok);
@@ -1045,7 +1044,6 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(followup.request.origin.kind === "automation");
   assert.equal(followup.request.origin.useOwnerKeychain, true);
-  assert.equal(followup.request.origin.ownerResourcesRequireOpen, true);
 });
 
 test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
@@ -1089,19 +1087,66 @@ test("coordinator delegation requires an explicit actor rollout", () => {
   );
 });
 
-test("disabled coordinators retain passive completion mail without a wake", async () => {
+async function webChildRig() {
   const r = await rig();
-  const opened = await r.syscallsFor(r.room).open({ task: "inspect logs" });
+  const webConversation: Conversation = { kind: "dm", threadRef: "web:alex:1", audience: [actor] };
+  const room = await r.sessions.getOrCreateByThread(webConversation.threadRef, "dm", scope, undefined, "web");
+  await r.sessions.addParticipant(room.id, actor.id);
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: room,
+    scopeId: scope,
+    request: { surface: "web", conversation: webConversation, actor },
+  });
+  const opened = await api.open({ task: "inspect logs" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => false },
-    (await r.runs.get(queued.id))!,
-  );
+  const deliver = async () =>
+    deliverSubagentMail({ ...r, maxAttempts: 3, delegationEnabled: async () => false }, (await r.runs.get(queued.id))!);
+  return { ...r, room, api, deliver, wakeKey: `subagent-return:${queued.id}` };
+}
+
+test("a finished child wakes an idle web parent once without the responsive rollout", async () => {
+  const r = await webChildRig();
+  assert.equal(await r.deliver(), false);
+  assert.equal(await r.deliver(), false);
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1);
+  assert.equal(wakes[0]!.dedupKey, r.wakeKey);
+  assert.equal(wakes[0]!.request.surfaceTools, undefined);
+  assert.equal(wakes[0]!.request.actor.id, actor.id);
   assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+});
+
+test("a busy parent collects completion mail at its next tool boundary without an extra wake", async () => {
+  const r = await webChildRig();
+  const busy = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    dedupKey: "busy-parent",
+    request: {
+      actor,
+      conversation: { kind: "dm", threadRef: r.room.threadRef, audience: [actor] },
+      origin: { kind: "human" },
+      text: "hi",
+    },
+  });
+  assert.equal(await r.deliver(), false);
+  assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
+  const mail = await r.api.receive!(0);
+  await r.api.acknowledge!(mail.map((message) => message.id));
+  const claimed = await r.runs.claimById(busy.run.id, "w1", 60000);
+  await r.runs.complete(busy.run.id, claimed!.leaseToken!, { status: "ok", reply: "hello" });
+  assert.equal(await r.deliver(), true);
+  assert.equal(await r.runs.getByDedupKey(r.wakeKey), null);
+});
+
+test("no wake once the parent already consumed the completion", async () => {
+  const r = await webChildRig();
+  assert.equal(await r.deliver(), false);
+  await r.api.acknowledge!((await r.mailbox.pending(r.room.id)).map((message) => message.id));
+  assert.equal(await r.deliver(), true);
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 });
 
@@ -1402,7 +1447,7 @@ for (const addressed of [true, false]) {
       gatewayContext: { location: "original DM", details: { channel: "D1" }, instructions: "Reply in Slack" },
       timezone: "America/Los_Angeles",
       model: "test-model",
-      harness: "codex",
+      harness: "pi",
       thinkingLevel: "high",
       fastMode: false,
       skipMemory: true,
@@ -1642,6 +1687,8 @@ for (const surface of ["slack", "web"] as const) {
       const mail = await r.mailbox.pending(parent.id);
       assert.equal(mail.length, 1);
       assert.match(mail[0]!.text, /INTERNAL_CHILD_REPORT/);
+      await r.mailbox.acknowledge(parent.id, [mail[0]!.id]);
+      await deliverSubagentMail(deps, completed);
       const files = await deliveries.pending(surface);
       assert.equal(files.length, 1);
       assert.equal(files[0]!.text, "");
@@ -1808,7 +1855,8 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
       origin: { kind: "human" },
     } as Parameters<typeof factory.forTurn>[0]["request"],
   });
-  for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })]) assert.equal(out.ok, false);
+  for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
+    assert.equal(out.ok, true, JSON.stringify(out));
   const unshareable =
     "this conversation's earlier history was shared with a different audience, so it can't be forked from here.";
   const checkpoint = async (audience: string, throughSeq: number) => {
@@ -1852,5 +1900,5 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 3);
+  assert.equal(started.length, 4);
 });

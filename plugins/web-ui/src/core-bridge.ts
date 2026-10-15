@@ -1,10 +1,9 @@
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
-import { EventType } from "@tanstack/ai/client";
-import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
+import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
-import type { ModelMetadata } from "./pi-models.ts";
+import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
@@ -64,7 +63,7 @@ export function oversizeAttachmentNote(name: string): string {
   return `"${name}" is too large — files up to ~1 GB can be sent. It was left out.`;
 }
 
-export function emptyAttachmentNote(name: string): string {
+function emptyAttachmentNote(name: string): string {
   return `"${name}" is empty. It was left out.`;
 }
 
@@ -73,7 +72,7 @@ export function tooManyFilesNote(names: string[]): string {
   return `Skipped ${skipped} — too many files in one message (max ${MAX_FILES_PER_MESSAGE}).`;
 }
 
-export interface SkippedAttachment {
+interface SkippedAttachment {
   id?: string;
   name: string;
   note: string;
@@ -126,7 +125,6 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
-  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;
@@ -137,10 +135,12 @@ export interface CoreSession {
   archived?: boolean;
   pinned?: boolean;
   color?: string | null;
+  unread?: boolean;
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -263,7 +263,7 @@ export interface CoreProject {
 
 export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): string | null {
   if (!workspaceUrl) return null;
-  const m = threadRef.match(/^(?:dm|ch):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
+  const m = threadRef.match(/^(?:dm|ch|grp):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
   if (!m) return null;
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
@@ -285,7 +285,7 @@ function browserTimezone(): string {
 
 export async function updateSession(
   id: string,
-  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
+  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null; unread?: boolean },
 ): Promise<{ session: CoreSession }> {
   return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: "POST",
@@ -389,15 +389,12 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
 
-export async function adoptSession(id: string, parentSessionId: string): Promise<{ adopted: true }> {
-  return api<{ adopted: true }>(`/api/sessions/${encodeURIComponent(id)}/adopt`, {
-    method: "POST",
-    body: JSON.stringify({ parentSessionId }),
-  });
-}
-
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
+}
+
+export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
+  return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
 }
 export interface SessionEntry {
   type:
@@ -438,6 +435,7 @@ export interface ToolActivity {
 }
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
+  streamStartOffset?: number;
   status: WorkStatus;
   startedAt?: number;
   finishedAt?: number;
@@ -505,6 +503,7 @@ export interface RunPoll {
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
   partial?: string;
+  partialStartOffset?: number;
   alive?: boolean;
   stale?: boolean;
   replyComplete?: boolean;
@@ -597,15 +596,6 @@ export function continuableMessages(
     popped.unshift(kept.pop()!);
   }
   return { messages: kept.length ? kept : [resumeAnchor()], popped };
-}
-
-export const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-
-export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
-  if (s.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-    return s.scopeId === `personal:${user}` || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
-  if (!s.threadRef.startsWith("web:")) return false;
-  return s.threadRef.startsWith(`web:${user}:`) || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
 }
 
 function zeroUsage(): Usage {
@@ -719,7 +709,7 @@ export function setSigninRequiredHandler(fn: (detail: SigninRequired) => void): 
   onSigninRequired = fn;
 }
 
-export function reportSigninRequired(detail: SigninRequired): void {
+function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
@@ -789,26 +779,6 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
   return body as T;
 }
 
-export interface RuntimeConfig {
-  interactiveFastMode?: boolean;
-  unavailableReason?: string;
-  scopeId: string;
-  approvedHarnesses: string[];
-  modelsByHarness: Record<string, string[]>;
-  modelCatalog: Record<string, ModelMetadata>;
-  orgDefault: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean; revision: number };
-  scopeOverride: {
-    harnessId: string;
-    modelId: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    orgRevision: number;
-  } | null;
-  effective: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean };
-  upgradeAvailable: boolean;
-  fastModeModelIds?: string[];
-}
-
 export async function fetchRuntimeConfig(scopeId?: string | null, account?: "company"): Promise<RuntimeConfig | null> {
   try {
     const params = new URLSearchParams();
@@ -822,17 +792,7 @@ export async function fetchRuntimeConfig(scopeId?: string | null, account?: "com
   }
 }
 
-export async function updateRuntimeConfig(
-  scopeId: string | null,
-  change: {
-    harnessId?: string;
-    modelId?: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    inherit?: boolean;
-    keep?: boolean;
-  },
-): Promise<RuntimeConfig> {
+export async function updateRuntimeConfig(scopeId: string | null, change: RuntimeChange): Promise<RuntimeConfig> {
   return api<RuntimeConfig>("/api/runtime-config", {
     method: "PUT",
     body: JSON.stringify({ ...change, ...(scopeId ? { scopeId } : {}) }),
@@ -1085,7 +1045,7 @@ async function driveApproval(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1162,7 +1122,7 @@ export function mintSendKey(): string {
   return crypto.randomUUID();
 }
 
-export function sendKeyOf(message: unknown): string | undefined {
+function sendKeyOf(message: unknown): string | undefined {
   const key = (message as SendKeyed | null)?.idempotencyKey;
   return typeof key === "string" && key ? key : undefined;
 }
@@ -1254,7 +1214,7 @@ async function drive(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1294,7 +1254,7 @@ async function resumeDrive(
     notify();
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
-    const st: Acc = { acc: "", lastProgressAt: now() };
+    const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
     // Keep any assistant text the transcript already showed for this in-flight
     // run visible: seed the accumulator with it so attaching the live stream
     // never blanks text the person has already read. The server's own partial
@@ -1318,7 +1278,7 @@ async function followRun(
   runId: string,
   signal?: AbortSignal,
   notify?: () => void,
-  st: Acc = { acc: "", lastProgressAt: now() },
+  st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() },
   slot?: RunSlot,
   gen = 0,
 ): Promise<void> {
@@ -1348,6 +1308,7 @@ function runPath(runId: string, suffix: string): string {
 }
 
 export interface Acc {
+  startOffset: number;
   acc: string;
   lastProgressAt: number;
   staleSince?: number;
@@ -1418,8 +1379,12 @@ function applyRun(
   }
   setWorkStale(work, run.stale === true, notify);
   const p = typeof run.partial === "string" ? run.partial : "";
-  if (p.length > st.acc.length) {
-    st.lastProgressAt = now();
+  const startOffset = run.partialStartOffset ?? 0;
+  if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
+    if (startOffset + p.length > st.startOffset + st.acc.length) st.lastProgressAt = now();
+    if (startOffset !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+    st.startOffset = startOffset;
+    if (work) work.streamStartOffset = startOffset;
     pushDelta(stream, partial, st, p);
   }
   if (!runIsTerminal(run)) return "open";
@@ -1580,16 +1545,6 @@ async function streamRunViaSse(
     clearTimeout(timer);
     timer = setTimeout(abort, SSE_SILENCE_MS);
   };
-  const processor = new StreamProcessor({
-    initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
-    events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
-  });
-  processor.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
-  const append = (delta: string): void => {
-    if (!delta) return;
-    st.lastProgressAt = now();
-    processor.processChunk({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: runId, delta });
-  };
   const transport = fetchServerSentEvents(withBase(runPath(runId, "/events")), {
     credentials: "same-origin",
   });
@@ -1598,7 +1553,7 @@ async function streamRunViaSse(
       received();
       if (event.type !== "CUSTOM") continue;
       if (event.name === "delta") {
-        const value = event.value as { offset?: unknown; delta?: unknown };
+        const value = event.value as { offset?: unknown; delta?: unknown; startOffset?: number };
         if (
           typeof value.offset !== "number" ||
           !Number.isSafeInteger(value.offset) ||
@@ -1606,13 +1561,10 @@ async function streamRunViaSse(
           typeof value.delta !== "string"
         )
           return "fallback";
-        if (value.offset > st.acc.length) return "fallback";
-        const delta = value.delta.slice(st.acc.length - value.offset);
-        append(delta);
+        if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
+        applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
-        if (typeof run.partial === "string" && run.partial.length > st.acc.length)
-          append(run.partial.slice(st.acc.length));
         // Completion must carry the final result, including files and approvals.
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
@@ -1666,6 +1618,28 @@ function abortStream(stream: AssistantMessageEventStream, partial: AssistantMess
   };
   stream.push({ type: "error", reason: "aborted", error });
   stream.end(error);
+}
+
+function applyStreamText(
+  stream: AssistantMessageEventStream,
+  partial: AssistantMessage,
+  st: Acc,
+  text: string,
+  offset: number,
+  startOffset: number,
+): void {
+  const end = st.startOffset + st.acc.length;
+  if (offset + text.length < end || (offset + text.length === end && startOffset <= st.startOffset)) return;
+  const start = Math.max(st.startOffset ?? 0, startOffset);
+  const next = offset > end ? text : st.acc + text.slice(Math.max(0, end - offset));
+  const nextStart = offset > end ? offset : st.startOffset;
+  const work = (partial as AssistantWork).work;
+  if (work) work.streamStartOffset = start;
+  if (start !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+  st.acc = offset > end ? "" : st.acc.slice(start - st.startOffset);
+  st.lastProgressAt = now();
+  pushDelta(stream, partial, st, next.slice(start - nextStart));
+  st.startOffset = start;
 }
 
 function pushDelta(stream: AssistantMessageEventStream, partial: AssistantMessage, st: Acc, next: string): void {
@@ -1762,7 +1736,7 @@ function xmlAttrUnescape(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
+function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   const text = (payload as { text?: unknown } | null)?.text;
   if (typeof text !== "string") return undefined;
   const m = SUBAGENT_MAIL_RE.exec(text);
@@ -1770,7 +1744,7 @@ export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   return { title: xmlAttrUnescape(m[1]!), sessionId: m[2]!, kind: m[3]! };
 }
 
-export interface HistorySystemNote {
+interface MessageRevisionNote {
   role: "system-note";
   note: "message_revision";
   action: "edited" | "deleted";
@@ -1779,6 +1753,15 @@ export interface HistorySystemNote {
   speaker?: string;
   timestamp?: number;
 }
+
+interface GoalCancelledNote {
+  role: "system-note";
+  note: "goal_cancelled";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -1851,7 +1834,13 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
   });
 }
 
-function messageRevisionPayload(payload: unknown): HistorySystemNote | null {
+function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
+  const p = payload as { kind?: unknown; cancelledBy?: unknown; goal?: { objective?: unknown } | null } | null;
+  if (p?.kind !== "goal" || typeof p.cancelledBy !== "string" || typeof p.goal?.objective !== "string") return null;
+  return { role: "system-note", note: "goal_cancelled", content: p.goal.objective };
+}
+
+function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
   const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
@@ -2139,6 +2128,13 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
+      const goalNote = goalCancelledPayload(e.payload);
+      if (goalNote) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        out.push({ ...goalNote, timestamp: e.createdAt } as unknown as AgentMessage);
+        continue;
+      }
       const revision = messageRevisionPayload(e.payload);
       if (revision) {
         spillHeldPosts();

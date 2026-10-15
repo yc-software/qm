@@ -2,18 +2,11 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import type { Task, TaskStore } from "../tasks/task-store.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import {
-  acquireLeaseWithin,
-  appendEntryOutsideTurn,
-  entryDeliveryKey,
-  type SessionStore,
-  type TranscriptAppendSessions,
-} from "../sessions/session-store.ts";
+import { acquireLeaseWithin, entryDeliveryKey, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
@@ -35,11 +28,7 @@ function webTranscriptNote(run: Run, surface: string, failed: boolean): Destinat
 
 export type AdminUrlFor = (sessionId: string) => string | undefined;
 
-export function runResultDelivery(
-  run: Run,
-  taskList: Task[] = [],
-  adminUrlFor?: AdminUrlFor,
-): RunResultDelivery | null {
+export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
@@ -58,7 +47,6 @@ export function runResultDelivery(
       ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
       : {}),
     ...(editRef ? { editRef } : {}),
-    ...(taskList.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };
   const idempotencyKey = `run:${run.id}`;
@@ -102,8 +90,10 @@ export function runResultDelivery(
   return null;
 }
 
-export type TurnFailureSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries">;
+export type TurnFailureSessions = Pick<
+  SessionStore,
+  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries"
+>;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
 const FAILURE_RECORD_WAIT_MS = 10 * 60_000;
@@ -131,7 +121,7 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
       message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
       runId: run.id,
     };
-    await appendEntryOutsideTurn(sessions, lease, { type: "system", payload, scopeLabel: session.scopeId });
+    await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
     return true;
   } finally {
     await sessions.releaseLease(lease);
@@ -149,7 +139,6 @@ export interface RunResultRecovery {
 export function wireRunResultDeliveries(
   runs: Pick<RunStore, "onTerminal" | "terminalFinished">,
   deliveries: Pick<DeliveryStore, "enqueue" | "existingKeys">,
-  tasks?: TaskStore,
   adminUrlFor?: AdminUrlFor,
   sessions?: TurnFailureSessions,
 ): RunResultRecovery {
@@ -159,8 +148,7 @@ export function wireRunResultDeliveries(
         reportFailureAs("delivery: record turn_failure entry", undefined, `run=${run.id}`),
       );
     }
-    const taskList = tasks ? await tasks.list({ originRunId: run.id }) : [];
-    const delivery = runResultDelivery(run, taskList, adminUrlFor);
+    const delivery = runResultDelivery(run, adminUrlFor);
     if (!delivery) return false;
     await deliveries.enqueue(delivery);
     return true;

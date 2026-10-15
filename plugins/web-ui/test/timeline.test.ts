@@ -312,8 +312,15 @@ test("memoized output still reflects a mutated-then-replaced work correctly", ()
 test("unified sandbox execution keeps legacy failure and display semantics", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
     assert.equal(toolCategory(identity), "execute");
-    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, stdout: "failed" }), "complete"), "ok");
-    assert.equal(toolRowKind(row(identity, { ...identity, code: 0, stdout: "ok" }), "complete"), "ok");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 1, result: "failed\n[exit 1]" }), "complete"), "ok");
+    assert.equal(toolRowKind(row(identity, { ...identity, code: 0, result: "ok\n[exit 0]" }), "complete"), "ok");
+    assert.equal(
+      toolRowKind(
+        row(identity, { ...identity, code: 1, timedOut: false, isError: true, result: "failed\n[exit 1]" }),
+        "complete",
+      ),
+      "ok",
+    );
     assert.equal(
       toolRowKind({ call: null, result: act(1, "tool_result", { ...identity, code: 2 }) }, "complete"),
       "ok",
@@ -360,11 +367,11 @@ test("unscreened execution retains its warning and neutral exit status without p
   assert.equal(toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"), "ok");
   assert.equal(toolExecutionOutput(result), result.result);
   assert.equal(
-    toolRowKind(row({ tool: "execute" }, { code: 0, stdout: "fake [exit 7]", isError: false }), "complete"),
+    toolRowKind(row({ tool: "execute" }, { code: 0, result: "fake [exit 7]\n[exit 0]", isError: false }), "complete"),
     "ok",
   );
   assert.equal(toolRowKind(row({ tool: "execute" }, { code: 0, timedOut: true }), "complete"), "failed");
-  assert.equal(toolExecutionOutput({ stdout: "", stderr: "", code: 0 }), "");
+  assert.equal(toolExecutionOutput({ code: 0, result: "done\n[exit 0]" }), "done\n[exit 0]");
   assert.equal(toolExecutionOutput({ isError: true, result: "[tool output quarantined]" }), null);
   assert.equal(
     toolRowKind(
@@ -493,4 +500,56 @@ test("ordinary and hidden user events do not become steering markers", () => {
     activity: [act(1, "user", { text: "ordinary" }), act(2, "user", { text: "hidden", steered: true, hidden: true })],
   };
   assert.deepEqual(buildTimeline(work), []);
+});
+
+test("detached execution uses process presentation rather than foreground output suppression", () => {
+  assert.equal(toolCategory({ tool: "execute", background: true }), "background");
+  assert.equal(toolCategory({ tool: "execute", background: false }), "execute");
+});
+
+test("trimmed phases show whole-word tails and newer phases retain absolute boundaries", () => {
+  const work: WorkBlock = {
+    status: "working",
+    streamStartOffset: 101,
+    activity: [
+      {
+        seq: 1,
+        parentSeq: null,
+        type: "text_start",
+        createdAt: 1,
+        payload: { phase: "final_answer", streamOffset: 80 },
+      },
+    ],
+  };
+  assert.equal(streamedAnswer("ipped word here", work), "…earlier output omitted\n\nword here");
+  assert.equal(streamedAnswer("unbroken", work), "…earlier output omitted\n\n");
+  work.activity = [
+    {
+      seq: 2,
+      parentSeq: null,
+      type: "text_start",
+      createdAt: 2,
+      payload: { phase: "final_answer", streamOffset: 107 },
+    },
+  ];
+  assert.equal(streamedAnswer("older New answer", work), "New answer");
+});
+
+test("recorded commentary is not repeated after its live window is trimmed", () => {
+  const work: WorkBlock = {
+    status: "working",
+    streamStartOffset: 101,
+    activity: [
+      { seq: 1, parentSeq: null, type: "text_start", createdAt: 1, payload: { phase: "commentary", streamOffset: 80 } },
+    ],
+  };
+  assert.equal(streamedAnswer("ipped word here", work), "…earlier output omitted\n\nword here");
+  work.activity.push({
+    seq: 2,
+    parentSeq: null,
+    type: "text",
+    createdAt: 2,
+    payload: { text: "The whole commentary is now recorded." },
+  });
+  assert.equal(streamedAnswer("ipped word here", work), "");
 });

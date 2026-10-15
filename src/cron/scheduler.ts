@@ -1,14 +1,7 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import {
-  parseScopeId,
-  type Cron,
-  type CronFireLogEntry,
-  type CronFireNote,
-  type TurnRequest,
-  type TurnResult,
-} from "../types.ts";
+import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -78,7 +71,6 @@ export interface SchedulerDeps {
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
-  isOpenScopeMember?: TriggerDeps["isOpenScopeMember"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
@@ -90,6 +82,8 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  skipFire?: (cron: Cron) => Promise<string | undefined>;
+  deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
     fireKey: string,
@@ -150,20 +144,11 @@ function mentionable(m: DirectoryMember): string {
   return `@${m.displayName}${mentionId ? ` (<@${mentionId}>)` : ""}`;
 }
 
-async function cronMentionRoster(deps: SchedulerDeps, cron: Cron): Promise<string | undefined> {
-  if (!deps.directory) return undefined;
-  const scope = cron.destination?.audienceScopeId;
-  if (!scope) return undefined;
-  const kind = parseScopeId(scope).kind;
-  if (kind !== "channel" && kind !== "group") return undefined;
-  const members = cron.members ?? [];
-  if (!members.length || members.length > CRON_MENTION_ROSTER_MAX) return undefined;
-  const byId = new Map((await deps.directory.list().catch(() => [])).map((m) => [m.principalId, m]));
-  const roster = members
-    .map((m) => byId.get(m.id))
-    .filter((m): m is DirectoryMember => !!m && m.type === "internal")
-    .map(mentionable);
-  return roster.length ? roster.join(", ") : undefined;
+function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined): string | undefined {
+  if (cron.destination?.audienceScopeId !== cron.ownerScopeId) return undefined;
+  const internal = homeRoster?.filter((m) => m.type === "internal") ?? [];
+  if (!internal.length || internal.length > CRON_MENTION_ROSTER_MAX) return undefined;
+  return internal.map(mentionable).join(", ");
 }
 
 function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
@@ -226,6 +211,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       });
       return { authzFailed: true };
     }
+    const skipped =
+      scheduledAt !== undefined
+        ? await deps.skipFire?.(current).catch(reportFailureAs(`scheduler: skip check for cron ${cron.id}`, undefined))
+        : undefined;
+    if (skipped) {
+      await deps.crons.recordFire(cron.id, {
+        fireKey,
+        threadRef: cronFireThreadRef(cron.id, fireKey),
+        firedAt: t,
+        endedAt: now(),
+        scheduledAt,
+        status: "silent",
+        note: skipped,
+      });
+      return { authzFailed: false };
+    }
     return fireEnabled(current, t, fireKey, scheduledAt);
   }
 
@@ -261,7 +262,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
-    const mentionRoster = await cronMentionRoster(deps, cron).catch(() => undefined);
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(
@@ -272,12 +272,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           run: deps.run,
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-          ...(deps.isOpenScopeMember ? { isOpenScopeMember: deps.isOpenScopeMember } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
         },
         {
           ...cronTriggerAuthority(cron),
-          input: renderCronFireInput(cron, mentionRoster),
+          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster)),
           fireKey,
           threadRef,
           surface: "cron",
@@ -332,10 +331,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });
     }
-    if (outcome.authzFailed) {
-      await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: true };
-    }
+    if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
+    else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
+    if (outcome.authzFailed) return { authzFailed: true };
     if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
     return { authzFailed: false };
   }

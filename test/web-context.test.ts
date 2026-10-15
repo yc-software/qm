@@ -97,8 +97,8 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
     async getEntries() {
       return entries;
     },
-    async getTape() {
-      return [];
+    async countEntriesBefore(_id: string, beforeSeq: number) {
+      return entries.filter((entry) => entry.seq < beforeSeq).length;
     },
     async latestEntrySeq() {
       return entries.length - 1;

@@ -1,5 +1,7 @@
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
+import { renderFacts } from "../../../memory/facts.ts";
+import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
 
@@ -23,7 +25,6 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
       } else {
         const content = await deps.memory!.read(id);
         bytes = Buffer.byteLength(content);
-        updatedAt = content.length > 0 ? await deps.memory!.updatedAt?.(id) : undefined;
       }
       return {
         scopeId: id,
@@ -43,26 +44,32 @@ export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, scopes });
 }
 
-export async function getAdminMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
+export async function adminMemory(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body, method } = ctx;
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
   const { actor, scope } = authz;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  audit(deps, { principalId: actor.id, action: "memory.read", resource: "memory", scopeLabel: scope });
-  return sendJson(res, 200, { scopeId: scope, content: await deps.memory.read(scope) });
-}
-
-export async function putAdminMemory(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
-  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
-  const content = (body as { content?: unknown }).content;
-  if (typeof content !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "memory requires { content: string }" });
-  await deps.memory.replace(scope, content, actor.id);
-  audit(deps, { principalId: actor.id, action: "memory.update", resource: "memory", scopeLabel: scope });
-  return sendJson(res, 200, { ok: true, scopeId: scope });
+  const memory = deps.memory;
+  if (!memory) return sendJson(res, 404, { error: "not_found" });
+  if (method === "POST") {
+    const facts = parseFacts(body);
+    if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
+    await memory.capture(scope, facts, Date.now(), actor.id, { mode: "explicit" });
+  } else if (method === "PATCH") {
+    const edits = parseEdits(body);
+    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+    await memory.edit?.(scope, edits, actor.id);
+  } else if (method === "DELETE") {
+    const ids = parseIds(body);
+    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+    await memory.delete?.(scope, ids, actor.id);
+  }
+  const action = method === "GET" ? "memory.read" : "memory.update";
+  audit(deps, { principalId: actor.id, action, resource: "memory", scopeLabel: scope });
+  const facts = await memoryFacts(memory, scope);
+  return sendJson(res, 200, {
+    scopeId: scope,
+    content: memory.facts ? renderFacts(facts) : await memory.read(scope),
+    facts,
+  });
 }

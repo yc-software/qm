@@ -123,11 +123,10 @@ test("skipMemory turns neither recall nor capture", async () => {
   let recalls = 0;
   let captures = 0;
   const memory: MemoryService = {
-    recall: async () => (recalls++, "remembered deployment state"),
+    recall: async () => (recalls++, [{ text: "remembered deployment state", score: 0.2 }]),
     capture: async () => 0,
     query: async () => [],
     read: async () => "",
-    replace: async () => {},
   };
   const orch = buildOrchestrator(createMockHarness(), memory, {
     onTurnEnd: async () => {

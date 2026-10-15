@@ -1,3 +1,5 @@
+import type { TeamStore } from "../teams/teams.ts";
+import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
@@ -49,7 +51,6 @@ import type { Scheduler } from "../cron/scheduler.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
-import type { DeviceFlowCutoverStore } from "../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type {
   ConnectorTokenStore,
@@ -121,8 +122,9 @@ export interface ServerDeps {
   config?: ScopedConfigStore;
   acl?: AclStore;
   credentialUsage?: CredentialUsageSink;
-  deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
+  teams?: TeamStore;
+  decisions?: DecisionStore;
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
@@ -185,8 +187,7 @@ export interface ServerDeps {
   deploymentLayer?: DeploymentLayerStore;
   backgroundOwnership?: BackgroundOwnershipControl;
   deploymentControlSecret?: string;
-  credentialServices?: () => readonly string[];
-  brokeredServices?: () => readonly string[];
+  spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
   deployGateSecret?: string;

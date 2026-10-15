@@ -1,8 +1,6 @@
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import { memoryContextPayload, nextMemoryContext } from "../src/memory/context-boundary.ts";
-import { assertPersonalConversationParity } from "./support/personal-conversation-parity.ts";
 import "./run-availability.ts";
-import { migrateTranscriptPage } from "../scripts/lib/transcript-tape-migration.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
@@ -73,6 +71,76 @@ test("pg session store: fork provenance survives a store restart", { skip }, asy
 
 test("pg session store: getForParticipant returns exactly the row listByParticipant returns", { skip }, async () => {
   await assertParticipantSessionParity(createPostgresSessionStore(URL!), `pg-parity-${randomUUID()}`);
+});
+
+test("pg participant presence checks seek into the visible history window", { skip }, async (t) => {
+  const store = createPostgresSessionStore(URL!);
+  const owner = `window-${randomUUID()}`;
+  const session = await store.getOrCreateByThread(owner, "channel", scopeId("channel", owner));
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  try {
+    await raw.query(
+      `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+       SELECT $1, n, NULL, 'user', '{"text":"window fixture"}', $2, n * 10
+         FROM generate_series(0, 3999) n`,
+      [session.id, session.scopeId],
+    );
+    await store.addParticipant(session.id, owner);
+    const captured: { text: string; values: unknown[] }[] = [];
+    const execute = pg.Client.prototype.query;
+    t.mock.method(pg.Client.prototype, "query", function (this: InstanceType<typeof pg.Client>, ...args: unknown[]) {
+      const config = args[0] as { text?: string; values?: unknown[] } | string;
+      const text = typeof config === "string" ? config : config.text;
+      if (text?.includes("AS has_entries")) {
+        captured.push({ text, values: typeof config === "string" ? (args[1] as unknown[]) : (config.values ?? []) });
+      }
+      return Reflect.apply(execute, this, args);
+    });
+    await store.listByParticipant(owner);
+    await store.getForParticipant(session.id, owner);
+    t.mock.restoreAll();
+    assert.equal(captured.length, 2);
+
+    const windows = [
+      { fromSeq: 4000, toSeq: null, from: 0, to: null, visible: [] },
+      { fromSeq: 0, toSeq: 1, from: 40000, to: 40000, visible: [0] },
+      { fromSeq: null, toSeq: null, from: 40000, to: null, visible: [] },
+      { fromSeq: null, toSeq: null, from: 0, to: 10, visible: [0] },
+      { fromSeq: 3998, toSeq: null, from: 40000, to: 39990, visible: [3998] },
+      { fromSeq: null, toSeq: 2, from: 10, to: 0, visible: [1] },
+      { fromSeq: 2, toSeq: 2, from: 0, to: null, visible: [] },
+    ];
+    type Plan = { "Relation Name"?: string; "Rows Removed by Filter"?: number; Plans?: Plan[] };
+    const rejectedEntries = (plan: Plan): number =>
+      (plan["Relation Name"] === "session_entries" ? (plan["Rows Removed by Filter"] ?? 0) : 0) +
+      (plan.Plans ?? []).reduce((sum, child) => sum + rejectedEntries(child), 0);
+    for (const window of windows) {
+      await raw.query(
+        `UPDATE participants SET valid_from_seq=$3, valid_to_seq=$4, valid_from=$5, valid_to=$6
+          WHERE session_id=$1 AND principal_id=$2`,
+        [session.id, owner, window.fromSeq, window.toSeq, window.from, window.to],
+      );
+      assert.deepEqual(
+        (await store.visibleEntries(session.id, owner)).map((entry) => entry.seq),
+        window.visible,
+      );
+      assert.equal((await store.listByParticipant(owner))[0]!.hasEntries, window.visible.length > 0);
+      assert.equal((await store.getForParticipant(session.id, owner))!.hasEntries, window.visible.length > 0);
+      if (window.fromSeq === null ? window.toSeq !== null : window.toSeq === null && window.to !== null) continue;
+      for (const query of captured) {
+        const result = await raw.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${query.text}`, query.values);
+        const rejected = rejectedEntries(result.rows[0]["QUERY PLAN"][0].Plan);
+        assert.ok(
+          rejected < 32,
+          `presence check rejected ${rejected} historical entries for ${JSON.stringify(window)}`,
+        );
+      }
+    }
+  } finally {
+    t.mock.restoreAll();
+    await raw.end();
+  }
 });
 
 test("pg participant activity uses the latest user entry, including overheard entries", { skip }, async () => {
@@ -739,41 +807,7 @@ test("pg lease: a lock taken by an older instance still blocks, and reports what
   assert.ok(blocked.heldUntil! > Date.now(), "the expiry is still readable, so the lock is still datable");
 });
 
-test("pg tape coverage counts only boolean turn-end watermarks and legacy imports", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "tape-coverage");
-  const session = await s.getOrCreateByThread("pg-tape-coverage", "dm", scope);
-  const { lease } = await s.acquireLease(session.id);
-  assert.ok(lease);
-
-  await s.appendTape(lease, { kind: "annotation", payload: { subturnEnd: true }, scopeLabel: scope, entrySeq: 50 });
-  await s.appendTape(lease, { kind: "annotation", payload: { turnEnd: "true" }, scopeLabel: scope, entrySeq: 49 });
-  await s.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "compaction", text: "summary" },
-    scopeLabel: scope,
-    coversEntrySeq: 60,
-  });
-  await s.appendTape(lease, {
-    kind: "message",
-    harness: "pi",
-    payload: { role: "user", content: [{ type: "text", text: "\ud800" }] },
-    scopeLabel: scope,
-  });
-  assert.equal(await s.tapeCoverage(session.id), -1);
-
-  await s.appendTape(lease, { kind: "annotation", payload: { turnEnd: true }, scopeLabel: scope, entrySeq: 42 });
-  assert.equal(await s.tapeCoverage(session.id), 42);
-  await s.appendTape(lease, {
-    kind: "context_event",
-    payload: { event: "legacy_import", messages: [] },
-    scopeLabel: scope,
-    coversEntrySeq: 45,
-  });
-  assert.equal(await s.tapeCoverage(session.id), 45);
-});
-
-test("pg latestEntrySeq, participant windows, and tape meta attachments round-trip", { skip }, async () => {
+test("pg latestEntrySeq and participant windows round-trip", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "proj-reads");
   const session = await s.getOrCreateByThread("pg-projection-reads", "dm", scope);
@@ -797,20 +831,6 @@ test("pg latestEntrySeq, participant windows, and tape meta attachments round-tr
     listed.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
     windows.map((w) => [w.principalId, w.validFromSeq, w.validToSeq]).sort(),
   );
-
-  const attachments = [{ name: "a.txt", mimetype: "text/plain", sizeBytes: 3 }];
-  await s.appendTape(lease!, {
-    kind: "message",
-    harness: "pi",
-    payload: { role: "user", content: [{ type: "text", text: "one" }] },
-    scopeLabel: scope,
-    entrySeq: 0,
-    meta: { bareText: "one", attachments, sourceRole: "agent" },
-  });
-  const rows = await s.getTape(session.id);
-  const message = rows.find((row) => row.kind === "message")!;
-  assert.deepEqual(message.meta?.attachments, attachments);
-  assert.equal(message.meta?.sourceRole, "agent");
 });
 
 test("pg participant tenure remains exact when every event shares a timestamp", { skip }, async () => {
@@ -2703,6 +2723,7 @@ test("pg search: full-text over entries with prefix match, window ACL, and type 
   await s.releaseLease(lease);
 
   const hits = await s.searchEntries("USRCH", "memo boar");
+  assert.ok(hits.every((hit) => hit.entryScopeLabel === scopeId("personal", "USRCH")));
   assert.equal(hits.length, 3, "prefix terms match user and assistant text; tool calls are ignored");
   assert.equal(hits[0]!.text, "memo board postscript", "newest first");
   assert.equal(hits[2]!.author, "josh", "user hits carry the author");
@@ -2783,7 +2804,7 @@ test("pg search: message writes populate the index and tool results stay unfinda
     { seq: reply.seq, type: "assistant", text: "Rotated the deploy key.", createdAt: reply.createdAt },
   ]);
   assert.equal(await s.searchIndexCoverage(sess.id), reply.seq);
-  assert.deepEqual(await s.searchEntries("UIDX", "deploy key"), before, "tape-index hits match the entries-index hits");
+  assert.deepEqual(await s.searchEntries("UIDX", "deploy key"), before, "search hits are unchanged by the reindex");
 
   await s.append(lease, { type: "user", payload: { text: "also rotate the staging deploy key" }, scopeLabel: scope });
   assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
@@ -3077,56 +3098,6 @@ test("pg session store: bounded participant listing is recent and optional", { s
   assert.deepEqual(await store.listByParticipant("bounded-user", { limit: 0 }), []);
 });
 
-test(
-  "pg canonical transcript annotations are exact and taint release preserves original identity",
-  { skip },
-  async () => {
-    const s = createPostgresSessionStore(URL!);
-    const scope = scopeId("personal", "canonical-tape");
-    const session = await s.getOrCreateByThread("pg-canonical-tape", "dm", scope);
-    const { lease } = await s.acquireLease(session.id);
-    assert.ok(lease);
-    for (let i = 0; i < 4; i++)
-      await s.append(lease, {
-        type: "tool_result",
-        scopeLabel: scope,
-        payload: { tool: "execute", callId: `c${i}`, result: "denied", isError: true, code: 1, securityTainted: true },
-      });
-    const before = await s.getEntries(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), before);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 0), true);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
-    assert.deepEqual(await s.getTranscriptEntries(session.id, { limit: 2 }), before.slice(-2));
-    assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, limit: 2 }), before.slice(-2));
-    for (const beforeSeq of [0, 1, 3, 4, 99]) {
-      for (const limit of [undefined, 0, 1, 10]) {
-        const expected = before.filter((entry) => entry.seq >= 1 && entry.seq < beforeSeq);
-        let page = expected;
-        if (limit !== undefined) page = limit === 0 ? [] : expected.slice(-limit);
-        assert.deepEqual(await s.getTranscriptEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
-        assert.deepEqual(await s.getEntries(session.id, { sinceSeq: 1, beforeSeq, limit }), page);
-      }
-    }
-    assert.equal(await s.tapeCoverage(session.id), -1);
-    assert.equal(await s.clearSecurityTaint(session.id), true);
-    const after = await s.getEntries(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), after);
-    assert.equal(after[0]!.createdAt, before[0]!.createdAt);
-    assert.equal(after[0]!.parentSeq, before[0]!.parentSeq);
-    assert.equal((after[0]!.payload as { securityTainted?: boolean }).securityTainted, undefined);
-    assert.equal((await s.getTape(session.id)).length, 8);
-    assert.equal(await s.clearSecurityTaint(session.id), true);
-    assert.equal((await s.getTape(session.id)).length, 8);
-    assert.equal(await s.tapeCoverage(session.id), -1);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
-    await s.append(lease, { type: "soul", payload: { text: "legacy instructions" }, scopeLabel: scope });
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 4), true);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 5), false);
-    await s.releaseLease(lease);
-  },
-);
-
 test("pg transcript write failure rolls back the entry and its counters", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("personal", "canonical-failure");
@@ -3140,7 +3111,7 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
     `CREATE FUNCTION reject_transcript_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'transcript unavailable'; END $$`,
   );
   await client.query(
-    `CREATE TRIGGER reject_transcript_test BEFORE INSERT ON session_tape FOR EACH ROW WHEN (NEW.session_id = '${session.id}') EXECUTE FUNCTION reject_transcript_test()`,
+    `CREATE TRIGGER reject_transcript_test BEFORE INSERT ON session_entries FOR EACH ROW WHEN (NEW.session_id = '${session.id}') EXECUTE FUNCTION reject_transcript_test()`,
   );
   try {
     await assert.rejects(
@@ -3148,143 +3119,14 @@ test("pg transcript write failure rolls back the entry and its counters", { skip
       /transcript unavailable/,
     );
     assert.deepEqual(await s.getEntries(session.id), []);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
     assert.equal(await s.latestEntrySeq(session.id), -1);
     const counters = (await client.query("SELECT messages FROM sessions WHERE id=$1", [session.id])).rows[0];
     assert.equal(counters.messages, 0);
   } finally {
-    await client.query("DROP TRIGGER reject_transcript_test ON session_tape");
+    await client.query("DROP TRIGGER reject_transcript_test ON session_entries");
     await client.query("DROP FUNCTION reject_transcript_test()");
     await client.end();
     await s.releaseLease(lease);
-  }
-});
-
-test("pg transcript backfill is bounded, idempotent, and independent of model coverage", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "canonical-backfill");
-  const session = await s.getOrCreateByThread("pg-canonical-backfill", "dm", scope);
-  const pg = (await import("pg")).default;
-  const client = new pg.Client({ connectionString: URL! });
-  await client.connect();
-  try {
-    await client.query(
-      `INSERT INTO session_entries(session_id,seq,parent_seq,type,payload,scope_label,created_at)
-      SELECT $1,i,NULLIF(i-1,-1),'user',json_build_object('text','history '||i,'securityTainted',true)::text,$2,123000+i
-      FROM generate_series(0,619) i`,
-      [session.id, scope],
-    );
-    const dry = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: false });
-    assert.deepEqual(dry, { busy: false, scanned: 200, changed: 200, afterSeq: 199 });
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
-    assert.equal(await s.canReadTranscriptSuffix(session.id, 620), false);
-    for (let afterSeq = -1; afterSeq < 619;) {
-      const page = await migrateTranscriptPage(client, session.id, { afterSeq, limit: 200, apply: true });
-      assert.ok(!page.busy);
-      assert.ok(page.scanned <= 200);
-      afterSeq = page.afterSeq;
-    }
-    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
-    assert.equal(await s.tapeCoverage(session.id), -1);
-    const repeated = await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 200, apply: true });
-    assert.deepEqual(repeated, { busy: false, scanned: 200, changed: 0, afterSeq: 199 });
-    assert.equal((await s.getTape(session.id)).length, 620);
-    await s.clearSecurityTaint(session.id);
-    assert.deepEqual(await s.getTranscriptEntries(session.id), await s.getEntries(session.id));
-  } finally {
-    await client.end();
-  }
-});
-
-test("pg transcript backfill refuses an active lease or writer transaction", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "canonical-busy");
-  const session = await s.getOrCreateByThread("pg-canonical-busy", "dm", scope);
-  const pg = (await import("pg")).default;
-  const client = new pg.Client({ connectionString: URL! });
-  const writer = new pg.Client({ connectionString: URL! });
-  await client.connect();
-  await writer.connect();
-  try {
-    const { lease } = await s.acquireLease(session.id);
-    assert.ok(lease);
-    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
-      busy: true,
-    });
-    await s.releaseLease(lease);
-    await writer.query("BEGIN");
-    await writer.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [session.id]);
-    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
-      busy: true,
-    });
-    await writer.query("ROLLBACK");
-    assert.deepEqual(await migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply: true }), {
-      busy: false,
-      scanned: 0,
-      changed: 0,
-      afterSeq: -1,
-    });
-  } finally {
-    await writer.end();
-    await client.end();
-  }
-});
-
-test(
-  "pg transcript migration rejects extra canonical tails and entries in an empty legacy session",
-  { skip },
-  async () => {
-    const s = createPostgresSessionStore(URL!);
-    const pg = (await import("pg")).default;
-    const client = new pg.Client({ connectionString: URL! });
-    await client.connect();
-    try {
-      for (const originalCount of [0, 3]) {
-        const scope = scopeId("personal", `extra-canonical-${originalCount}`);
-        const session = await s.getOrCreateByThread(`pg-extra-canonical-${originalCount}`, "dm", scope);
-        const { lease } = await s.acquireLease(session.id);
-        assert.ok(lease);
-        for (let i = 0; i <= originalCount; i++)
-          await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
-        await s.releaseLease(lease);
-        await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=$2", [session.id, originalCount]);
-        for (const apply of [false, true]) {
-          await assert.rejects(
-            migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
-            /extra entry/,
-          );
-        }
-        assert.equal((await s.getTranscriptEntries(session.id)).length, originalCount + 1);
-      }
-    } finally {
-      await client.end();
-    }
-  },
-);
-
-test("pg transcript migration refuses gapped legacy history", { skip }, async () => {
-  const s = createPostgresSessionStore(URL!);
-  const pg = (await import("pg")).default;
-  const client = new pg.Client({ connectionString: URL! });
-  await client.connect();
-  try {
-    const scope = scopeId("personal", "gapped-transcript");
-    const session = await s.getOrCreateByThread("pg-gapped-transcript", "dm", scope);
-    const { lease } = await s.acquireLease(session.id);
-    assert.ok(lease);
-    for (let i = 0; i < 3; i++)
-      await s.append(lease, { type: "user", payload: { text: `row ${i}` }, scopeLabel: scope });
-    await s.releaseLease(lease);
-    await client.query("DELETE FROM session_entries WHERE session_id=$1 AND seq=1", [session.id]);
-    await client.query("DELETE FROM session_tape WHERE session_id=$1", [session.id]);
-    for (const apply of [false, true])
-      await assert.rejects(
-        migrateTranscriptPage(client, session.id, { afterSeq: -1, limit: 10, apply }),
-        /sequence gap/,
-      );
-    assert.deepEqual(await s.getTranscriptEntries(session.id), []);
-  } finally {
-    await client.end();
   }
 });
 
@@ -3331,51 +3173,6 @@ test("pg child parentage and spawn metadata survive reopening", { skip }, async 
   );
   await reopened.setParentSession(child.id, null);
   assert.equal((await reopened.get(child.id))?.parentSessionId, undefined);
-});
-
-test("pg personal conversation counts exclude synthetic and inherited chats", { skip }, async () => {
-  await assertPersonalConversationParity(createPostgresSessionStore(URL!), "pg-personal-count");
-});
-
-test("pg personal conversation counts tolerate legacy null characters", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const scope = scopeId("personal", "legacy-null-count");
-  const session = await store.getOrCreateByThread("legacy-null-count", "dm", scope);
-  const { lease } = await store.acquireLease(session.id);
-  assert.ok(lease);
-  await store.append(lease, { type: "user", payload: { text: "Hello" }, scopeLabel: scope });
-  await store.releaseLease(lease);
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query("DELETE FROM session_tape WHERE session_id = $1", [session.id]);
-    await raw.query("UPDATE session_entries SET payload = $2 WHERE session_id = $1", [
-      session.id,
-      JSON.stringify({ text: "Hello\u0000", hidden: "true", overheard: "true" }),
-    ]);
-    assert.equal(await store.countPersonalConversations(scope), 1);
-    await raw.query("UPDATE session_entries SET payload = $2 WHERE session_id = $1", [
-      session.id,
-      JSON.stringify({ text: "Hello\u0000", hidden: true }),
-    ]);
-    assert.equal(await store.countPersonalConversations(scope), 0);
-  } finally {
-    await raw.end();
-  }
-});
-
-test("pg session status survives restart, is shared, and clears", { skip }, async () => {
-  const first = createPostgresSessionStore(URL!);
-  const session = await first.getOrCreateByThread("session-status", "dm", scopeId("personal", "U1"));
-  await first.addParticipant(session.id, "U1");
-  await first.addParticipant(session.id, "U2");
-  const status = { emoji: "🚀", text: "Live in production" };
-  await first.updateStatus(session.id, status);
-  const restarted = createPostgresSessionStore(URL!);
-  assert.deepEqual((await restarted.get(session.id))?.status, status);
-  assert.deepEqual((await restarted.getForParticipant(session.id, "U2"))?.status, status);
-  await restarted.updateStatus(session.id, null);
-  assert.equal((await first.get(session.id))?.status ?? null, null);
 });
 
 test(

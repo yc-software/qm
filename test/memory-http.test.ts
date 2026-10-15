@@ -28,183 +28,75 @@ function start() {
 const ALICE_ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 const json = async (r: Response): Promise<any> => r.json();
 
-test("a user reads and curates their OWN personal memory (personal-scoped, boundary-safe)", async () => {
+const send = (base: string, path: string, method: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${base}${path}`, {
+    method,
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+
+test("a user edits and forgets facts in their OWN personal notebook only", async () => {
   const s = start();
   try {
-    const empty = await fetch(`${s.base}/v1/memory?principalId=U1`);
-    assert.equal(empty.status, 200);
-    const emptyHead = await json(empty);
-    assert.equal(emptyHead.content, "", "no memory yet → empty");
-    assert.match(emptyHead.revision, /^[a-f0-9]{64}$/, "even an empty notebook has a usable revision token");
+    const mine = scopeId("personal", "U1");
+    await s.built.memory.capture(mine, ["Prefers terse replies", "Works in ET"], Date.parse("2026-05-31"));
+    const [terse, tz] = (await json(await fetch(`${s.base}/v1/memory?principalId=U1`))).facts;
+    assert.equal(terse.text, "Prefers terse replies");
 
-    await s.built.memory.capture(scopeId("personal", "U1"), ["Prefers terse replies"], Date.parse("2026-05-31"));
-    const seeded = await json(await fetch(`${s.base}/v1/memory?principalId=U1`));
-    assert.match(seeded.content, /Prefers terse replies/, "captured fact is visible to the owner");
-
-    const put = await fetch(`${s.base}/v1/memory`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", content: "# Memory\n\n- I work in PT\n" }),
+    const edited = await send(s.base, "/v1/memory", "PATCH", {
+      principalId: "U1",
+      facts: [{ id: tz.id, text: "Works in PT" }],
     });
-    assert.equal(put.status, 200);
-    assert.equal(
-      (await json(await fetch(`${s.base}/v1/memory?principalId=U1`))).content,
-      "# Memory\n\n- I work in PT\n",
-    );
+    assert.equal(edited.status, 200);
+    assert.equal(await s.built.memory.read(mine), "- (2026-05-31) Prefers terse replies\n- (2026-05-31) Works in PT");
+    assert.equal((await send(s.base, "/v1/memory", "DELETE", { principalId: "U1", ids: [terse.id] })).status, 200);
+    assert.equal(await s.built.memory.read(mine), "- (2026-05-31) Works in PT");
 
     assert.equal(
-      (await json(await fetch(`${s.base}/v1/memory?principalId=U2`))).content,
-      "",
-      "another user's memory is separate",
+      (await send(s.base, "/v1/memory", "PATCH", { principalId: "U2", facts: [{ id: tz.id, text: "hijack" }] })).status,
+      404,
+      "ids are per notebook, so another user's ids are missing in yours",
     );
-
-    const onDisk = await s.built.workspace.read(scopeId("personal", "U1"), "memory/MEMORY.md");
-    assert.equal(JSON.parse(onDisk!).version, 1);
-    assert.equal(await s.built.memory.read(scopeId("personal", "U1")), "# Memory\n\n- I work in PT\n");
+    assert.equal((await send(s.base, "/v1/memory", "PATCH", { principalId: "U1", facts: [] })).status, 400);
+    assert.equal((await fetch(`${s.base}/v1/memory`)).status, 400, "GET needs principalId");
 
     const actions = (await s.built.auditLog.events()).filter((e) => e.principalId === "U1").map((e) => e.action);
-    assert.ok(
-      actions.includes("memory.self.read") && actions.includes("memory.self.update"),
-      "self memory access is audited",
-    );
+    assert.ok(actions.includes("memory.self.read") && actions.includes("memory.self.update"));
   } finally {
     await s.close();
   }
 });
 
-test("user memory rejects a missing principal or non-string content", async () => {
-  const s = start();
-  try {
-    assert.equal((await fetch(`${s.base}/v1/memory`)).status, 400, "GET needs principalId");
-    assert.equal(
-      (
-        await fetch(`${s.base}/v1/memory`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        })
-      ).status,
-      400,
-      "PUT needs principalId",
-    );
-    const noContent = await fetch(`${s.base}/v1/memory`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1" }),
-    });
-    assert.equal(noContent.status, 400, "PUT needs content");
-  } finally {
-    await s.close();
-  }
-});
-
-test("revisioned saves reject stale editors without losing a newer capture", async () => {
-  const s = start();
-  try {
-    const head = await json(await fetch(`${s.base}/v1/memory?principalId=U1`));
-    await s.built.memory.capture(scopeId("personal", "U1"), ["New fact from another conversation"], Date.now());
-    const stale = await fetch(`${s.base}/v1/memory`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", revision: head.revision, content: "# Memory\n\n- stale edit\n" }),
-    });
-    assert.equal(stale.status, 409);
-    assert.match((await json(stale)).content, /New fact from another conversation/);
-    assert.match(await s.built.memory.read(scopeId("personal", "U1")), /New fact from another conversation/);
-  } finally {
-    await s.close();
-  }
-});
-
-test("an empty revision falls back to the backward-compatible save path", async () => {
-  const s = start();
-  try {
-    const saved = await fetch(`${s.base}/v1/memory`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: "U1", revision: "", content: "# Memory\n\n- first edit\n" }),
-    });
-    assert.equal(saved.status, 200);
-    assert.match(await s.built.memory.read(scopeId("personal", "U1")), /first edit/);
-  } finally {
-    await s.close();
-  }
-});
-
-test("an admin views and curates any scope's memory; the write replaces the notebook", async () => {
+test("an admin edits any scope's facts by id; non-admins are refused without a write", async () => {
   const s = start();
   try {
     const scope = "channel:C9";
+    const path = `/v1/admin/memory?scope=${encodeURIComponent(scope)}`;
     await s.built.memory.capture(scope, ["The standup is at 10am"], Date.parse("2026-05-31"));
+    const [fact] = (await json(await fetch(`${s.base}${path}`, { headers: ALICE_ADMIN }))).facts;
 
-    const read = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, { headers: ALICE_ADMIN });
-    assert.equal(read.status, 200);
-    const d = await json(read);
-    assert.equal(d.scopeId, scope);
-    assert.match(d.content, /standup is at 10am/);
+    const nobody = { "x-admin-actor": "nobody@default-org" };
+    assert.equal((await fetch(`${s.base}${path}`, { headers: nobody })).status, 403);
+    assert.equal((await send(s.base, path, "PATCH", { facts: [{ id: fact.id, text: "evil" }] }, nobody)).status, 403);
+    assert.equal((await fetch(`${s.base}/v1/admin/memory`, { headers: ALICE_ADMIN })).status, 400);
 
-    const put = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-      method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-      body: JSON.stringify({ content: "# Memory\n\n- Standup moved to 9:30\n" }),
-    });
-    assert.equal(put.status, 200);
-    const after = await json(
-      await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, { headers: ALICE_ADMIN }),
+    const added = await send(s.base, path, "POST", { facts: ["Retro is on Fridays"] }, ALICE_ADMIN);
+    assert.match((await json(added)).content, /Retro is on Fridays/);
+    const edited = await send(
+      s.base,
+      path,
+      "PATCH",
+      { facts: [{ id: fact.id, text: "Standup moved to 9:30" }] },
+      ALICE_ADMIN,
     );
-    assert.equal(after.content, "# Memory\n\n- Standup moved to 9:30\n");
-
-    await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-      method: "PUT",
-      headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-      body: JSON.stringify({ content: "   \n" }),
-    });
+    assert.match((await json(edited)).content, /^- \(2026-05-31\) Standup moved to 9:30\n/);
     assert.equal(
-      (
-        await json(
-          await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, { headers: ALICE_ADMIN }),
-        )
-      ).content,
-      "",
+      (await json(await send(s.base, path, "DELETE", { ids: [fact.id] }, ALICE_ADMIN))).content,
+      `- (${new Date().toISOString().slice(0, 10)}) Retro is on Fridays`,
     );
 
     const actions = (await s.built.auditLog.events()).map((e) => e.action);
     assert.ok(actions.includes("memory.read") && actions.includes("memory.update"), "admin memory access is audited");
-  } finally {
-    await s.close();
-  }
-});
-
-test("admin memory is authz-gated (authz is the boundary) and needs a scope", async () => {
-  const s = start();
-  try {
-    const scope = "personal:U1";
-    assert.equal(
-      (
-        await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-          headers: { "x-admin-actor": "nobody@default-org" },
-        })
-      ).status,
-      403,
-    );
-    const denied = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-      method: "PUT",
-      headers: { "x-admin-actor": "nobody@default-org", "content-type": "application/json" },
-      body: JSON.stringify({ content: "evil" }),
-    });
-    assert.equal(denied.status, 403);
-    assert.equal(await s.built.workspace.read(scope, "memory/MEMORY.md"), null, "a denied PUT cannot write memory");
-    assert.equal((await fetch(`${s.base}/v1/admin/memory`, { headers: ALICE_ADMIN })).status, 400);
-    assert.equal(
-      (
-        await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scope)}`, {
-          method: "PUT",
-          headers: { ...ALICE_ADMIN, "content-type": "application/json" },
-          body: JSON.stringify({ content: 42 }),
-        })
-      ).status,
-      400,
-    );
   } finally {
     await s.close();
   }

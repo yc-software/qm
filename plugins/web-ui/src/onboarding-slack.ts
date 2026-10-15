@@ -2,7 +2,8 @@ import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import "./slack-account.css";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
-import { icon, slackMark } from "./ui";
+import { slackMark } from "./ui";
+import { icon } from "./icons";
 
 export class OnboardingSlack extends LitElement {
   static properties = {

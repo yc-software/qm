@@ -43,9 +43,6 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
     layer.tools.map((t) => t.id),
     ["acmecli", "jq"],
   );
-  assert.deepEqual(layer.connectors, [
-    { id: "acmecli", label: "Acme CLI", check: "acmecli me", reauth: "acmecli login --use-device-code" },
-  ]);
   assert.deepEqual(
     layer.advertisedTools,
     ["acmecli (organization CLI)"],
@@ -114,9 +111,8 @@ test("a layer declaring brokers on two tools is rejected at load", () => {
   );
 });
 
-test("loadDeploymentLayer: an authless tool contributes no connector or paths", () => {
+test("loadDeploymentLayer: an authless tool contributes no paths", () => {
   const layer = loadDeploymentLayer(layerDir({ helper: { id: "helper", advertise: "helper tool" } }));
-  assert.deepEqual(layer.connectors, []);
   assert.deepEqual(layer.credentialPaths, []);
   assert.deepEqual(layer.splitEnvTemplates, []);
   assert.deepEqual(layer.advertisedTools, ["helper tool"]);

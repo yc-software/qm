@@ -4,10 +4,11 @@ import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import type { McpFetch } from "../src/mcp/mcp-client.ts";
+import { recallText } from "./support/recall-text.ts";
 
 const defaultMemory: MemoryService = {
   async recall() {
-    return "personal notebook";
+    return [{ text: "personal notebook", score: 0.2 }];
   },
   async capture(_scope, facts) {
     return facts.length;
@@ -18,7 +19,6 @@ const defaultMemory: MemoryService = {
   async read() {
     return "personal notebook";
   },
-  async replace() {},
 };
 
 function response(body: unknown) {
@@ -68,8 +68,8 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
     fetchImpl,
   });
 
-  assert.equal(await memory.recall("personal:u1", { query: "launch", actorId: "u1" }), "personal notebook");
-  assert.equal(await memory.recall("org:acme", { query: "launch", actorId: "u1" }), "org knowledge");
+  assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");
+  assert.equal(recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1" })), "org knowledge");
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 

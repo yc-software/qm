@@ -9,20 +9,17 @@ import {
   type ToolInstallFile,
 } from "./deployment-layer.ts";
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
-import type { ResidentAuthConnector } from "../credentials/resident-auth.ts";
 import type { CommandRule } from "../types.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
   tools: ToolDescriptor[];
-  connectors: ResidentAuthConnector[];
   advertisedTools: string[];
   hints: string[];
   credentialPaths: ToolCredentialPath[];
   splitEnvTemplates: Record<string, string>[];
   brokeredTools: BrokeredLayerTool[];
   commandRules: CommandRule[];
-  credentialTools: LayerCredentialTool[];
   installFiles: LayerInstallFile[];
 }
 
@@ -39,23 +36,16 @@ export interface LayerInstallFile {
   content: string;
 }
 
-export interface LayerCredentialTool {
-  service: string;
-  roots: string[];
-}
-
 export function emptyDeploymentLayer(): DeploymentLayerRuntime {
   return {
     dir: "",
     tools: [],
-    connectors: [],
     advertisedTools: [],
     hints: [],
     credentialPaths: [],
     splitEnvTemplates: [],
     brokeredTools: [],
     commandRules: [],
-    credentialTools: [],
     installFiles: [],
   };
 }
@@ -116,13 +106,6 @@ function toolService(tool: ToolDescriptor, why: string): string {
   );
 }
 
-function toolServices(tool: ToolDescriptor): string[] {
-  const services = new Set(
-    (tool.auth?.credentialPaths ?? []).flatMap((entry) => credentialServiceForPath(entry.path) ?? []),
-  );
-  return services.has(tool.id) || services.size === 0 ? [tool.id] : [...services];
-}
-
 export function resolvedDeploymentLayer(
   dir: string,
   tools: ToolDescriptor[],
@@ -140,14 +123,6 @@ export function resolvedDeploymentLayer(
   return {
     dir,
     tools,
-    connectors: withAuth
-      .filter((t) => !t.auth!.broker)
-      .map((t) => ({
-        id: t.id,
-        label: t.label ?? t.id,
-        check: t.auth!.check,
-        reauth: t.auth!.reauth,
-      })),
     advertisedTools: tools.flatMap((t) => (t.advertise ? [t.advertise] : [])),
     hints: tools.flatMap((t) => t.hints ?? []),
     credentialPaths: [
@@ -171,14 +146,6 @@ export function resolvedDeploymentLayer(
         ...(approval.reason ? { reason: approval.reason } : {}),
       })),
     ),
-    credentialTools: withAuth.flatMap((t) =>
-      toolServices(t).map((service) => ({
-        service,
-        roots: (t.auth!.credentialPaths ?? []).flatMap((entry) =>
-          credentialServiceForPath(entry.path) === service ? [entry.path] : [],
-        ),
-      })),
-    ),
     installFiles,
   };
 }
@@ -187,14 +154,12 @@ export function replaceDeploymentLayer(target: DeploymentLayerRuntime, source: D
   target.dir = source.dir;
   for (const key of [
     "tools",
-    "connectors",
     "advertisedTools",
     "hints",
     "credentialPaths",
     "splitEnvTemplates",
     "brokeredTools",
     "commandRules",
-    "credentialTools",
     "installFiles",
   ] as const) {
     target[key].splice(0, target[key].length, ...(source[key] as never[]));

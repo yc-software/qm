@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import { retainedSnapshot } from "../harness/context-snapshot.ts";
+import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
+import type { SessionEntry } from "../types.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
-import type { ResidentAuthConnector, ScopeLivenessRecord } from "../credentials/resident-auth.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
 export interface WorkspaceLayoutInfo {
@@ -35,32 +38,6 @@ export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout:
   return lines.join("\n");
 }
 
-export function renderResidentLoginsBlock(
-  record: ScopeLivenessRecord | null,
-  connectors: readonly ResidentAuthConnector[],
-): string {
-  if (!record) return "";
-  const present = connectors.filter((c) => {
-    const s = record.connectors[c.id];
-    return s === "active" || s === "inactive";
-  });
-  if (!present.length) return "";
-  const lines = [
-    "## Your logins",
-    "Native logins on your computer (resident — each tool authenticates with its own; checked recently):",
-    "Logins survive machine replacement automatically: the platform keeps an encrypted copy core-side and restores it onto a fresh machine; they are never written into workspace backups.",
-    "To (re)log in, start the login command as a background process using the available process controls. A device-flow login prints a URL/code then waits for the person to approve. Relay the URL/code, then watch or poll the process until it exits; never kill it mid-flight. Capture into your keychain is automatic.",
-  ];
-  for (const c of present.sort((a, b) => a.id.localeCompare(b.id))) {
-    if (record.connectors[c.id] === "active") {
-      lines.push(`- ${c.label} — ✓ signed in`);
-    } else {
-      lines.push(`- ${c.label} — ✗ not signed in; to use it: start \`${c.reauth}\` as a background process`);
-    }
-  }
-  return lines.join("\n");
-}
-
 export function renderConnectedAppsBlock(
   record: ConnectorStatusRecord | null,
   availableProviders: readonly string[] = [],
@@ -68,28 +45,30 @@ export function renderConnectedAppsBlock(
 ): string {
   const allowed = new Set(availableProviders);
   const entries = Object.entries(record?.providers ?? {})
-    .filter(([name]) => allowed.has(name))
+    .filter(([name, e]) => allowed.has(name) || e.mcpLabel)
     .sort(([a], [b]) => a.localeCompare(b));
-  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name]) => connectorLabel(name));
+  const label = (name: string, e: (typeof entries)[number][1]) => e.mcpLabel ?? connectorLabel(name);
+  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name, e]) => label(name, e));
   const reconnect = entries
     .filter(([, e]) => e.needsReconnect)
-    .map(([name, e]) => `${connectorLabel(name)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
+    .map(([name, e]) => `${label(name, e)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
   const lines = [
     "## Connected apps",
     "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
   ];
   if (!availableProviders.length) {
     lines.push("No direct OAuth app connections are configured. Do not offer direct OAuth consent links.");
-    return lines.join("\n");
-  }
-  const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-  const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
-  if (available.length) {
-    lines.push(
-      `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
-    );
+    if (!connected.length && !reconnect.length) return lines.join("\n");
   } else {
-    lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
+    const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
+    const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
+    if (available.length) {
+      lines.push(
+        `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
+      );
+    } else {
+      lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
+    }
   }
   if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
   if (connected.length) {
@@ -99,4 +78,59 @@ export function renderConnectedAppsBlock(
     lines.push(`Needs reconnect: ${reconnect.join(", ")}. Do not use these apps until the user reconnects them.`);
   }
   return lines.join("\n");
+}
+
+interface EnvironmentSnapshot {
+  hashes: Record<string, string>;
+  sessionId: string;
+  anchorSeq?: number;
+}
+
+export function environmentDelta(
+  blocks: Record<string, string>,
+  history: readonly SessionEntry[],
+  sessionId: string,
+): { text: string; record: EnvironmentSnapshot } {
+  const { previous, anchorSeq } = retainedSnapshot(
+    history,
+    (entry) => (entry.payload as { environmentSnapshot?: EnvironmentSnapshot } | null)?.environmentSnapshot,
+  );
+  const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
+  const hashes = Object.fromEntries(
+    Object.entries(current).map(([key, text]) => [key, createHash("sha256").update(text).digest("hex")]),
+  );
+  const record = { hashes, sessionId, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
+  if (!previous) return { text: Object.values(current).join("\n\n"), record };
+  const changed = Object.entries(current).filter(([key]) => previous.hashes[key] !== hashes[key]);
+  const removed = Object.keys(previous.hashes).filter((key) => !(key in current));
+  return {
+    text:
+      changed.length || removed.length
+        ? [
+            "Environment changes: sections below replace their earlier versions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
+            ...changed.map(([, text]) => text),
+            ...removed.map((key) => `No longer included: ${key}. Do not rely on its earlier inventory.`),
+          ].join("\n\n")
+        : "",
+    record,
+  };
+}
+
+export function renderSandboxProfiles(
+  providers: ReturnType<SandboxResources["profiles"]>,
+  layout: WorkspaceLayoutInfo,
+): Record<string, string> {
+  return Object.fromEntries(
+    providers
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((provider) => [
+        `Sandbox provider ${provider.name}`,
+        [
+          `## Sandbox provider ${provider.name}`,
+          `Available actions: ${provider.actions.toSorted().join(", ")}.`,
+          renderComputerBlock(provider.spec, layout).replace("## Sandbox environment profile\n", "") ||
+            "Environment profile unknown.",
+        ].join("\n"),
+      ]),
+  );
 }

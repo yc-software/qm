@@ -1,52 +1,25 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
-import test from "node:test";
-import { runInNewContext } from "node:vm";
-import { JSDOM } from "jsdom";
+import test, { after } from "node:test";
+import { browserEnv } from "./browser-env.ts";
 import type { SessionTool, SessionTopbarOpts } from "../src/session-scope.ts";
 
-const source = readFileSync(new URL("../src/session-scope.ts", import.meta.url), "utf8");
-const dom = new JSDOM("<!doctype html><body></body>");
-for (const [key, value] of Object.entries({
-  window: dom.window,
-  document: dom.window.document,
-  HTMLElement: dom.window.HTMLElement,
-  customElements: dom.window.customElements,
-}))
-  Object.defineProperty(globalThis, key, { configurable: true, value });
-const { html, nothing, render } = await import("lit");
-const { sessionStatusMark } = await import("../src/session-status.ts");
-
-function load(api: (path: string) => Promise<unknown> = async () => ({})) {
-  return runInNewContext(
-    stripTypeScriptTypes(
-      source.replace(/^import .*;\n/gm, "").replace(/^export /gm, "") + "\n({ scopeToolCount, sessionTopbarTpl });",
-    ),
-    {
-      api,
-      html,
-      sessionStatusMark,
-      nothing,
-      icon: () => nothing,
-      tip: () => nothing,
-      closeFormMenus: () => {},
-      toggleFormMenu: () => {},
-      ...Object.fromEntries(
-        ["ArrowUpLeft", "Box", "Brain", "Clock3", "Ellipsis", "Files", "GitFork", "KeyRound", "Rocket"].map((name) => [
-          name,
-          name,
-        ]),
-      ),
-    },
-  ) as {
-    scopeToolCount: (tool: SessionTool, scope: string, ready: () => void) => number | null;
-    sessionTopbarTpl: (opts: SessionTopbarOpts) => ReturnType<typeof html>;
-  };
-}
+const requests: string[] = [];
+let respond: (path: string) => unknown = () => ({});
+const { vite, close } = await browserEnv({
+  fetch: async (input) => {
+    const path = String(input);
+    requests.push(path);
+    return Response.json(respond(path));
+  },
+});
+after(close);
+const { render } = await vite.ssrLoadModule("lit");
+const { scopeToolCount, sessionTopbarTpl } = (await vite.ssrLoadModule("/src/session-scope.ts")) as {
+  scopeToolCount: (tool: SessionTool, scope: string, ready: () => void) => number | null;
+  sessionTopbarTpl: (opts: SessionTopbarOpts) => unknown;
+};
 
 test("only Crons and Apps request counts; both count past 100", async () => {
-  const requests: string[] = [];
   const crons = Array.from({ length: 137 }, (_, i) => ({
     id: String(i),
     ownerScopeId: "personal:test",
@@ -57,9 +30,8 @@ test("only Crons and Apps request counts; both count past 100", async () => {
     ownerScopeId: "personal:test",
     status: "ready",
   }));
-  const { scopeToolCount } = load(async (path) => {
-    requests.push(path);
-    return path === "/api/crons"
+  respond = (path) =>
+    path === "/api/crons"
       ? {
           crons: [
             ...crons,
@@ -76,7 +48,6 @@ test("only Crons and Apps request counts; both count past 100", async () => {
             { id: "other", ownerScopeId: "other", status: "ready" },
           ],
         };
-  });
   for (const tool of ["files", "skills", "memory", "keychain"] as const) {
     assert.equal(
       scopeToolCount(tool, "personal:test", () => assert.fail("unexpected refresh")),
@@ -100,7 +71,6 @@ test("only Crons and Apps request counts; both count past 100", async () => {
 });
 
 test("desktop and mobile put Crons and Apps first and badge only those tools", () => {
-  const { sessionTopbarTpl } = load();
   const host = document.createElement("div");
   const queried: string[] = [];
   const clicked: string[] = [];
@@ -152,24 +122,6 @@ test("desktop and mobile put Crons and Apps first and badge only those tools", (
 
 test("zero counts remain hidden in desktop and mobile tools", () => {
   const host = document.createElement("div");
-  render(load().sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
+  render(sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
-});
-
-test("session status appears after the heading and before tools", () => {
-  const host = document.createElement("div");
-  render(
-    load().sessionTopbarTpl({
-      crumb: null,
-      title: "Release verification",
-      status: { emoji: "🚀", text: "Live in production" },
-      onTool: () => {},
-    }),
-    host,
-  );
-  const status = host.querySelector(".session-status")!;
-  assert.equal(status.textContent, "🚀");
-  assert.equal(status.getAttribute("aria-label"), "Live in production");
-  assert.ok(status.previousElementSibling?.classList.contains("session-heading"));
-  assert.ok(status.nextElementSibling?.classList.contains("session-tools"));
 });

@@ -14,6 +14,7 @@ import {
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { materializeGrant } from "./support/materialize-grant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -24,7 +25,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -368,8 +369,8 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
       purpose: "single use",
     });
     const results = await Promise.allSettled([
-      owner.materialize(grant.id, scopeId("channel", "C1"), "U2"),
-      peer.materialize(grant.id, scopeId("channel", "C1"), "U3"),
+      materializeGrant(owner, grant.id, scopeId("channel", "C1"), "U2"),
+      materializeGrant(peer, grant.id, scopeId("channel", "C1"), "U3"),
     ]);
     assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
     assert.equal(
@@ -466,3 +467,58 @@ for (const postgres of [false, true]) {
     },
   );
 }
+
+test("pg map: an indexed select plans both branches through their indexes", { skip }, async () => {
+  const factory = createPostgresMapFactory(URL!);
+  const pg = factory.pool;
+  const indexed = factory.map<{ owner: string; blob: string }>("map_scoped_widgets", ["owner"]);
+  await indexed.put("seed", { owner: "seed", blob: "" });
+  await pg.q(
+    `INSERT INTO map_scoped_widgets (id, json)
+     SELECT 'w' || g, jsonb_build_object('owner', 'owner-' || (g % 40), 'blob', repeat(md5(g::text), 200))
+     FROM generate_series(1, 4000) g`,
+  );
+  await pg.q("ANALYZE map_scoped_widgets");
+  const captured: Array<{ sql: string; params: unknown[] }> = [];
+  const original = pg.q.bind(pg);
+  pg.q = (async (sql: string, params?: unknown[]) => {
+    captured.push({ sql, params: params ?? [] });
+    return original(sql, params);
+  }) as typeof pg.q;
+  try {
+    const rows = await indexed.select({ omit: ["blob"], where: { field: "owner", anyOfFold: ["OWNER-7"] } });
+    assert.equal(rows.length, 100);
+    const select = captured.find((call) => call.sql.includes("ANY("));
+    assert.ok(select, "the select ran through the pool");
+    pg.q = original;
+    for (const mode of ["force_custom_plan", "force_generic_plan"]) {
+      const client = await (await pg.pool()).connect();
+      try {
+        await client.query(`SET plan_cache_mode = ${mode}`);
+        await client.query(`PREPARE scoped_select AS ${select.sql}`);
+        const args = select.params.map((value) =>
+          Array.isArray(value)
+            ? `ARRAY[${value.map((v: string) => client.escapeLiteral(v)).join(", ")}]::text[]`
+            : client.escapeLiteral(String(value)),
+        );
+        const [{ "QUERY PLAN": plan }] = (
+          await client.query(`EXPLAIN (FORMAT JSON) EXECUTE scoped_select(${args.join(", ")})`)
+        ).rows;
+        const filtered: string[] = [];
+        const walk = (node: Record<string, unknown>) => {
+          if (node["Node Type"] === "Seq Scan" && typeof node["Filter"] === "string") filtered.push(node["Filter"]);
+          for (const child of (node["Plans"] as Record<string, unknown>[] | undefined) ?? []) walk(child);
+        };
+        walk(plan[0].Plan);
+        assert.deepEqual(filtered, [], `${mode}: no branch filters by sequential scan`);
+      } finally {
+        await client.query("DEALLOCATE ALL");
+        client.release();
+      }
+    }
+  } finally {
+    pg.q = original;
+    await pg.q("DROP TABLE IF EXISTS map_scoped_widgets");
+    await factory.pool.close();
+  }
+});

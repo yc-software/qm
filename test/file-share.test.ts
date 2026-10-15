@@ -7,239 +7,134 @@ import { carriedFileHandles } from "../src/resolution/sharing-access.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { artifactPath, createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
+import { createMemoryFileArtifactStore, fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
-import { scopeId, type Principal, type WorkspaceLayer } from "../src/types.ts";
-import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { scopeId, type Principal } from "../src/types.ts";
+import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/blob-transfer.ts";
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
   type: "internal",
   ...(teamIds ? { teamIds } : {}),
 });
-
-const ws = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fshare-")));
-
-const sameBytes = (a: Uint8Array | null | undefined, b: Uint8Array) => assert.deepEqual([...(a ?? [])], [...b]);
-
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0xff]);
+const owner = scopeId("personal", "U1");
+const grantee = scopeId("personal", "U2");
 
-function memSandbox(seed: Record<string, Uint8Array> = {}): { sandbox: Sandbox; files: Map<string, Uint8Array> } {
-  const files = new Map<string, Uint8Array>(Object.entries(seed));
-  const sandbox = {
-    async writeFile(_h: SandboxHandle, rel: string, data: string) {
-      files.set(rel, new TextEncoder().encode(data));
-    },
-    async readFile(_h: SandboxHandle, rel: string) {
-      const b = files.get(rel);
-      return b ? new TextDecoder().decode(b) : null;
-    },
-    async writeFileBytes(_h: SandboxHandle, rel: string, data: Uint8Array) {
-      files.set(rel, data);
-    },
-    async readFileBytes(_h: SandboxHandle, rel: string) {
-      return files.get(rel) ?? null;
-    },
-  } as unknown as Sandbox;
-  return { sandbox, files };
-}
-
-function toolCtx(opts: {
-  scope: string;
-  workspace: ReturnType<typeof createLocalWorkspaceStore>;
-  sandbox: Sandbox;
-  acl: ReturnType<typeof createAclStore>;
-  auditLog?: ReturnType<typeof createAuditLog>;
-  layers?: WorkspaceLayer[];
-  grantedHandles?: Awaited<ReturnType<ReturnType<typeof createAclStore>["handlesFor"]>>;
-  sharedMaterializeDir?: string;
-  createdBy?: string;
-}) {
-  return createToolContext({
-    sandbox: opts.sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers: opts.layers ?? [{ scopeId: opts.scope, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: opts.grantedHandles ?? [],
-    ...(opts.sharedMaterializeDir ? { sharedMaterializeDir: opts.sharedMaterializeDir } : {}),
-    workspace: opts.workspace,
-    deploy: {} as never,
-    acl: opts.acl,
-    ...(opts.auditLog ? { auditLog: opts.auditLog } : {}),
-    createdBy: opts.createdBy ?? opts.scope.split(":")[1] ?? opts.scope,
-  });
-}
-
-test("write shares an existing file to a person; the grantee reads it back byte-for-byte", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
-  const owner = scopeId("personal", "U1");
-  const carol = scopeId("personal", "U2");
-
-  const r = await toolCtx({
-    scope: owner,
-    workspace,
-    sandbox: memSandbox({ "orange.jpg": JPEG }).sandbox,
-    acl,
-    auditLog,
-  }).write("orange.jpg", undefined, [{ scope: carol, permission: "read" }]);
-
-  assert.deepEqual(r.shared, [{ scope: carol, permission: "read" }]);
-  assert.equal((await acl.list()).length, 1);
-  assert.deepEqual((await acl.list())[0], {
-    ownerScopeId: owner,
-    ref: "orange.jpg",
-    granteeScopeId: carol,
-    permission: "read",
-    grantedBy: "U1",
-  });
-  assert.equal(
-    (await auditLog.events()).some(
-      (e) => e.action === "file_share" && e.resource === "orange.jpg" && e.scopeLabel === carol,
-    ),
-    true,
-  );
-  sameBytes(await workspace.readBytes(owner, "orange.jpg"), JPEG);
-
-  const carolBox = memSandbox();
-  const got = await toolCtx({
-    scope: carol,
-    workspace,
-    sandbox: carolBox.sandbox,
-    acl,
-    grantedHandles: await acl.handlesFor([carol]),
-  }).read("shared/orange.jpg");
-
-  assert.match(got.content ?? "", /materialized.*shared\/orange\.jpg/);
-  assert.equal(got.sourceScopeId, owner);
-  sameBytes(carolBox.files.get("shared/orange.jpg"), JPEG);
-});
-
-test("a binary shared file materializes in the current turn's private directory", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const owner = scopeId("personal", "U1");
-  const grantee = scopeId("personal", "U2");
-  await workspace.write(owner, "orange.jpg", JPEG);
-  await acl.grant({
-    ownerScopeId: owner,
-    ref: "orange.jpg",
-    granteeScopeId: grantee,
-    permission: "read",
-    grantedBy: "U1",
-  });
-
-  const box = memSandbox();
-  const got = await toolCtx({
-    scope: grantee,
-    workspace,
-    sandbox: box.sandbox,
-    acl,
-    grantedHandles: await acl.handlesFor([grantee]),
-    sharedMaterializeDir: "shared/turn-1",
-  }).read("shared/orange.jpg");
-
-  assert.match(got.content ?? "", /shared\/turn-1\/orange\.jpg/);
-  sameBytes(box.files.get("shared/turn-1/orange.jpg"), JPEG);
-  assert.equal(box.files.has("shared/orange.jpg"), false);
+function fixture() {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const openHandle = (await carriedFileHandles([owner], workspace, files))[0]!;
-  const carriedBox = memSandbox();
-  const blocked = await toolCtx({
-    scope: grantee,
-    workspace,
-    sandbox: carriedBox.sandbox,
-    acl,
-    grantedHandles: [openHandle],
-  }).read(openHandle.handlePath);
-  assert.match(blocked.content ?? "", /Binary files require an explicit share/);
-  assert.equal(carriedBox.files.size, 0);
-  await workspace.write(owner, "notes.txt", "untrusted source text");
-  const textHandle = (await carriedFileHandles([owner], workspace, files)).find((h) => h.ownerPath === "notes.txt")!;
-  const text = await toolCtx({
-    scope: grantee,
-    workspace,
-    sandbox: carriedBox.sandbox,
-    acl,
-    grantedHandles: [textHandle],
-  }).read(textHandle.handlePath);
-  assert.equal(text.shared, true);
-});
+  return { files, acl: createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }) };
+}
 
-test("the screenshot scenario: shared to the org in a DM, delivered from a channel session", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const org = scopeId("org", "default-org");
-  const alice = scopeId("personal", "U1");
+async function put(
+  files: ReturnType<typeof createMemoryFileArtifactStore>,
+  ownerScopeId: string,
+  name: string,
+  data: Uint8Array,
+) {
+  const id = fileArtifactId(`${ownerScopeId}:${name}`, "in", 0);
+  return (
+    await files.put({
+      id,
+      ownerScopeId,
+      createdBy: "U1",
+      name,
+      path: name,
+      mimetype: name.endsWith(".jpg") ? "image/jpeg" : "text/plain",
+      data,
+      direction: "in",
+    })
+  ).artifact;
+}
 
-  const dmLayers: WorkspaceLayer[] = [
-    { scopeId: org, mountPath: "global", mode: "ro" },
-    { scopeId: alice, mountPath: "", mode: "rw" },
-  ];
-  const r = await toolCtx({
-    scope: alice,
-    workspace,
-    sandbox: memSandbox({ "orange.jpg": JPEG }).sandbox,
-    acl,
-    layers: dmLayers,
-  }).write("orange.jpg", undefined, [{ scope: "org", permission: "read" }]);
-  assert.deepEqual(r.shared, [{ scope: org, permission: "read" }], '"org" resolves to the session org scope');
+for (const carried of [false, true]) {
+  test(`${carried ? "carried" : "explicitly shared"} Files records read inline or return a sendable binary ID without a computer`, async () => {
+    const { files, acl } = fixture();
+    const image = await put(files, owner, "orange.jpg", JPEG);
+    const text = await put(files, owner, "notes.txt", Buffer.from("the plan"));
+    for (const file of [image, text])
+      await acl.grant({
+        ownerScopeId: owner,
+        ref: file.id,
+        granteeScopeId: grantee,
+        permission: "read",
+        grantedBy: "U1",
+      });
+    const handles = carried ? await carriedFileHandles([owner], files) : await acl.handlesFor([grantee]);
+    const noComputer = async (): Promise<never> => {
+      throw new Error("must not provision a computer");
+    };
+    const ctx = createToolContext({
+      sandbox: {} as Sandbox,
+      provision: noComputer,
+      layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
+      commandPolicy: () => ({}) as never,
+      authorizeCommand: () => false,
+      grantedHandles: handles,
+      workspace: createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fshare-"))),
+      files,
+      deploy: {} as never,
+      acl,
+      createdBy: "U2",
+    });
+    const textHandle = handles.find((handle) => handle.fileId === text.id)!;
+    assert.deepEqual(await ctx.read(textHandle.handlePath), {
+      content: "the plan",
+      sourceScopeId: owner,
+      shared: true,
+    });
+    const imageHandle = handles.find((handle) => handle.fileId === image.id)!;
+    assert.deepEqual(await ctx.read(imageHandle.handlePath), {
+      content: `[binary file orange.jpg, Files ID ${image.id}; send it by ID]`,
+      sourceScopeId: owner,
+      shared: true,
+    });
+    const transfer = createMemoryBlobTransferStore();
+    const staging = createAttachStaging({
+      sandbox: {} as Sandbox,
+      provision: noComputer,
+      blobTransfer: transfer,
+      fileRegistration: { store: files, ownerScopeId: grantee, createdBy: "U2", seed: "send" },
+      openStored: async (id) => {
+        if (!handles.some((handle) => handle.fileId === id)) return null;
+        const file = await files.get(id);
+        const opened = await files.open(id);
+        return file && opened ? { ...opened, name: file.name, mimetype: file.mimetype } : null;
+      },
+    });
+    assert.equal((await staging.attach([{ file_id: image.id }])).ok, true);
+    const sent = await transfer.open(staging.staged()[0]!.blobId);
+    assert.deepEqual(await collectBlob(sent!.stream), Buffer.from(JPEG));
+  });
+}
 
-  const channel = scopeId("channel", "C1");
-  const handles = await acl.handlesFor([channel, org]);
-  assert.equal(handles.length, 1, "the org-granted file is reachable from the channel session");
-
-  const channelBox = memSandbox();
-  const got = await toolCtx({
-    scope: channel,
-    workspace,
-    sandbox: channelBox.sandbox,
-    acl,
-    grantedHandles: handles,
-  }).read("shared/orange.jpg");
-  sameBytes(channelBox.files.get("shared/orange.jpg"), JPEG);
-  assert.equal(got.sourceScopeId, alice, "the file keeps its owner (Alice) — sharing never moves ownership");
-});
-
-test("write can save AND share in one call; a text grant returns inline content", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const owner = scopeId("personal", "U1");
-  const grantee = scopeId("personal", "U2");
-
-  const r = await toolCtx({ scope: owner, workspace, sandbox: memSandbox().sandbox, acl }).write(
-    "notes.md",
-    "the plan",
-    [{ scope: grantee, permission: "read" }],
+test("workspace paths cannot be granted even when a Files record has that path", async () => {
+  const { files, acl } = fixture();
+  const file = await put(files, owner, "notes.txt", Buffer.from("the plan"));
+  await assert.rejects(
+    acl.grant({ ownerScopeId: owner, ref: file.path, granteeScopeId: grantee, permission: "read", grantedBy: "U1" }),
+    /Files record ID/,
   );
-  assert.deepEqual(r.shared, [{ scope: grantee, permission: "read" }]);
-  assert.equal(await workspace.read(owner, "notes.md"), "the plan", "the contents were saved durably");
-
-  const box = memSandbox();
-  const got = await toolCtx({
-    scope: grantee,
-    workspace,
-    sandbox: box.sandbox,
-    acl,
-    grantedHandles: await acl.handlesFor([grantee]),
-  }).read("shared/notes.md");
-  assert.equal(got.content, "the plan");
-  assert.equal(box.files.has("shared/notes.md"), false, "text reads stay inline — no sandbox materialization");
+  assert.deepEqual(await acl.list(), []);
+  await acl.grant({ ownerScopeId: owner, ref: file.id, granteeScopeId: grantee, permission: "read", grantedBy: "U1" });
+  assert.deepEqual(await acl.handlesFor([grantee]), [
+    { handlePath: "shared/notes.txt", ownerScopeId: owner, fileId: file.id, permission: "read" },
+  ]);
 });
 
 test("a person-grant resolves in a shared room of {owner, grantee} — but never leaks to an unentitled member", async () => {
-  const acl = createAclStore();
+  const { files, acl } = fixture();
   const alice = scopeId("personal", "U1");
   const carol = scopeId("personal", "U2");
   const org = scopeId("org", "default-org");
   const channel = scopeId("channel", "C1");
+  const image = await put(files, alice, "orange.jpg", JPEG);
   await acl.grant({
     ownerScopeId: alice,
-    ref: "orange.jpg",
+    ref: image.id,
     granteeScopeId: carol,
     permission: "read",
     grantedBy: "U1",
@@ -265,14 +160,16 @@ test("a person-grant resolves in a shared room of {owner, grantee} — but never
 });
 
 test("an org grant surfaces for the whole audience; a team grant only when every member is in the team", async () => {
-  const acl = createAclStore();
+  const { files, acl } = fixture();
   const alice = scopeId("personal", "U1");
   const org = scopeId("org", "default-org");
   const channel = scopeId("channel", "C1");
-  await acl.grant({ ownerScopeId: alice, ref: "poster.png", granteeScopeId: org, permission: "read", grantedBy: "U1" });
+  const poster = await put(files, alice, "poster.png", JPEG);
+  const playbook = await put(files, alice, "playbook.md", Buffer.from("plan"));
+  await acl.grant({ ownerScopeId: alice, ref: poster.id, granteeScopeId: org, permission: "read", grantedBy: "U1" });
   await acl.grant({
     ownerScopeId: alice,
-    ref: "playbook.md",
+    ref: playbook.id,
     granteeScopeId: scopeId("team", "T1"),
     permission: "read",
     grantedBy: "U1",
@@ -293,120 +190,4 @@ test("an org grant surfaces for the whole audience; a team grant only when every
     principalEntitledToScope,
   );
   assert.deepEqual(allInTeam.map((h) => h.handlePath).sort(), ["shared/playbook.md", "shared/poster.png"]);
-});
-
-test("write without data or share is rejected; sharing a missing file / from a read-only session errors", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const owner = scopeId("personal", "U1");
-
-  await assert.rejects(
-    () => toolCtx({ scope: owner, workspace, sandbox: memSandbox().sandbox, acl }).write("x.md"),
-    /needs `data`.*`share`/,
-  );
-  await assert.rejects(
-    () =>
-      toolCtx({ scope: owner, workspace, sandbox: memSandbox().sandbox, acl }).write("ghost.png", undefined, [
-        { scope: owner },
-      ]),
-    /no such file to share: ghost\.png/,
-  );
-  await assert.rejects(
-    () =>
-      toolCtx({
-        scope: owner,
-        workspace,
-        sandbox: memSandbox({ "x.png": JPEG }).sandbox,
-        acl,
-        layers: [{ scopeId: scopeId("org", "default-org"), mountPath: "global", mode: "ro" }],
-      }).write("x.png", undefined, [{ scope: "org" }]),
-    /writable scope/,
-  );
-});
-
-test("a viewer-uploaded artifact (artifacts/<id>/<name>) is readable through its shared handle (public #94)", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const owner = scopeId("personal", "U1");
-  const grantee = scopeId("personal", "U2");
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const id = fileArtifactId("upload:U1:test:1:x", "in", 0);
-  const path = artifactPath(id, "notes.txt");
-  await files.put({
-    id,
-    ownerScopeId: owner,
-    createdBy: "U1",
-    name: "notes.txt",
-    path,
-    mimetype: "text/plain",
-    data: Buffer.from("hello from the upload"),
-    direction: "in",
-    createdInScope: grantee,
-  });
-  await acl.grant({ ownerScopeId: owner, ref: path, granteeScopeId: grantee, permission: "read", grantedBy: "U1" });
-
-  const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
-  assert.equal(handles.length, 1, "the grant materializes as a handle");
-
-  const ctx = createToolContext({
-    sandbox: memSandbox().sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: handles,
-    workspace,
-    files,
-    deploy: {} as never,
-    acl,
-    createdBy: "U2",
-  });
-  const got = await ctx.read(handles[0]!.handlePath);
-  assert.equal(got.content, "hello from the upload");
-  assert.equal(got.sourceScopeId, owner);
-});
-
-test("a workspace-backed share is never served from a stale artifact snapshot", async () => {
-  const workspace = ws();
-  const acl = createAclStore();
-  const owner = scopeId("personal", "U1");
-  const grantee = scopeId("personal", "U2");
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  // artifact snapshot holds version 1 under the real workspace path
-  await files.put({
-    id: fileArtifactId("share:U1:doc.txt", "out", 0),
-    ownerScopeId: owner,
-    createdBy: "U1",
-    name: "doc.txt",
-    path: "doc.txt",
-    mimetype: "text/plain",
-    data: Buffer.from("version 1"),
-    direction: "out",
-    createdInScope: owner,
-  });
-  // workspace holds version 2
-  await workspace.write(owner, "doc.txt", "version 2");
-  await acl.grant({
-    ownerScopeId: owner,
-    ref: "doc.txt",
-    granteeScopeId: grantee,
-    permission: "read",
-    grantedBy: "U1",
-  });
-  const handles = await acl.handlesForAudience([person("U2")], grantee, "org:o", principalEntitledToScope);
-  const ctx = createToolContext({
-    sandbox: memSandbox().sandbox,
-    provision: async () => ({ id: "h", rootDir: "/workspace" }) as SandboxHandle,
-    layers: [{ scopeId: grantee, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: handles,
-    workspace,
-    files,
-    deploy: {} as never,
-    acl,
-    createdBy: "U2",
-  });
-  const got = await ctx.read(handles[0]!.handlePath);
-  assert.equal(got.content, "version 2", "the live workspace copy wins for workspace-namespace paths");
 });

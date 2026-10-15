@@ -13,7 +13,6 @@ const conversation: Conversation = { kind: "dm", threadRef: "t1", audience: [act
 test("agent-only strategy: no automatic extraction, curation guidance in promptLines", () => {
   const strategy = createAgentOnlyStrategy();
   assert.equal(strategy.onTurnEnd, undefined);
-  assert.equal(strategy.maintain, undefined);
   const lines = strategy.promptLines?.() ?? [];
   assert.deepEqual(lines, AGENT_ONLY_PROMPT_LINES);
   const text = lines.join("\n");
@@ -27,8 +26,7 @@ test("agent-only strategy: no automatic extraction, curation guidance in promptL
 test("createMemoryStrategy('agent-only') returns the agent-only strategy", () => {
   const harness = {} as never;
   const memory = {} as never;
-  const workspace = {} as never;
-  const { strategy } = createMemoryStrategy("agent-only", { harness, memory, workspace });
+  const { strategy } = createMemoryStrategy("agent-only", { harness, memory });
   assert.equal(strategy.onTurnEnd, undefined);
   assert.deepEqual(strategy.promptLines?.(), AGENT_ONLY_PROMPT_LINES);
 });

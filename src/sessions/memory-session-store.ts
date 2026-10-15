@@ -5,7 +5,6 @@ import type {
   EntrySearchHit,
   CronGroupSummary,
   GetEntriesOptions,
-  GetTapeOptions,
   LeaseAttempt,
   LeaseHolder,
   LeasePeek,
@@ -13,7 +12,6 @@ import type {
   NewEntry,
   NewLlmRequest,
   NewSearchEntry,
-  NewTapeRecord,
   NewSessionPin,
   ParticipantWindow,
   ScopeSessionRollup,
@@ -24,7 +22,6 @@ import type {
   SessionPin,
   SpendRow,
   StoreOptions,
-  TapeRecord,
 } from "./session-store.ts";
 import {
   entrySearchAuthor,
@@ -43,8 +40,7 @@ import {
   sessionCategory,
   sessionOrigin,
   userMessagePreview,
-  tapeTranscriptEntryRecord,
-  transcriptEntryFromTape,
+  isWebThread,
 } from "./session-store.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
@@ -74,7 +70,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
   const entries = new Map<string, SessionEntry[]>();
-  const tape = new Map<string, TapeRecord[]>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
   const llmRequestSeq = new Map<string, number>();
@@ -96,6 +91,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         archived?: boolean;
         pinned?: boolean;
         color?: string | null;
+        readAt?: number;
       }
     >
   >();
@@ -109,12 +105,16 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     const log = all.filter((e) => e.type === "user");
     const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
+    const replies = all.filter((e) => e.type === "assistant" || e.type === "delivery");
+    const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
+    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && isWebThread(s.threadRef);
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),
       ...(view?.archived ? { archived: true } : {}),
       ...(view?.pinned ? { pinned: true } : {}),
       ...(view?.color != null ? { color: view.color } : {}),
+      ...(unread ? { unread: true } : {}),
       lastActivityAt,
       hasEntries: visible,
     };
@@ -159,11 +159,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async updateTitle(sessionId, title) {
       const s = sessions.get(sessionId);
       if (s) s.title = title;
-    },
-
-    async updateStatus(sessionId, status) {
-      const s = sessions.get(sessionId);
-      if (s) s.status = status ? { ...status } : null;
     },
 
     async updateForkProvenance(sessionId, provenance) {
@@ -234,7 +229,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
       sessions.delete(sessionId);
       entries.delete(sessionId);
-      tape.delete(sessionId);
       searchIndex.delete(sessionId);
       llmRequests.delete(sessionId);
       windows.delete(sessionId);
@@ -279,16 +273,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           scopeLabel: entry.scopeLabel as ScopeId,
           createdAt: now(),
         };
-        const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
         log.push(full);
-        const tapeLog = tape.get(lease.sessionId) ?? [];
-        tapeLog.push({
-          ...mirrored,
-          sessionId: lease.sessionId,
-          seq: tapeLog.length,
-          createdAt: now(),
-        });
-        tape.set(lease.sessionId, tapeLog);
         const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
         if (text?.trim()) {
           const index = searchIndex.get(full.sessionId) ?? [];
@@ -322,29 +307,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
-    async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
-      const projected = new Map<number, SessionEntry>();
-      for (const row of tape.get(sessionId) ?? []) {
-        const entry = transcriptEntryFromTape(row);
-        if (entry) projected.set(entry.seq, entry);
-      }
-      const filtered = [...projected.values()]
-        .filter(
-          (entry) =>
-            entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
-        )
-        .sort((a, b) => a.seq - b.seq);
-      if (opts?.limit === 0) return [];
-      return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
-    },
-
-    async canReadTranscriptSuffix(sessionId, beforeSeq) {
-      const prefix = new Map<number, string>();
-      for (const row of tape.get(sessionId) ?? []) {
-        const entry = transcriptEntryFromTape(row);
-        if (entry && entry.seq >= 0 && entry.seq < beforeSeq) prefix.set(entry.seq, entry.type);
-      }
-      return prefix.size === beforeSeq && [...prefix.values()].every((type) => type !== "soul");
+    async countEntriesBefore(sessionId, beforeSeq, principalId) {
+      const win = principalId === undefined ? undefined : windows.get(sessionId)?.get(principalId);
+      if (principalId !== undefined && !win) return 0;
+      return (entries.get(sessionId) ?? []).filter(
+        (e) => e.seq < beforeSeq && e.type !== "soul" && (!win || entryWithinTenure(e, win)),
+      ).length;
     },
 
     async getContextWindow(sessionId) {
@@ -368,60 +336,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         delete payload.securityTainted;
         if (!("securityTainted" in (entry.payload as object))) continue;
         entry.payload = payload;
-        const tapeLog = tape.get(sessionId) ?? [];
-        tapeLog.push({
-          ...structuredClone(tapeTranscriptEntryRecord(entry)),
-          sessionId,
-          seq: tapeLog.length,
-          createdAt: now(),
-        });
-        tape.set(sessionId, tapeLog);
       }
       return true;
-    },
-
-    async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
-      return (await this.appendTapeMany(lease, [rec]))[0]!;
-    },
-    async appendTapeMany(lease, records): Promise<TapeRecord[]> {
-      const held = leases.get(lease.sessionId);
-      if (!held || held.token !== lease.token || now() >= held.expiresAt)
-        throw new Error("tape append without a valid session lease");
-      held.expiresAt = now() + leaseTtlMs;
-      const log = tape.get(lease.sessionId) ?? [];
-      tape.set(lease.sessionId, log);
-      const full = records.map((rec, index) => ({
-        ...rec,
-        sessionId: lease.sessionId,
-        seq: log.length + index,
-        createdAt: now(),
-      }));
-      log.push(...full);
-      return full;
-    },
-
-    async getTape(sessionId, opts?: GetTapeOptions) {
-      const log = tape.get(sessionId) ?? [];
-      const since = opts?.sinceSeq;
-      const filtered = since !== undefined ? log.filter((r) => r.seq > since) : log;
-      return opts?.limit !== undefined ? filtered.slice(-opts.limit) : [...filtered];
-    },
-
-    async tapeCoverage(sessionId) {
-      const log = tape.get(sessionId) ?? [];
-      return log.reduce(
-        (m, r) =>
-          Math.max(
-            m,
-            r.kind === "annotation" && (r.payload as { turnEnd?: unknown } | null)?.turnEnd === true
-              ? (r.entrySeq ?? -1)
-              : -1,
-            r.kind === "context_event" && (r.payload as { event?: unknown } | null)?.event === "legacy_import"
-              ? (r.coversEntrySeq ?? -1)
-              : -1,
-          ),
-        -1,
-      );
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest) {
@@ -568,6 +484,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (patch.archived !== undefined) view.archived = patch.archived;
       if (patch.pinned !== undefined) view.pinned = patch.pinned;
       if (patch.color !== undefined) view.color = patch.color;
+      if (patch.readAt !== undefined) view.readAt = patch.readAt;
     },
 
     async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {
@@ -593,11 +510,16 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return true;
     },
 
-    async visibleEntries(sessionId, principalId) {
+    async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions) {
       const win = windows.get(sessionId)?.get(principalId);
       if (!win) return [];
-      const log = entries.get(sessionId) ?? [];
-      return log.filter((e) => entryWithinTenure(e, win));
+      const visible = (entries.get(sessionId) ?? []).filter(
+        (e) =>
+          entryWithinTenure(e, win) &&
+          e.seq >= (opts?.sinceSeq ?? 0) &&
+          (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+      );
+      return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
     },
 
     async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
@@ -612,9 +534,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!session) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
+          const entry = entries.get(sessionId)?.[row.seq];
+          if (!entry) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
           hits.push({
             sessionId,
+            entryScopeLabel: entry.scopeLabel,
             scopeId: session.scopeId,
             ...((win.title ?? session.title) != null ? { title: win.title ?? session.title } : {}),
             ...(session.channelName ? { channelName: session.channelName } : {}),
@@ -689,41 +614,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async scopeHasSessions(scope) {
       return [...sessions.values()].some((s) => s.scopeId === scope);
-    },
-
-    async countPersonalConversations(scope, limit = 3) {
-      const boundedLimit = Math.max(0, Math.floor(limit));
-      if (!boundedLimit) return 0;
-      let count = 0;
-      for (const session of sessions.values()) {
-        if (
-          session.scopeId !== scope ||
-          session.type !== "dm" ||
-          session.parentSessionId ||
-          sessionOrigin(session.threadRef) !== "conversation"
-        )
-          continue;
-        const log = new Map((entries.get(session.id) ?? []).map((entry) => [entry.seq, entry]));
-        for (const row of tape.get(session.id) ?? []) {
-          const entry = transcriptEntryFromTape(row);
-          if (entry) log.set(entry.seq, entry);
-        }
-        if (
-          [...log.values()].some((entry) => {
-            const payload = entry.payload as { hidden?: unknown; overheard?: unknown } | null;
-            return (
-              entry.seq > (session.forkBoundarySeq ?? -1) &&
-              entry.type === "user" &&
-              payload?.hidden !== true &&
-              payload?.overheard !== true
-            );
-          })
-        ) {
-          count++;
-          if (count >= boundedLimit) break;
-        }
-      }
-      return count;
     },
 
     async sessionsByThreadRefs(threadRefs) {

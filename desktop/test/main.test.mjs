@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock, test } from "node:test";
@@ -21,6 +21,16 @@ test(
       getPath: () => directory,
       setAsDefaultProtocolClient() {},
     });
+    let prepareUpdate;
+    let resumeUpdate;
+    mock.module(new URL("../updates.mjs", import.meta.url).href, {
+      namedExports: {
+        startUpdates: (prepare, resume) => {
+          prepareUpdate = prepare;
+          resumeUpdate = resume;
+        },
+      },
+    });
     const handlers = new Map();
     const windows = [];
     const initialLoad = Promise.withResolvers();
@@ -29,8 +39,13 @@ test(
     const errors = [];
     let flushes = 0;
     const session = {
-      setPermissionRequestHandler() {},
-      setPermissionCheckHandler() {},
+      setPermissionRequestHandler(handler) {
+        this.requestPermission = handler;
+      },
+      setPermissionCheckHandler(handler) {
+        this.checkPermission = handler;
+      },
+      flushStorageData() {},
       cookies: {
         flushStore: async () => {
           flushes++;
@@ -56,6 +71,9 @@ test(
         this.url = url;
         initialLoad.resolve();
       }
+      setEnabled(value) {
+        this.enabled = value;
+      }
       show() {
         this.visible = true;
       }
@@ -76,6 +94,7 @@ test(
     mock.module("electron", {
       namedExports: {
         app,
+        autoUpdater: {},
         BrowserWindow,
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
         Menu: { buildFromTemplate: (template) => template, setApplicationMenu() {} },
@@ -94,6 +113,23 @@ test(
       await import("../main.mjs");
       await initialLoad.promise;
       assert.equal(windows[0].url, "https://old.example/");
+      for (const [permission, requestingUrl, allowed] of [
+        ["clipboard-sanitized-write", "https://old.example/", true],
+        ["clipboard-sanitized-write", "https://old.example/share/internal/test", true],
+        ["clipboard-sanitized-write", "https://evil.example/", false],
+        ["clipboard-sanitized-write", "about:blank", false],
+        ["clipboard-sanitized-write", undefined, false],
+        ["clipboard-read", "https://old.example/", false],
+        ["media", "https://old.example/", false],
+        ["notifications", "https://old.example/", false],
+      ]) {
+        assert.equal(session.checkPermission(windows[0].webContents, permission, requestingUrl), allowed);
+        let granted;
+        session.requestPermission(windows[0].webContents, permission, (value) => (granted = value), {
+          requestingUrl,
+        });
+        assert.equal(granted, allowed);
+      }
       for (const destination of ["about:blank", "https://old.example/file.pdf", "blob:https://old.example/id"]) {
         const popup = windows[0].popup({ url: destination });
         assert.equal(popup.action, "allow");
@@ -104,6 +140,24 @@ test(
       assert.equal(windows[0].url, "https://old.example/");
       assert.deepEqual(windows[0].popup({ url: "file:///tmp/private" }), { action: "deny" });
       assert.equal(opened.length, 0);
+      const sent = [];
+      windows[0].webContents.send = (...args) => sent.push(args);
+      let reserved = false;
+      const input = (key, control) =>
+        windows[0].webContents.emit(
+          "before-input-event",
+          {
+            preventDefault() {
+              reserved = true;
+            },
+          },
+          { type: "keyDown", key, control },
+        );
+      input("Tab", false);
+      assert.equal(reserved, false);
+      input("Tab", true);
+      assert.equal(reserved, true);
+      assert.deepEqual(sent, [["qm:cycle-tab", 1]]);
       const frame = { url: "https://old.example/" };
       windows[0].webContents.mainFrame = frame;
       const browserEvent = { sender: windows[0].webContents, senderFrame: frame };
@@ -172,6 +226,20 @@ test(
       assert.equal(opened[1].includes("test-token"), false);
       assert.equal(windows[3].isDestroyed(), true);
       const active = windows.at(-1);
+      const ready = Promise.withResolvers();
+      active.webContents.executeJavaScript = async (source) =>
+        source.includes("qm:prepare-update") ? ready.promise : true;
+      const preparing = prepareUpdate();
+      assert.equal(active.enabled, false, "input is disabled before asking the renderer for readiness");
+      ready.resolve(false);
+      assert.equal(await preparing, false);
+      resumeUpdate();
+      assert.equal(active.enabled, true, "a deferred update restores input");
+      active.webContents.executeJavaScript = async () => true;
+      assert.equal(await prepareUpdate(), true);
+      assert.equal(active.enabled, false, "prepared windows remain quiescent until restart");
+      assert.equal(JSON.parse(await readFile(path.join(directory, "instance.json"), "utf8")).url, active.url);
+      resumeUpdate();
       const child = new BrowserWindow({});
       child.url = "https://new.example/file.pdf";
       active.webContents.emit("did-create-window", child);

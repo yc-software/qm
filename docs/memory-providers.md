@@ -2,6 +2,37 @@
 
 QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a scope-aware provider router. Routes independently select where each scope recalls from, accepts explicit writes, and receives automatic post-turn capture.
 
+## Prompt memory
+
+Each turn carries at most 6,000 characters of memory, selected across every notebook
+the conversation may read, one heading per notebook. With PostgreSQL and an embedding
+model, facts are ranked by exact cosine similarity to the current message and recent
+dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
+
+Choose the model with the org setting `memory-embedding-model`
+(`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
+Gateway models with `mode=embedding` are listed automatically; a direct OpenAI-compatible
+model is registered in the model registry with `"kind": "embedding"`. The provider
+receives fact text during background indexing and the query during recall. PostgreSQL
+stores typed vectors in `memory_fact_vectors`; recall ranks live, disclosed facts once per
+scope in SQL and returns compact ranked matches. No approximate vector index is used.
+
+Semantic recall requires the PostgreSQL `vector` extension. Its migration is registered
+only after a configured embedding model resolves, not during an unconfigured startup.
+If the application database role cannot install extensions, an administrator must install
+`vector` first. File-backed installations use newest-first recall, even with a model selected.
+
+A single background indexer embeds at most 64 missing facts and removes stale vectors in
+bounded batches every 30 seconds. It also sends a short dimension probe every ten minutes so a provider's
+vector-width change is detected even when its model identifier stays the same.
+
+New or edited facts may wait for a background tick before becoming semantic matches.
+Unindexed facts participate at the recency fallback score alongside indexed semantic
+matches. If the provider/database fails, recall falls back to newest-first. Text search (`memory` search, `POST /v1/memory/search`) remains
+immediate and does not use embeddings.
+
+## External routing
+
 ```json
 {
   "providers": [

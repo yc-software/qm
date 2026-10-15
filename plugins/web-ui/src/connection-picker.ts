@@ -1,7 +1,7 @@
 import { html, nothing, render } from "lit";
 import { Search, ArrowUpRight, Check } from "lucide";
 import { connectorLogo } from "./connector-logo";
-import { icon } from "./ui";
+import { icon } from "./icons";
 
 export interface ConnectionService {
   id: string;

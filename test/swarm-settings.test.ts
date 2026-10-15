@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
-import { resolveSwarmSettings, SWARM_DEFAULTS, SWARM_MAXIMUMS } from "../src/swarms/swarm-settings.ts";
+import { resolveSwarmSettings, SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
@@ -17,9 +17,12 @@ test("backend defaults validate every setting and preserve unspecified defaults"
   for (const settings of ["null", "[]", '"wrong"', '{"surprise":1}', '{"turnMs":0}', "{"])
     assert.throws(() => loadConfig({ SWARM_DEFAULTS: settings }));
   for (const key of Object.keys(SWARM_DEFAULTS) as Array<keyof typeof SWARM_DEFAULTS>) {
-    for (const value of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, SWARM_MAXIMUMS[key] + 1])
+    for (const value of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
       assert.throws(() => resolveSwarmSettings({ [key]: value }), new RegExp(key));
   }
+  assert.throws(() => resolveSwarmSettings({ turnMs: 2_147_483_648 }), /turnMs/);
+  const large = { agents: 10_000, depth: 100, messages: 100_000, lifetimeMs: 30 * 86_400_000, turnMs: 2_147_483_647 };
+  assert.deepEqual(resolveSwarmSettings(large), { ...SWARM_DEFAULTS, ...large });
 });
 
 test("resolved defaults, initial overrides, children, and restarted services share one immutable settings contract", async () => {

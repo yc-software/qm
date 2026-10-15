@@ -406,7 +406,9 @@ test("email classification projection is opt-in, scoped, and never changes store
     assert.ok(query.omit?.includes("proposal"));
     assert.ok(query.omit?.includes("thread"));
     if (!query.omit?.includes("sourcePayload"))
-      assert.deepEqual(query.pickNested, { sourcePayload: ["source", "automated"] });
+      assert.deepEqual(query.pickNested, {
+        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
+      });
     const rows = await originalSelect(query);
     for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
     return rows;
@@ -414,7 +416,7 @@ test("email classification projection is opt-in, scoped, and never changes store
   const before = await ledger.summaries([LOOP]);
   assert.equal(before.length, 1);
   assert.equal(before[0]!.inboxPreview!.automated, undefined);
-  const classified = await ledger.summaries([LOOP], { includeEmailClassification: true });
+  const classified = await ledger.summaries([LOOP], { includeInboxMetadata: true });
   assert.equal(classified.length, 1);
   assert.equal(classified[0]!.inboxPreview!.automated, true);
   assert.equal(classified[0]!.inboxPreview!.privateDetail, undefined);
@@ -427,7 +429,7 @@ test("flagged summaries classify payload-only legacy email without changing stor
   const ledger = createLoopItemLedger();
   await ledger.ingest([entry({ source: undefined, sourcePayload: { source: "gmail", automated: true } })]);
   const before = await ledger.summaries([LOOP]);
-  const [classified] = await ledger.summaries([LOOP], { includeEmailClassification: true });
+  const [classified] = await ledger.summaries([LOOP], { includeInboxMetadata: true });
   assert.equal(classified!.source, "gmail");
   assert.equal(classified!.inboxPreview!.automated, true);
   assert.deepEqual(await ledger.summaries([LOOP]), before);
@@ -477,4 +479,87 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
   assert.equal((await backing.all()).length, 101);
   assert.ok(await backing.get("legacy"));
   assert.equal(await backing.get(original.id), null);
+});
+
+test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {
+  t.mock.method(Date, "now", () => 1000);
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byLoop(LOOP);
+  const snapshot = structuredClone(item!.sourcePayload!);
+  const first = await ledger.annotate(
+    item!.id,
+    { participants: [{ id: "U1", name: "Alex" }] },
+    { expectedSourcePayload: snapshot },
+  );
+  assert.ok(first);
+  assert.equal(first.updatedAt, item!.updatedAt);
+  const stale = await ledger.annotate(item!.id, { participants: [] }, { expectedSourcePayload: snapshot });
+  assert.equal(stale, null);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload!.participants, [{ id: "U1", name: "Alex" }]);
+  const current = structuredClone(first.sourcePayload!);
+  assert.ok(
+    await ledger.annotate(
+      item!.id,
+      { participants: [{ id: "U2", name: "Taylor" }] },
+      { expectedSourcePayload: current },
+    ),
+  );
+});
+
+test("agent ledger views omit cosmetic Slack data without changing UI data or task images", async () => {
+  const ledger = createLoopItemLedger();
+  const payload = {
+    source: "slack",
+    slackAvatarsRefreshAt: 12345,
+    participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+    context: [
+      {
+        author: "Alex",
+        authorId: "U1",
+        avatarUrl: "https://example.com/avatar.png",
+        images: ["https://example.com/task.png"],
+      },
+    ],
+    task: { avatarUrl: "keep this task data" },
+  };
+  await ledger.ingest([entry({ source: "slack", sourcePayload: payload })]);
+  const [item] = await ledger.byLoop(LOOP);
+  const agent = ledgerItemView(item!, {}, true);
+  assert.deepEqual(agent.sourcePayload, {
+    source: "slack",
+    participants: [{ id: "U1", name: "Alex" }],
+    context: [{ author: "Alex", authorId: "U1", images: ["https://example.com/task.png"] }],
+    task: { avatarUrl: "keep this task data" },
+  });
+  assert.deepEqual(ledgerItemView(item!, {}).sourcePayload, payload);
+  assert.deepEqual((await ledger.get(item!.id))!.sourcePayload, payload);
+  assert.deepEqual(ledgerItemView({ ...item!, source: "gmail" }, {}, true).sourcePayload, payload);
+});
+
+test("ordinary ledger annotations leave previews unchanged and do not project avatar metadata", async () => {
+  const ledger = createLoopItemLedger();
+  await ledger.ingest([entry()]);
+  const [item] = await ledger.byLoop(LOOP);
+  const before = structuredClone(item!.inboxPreview);
+  const updated = await ledger.annotate(item!.id, {
+    title: "Updated title",
+    participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+    slackAvatarsRefreshAt: 12345,
+  });
+  assert.equal(updated!.sourcePayload!.title, "Updated title");
+  assert.deepEqual(updated!.inboxPreview, before);
+  const [summary] = await ledger.summaries([LOOP]);
+  assert.deepEqual(summary!.inboxPreview, before);
+  const [inboxSummary] = await ledger.summaries([LOOP], { includeInboxMetadata: true });
+  assert.equal(inboxSummary!.inboxPreview?.participants, undefined);
+  await ledger.ingest([entry({ source: "slack", dedupeKey: "slack", sourcePayload: updated!.sourcePayload })]);
+  const ordinary = (await ledger.summaries([LOOP])).find((item) => item.source === "slack")!;
+  assert.equal(ordinary.inboxPreview?.participants, undefined);
+  const projected = (await ledger.summaries([LOOP], { includeInboxMetadata: true })).find(
+    (item) => item.source === "slack",
+  )!;
+  assert.deepEqual(projected.inboxPreview?.participants, updated!.sourcePayload!.participants);
+  assert.equal(projected.inboxPreview?.slackAvatarsRefreshAt, 12345);
+  assert.equal("sourcePayload" in projected, false);
 });

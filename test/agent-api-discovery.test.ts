@@ -210,8 +210,9 @@ test("the catalog IS the gate: discovery rows with real paths are admitted, unli
   assert.equal(agentApiMatches("POST", "/v1/crons/abc/note"), true);
   assert.equal(agentApiMatches("GET", "/v1/crons/abc/note"), false, "note is POST-only");
   assert.equal(agentApiMatches("POST", "/v1/webhooks/abc/enable"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/memory/self"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/admin/memory"), true);
+  assert.equal(agentApiMatches("PATCH", "/v1/memory/facts"), true);
+  assert.equal(agentApiMatches("PUT", "/v1/memory/self"), false, "notebooks are edited by fact id, not rewritten");
+  assert.equal(agentApiMatches("PATCH", "/v1/admin/memory"), true);
   assert.equal(agentApiMatches("GET", "/v1/admin/whoami"), true);
   assert.equal(
     agentApiMatches("POST", "/v1/connectors/oauth/revoke"),
@@ -270,26 +271,5 @@ test("disabled swarms are absent from discovery and reject direct API calls", as
     }
   } finally {
     await close();
-  }
-});
-
-test("conversation status is advertised on web turns and omitted on Slack turns", async () => {
-  const s = await start();
-  try {
-    const update = (body: any) =>
-      body.endpoints.filter((e: any) => e.path === "/v1/conversations/:id" && e.method === "POST");
-    const cap = (surface: string) =>
-      mintCapabilityToken(
-        { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS, surface },
-        SECRET,
-      );
-    const web = update((await listApis(s.base, await cap("web"))).body);
-    assert.equal(web.length, 1);
-    assert.match(web[0].summary, /sidebar status/);
-    const slack = update((await listApis(s.base, await cap("slack"))).body);
-    assert.equal(slack.length, 1);
-    assert.doesNotMatch(JSON.stringify(slack), /status/i);
-  } finally {
-    await s.close();
   }
 });

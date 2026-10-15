@@ -440,7 +440,7 @@ test("tool entries are folded into the following assistant reply's work block", 
     { type: "tool_call", payload: { tool: "execute", command: "ls" }, createdAt: 110, seq: 2, parentSeq: 1 },
     {
       type: "tool_result",
-      payload: { tool: "execute", code: 0, stdout: "a\nb" },
+      payload: { tool: "execute", code: 0, result: "a\nb" },
       createdAt: 120,
       seq: 3,
       parentSeq: 2,

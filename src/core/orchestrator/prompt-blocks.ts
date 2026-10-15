@@ -1,3 +1,5 @@
+import cronstrue from "cronstrue";
+import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, Cron, Monitor, Webhook } from "../../types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
@@ -29,46 +31,59 @@ export function renderProjectHomeChannel(channelName: string): string {
   ].join("\n");
 }
 
-const OBLIGATIONS_CAP = 10;
-function cronSchedulePromptLabel(c: Cron): string {
-  const schedule = c.schedule;
-  if (schedule.cron) return `cron ${schedule.cron}${schedule.timezone ? ` ${schedule.timezone}` : " default timezone"}`;
-  return schedule.everyMs != null
-    ? `every ${Math.max(1, Math.round(schedule.everyMs / 60_000))}m`
-    : `once at ${new Date(schedule.firstFireAt ?? c.createdAt).toISOString()}`;
+function localIsoTime(timezone: string, nowMs: number): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset",
+  }).formatToParts(nowMs);
+  const fields = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const offset = fields.timeZoneName === "GMT" ? "+00:00" : fields.timeZoneName!.slice(3);
+  return `${fields.year}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}:${fields.second}${offset}`;
 }
 
-export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string {
-  const total = crons.length + webhooks.length + monitors.length;
-  if (total === 0) return "## Already scheduled here\nNo active scheduled work was found for this conversation.";
-  const snippet = (s: string) => (s.length > 100 ? `${s.slice(0, 97)}…` : s).replace(/\s+/g, " ");
+function cronSchedulePromptLabel(c: Cron, timezone: string): string {
+  const schedule = c.schedule;
+  if (schedule.cron)
+    return `${cronstrue.toString(schedule.cron.replaceAll("#L", "L"))} (${schedule.timezone ?? DEFAULT_CRON_TIMEZONE})`;
+  if (schedule.everyMs != null) {
+    for (const [size, unit] of [
+      [3_600_000, "hours"],
+      [60_000, "minutes"],
+      [1000, "seconds"],
+    ] as const) {
+      if (schedule.everyMs % size === 0) return `every ${schedule.everyMs / size} ${unit}`;
+    }
+    return `every ${schedule.everyMs} milliseconds`;
+  }
+  return `once at ${localIsoTime(timezone, schedule.firstFireAt ?? c.createdAt)}`;
+}
+
+export function renderStandingObligations(
+  crons: Cron[],
+  webhooks: Webhook[],
+  monitors: Monitor[],
+  timezone = DEFAULT_CRON_TIMEZONE,
+): string {
+  const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
   const lines = [
     ...crons
       .toSorted((a, b) => a.id.localeCompare(b.id))
-      .slice(0, OBLIGATIONS_CAP)
-      .map(
-        (c) =>
-          `- cron \`${c.id}\`${c.title ? ` "${c.title}"` : ""} (${cronSchedulePromptLabel(c)}, owner ${c.owner}): ${snippet(c.action ?? c.message ?? "")}`,
-      ),
-    ...webhooks
-      .toSorted((a, b) => a.id.localeCompare(b.id))
-      .slice(0, OBLIGATIONS_CAP)
-      .map((w) => `- webhook \`${w.id}\` (owner ${w.owner}): ${snippet(w.action)}`),
+      .map((c) => `- ${c.title || "Untitled scheduled task"} — ${cronSchedulePromptLabel(c, timezone)}`),
+    ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
-      .slice(0, OBLIGATIONS_CAP)
-      .map((m) => `- job watch on \`${m.processId}\`: ${snippet(m.purpose ?? m.command)}`),
+      .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
   ];
   return [
     "## Already scheduled here",
-    ...lines,
-    ...(total > lines.length
-      ? [
-          `…and ${total - lines.length} more — \`cron\` action=list${
-            webhooks.length > OBLIGATIONS_CAP ? " / `webhook` action=list" : ""
-          }.`,
-        ]
-      : []),
+    ...(lines.length ? lines : ["No active scheduled work was found for this conversation."]),
   ].join("\n");
 }
 
@@ -107,16 +122,5 @@ export function renderConversationRoster(members: DirectoryMember[]): string | n
 }
 
 export function currentTimeBlock(timezone: string, nowMs: number): string {
-  let local: string;
-  try {
-    local = new Intl.DateTimeFormat("en-US", { timeZone: timezone, dateStyle: "full", timeStyle: "short" }).format(
-      nowMs,
-    );
-  } catch {
-    return "";
-  }
-  return [
-    "## The user's local time",
-    `It is currently ${local} for this user (timezone ${timezone}). Read "today", "tonight", "9am my time" and similar against this timezone unless they say otherwise.`,
-  ].join("\n");
+  return `## The user's local time\n${localIsoTime(timezone, nowMs)} (${timezone})`;
 }

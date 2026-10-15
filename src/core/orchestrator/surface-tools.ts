@@ -16,7 +16,7 @@ import {
   withDelete,
   type ReachResolution,
 } from "../../reach/reach.ts";
-import { hasParentPathSegment, type SandboxHandle } from "../../sandbox/sandbox.ts";
+import { type SandboxHandle } from "../../sandbox/sandbox.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
@@ -27,7 +27,13 @@ import type {
   SurfaceSearchResult,
 } from "../../tools/primitives.ts";
 import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import { collectNamedOutbound, type ArtifactRegistration } from "../attachments.ts";
+import {
+  collectNamedOutbound,
+  parseOutboundFiles,
+  type OutboundFile,
+  type OpenStoredFile,
+  type ArtifactRegistration,
+} from "../attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -57,7 +63,8 @@ export interface SurfaceToolsContext {
   defaultDestination: Destination | undefined;
   blobTransfer: BlobTransferStore;
   fileRegistration: ArtifactRegistration;
-  provision: () => Promise<SandboxHandle>;
+  openStored?: OpenStoredFile;
+  provision: (sandboxId?: string) => Promise<SandboxHandle>;
   postProvenance: (deliveryKey: string) => DeliveryProvenance;
   postKeys: TurnPostKeys;
   spine: SpineState;
@@ -191,17 +198,21 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     return coverageSince;
   };
   const resolveFiles = async (
-    files?: readonly string[],
+    files?: readonly OutboundFile[],
+    sandboxId?: string,
   ): Promise<{ ok: true; attachments?: OutgoingAttachment[] } | { ok: false; message: string }> => {
     if (!files?.length) return { ok: true };
-    const invalid = files.filter(hasParentPathSegment);
-    if (invalid.length)
-      return {
-        ok: false,
-        message: `couldn't attach: ${invalid.map((p) => `${p} (not found)`).join(", ")} — nothing was sent; fix the path(s) and retry`,
-      };
-    const handle = await provision();
-    const r = await collectNamedOutbound(deps.sandbox, handle, files, blobTransfer, fileRegistration);
+    const parsed = parseOutboundFiles(files);
+    if (!parsed.ok) return parsed;
+    const r = await collectNamedOutbound(
+      deps.sandbox,
+      () => provision(sandboxId),
+      files,
+      blobTransfer,
+      fileRegistration,
+      [],
+      ctx.openStored,
+    );
     const bad = [
       ...r.missing.map((p) => `${p} (not found)`),
       ...r.empty.map((p) => `${p} (empty)`),
@@ -212,7 +223,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     return { ok: true, attachments: r.attachments };
   };
   return {
-    post: async (postText, opts, files) => {
+    post: async (postText, opts, files, sandboxId) => {
       const seq = postKeys.take();
       let destination = currentDestination;
       if (opts?.ts && destination.type !== "principal") {
@@ -220,24 +231,22 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       } else if (opts?.broadcast && destination.type !== "principal" && conversation.channelRef) {
         destination = { ...destination, target: conversation.channelRef };
       }
-      const f = await resolveFiles(files);
+      const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
       const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
-      const taskList = input.runId ? await deps.tasks?.list({ originRunId: input.runId }) : undefined;
       const editRef =
         !editRefConsumed && destination.target === currentDestination.target ? run?.deliveryState?.editRef : undefined;
       if (editRef) editRefConsumed = true;
       const projectedDestination = {
         ...destination,
         ...(editRef ? { editRef } : {}),
-        ...(taskList?.length ? { taskList: taskList.map(({ id, title, status }) => ({ id, title, status })) } : {}),
         ...(footer ? { debugFooter: footer } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
       return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;
     },
-    reach: async (postText, target, files) => {
+    reach: async (postText, target, files, sandboxId) => {
       const seq = postKeys.take();
       if (spine.crossConversationPosts >= 5) return { ok: false, message: "outbound limit reached for this turn" };
       const selectors = [
@@ -247,7 +256,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       ].filter(Boolean).length;
       if (selectors !== 1)
         return { ok: false, message: "reach needs exactly one of: channel, recipient, or participants." };
-      const f = await resolveFiles(files);
+      const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
       const sending = postText.trim().length > 0 || (f.attachments?.length ?? 0) > 0;
       const d = await resolveDestination(target, { mayOpenGroup: sending });

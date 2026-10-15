@@ -1,4 +1,4 @@
-import { effortLevelsForHarness } from "./composer-loadout";
+import { effortLevelsForHarness } from "./composer-loadout.ts";
 
 const COLORS = ["#e8843a", "#e45d79", "#a78bfa", "#60a5fa", "#5cc074", "#f6cc46"];
 let activeBurst: HTMLElement | null = null;

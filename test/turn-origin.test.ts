@@ -103,16 +103,8 @@ test("matching automation origins preserve or combine every screening payload", 
   assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /legacy/);
 });
 
-test("Open owner-resource requirement survives legacy and typed automation normalization", () => {
-  const origin: TurnOrigin = { kind: "automation", useOwnerKeychain: true, ownerResourcesRequireOpen: true };
+test("the owner-keychain flag survives legacy and typed automation normalization", () => {
+  const origin: TurnOrigin = { kind: "automation", useOwnerKeychain: true };
   assert.deepEqual(normalizeTurnOrigin(turnOriginRequestFields(origin)), origin);
-  assert.equal(resolveTurnOrigin({ origin, triggered: true }).kind, "automation");
-  assert.deepEqual(
-    resolveTurnOrigin({
-      origin: { kind: "automation", useOwnerKeychain: true },
-      triggered: true,
-      ownerResourcesRequireOpen: true,
-    }),
-    origin,
-  );
+  assert.deepEqual(resolveTurnOrigin({ origin, triggered: true }), origin);
 });

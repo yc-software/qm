@@ -7,13 +7,13 @@ description: Publish a long-lived internal web app, site, or dashboard from the 
 
 Use this skill when the user wants something that **outlives the turn** and is
 **reachable in a browser** — a small web app, an internal API, a status page, a
-dashboard you generated from a query. A turn's sandbox is torn down when the turn
-ends; publishing ships your files to a separate, long-lived runtime that keeps running
-and gets a stable link.
+dashboard you generated from a query. Publishing ships your files from the selected
+sandbox to a separate, long-lived runtime with a stable link.
 
 Publish with the `apps` tool, action `publish`. Build the app in the workspace with
-`files` actions `write` / `read`; install dependencies and test with `sandbox` action
-`exec` (`execute` before sandbox-resource activation). Then publish the directory.
+`files` actions `write` / `read`; install dependencies and test with `execute`. Keep the
+same explicit `sandbox_id` throughout writing, building, testing, previewing, and
+publishing. Use `sandbox` only to manage computers, not to run commands.
 The app must listen on the `PORT` env var (the runtime sets it).
 
 ## Match the house style (the default)
@@ -38,7 +38,7 @@ no UI.
 First publish, and every later update — same call, same `name`, a new immutable version:
 
 ```
-apps({ action: "publish", dir: "dist", entrypoint: "node server.js", name: "status-board" })
+apps({ action: "publish", dir: "dist", entrypoint: "node server.js", name: "status-board", sandbox_id: "<selected sandbox ID>" })
 ```
 
 Roll back to an earlier version (an instant pointer flip):
@@ -96,8 +96,9 @@ the same as the app _working_. So for anything browsable, sanity-check it locall
 publish:
 
 1. Run it locally. Start the server in the background on a port — e.g.
-   `PORT=8080 node server.js` via `sandbox` action `start_process` with `purpose: "App preview server"` (`background` action `start`
-   before sandbox-resource activation), so it keeps serving while you check.
+   `PORT=8080 node server.js` via `execute` with the selected `sandbox_id`,
+   `background:true`, and `purpose: "App preview server"`, so it keeps serving while you check.
+   Use `background` with its returned `process_id` to poll or stop the server.
 2. Probe it with `curl` — confirm it answers, returns the status you expect, and the main
    page/endpoint is actually there (real content, not a stack trace or a blank 500):
 
@@ -111,18 +112,17 @@ publish:
 
 ## Sharing — say who can reach it
 
-Publishing is always private to you: a new app is reachable only by its owner, and
-republishing never changes who can reach it. Grant access as a separate step with the app
-ID or handle:
+New apps made in a channel are shared with that channel for authenticated read/use.
+Apps made in DMs stay private. Republishing never changes access; anonymous access is
+never enabled by default. Grant additional access separately with the app ID or handle:
 
 ```
 apps({ action: "share", id: "status-board", toScope: "org", permission: "read" })
 ```
 
 - **read** = can reach the app. **write** = can also manage it (redeploy/rollback).
-- Share to `personal:<id>` (one teammate), or `org:<id>` (the whole org). Team/channel
-  scopes can be granted, but team-membership reach at the link is not enforced yet — for
-  now use `org:` or `personal:` grants for reach.
+- Share to `personal:<id>` (one teammate), `channel:<id>` (a channel), or `org:<id>`
+  (the whole org). Channel access follows the current channel visibility and membership.
 
 ## What you can rely on
 
@@ -153,17 +153,19 @@ apps({ action: "share", id: "status-board", toScope: "org", permission: "read" }
 
 ## If you can't publish
 
-Publishing needs the deployment runtime to be available on this computer. If `apps` action `publish`
-errors (e.g. the runtime/Docker isn't present, the command is missing), **do not silently
-fall back to sending the files and tell the user they can "view the site" there.** Sending
+Publishing reads source files from the selected sandbox; the configured deployment provider
+starts the app separately. If `apps` action `publish` fails, inspect the actual error:
+source-path or sandbox-access failures differ from missing deployment configuration or
+provider build/start failures. Do not assume Docker must be installed on the source sandbox.
+**Do not silently fall back to sending the files and call that a hosted site.** Sending
 a file delivers it as a **downloadable attachment**, not a hosted, browsable site — a
 multi-file app (HTML + CSS + JS + assets) will NOT render from an attachment, and even a
 single `index.html` arrives as a file to download, not a live URL.
 
 So when publishing is unavailable:
 
-- Say plainly that you couldn't publish and why (the runtime isn't available here), and
-  what would fix it (the deployment runtime needs to be enabled on the agent computer).
+- Report the failed operation and actual error, and fix that cause where authorized.
+  If blocked, say what configuration, access, or app change is needed.
 - Only offer to send files for what that actually is: "I can send you the file(s) to
   download." It's a reasonable stopgap for a **single self-contained** `.html` (inline
   CSS/JS, no external assets) the user can open locally — describe it that way, not as a
