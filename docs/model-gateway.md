@@ -24,7 +24,7 @@ credentials when no gateway is configured; ChatGPT access uses the user's connec
 OpenAI account, including refreshed subscription access; Claude access supports
 API keys. Claude subscription access is unavailable for the inner browser agent
 and returns an actionable error. No account silently falls back to another.
-Kernel, Anchor and Browserbase still use their own credentials for browser sessions.
+Kernel, Anchor, Browserbase and Browser Use still use their own credentials for browser sessions.
 
 Core gives internal, non-strict turns a one-hour capability bound to the account,
 model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming

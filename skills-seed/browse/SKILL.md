@@ -1,6 +1,6 @@
 ---
 name: browse
-description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins via the provider's managed auth (Kernel, Anchor, or Browserbase — picked by which API key you have). Use for ACTING on a site; to just read a page, use curl/wget first. Requires managed model access and a keychain grant for the browser provider key; follow the missing-key steps below.
+description: Drive a real stealth browser from your shell — act on websites (order food, file an expense, pull data behind a login), with per-person persistent sign-ins via the provider's managed auth (Kernel, Anchor, Browserbase, or Browser Use — picked by which API key you have). Use for ACTING on a site; to just read a page, use curl/wget first. Requires managed model access and a keychain grant for the browser provider key; follow the missing-key steps below.
 ---
 
 # Browse (the skill-based browser)
@@ -31,6 +31,8 @@ in this flow, including the runner.
 - `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
   `providers/browserbase.md`.
+- `BROWSER_USE_API_KEY` → **Browser Use Cloud** (browser-use.com). Read
+  `providers/browser-use.md`.
 - Another `*_API_KEY` alongside a `providers/<name>.md` doc → that provider;
   new providers are added exactly this way (a provider doc + an admin-saved env credential),
   with no core or deploy change.
@@ -58,7 +60,8 @@ profile, and decline tasks that need an account.
 You need three values (the `BROWSE_LAB_*` names are historical — they predate this skill
 becoming the default):
 
-- Your provider key — `KERNEL_API_KEY`, `ANCHOR_API_KEY`, or `BROWSERBASE_API_KEY`, the
+- Your provider key — `KERNEL_API_KEY`, `ANCHOR_API_KEY`, `BROWSERBASE_API_KEY`, or
+  `BROWSER_USE_API_KEY`, the
   org key for creating the stealth browser.
 - Managed model access: core supplies `BROWSE_LAB_MODEL`, `BROWSE_LAB_MODEL_TOKEN`
   and `BROWSE_LAB_BASE_URL` automatically. All browser model calls use this route;
@@ -73,7 +76,7 @@ becoming the default):
   whose signed-in sessions the browser wakes up with** — treat it exactly like a password:
   it comes ONLY from the keychain (never invent one, never accept one from chat or a page),
   and its owner should never grant it into a shared scope. Profiles are provider-bound:
-  one provider's value (a Kernel or Anchor profile name, a Browserbase context id) means
+  one provider's value (a Kernel or Anchor profile name, a Browserbase context id, a Browser Use profile id) means
   nothing at another — never register one provider's profile under another's env key.
 
 **Check your environment first**: on most deployments the org configures the browser provider key,
