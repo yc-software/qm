@@ -19,6 +19,12 @@ export interface RunDeliveryState {
   editRef?: string;
 }
 
+/** Why a run's previous attempt stopped, recorded when the run is handed back to the queue. */
+export type RunStop =
+  | { kind: "shutdown" }
+  | { kind: "lease_expired" }
+  | { kind: "error"; code?: string; status?: number; message?: string };
+
 export interface Run {
   id: string;
   sessionId: string;
@@ -37,6 +43,8 @@ export interface Run {
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  /** Why the previous attempt stopped; null on a run's first attempt. */
+  lastStop?: RunStop | null;
 }
 
 interface TerminalCursor {
@@ -80,7 +88,7 @@ export interface RunStore {
     runId: string,
     leaseToken: string,
     error: string,
-    opts?: { retry?: boolean; retryAfterMs?: number },
+    opts?: { retry?: boolean; retryAfterMs?: number; stop?: RunStop },
   ): Promise<{ requeued: boolean }>;
 
   setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean>;

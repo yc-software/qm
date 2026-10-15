@@ -106,7 +106,11 @@ import {
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
-import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import {
+  estimateHistoryTokens,
+  INTERRUPTED_TOOL_RESULT,
+  LEGACY_INTERRUPTED_TOOL_RESULT,
+} from "./context-compaction.ts";
 import { createStepRecorder, recordingTools, type StepRecorder } from "./pi-step-recorder.ts";
 import { ELIDED_IMAGE_TEXT, restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { summarizeHistory } from "./history-summary.ts";
@@ -681,7 +685,9 @@ interface PiAgentWithPayloadHook {
 
 export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
   const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
-  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+  if (last?.role !== "toolResult") return false;
+  const text = textFromContent(last.content);
+  return text !== INTERRUPTED_TOOL_RESULT && text !== LEGACY_INTERRUPTED_TOOL_RESULT;
 }
 
 function continueAssistantTurn(session: AgentSession): Promise<void> {

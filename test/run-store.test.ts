@@ -264,6 +264,28 @@ for (const backend of backends) {
     assert.equal(reclaimed?.errorAttempts, 0);
   });
 
+  test(`[${backend.name}] a requeued run records why its last attempt stopped`, async () => {
+    const { runs } = backend.make();
+    const r = (await runs.enqueue({ sessionId: "s1", request: turn("long turn") })).run;
+    assert.equal((await runs.get(r.id))?.lastStop ?? null, null, "a fresh run has no stop cause");
+
+    const first = await runs.claim("w1", 60_000);
+    await runs.releaseLease(r.id, first!.leaseToken!);
+    assert.deepEqual((await runs.get(r.id))?.lastStop, { kind: "shutdown" });
+
+    const second = await runs.claim("w1", 60_000);
+    const stop = { kind: "error" as const, code: "transient", status: 503, message: "BedrockException" };
+    await runs.fail(r.id, second!.leaseToken!, "boom", { retry: true, stop });
+    assert.deepEqual((await runs.get(r.id))?.lastStop, stop);
+
+    await sleep(5);
+    const third = await runs.claim("w1", 1);
+    assert.ok(third, "claimable once the retry delay passes");
+    await sleep(5);
+    await runs.reapExpired();
+    assert.deepEqual((await runs.get(r.id))?.lastStop, { kind: "lease_expired" });
+  });
+
   test(`[${backend.name}] releaseLease with a wrong/stale token is a no-op`, async () => {
     const { runs } = backend.make();
     const r = (await runs.enqueue({ sessionId: "s1", request: turn("hi") })).run;

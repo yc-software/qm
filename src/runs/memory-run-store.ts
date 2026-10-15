@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStore } from "./run-store.ts";
+import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -113,6 +113,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       run.leaseToken = null;
       run.leaseExpiresAt = null;
       run.workerId = null;
+      run.lastStop = { kind: "shutdown" };
       return true;
     },
 
@@ -136,8 +137,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = runs.get(runId);
       if (!run || run.leaseToken !== leaseToken) return { requeued: false };
       return {
-        requeued: retire(run, error, opts?.retry !== false, { countsAsError: true, retryAfterMs: opts?.retryAfterMs })
-          .requeued,
+        requeued: retire(run, error, opts?.retry !== false, {
+          countsAsError: true,
+          retryAfterMs: opts?.retryAfterMs,
+          ...(opts?.stop ? { stop: opts.stop } : {}),
+        }).requeued,
       };
     },
 
@@ -363,7 +367,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run: Run,
     error: string,
     retry: boolean,
-    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number },
+    opts?: { ifExpiredAt?: number; countsAsError?: boolean; retryAfterMs?: number; stop?: RunStop },
   ): { requeued: boolean; applied: boolean } {
     if (run.status !== "running") return { requeued: false, applied: false };
     if (opts?.ifExpiredAt !== undefined && (run.leaseExpiresAt === null || run.leaseExpiresAt > opts.ifExpiredAt)) {
@@ -376,6 +380,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     const overClaimed = run.attempts >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
+      run.lastStop = opts?.stop ?? (opts?.countsAsError ? { kind: "error" } : { kind: "lease_expired" });
       retryAfter.set(run.id, Date.now() + Math.max(0, opts?.retryAfterMs ?? 0));
       return { requeued: true, applied: true };
     }

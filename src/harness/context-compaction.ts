@@ -18,6 +18,10 @@ function headTailSlice(s: string, maxChars: number, tailChars: number): string {
 }
 
 export const INTERRUPTED_TOOL_RESULT =
+  "[interrupted — the agent stopped while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
+
+/** The marker's wording before the cause was recorded; still present in stored history. */
+export const LEGACY_INTERRUPTED_TOOL_RESULT =
   "[interrupted — a routine platform deploy restarted the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
 
 export const CONTEXT_SUMMARY_HEADER =

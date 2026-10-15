@@ -1,3 +1,4 @@
+import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
@@ -96,6 +97,8 @@ export interface OrchestratorInput extends Omit<
   origin: TurnOrigin;
   runId?: string;
   attempt?: number;
+  /** Why the previous attempt of this run stopped (recorded by the run store); absent on a first attempt. */
+  resumeCause?: RunStop;
   runLeaseToken?: string;
 
   runStartedAt?: number;

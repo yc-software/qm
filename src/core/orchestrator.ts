@@ -2984,7 +2984,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
         }
         let turnInput = resumePlan
-          ? resumeNote({ strategy: resumePlan, backgroundJobs: !!backgroundBroker })
+          ? resumeNote({
+              strategy: resumePlan,
+              backgroundJobs: !!backgroundBroker,
+              ...(input.resumeCause ? { cause: input.resumeCause } : {}),
+            })
           : baseText;
         const requestInHistory = !!partial && history.some((entry) => entry.seq === partial.userSeq);
         const continueTurn =
@@ -3651,7 +3655,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
             segment = await runHarnessSegment(
-              resumeNote({ cause: "runtime-change" }) +
+              resumeNote({ cause: { kind: "runtime_change" } }) +
                 (recovery ? "\nContext reduced without a new summary." : "\nRuntime handoff completed.") +
                 " Continue the user's unfinished request using the saved conversation and tool results. Do not repeat completed actions or ask the user to repeat the request." +
                 (recovery &&

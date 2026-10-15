@@ -242,11 +242,12 @@ test("resumeStrategy restarts when the dead attempt recorded no work", () => {
   assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
 });
 
-test("the resume notes name the routine deploy, and only the retry note promises a complete record", () => {
+test("the resume notes state the recorded cause, and only the retry note promises a complete record", () => {
   const note = resumeNote();
   assert.ok(isResumeNote(note));
-  assert.match(note, /routine platform deploy/);
-  assert.match(note, /almost never worth mentioning to the user/);
+  assert.match(note, /cause not recorded/);
+  assert.doesNotMatch(note, /deploy/);
+  assert.doesNotMatch(note, /almost never worth mentioning/);
   assert.match(note, /unknown outcome/);
   const retried = resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } });
   assert.ok(isResumeNote(retried));
@@ -254,7 +255,7 @@ test("the resume notes name the routine deploy, and only the retry note promises
   assert.doesNotMatch(retried, /unknown outcome/);
   assert.match(retried, /Continue from where you left off/);
   assert.doesNotMatch(retried, /history|c1/);
-  const handoff = resumeNote({ cause: "runtime-change" });
+  const handoff = resumeNote({ cause: { kind: "runtime_change" } });
   assert.ok(isResumeNote(handoff));
   assert.doesNotMatch(handoff, /deploy/);
   assert.match(handoff, /unknown outcome/);
@@ -295,4 +296,27 @@ test("resumeStrategy continues silently only when every call is answered and the
     }).kind,
     "retry",
   );
+});
+
+test("resume notes name exactly the cause the run store recorded", () => {
+  const deploy = resumeNote({ cause: { kind: "shutdown" } });
+  assert.match(deploy, /restarted for a routine platform deploy/);
+  assert.doesNotMatch(deploy, /runtime tool/);
+
+  const provider = resumeNote({
+    cause: { kind: "error", code: "transient", status: 503, message: "BedrockException - service unavailable" },
+  });
+  assert.match(provider, /model provider call failed \(transient, HTTP 503\): BedrockException - service unavailable/);
+  assert.match(provider, /switching to another model with your runtime tool/);
+  assert.doesNotMatch(provider, /deploy/);
+
+  const crashed = resumeNote({ strategy: { kind: "restart" }, cause: { kind: "lease_expired" } });
+  assert.match(crashed, /before it recorded any work — the worker running it stopped responding/);
+  assert.doesNotMatch(crashed, /deploy/);
+
+  const harnessError = resumeNote({ cause: { kind: "error", message: "sandbox exec failed" } });
+  assert.match(harnessError, /it failed with an error: sandbox exec failed/);
+  assert.doesNotMatch(harnessError, /runtime tool/);
+
+  assert.match(resumeNote({ cause: { kind: "runtime_change" } }), /the runtime was switched/);
 });

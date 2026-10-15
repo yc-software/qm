@@ -1,3 +1,4 @@
+import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { entryDeliveryKey, isOverheardEntry } from "../sessions/session-store.ts";
 
@@ -118,31 +119,60 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   };
 }
 
-const ROUTINE = "This was a routine platform deploy; it is common and almost never worth mentioning to the user.";
 const CONTINUE = "Continue from where you left off; don't start over or repeat completed steps.)";
+
+export type ResumeCause = RunStop | { kind: "runtime_change" };
+
+/** Why the previous attempt stopped, in words, from the cause the run store recorded. Never guessed. */
+function causePhrase(cause: ResumeCause | undefined): string {
+  switch (cause?.kind) {
+    case "shutdown":
+      return "the server running it restarted for a routine platform deploy";
+    case "lease_expired":
+      return "the worker running it stopped responding (a crash or forced restart)";
+    case "runtime_change":
+      return "the runtime was switched";
+    case "error": {
+      const detail = cause.message ? `: ${cause.message}` : "";
+      if (!cause.code) return `it failed with an error${detail}`;
+      return `the model provider call failed (${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""})${detail}`;
+    }
+    default:
+      return "it stopped before finishing (cause not recorded)";
+  }
+}
+
+const PROVIDER_HINT = "If the same model keeps failing, consider switching to another model with your runtime tool.";
 
 export function resumeNote(opts?: {
   strategy?: ResumeStrategy;
   backgroundJobs?: boolean;
-  cause?: "deploy" | "runtime-change";
+  cause?: ResumeCause;
 }): string {
   const strategy = opts?.strategy ?? { kind: "note" };
+  const why = causePhrase(opts?.cause);
+  const hint = opts?.cause?.kind === "error" && opts.cause.code ? PROVIDER_HINT : "";
   if (strategy.kind === "restart") {
-    return `${NOTE_HEAD} your previous attempt at the request above was interrupted before it recorded any work (a routine platform deploy), so there is nothing to pick up. Start the request now.)`;
+    return [
+      `${NOTE_HEAD} your previous attempt at the request above stopped before it recorded any work — ${why}.`,
+      hint,
+      "There is nothing to pick up. Start the request now.)",
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
   const parts =
     strategy.kind === "retry"
       ? [
-          `${NOTE_HEAD} your previous attempt at the request above was paused mid-turn and has resumed.`,
-          ROUTINE,
+          `${NOTE_HEAD} your previous attempt at the request above stopped mid-turn — ${why} — and has resumed.`,
           "The result of the tool call that was in flight is recorded above.",
         ]
       : [
-          `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn.`,
-          opts?.cause === "runtime-change" ? "" : ROUTINE,
+          `${NOTE_HEAD} your previous attempt at the request above was interrupted mid-turn — ${why}.`,
           "Your work up to the interruption is recorded above; a tool result marked interrupted has an",
           "unknown outcome, so check what actually happened before redoing anything with side effects.",
         ];
+  if (hint) parts.push(hint);
   if (opts?.backgroundJobs) {
     parts.push("Background jobs on your computer kept running — `background` list/poll to check on them.");
   }
