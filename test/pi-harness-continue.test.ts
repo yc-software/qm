@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { isNonRetryable, turnFailureMessage } from "../src/core/turn-error.ts";
 import { createPiHarness, endsAtRecordedToolResult } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
@@ -54,7 +55,7 @@ function turnInput(sink: Sink, overrides: Partial<HarnessTurnInput>): HarnessTur
   };
 }
 
-function sse(text: string): Response {
+function sse(text: string, stopReason = "end_turn"): Response {
   const events: Array<Record<string, unknown>> = [
     {
       type: "message_start",
@@ -71,14 +72,14 @@ function sse(text: string): Response {
     { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
     { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
     { type: "content_block_stop", index: 0 },
-    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+    { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 3 } },
     { type: "message_stop" },
   ];
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurnInput> = {}) {
+async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurnInput> = {}, stopReason = "end_turn") {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
@@ -86,7 +87,7 @@ async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurn
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     requests.push(JSON.parse(String(init?.body ?? "{}")) as RequestBody);
-    return sse("done: two files");
+    return sse("done: two files", stopReason);
   }) as typeof globalThis.fetch;
   try {
     const result = await harness.turns.runTurn(
@@ -173,4 +174,24 @@ test("endsAtRecordedToolResult accepts only a real trailing tool result", () => 
   assert.equal(endsAtRecordedToolResult([{ role: "user" }, { role: "assistant" }]), false);
   assert.equal(endsAtRecordedToolResult([{ role: "user" }]), false);
   assert.equal(endsAtRecordedToolResult([]), false);
+});
+
+test("a token-limited Pi response fails visibly without retrying an incomplete answer", async () => {
+  const sink: Sink = { entries: [] };
+  await assert.rejects(runResume([ASK], { emit: turnInput(sink, {}).emit }, "max_tokens"), (error: unknown) => {
+    assert.equal(isNonRetryable(error), true);
+    assert.match(turnFailureMessage(error), /output limit.*incomplete/i);
+    return true;
+  });
+  assert.equal(
+    sink.entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+  const partial = sink.entries.find((entry) => entry.type === "text")?.payload as {
+    text?: string;
+    step?: { stopReason?: string };
+  };
+  assert.ok(partial);
+  assert.equal(partial.text, "done: two files");
+  assert.equal(partial.step?.stopReason, "length");
 });

@@ -53,7 +53,12 @@ const TURN_EFFORT_LEVELS = new Set<string>([
 ]);
 import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
-import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
+import {
+  MODEL_OUTPUT_LIMIT_TEXT,
+  NonRetryableTurnError,
+  ProviderTurnError,
+  TitleRejected,
+} from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
@@ -932,6 +937,9 @@ const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
   if (err) throw err;
+  const lastAssistant = session.messages.findLast((message) => message.role === "assistant") as
+    AssistantMessage | undefined;
+  if (lastAssistant?.stopReason === "length") throw new NonRetryableTurnError(MODEL_OUTPUT_LIMIT_TEXT);
   return session.getLastAssistantText();
 }
 
@@ -2364,7 +2372,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             });
             if (g.status === "complete") entry.ref.goal = null;
           }
-          const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
+          let closingText = "";
+          if (!recoveryDead) {
+            try {
+              closingText = piLastAssistantTextOrThrow(entry.agentSession) ?? "";
+            } catch (error) {
+              steps.flush();
+              await thinkTail;
+              if (persistError) throw persistError;
+              throw error;
+            }
+          }
           // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
           const reply = entry.ref.silentRequested ? "" : closingText;
           await turn.emit({

@@ -1,5 +1,8 @@
 import { headSlice } from "../util/text.ts";
 
+export const MODEL_OUTPUT_LIMIT_TEXT =
+  "The model reached its output limit before finishing. This response is incomplete.";
+
 export class NonRetryableTurnError extends Error {
   constructor(message: string) {
     super(message);
