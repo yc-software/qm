@@ -2183,6 +2183,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                       govern: (previous: GovernorVerdict | undefined) =>
                         entry.ref.governGoal!({
                           objective: goalAfterPrompt.objective,
+                          ...(goalAfterPrompt.request ? { request: goalAfterPrompt.request } : {}),
                           trigger: "checkpoint",
                           recentWork: entry.ref.goalRecentWork?.() ?? "",
                           ...(previous ? { previous } : {}),
