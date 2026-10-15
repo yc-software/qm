@@ -1070,7 +1070,11 @@ export function stableCwd(prefix: string): string {
   return join(tmpdir(), `${prefix}-cwd`);
 }
 
-async function createIsolatedResources(prefix: string, systemPrompt: string): Promise<IsolatedResources> {
+async function createIsolatedResources(
+  prefix: string,
+  systemPrompt: string,
+  settings: Parameters<typeof SettingsManager.inMemory>[0] = {},
+): Promise<IsolatedResources> {
   let cwd = stableCwd(prefix);
   let ephemeralCwd: string | undefined;
   try {
@@ -1082,7 +1086,7 @@ async function createIsolatedResources(prefix: string, systemPrompt: string): Pr
     ephemeralCwd = cwd;
   }
   const agentDir = mkdtempSync(join(tmpdir(), `${prefix}-agent-`));
-  const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+  const settingsManager = SettingsManager.inMemory(settings, { projectTrusted: false });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -1603,6 +1607,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
       composedPrompt,
+      { retry: { enabled: false } },
     );
     const compileMs = Date.now() - compileStart;
 
@@ -1858,6 +1863,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let curStart: number | undefined;
           let curFirst: number | undefined;
           let prevStepEnd: number | undefined;
+          let stepFailure: AssistantMessage | undefined;
           const stepWindows: Array<{ gapStart?: number; gapEnd: number }> = [];
           let thinkTail: Promise<unknown> = Promise.resolve();
           let triggerSeen = continueTurn;
@@ -1924,7 +1930,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
+            } else if (event.type === "compaction_end" && event.reason === "overflow" && event.errorMessage) {
+              if (stepFailure) stepFailure = { ...stepFailure, errorMessage: event.errorMessage };
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
+              const stepMessage = event.message as AssistantMessage;
+              stepFailure = stepMessage.stopReason === "error" ? stepMessage : undefined;
               const end = Date.now();
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
@@ -2173,6 +2183,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 ok: "ok" as const,
                 blocked: () =>
                   userAborted ||
+                  !!stepFailure ||
                   !!turn.cancel?.aborted ||
                   !!entry.ref.runtimeHandoff ||
                   !!entry.ref.pausedOnApproval ||
@@ -2354,6 +2365,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
 
+          if (stepFailure) throw piAssistantFailure({ messages: [stepFailure] } as AssistantTextSession)!;
           if (entry.ref.goal) {
             const g = entry.ref.goal;
             bankGoalTurn(g, grindMeter.startedAt);
