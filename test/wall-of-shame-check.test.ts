@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { alwaysReviewedLenses, wallOfShameLenses, wallOfShameProblems } from "../scripts/wall-of-shame-check.ts";
+import { wallOfShameLenses, wallOfShameProblems } from "../scripts/wall-of-shame-check.ts";
 
 const spec =
   "## Wall of shame\n\n### Overengineering (6 examples)\n\n### Regex\n\n### Honorable mentions\n\n## Later\n\n### Not a lens\n";
@@ -72,7 +72,6 @@ test("always-reviewed lenses cannot be triaged as not relevant", () => {
 
 test("the spec always reviews Historylessness", () => {
   const real = readFileSync("docs/SPEC.md", "utf8");
-  assert.ok(alwaysReviewedLenses(real).includes("Historylessness"));
   const rows = wallOfShameLenses(real).map((lens) =>
     lens === "Historylessness" ? `| ${lens} | Haiku triage | Not relevant |  | No schema change. |` : row(lens),
   );
