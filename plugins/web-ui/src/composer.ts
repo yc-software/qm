@@ -814,11 +814,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
-    const queued = [...queuedRunsFor(ctx.chat.state.threadRef)];
-    if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
-      queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
     const threadRef = ctx.chat.state.threadRef;
     const steering = steeringRunsFor(threadRef, agent);
+    const queued = queuedRunsFor(threadRef).filter((q) => !pendingSteers.has(q.runId));
+    if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
+      queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
     if (!queued.length && !steering.length) return nothing;
     const steerable = canSteer(agent);
     const steerTip = (): string => {
@@ -1497,16 +1497,16 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     }
     pendingSteers.add(queued.runId);
     composerState.error = "";
-    if (fresh) markSteering(threadRef, queued);
+    markSteering(threadRef, queued);
+    let steered = false;
     let fallBackToQueue = fresh;
     try {
       const outcome = await ctx.chat.signalLiveRun("steer", queued.text, queued.runId);
+      steered = outcome.ok;
       if (outcome.ok || outcome.replayed) {
         fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
         bumpSessionActivity(threadRef);
-        if (outcome.ok) markSteering(threadRef, queued);
-        else unmarkSteering(threadRef, queued.runId);
         if (
           !outcome.ok &&
           outcome.replayed &&
@@ -1522,7 +1522,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       } else if (outcome.reason === "queued_started" || outcome.reason === "not_found") {
         fallBackToQueue = false;
         forgetQueuedRun(threadRef, queued.runId);
-        unmarkSteering(threadRef, queued.runId);
       } else {
         reportHandledError("web:steer_refused", new Error(outcome.reason ?? "steer refused"));
         if (
@@ -1538,11 +1537,9 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         composerState.error = errMessage(err, "Could not confirm steering. Try again.");
     } finally {
       pendingSteers.delete(queued.runId);
+      if (!steered) unmarkSteering(threadRef, queued.runId);
     }
-    if (fallBackToQueue) {
-      unmarkSteering(threadRef, queued.runId);
-      addQueuedRun(threadRef, queued);
-    }
+    if (fallBackToQueue) addQueuedRun(threadRef, queued);
     if (agent !== ctx.chat.state.agent || threadRef !== ctx.chat.state.threadRef) return;
     ctx.chat.drawActiveChat(agent);
     ctx.chat.resumeIfIdle();
