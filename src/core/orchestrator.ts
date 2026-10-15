@@ -956,6 +956,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...grantModesField,
             });
+            return true;
           });
         } catch (err) {
           if (err instanceof ProjectRosterChanged) {
