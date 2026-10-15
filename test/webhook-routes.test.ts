@@ -11,6 +11,7 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -280,9 +281,14 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     assert.ok(events[0]?.sessionId);
     assert.match(events[0]!.payload, /agent message for worklog/);
     const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
-    const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
-    assert.equal(worklog.status, 200);
-    assert.match(JSON.stringify(await worklog.json()), /agent message for worklog/);
+    let worklogBody: unknown;
+    await settle(async () => {
+      const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
+      assert.equal(worklog.status, 200);
+      worklogBody = await worklog.json();
+      return /agent message for worklog/.test(JSON.stringify(worklogBody));
+    });
+    assert.match(JSON.stringify(worklogBody), /agent message for worklog/);
     const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
     assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
   } finally {
