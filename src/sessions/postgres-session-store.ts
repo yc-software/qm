@@ -863,6 +863,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            )`,
         ],
       },
+      {
+        id: "sessions/store/0033-human-steer-index",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_human_steer
+             ON session_entries(session_id, (payload::jsonb->>'runId'), seq DESC)
+             WHERE type = 'user' AND jsonb_typeof(payload::jsonb->'personText') = 'string'
+               AND jsonb_typeof(payload::jsonb->'personId') = 'string'`,
+        ],
+      },
     ],
     [
       {
