@@ -6,6 +6,7 @@ import { createLogin, loginCallback } from "./login.mjs";
 import { startUpdates } from "./updates.mjs";
 import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
+import { applyWindowGlass } from "./glass.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
@@ -143,7 +144,9 @@ async function showInstance(url) {
     minWidth: 800,
     minHeight: 600,
     backgroundColor: "#f5f4f0",
-    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 } } : {}),
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 }, transparent: true }
+      : {}),
     webPreferences: {
       session: instanceSession(url),
       preload: path.join(directory, "workspace-preload.cjs"),
@@ -206,7 +209,7 @@ async function showInstance(url) {
             minWidth: 600,
             minHeight: 400,
             ...(process.platform === "darwin"
-              ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 } }
+              ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 20, y: 20 }, transparent: true }
               : {}),
             webPreferences: {
               session,
@@ -290,6 +293,13 @@ async function start() {
       throw new Error("Untrusted settings request");
     }
   };
+  ipcMain.handle("qm:glass", (event, value) => {
+    const page = [...workspaceWindows].find(
+      (candidate) => !candidate.isDestroyed() && candidate.webContents === event.sender,
+    );
+    if (!page || event.senderFrame !== event.sender.mainFrame) return;
+    applyWindowGlass(page, value === "light" || value === "dark" ? value : "off");
+  });
   ipcMain.handle("qm:open-browser", async (event, value) => {
     if (
       !mainWindow ||

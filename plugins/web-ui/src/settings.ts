@@ -3,14 +3,14 @@ import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
 import { api, fetchUiState, putUiState, withBase } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, Droplets, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
 import { icon } from "./icons";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
-type ThemeChoice = "light" | "dark" | "system" | "custom";
+type ThemeChoice = "light" | "dark" | "system" | "glass" | "custom";
 
 const THEME_KEY = "theme";
 const CUSTOM_THEME_KEY = "theme:custom";
@@ -25,6 +25,10 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode 
   { value: "system", label: "System", glyph: Monitor },
 ];
 
+function macDesktop(): boolean {
+  return document.documentElement.dataset.qmDesktop === "darwin";
+}
+
 let settingsHost: HTMLElement | null = null;
 let themeImportError: string | null = null;
 
@@ -32,6 +36,7 @@ function storedTheme(): ThemeChoice {
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark") return stored;
+    if (stored === "glass") return macDesktop() ? stored : "system";
     if (stored === "custom" && storedCustomTheme()) return stored;
   } catch {
     void 0;
@@ -76,6 +81,7 @@ export function applyTheme(): void {
   const choice = storedTheme();
   const custom = choice === "custom" ? storedCustomTheme() : null;
   const root = document.documentElement;
+  root.classList.toggle("glass", choice === "glass" && macDesktop());
   let styleEl = document.getElementById(CUSTOM_THEME_STYLE_ID);
   if (custom) {
     const tokens = themeTokens(custom);
@@ -90,7 +96,9 @@ export function applyTheme(): void {
     return;
   }
   styleEl?.remove();
-  const dark = choice === "system" ? window.matchMedia("(prefers-color-scheme: dark)").matches : choice === "dark";
+  const dark =
+    choice === "dark" ||
+    ((choice === "system" || choice === "glass") && window.matchMedia("(prefers-color-scheme: dark)").matches);
   root.classList.toggle("dark", dark);
   publishTheme();
 }
@@ -142,7 +150,7 @@ export function watchSystemTheme(): void {
     if (event.key === null || event.key === THEME_KEY || event.key === CUSTOM_THEME_KEY) applyTheme();
   });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (storedTheme() === "system") applyTheme();
+    if (storedTheme() === "system" || storedTheme() === "glass") applyTheme();
   });
 }
 
@@ -189,7 +197,10 @@ function themeRow(): TemplateResult {
       </div>
       <div class="settings-theme-controls">
         <div class="settings-choice" role="radiogroup" aria-label="Theme">
-          ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
+          ${(macDesktop()
+            ? [...THEME_OPTIONS, { value: "glass" as const, label: "Liquid glass", glyph: Droplets }]
+            : THEME_OPTIONS
+          ).map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
           ${custom ? themeOption("custom", current, custom.name, themeSwatches(custom)) : nothing}
         </div>
         <div class="settings-theme-import">

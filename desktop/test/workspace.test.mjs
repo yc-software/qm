@@ -8,11 +8,17 @@ const preload = await readFile(new URL("../workspace-preload.cjs", import.meta.u
 async function workspace(platform = "darwin") {
   const dom = new JSDOM('<div id="sidebar-body"></div><textarea></textarea>', { runScripts: "outside-only" });
   const { window } = dom;
+  const glass = [];
   window.process = { platform };
   const listeners = new Map();
   window.require = () => ({
     contextBridge: { exposeInMainWorld() {} },
-    ipcRenderer: { invoke() {}, on: (name, listener) => listeners.set(name, listener) },
+    ipcRenderer: {
+      invoke(channel, value) {
+        if (channel === "qm:glass") glass.push(value);
+      },
+      on: (name, listener) => listeners.set(name, listener),
+    },
   });
   window.HTMLElement.prototype.checkVisibility = function () {
     return !this.closest("[hidden], .collapsed, .sidebar-closed");
@@ -47,6 +53,7 @@ async function workspace(platform = "darwin") {
     add,
     key,
     cycle: (step) => listeners.get("qm:cycle-tab")({}, step),
+    glass,
     close: () => {
       window.dispatchEvent(new window.Event("blur"));
       window.close();
@@ -164,6 +171,24 @@ test("cycle-tab commands reach the page unless a modal dialog is open", async ()
     dialog.remove();
     app.cycle(-1);
     assert.deepEqual(steps, [1, -1]);
+  } finally {
+    app.close();
+  }
+});
+
+test("liquid glass reports the material the desktop window should use", async () => {
+  const app = await workspace();
+  try {
+    assert.deepEqual(app.glass, ["off"]);
+    app.window.document.documentElement.classList.add("glass");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(app.glass, ["off", "light"]);
+    app.window.document.documentElement.classList.add("dark");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(app.glass.at(-1), "dark");
+    app.window.document.documentElement.classList.remove("glass");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(app.glass.at(-1), "off");
   } finally {
     app.close();
   }

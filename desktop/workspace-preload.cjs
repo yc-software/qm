@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+if (document.documentElement) document.documentElement.dataset.qmDesktop = process.platform;
+
 contextBridge.exposeInMainWorld("qmDesktop", {
   openBrowser: (url) => ipcRenderer.invoke("qm:open-browser", url),
 });
@@ -151,4 +153,11 @@ window.addEventListener("DOMContentLoaded", () => {
     attributes: true,
     attributeFilter: ["class", "style", "hidden"],
   });
+  const publishGlass = () => {
+    if (window.top !== window) return;
+    const mode = root.classList.contains("glass") ? (root.classList.contains("dark") ? "dark" : "light") : "off";
+    void ipcRenderer.invoke("qm:glass", mode);
+  };
+  new MutationObserver(publishGlass).observe(root, { attributes: true, attributeFilter: ["class"] });
+  publishGlass();
 });

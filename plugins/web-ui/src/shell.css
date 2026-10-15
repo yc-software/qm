@@ -12537,3 +12537,57 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   opacity: 0;
   pointer-events: none;
 }
+
+html[data-qm-desktop="darwin"].glass
+  :is(
+    body,
+    #app,
+    .layout,
+    .main,
+    .split-canvas,
+    .split-dock,
+    .dv-dockview,
+    .dockview-theme-qm,
+    .dv-content-container,
+    .custom-chat,
+    .custom-chat-shell,
+    .chat-scroll,
+    .chat-topbar,
+    .dv-tabs-and-actions-container
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+html[data-qm-desktop="darwin"].glass body::before {
+  background: transparent;
+}
+html[data-qm-desktop="darwin"].glass .sidebar {
+  background: rgb(255 255 255 / 0.28);
+}
+html[data-qm-desktop="darwin"].glass.dark .sidebar {
+  background: rgb(16 18 26 / 0.5);
+}
+html[data-qm-desktop="darwin"].glass .dv-groupview {
+  background: rgb(255 255 255 / 0.16);
+}
+html[data-qm-desktop="darwin"].glass.dark .dv-groupview {
+  background: rgb(14 18 28 / 0.46);
+}
+html[data-qm-desktop="darwin"].glass
+  :is(
+    .main > .pane,
+    .project-dialog,
+    .composer-wrap,
+    .menu-popover,
+    .loadout-submenu,
+    .session-menu-popover,
+    .user-menu-popover,
+    .chat-search-palette
+  ) {
+  background: var(--background);
+}
+@media (prefers-reduced-transparency: reduce) {
+  html[data-qm-desktop="darwin"].glass :is(.sidebar, .dv-groupview) {
+    background: var(--background);
+  }
+}
