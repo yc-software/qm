@@ -354,8 +354,6 @@ export function createMemoryConfigStore(
   const autoFlaggerStore = opts.autoFlaggerConfigs ?? createMemoryMap<PersistedAutoFlaggerConfig>();
   const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
   const writeQueue = createKeyedQueue();
-  // Writes land in the durable store before the cache changes, so a setter that resolves
-  // means the value is saved and a rejected one leaves this process agreeing with the store.
   const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
     writeQueue(key, async () => {
       await write();
@@ -489,8 +487,6 @@ export function createMemoryConfigStore(
 
   return {
     async refreshSecurity(ids) {
-      // Each reload queues behind this process's writes to the same key, so it never
-      // overwrites a newer local write with the row it read before that write landed.
       const reload = <T>(key: string, read: () => Promise<T>, apply: (row: T) => void) =>
         writeQueue(key, async () => apply(await read()));
       await Promise.all(
