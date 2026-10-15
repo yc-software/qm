@@ -457,7 +457,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       timeoutMs: timeoutSec * 1000,
       ...(env ? { env } : {}),
     });
-    return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+    return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.timedOut === true };
   }
 
   async function execRaw(

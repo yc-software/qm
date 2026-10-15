@@ -214,7 +214,11 @@ test("Modal exec deadlines are whole seconds with a single grace margin, even ne
     modalExecs.map((call) => call.params.timeoutMs),
     [13_000 + MODAL_EXEC_GRACE_MS, 1000 + MODAL_EXEC_GRACE_MS, 3600_000 + MODAL_EXEC_GRACE_MS],
   );
-  assert.deepEqual(modalExecs[0]!.args, ["timeout", "13", "sh", "-c", "wc -c < /root/.qm-home.tar"]);
+  // The command runs under the group-kill timeout guard, with the deadline in whole seconds.
+  const [shell, flag, guard] = modalExecs[0]!.args;
+  assert.deepEqual([shell, flag], ["sh", "-c"]);
+  assert.match(guard!, /\bsleep 13\b/);
+  assert.ok(guard!.includes(`sh -c 'wc -c < /root/.qm-home.tar' &`), "the command itself is run unchanged");
 });
 
 test("Modal passes command env through exec and spools oversized commands through the filesystem", async () => {
@@ -232,9 +236,12 @@ test("Modal passes command env through exec and spools oversized commands throug
   assert.equal(modalWrites.length, 1);
   assert.equal(modalWrites[0]!.bytes, Buffer.byteLength(huge));
   assert.match(modalWrites[0]!.path, /^\/tmp\/\.qm-exec-[0-9a-f-]{36}\.sh$/);
-  assert.equal(
-    modalExecs[2]!.args[2],
-    `timeout 3600 sh ${modalWrites[0]!.path}; rc=$?; rm -f ${modalWrites[0]!.path}; exit $rc`,
+  const spooledRun = modalExecs[2]!.args[2]!;
+  assert.match(spooledRun, /\bsleep 3600\b/, "the spooled script runs under the same timeout guard");
+  assert.ok(spooledRun.includes(`sh ${modalWrites[0]!.path}`));
+  assert.ok(
+    spooledRun.endsWith(`; rc=$?; rm -f ${modalWrites[0]!.path}; exit $rc`),
+    "the spooled script is removed after the guard returns",
   );
   assert.ok(Buffer.byteLength(modalExecs[2]!.args[2]!) < MODAL_MAX_EXEC_ARG_BYTES);
 });

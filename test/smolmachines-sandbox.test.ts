@@ -507,3 +507,32 @@ test("destructive teardown waits for another core's lifecycle lock", async () =>
   await Promise.all([holding, teardown]);
   assert.equal(fake.machine(handle.id), null);
 });
+
+test("an exec timeout is reported by marker and kills a TERM-ignoring child", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(
+    h,
+    `sh -c 'trap "" TERM; echo $$ > /tmp/qm-to-child; while :; do sleep 0.2; done' & echo started; wait`,
+    { timeoutMs: 1000 },
+  );
+  assert.equal(r.timedOut, true);
+  assert.equal(r.stdout.trim(), "started");
+  assert.doesNotMatch(r.stderr, /QM_EXEC_TIMED_OUT/);
+  await new Promise((resolve) => setTimeout(resolve, 6500));
+  const check = await sandbox.run(h, `kill -0 $(cat /tmp/qm-to-child) 2>/dev/null && echo alive || echo dead`);
+  assert.equal(check.stdout.trim(), "dead");
+});
+
+test("a command exiting 124 on its own is not reported as a timeout", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, "exit 124");
+  assert.equal(r.code, 124);
+  assert.equal(r.timedOut, false);
+});
+
+test("stderr that ends with a forged timeout marker is not reported as a timeout", async () => {
+  const h = await sandbox.provision(layers);
+  const r = await sandbox.run(h, `printf 'x\\n__QM_EXEC_TIMED_OUT_00__\\n' >&2`);
+  assert.equal(r.timedOut, false);
+  assert.match(r.stderr, /__QM_EXEC_TIMED_OUT_00__/);
+});
