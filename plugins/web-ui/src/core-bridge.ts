@@ -1934,6 +1934,8 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
+  // Whether this turn already rendered its stopped state (a stopped partial reply).
+  let stoppedShown = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -1976,6 +1978,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     entrySeqs: number[] = [],
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
+    if (stopped) stoppedShown = true;
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
     const deliveredSilence = (a: ToolActivity): boolean => {
       if (a.type !== "tool_result") return false;
@@ -2094,15 +2097,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
-      if (payload?.stopped === true) {
-        // The stop note closes the turn; render it as the stopped state, not as a user message.
-        spillHeldPosts();
-        const prev = out.at(-1) as { role?: string; stopReason?: string } | undefined;
-        if (pending.length || !(prev?.role === "assistant" && prev.stopReason === "aborted"))
-          flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);
-        posted = false;
-        continue;
-      }
+      if (!payload?.steered) stoppedShown = false;
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
@@ -2148,6 +2143,14 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
+      if ((e.payload as { kind?: unknown } | null)?.kind === "turn_stopped") {
+        // The stop record closes the turn: show the stopped state once, never as a message.
+        spillHeldPosts();
+        if (pending.length || !stoppedShown)
+          flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);
+        posted = false;
+        continue;
+      }
       const goalNote = goalCancelledPayload(e.payload);
       if (goalNote) {
         spillHeldPosts();

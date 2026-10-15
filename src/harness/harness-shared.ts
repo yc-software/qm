@@ -1,4 +1,4 @@
-import type { ReplayImageRef } from "./replay.ts";
+import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
@@ -75,13 +75,10 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
 
 export const STOPPED_FALLBACK_REASON = "it was stopped before it finished";
 
-export function stoppedNote(reason: string): string {
-  return `[system] Turn stopped: ${reason}.`;
-}
-
 /**
  * Records a stopped turn: whatever the model actually wrote before the stop (never a placeholder),
- * then a system note saying who or what stopped it. The note is a user-side entry, hidden in the UI.
+ * then a system entry naming who or what stopped it. Replay shows the model that entry as a
+ * "[system] Turn stopped: …" message; it is never a user or assistant entry.
  */
 export async function recordStoppedTurn(
   turn: HarnessTurnInput,
@@ -91,11 +88,15 @@ export async function recordStoppedTurn(
 ): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
   const answer = partial.trim()
-    ? await turn.emit({ type: "assistant", payload: { text: partial, stopped: true, ...replay }, scopeLabel: turn.scopeLabel })
+    ? await turn.emit({
+        type: "assistant",
+        payload: { text: partial, stopped: true, ...replay },
+        scopeLabel: turn.scopeLabel,
+      })
     : null;
   const note = await turn.emit({
-    type: "user",
-    payload: { text: stoppedNote(reason), hidden: true, stopped: true },
+    type: "system",
+    payload: { kind: TURN_STOPPED_KIND, reason },
     scopeLabel: turn.scopeLabel,
   });
   return note ?? answer;

@@ -596,3 +596,22 @@ test("reconstructMessagesFromHistory keeps parallel tool calls in one assistant 
     ["user", "a,b", "toolResult", "toolResult", "c", "toolResult", "text"],
   );
 });
+
+test("reconstructMessagesFromHistory replays a stopped turn as a system note in user voice, after the real partial", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "write the report" }, 1),
+    ent("assistant", { text: "Draft so far", stopped: true }, 2),
+    ent("system", { kind: "turn_stopped", reason: "the parent agent interrupted it" }, 3),
+    ent("user", { text: "carry on" }, 4),
+  ];
+  const msgs = reconstructMessagesFromHistory(history);
+  assertValidWire(msgs);
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "user", "user"],
+  );
+  assert.deepEqual(msgs[1]!.content, [{ type: "text", text: "Draft so far" }]);
+  assert.deepEqual(msgs[2]!.content, [
+    { type: "text", text: "[system] Turn stopped: the parent agent interrupted it." },
+  ]);
+});

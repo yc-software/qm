@@ -17,6 +17,14 @@ import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 
+/** System entry kind recording that a turn was stopped and who or what stopped it. */
+export const TURN_STOPPED_KIND = "turn_stopped";
+
+/** How a stopped turn reads to the model on replay. */
+export function turnStoppedNote(reason: string): string {
+  return `[system] Turn stopped: ${reason}.`;
+}
+
 export { INTERRUPTED_TOOL_RESULT };
 
 export interface SeededMessage {
@@ -318,11 +326,13 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
     } else if (e.type === "system") {
       const revision = messageRevision(e);
-      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown };
+      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown; reason?: unknown };
       if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
       else if (p.kind === WAKE_KIND && typeof p.text === "string") raw.push(userMsg(p.text, e.createdAt));
       else if (p.kind === "goal_cancelled" && typeof p.objective === "string")
         raw.push(userMsg(goalCancelledNote(p.objective), e.createdAt));
+      else if (p.kind === TURN_STOPPED_KIND && typeof p.reason === "string")
+        raw.push(userMsg(turnStoppedNote(p.reason), e.createdAt));
     } else if (e.type === "tool_call") {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const cid = typeof p.callId === "string" ? p.callId : "";

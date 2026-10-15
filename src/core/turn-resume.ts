@@ -1,3 +1,4 @@
+import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import type { SessionEntry } from "../types.ts";
 import { entryDeliveryKey, isOverheardEntry } from "../sessions/session-store.ts";
 
@@ -16,6 +17,11 @@ export function isResumeNote(text: string): boolean {
   return text.trimStart().startsWith(NOTE_HEAD);
 }
 
+/** A stop record closes its turn, like a final answer: a later attempt must not resume it. */
+function isTurnStoppedEntry(e: SessionEntry): boolean {
+  return e.type === "system" && (e.payload as { kind?: unknown } | null)?.kind === TURN_STOPPED_KIND;
+}
+
 const MODEL_TURN_ENTRY_TYPES = new Set<SessionEntry["type"]>(["user", "assistant", "tool_call", "tool_result"]);
 
 export function findTrailingPartialTurn(entries: readonly SessionEntry[], inputText: string): PartialTurn | null {
@@ -24,7 +30,7 @@ export function findTrailingPartialTurn(entries: readonly SessionEntry[], inputT
   let workEntries = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.type === "assistant") return null;
+    if (e.type === "assistant" || isTurnStoppedEntry(e)) return null;
     if (e.type === "tool_call" || e.type === "tool_result") {
       workEntries += 1;
       continue;

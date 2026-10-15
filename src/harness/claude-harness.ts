@@ -721,7 +721,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
-        if (!terminal)
+        if (!terminal && (reply || stopped))
           await recordStoppedTurn(turn, reply, stopped ? stopReason : "the run was cancelled before it finished");
         return {
           reply,

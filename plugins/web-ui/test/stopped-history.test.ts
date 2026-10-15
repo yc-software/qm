@@ -34,26 +34,43 @@ test("legacy stopped placeholders are recognized without treating ordinary repli
   }
 });
 
-test("a stop note renders as the stopped state, once, and never as a user message", () => {
-  const note = (seq: number): SessionEntry => ({
-    type: "user",
-    payload: { text: "[system] Turn stopped: a person stopped it.", hidden: true, stopped: true },
+test("a turn_stopped record renders as the stopped state, once, and never as a message", () => {
+  const stop = (seq: number): SessionEntry => ({
+    type: "system",
+    payload: { kind: "turn_stopped", reason: "a person stopped it" },
     createdAt: 5000,
     seq,
   });
-  const request: SessionEntry = { type: "user", payload: { text: "do the thing" }, createdAt: 1000, seq: 1 };
+  const request = (seq: number): SessionEntry => ({
+    type: "user",
+    payload: { text: "do the thing" },
+    createdAt: 1000,
+    seq,
+  });
 
-  const bare = entriesToMessages([request, note(2)]);
+  const bare = entriesToMessages([request(1), stop(2)]);
   assert.equal(bare.length, 2);
   assert.equal((bare[1] as AssistantWork).stopReason, "aborted");
   assert.deepEqual((bare[1] as AssistantWork).content, [{ type: "text", text: "" }]);
 
   const withPartial = entriesToMessages([
-    request,
+    request(1),
     { type: "assistant", payload: { text: "Partial answer", stopped: true }, createdAt: 4000, seq: 2 },
-    note(3),
+    stop(3),
   ]);
   assert.equal(withPartial.length, 2, "the partial answer already shows the stopped state");
-  assert.equal((withPartial[1] as AssistantWork).stopReason, "aborted");
   assert.deepEqual((withPartial[1] as AssistantWork).content, [{ type: "text", text: "Partial answer" }]);
+
+  const twoStoppedTurns = entriesToMessages([
+    request(1),
+    { type: "assistant", payload: { text: "Partial answer", stopped: true }, createdAt: 4000, seq: 2 },
+    stop(3),
+    { type: "user", payload: { text: "continue", hidden: true }, createdAt: 6000, seq: 4 },
+    stop(5),
+  ]);
+  assert.equal(
+    twoStoppedTurns.filter((m) => (m as AssistantWork).stopReason === "aborted").length,
+    2,
+    "a later stopped turn after a hidden prompt still shows its own stopped state",
+  );
 });

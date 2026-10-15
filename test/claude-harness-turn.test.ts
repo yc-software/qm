@@ -795,7 +795,7 @@ for (const shutdown of [false, true]) {
     assert.equal(result.stoppedByUser, undefined);
     assert.deepEqual(
       entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
-      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "user"],
+      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "system"],
     );
     const partial = findTrailingPartialTurn(entries, turn.input);
     if (shutdown) {
@@ -805,9 +805,8 @@ for (const shutdown of [false, true]) {
     } else {
       assert.deepEqual(entries.at(-2)!.payload, { text: "Visible partial", stopped: true });
       assert.deepEqual(entries.at(-1)!.payload, {
-        text: "[system] Turn stopped: the run was cancelled before it finished.",
-        hidden: true,
-        stopped: true,
+        kind: "turn_stopped",
+        reason: "the run was cancelled before it finished",
       });
       assert.equal(partial, null);
     }

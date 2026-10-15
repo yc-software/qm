@@ -1,4 +1,5 @@
 import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
+import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
@@ -274,6 +275,13 @@ function entryText(entry: SessionEntry): string | undefined {
 function lastAssistantText(entries: readonly SessionEntry[]): string | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
+    const stop = e.type === "system" ? (e.payload as { kind?: unknown; reason?: unknown } | null) : null;
+    if (stop?.kind === TURN_STOPPED_KIND) {
+      // A partial reply recorded just before the stop is still the last thing said.
+      const before = entries[i - 1];
+      const partial = before?.type === "assistant" ? entryText(before) : "";
+      return partial || `(stopped: ${typeof stop.reason === "string" ? stop.reason : "no reason recorded"})`;
+    }
     if (e.type !== "assistant" && e.type !== "text") continue;
     const text = entryText(e);
     if (text) return text;
