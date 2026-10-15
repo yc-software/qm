@@ -171,6 +171,19 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
   const secret = opts.signingSecret ?? randomUUID();
 
+  async function mutate(id: string, edit: (s: Skill) => Skill): Promise<Skill> {
+    if (skills.update) {
+      const next = await skills.update(id, edit);
+      if (!next) throw new Error(`unknown skill: ${id}`);
+      return next;
+    }
+    const s = await skills.get(id);
+    if (!s) throw new Error(`unknown skill: ${id}`);
+    const next = edit(s);
+    await skills.put(next.id, next);
+    return next;
+  }
+
   function sign(manifest: SkillManifest): string {
     const files = canonicalFiles(manifest.files);
     const canonical = JSON.stringify({
@@ -208,16 +221,16 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
     async update(id, manifest) {
       assertSafeSkillName(manifest.name);
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (manifest.name !== s.manifest.name) throw new Error("skill update cannot rename — create a new skill instead");
-      s.manifest = manifest;
-      s.signature = sign(manifest);
-      if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
-      s.version += 1;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        if (manifest.name !== s.manifest.name)
+          throw new Error("skill update cannot rename — create a new skill instead");
+        s.manifest = manifest;
+        s.signature = sign(manifest);
+        if (scopeKind(s.scopeId) !== "personal") s.status = "draft";
+        s.version += 1;
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     get: (id) => skills.get(id),
@@ -228,39 +241,36 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async review(id, reviewer, grantCapabilities) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      assertSafeSkillName(s.manifest.name);
-      if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
-      s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
-      if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
-      s.status = "reviewed";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        assertSafeSkillName(s.manifest.name);
+        if (sign(s.manifest) !== s.signature) throw new Error("skill signature invalid — manifest was tampered with");
+        s.grantedCapabilities = [...new Set([...s.grantedCapabilities, ...grantCapabilities])];
+        if (!s.approvals.includes(reviewer)) s.approvals.push(reviewer);
+        s.status = "reviewed";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async publish(id) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      assertSafeSkillName(s.manifest.name);
-      if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
-      const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
-      if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
-      s.status = "published";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        assertSafeSkillName(s.manifest.name);
+        if (s.status === "draft") throw new Error("skill must be reviewed before it is published");
+        const missing = s.manifest.requiredCapabilities.filter((c) => !s.grantedCapabilities.includes(c));
+        if (missing.length) throw new Error(`skill requires ungranted capabilities: ${missing.join(", ")}`);
+        s.status = "published";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async archive(id) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (s.status === "archived") return s;
-      s.status = "archived";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (s) => {
+        if (s.status === "archived") return s;
+        s.status = "archived";
+        s.updatedAt = Date.now();
+        return s;
+      });
     },
 
     async restore(skill) {
@@ -319,10 +329,11 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       if (scopeKind(toScopeId) === "org") {
         throw new Error("ceding a skill to the org goes through promote (admin-gated), not move");
       }
-      s.scopeId = toScopeId;
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      return mutate(id, (current) => {
+        current.scopeId = toScopeId;
+        current.updatedAt = Date.now();
+        return current;
+      });
     },
   };
 }
