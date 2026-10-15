@@ -73,7 +73,7 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 
-export const STOPPED_FALLBACK_REASON = "unexpectedly";
+const STOPPED_FALLBACK_REASON = "unexpectedly";
 
 /**
  * Records a stopped turn: whatever the model actually wrote before the stop (never a placeholder),

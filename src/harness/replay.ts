@@ -21,12 +21,12 @@ import { isObj } from "../util/objects.ts";
 export const TURN_STOPPED_KIND = "turn_stopped";
 
 /** How a stopped turn reads to the model on replay. `reason` reads after "Turn stopped", e.g. "by user". */
-export function turnStoppedNote(reason: string): string {
+function turnStoppedNote(reason: string): string {
   return `[system] Turn stopped ${reason}.`;
 }
 
 /** The result of a tool call that was still running when its turn was stopped. */
-export function stoppedToolResult(reason: string): string {
+function stoppedToolResult(reason: string): string {
   return `[system] Turn stopped ${reason} while this call was running; its outcome wasn't recorded. Check what happened before retrying.`;
 }
 

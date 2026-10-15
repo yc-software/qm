@@ -99,7 +99,7 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
     (e) => e.type === "tool_call" && !answered.has((e.payload as { callId?: unknown } | null)?.callId),
   );
   if (dangling.length === 0) {
-    const last = turn.findLast((e) => MODEL_TURN_ENTRY_TYPES.has(e.type));
+    const last = turn.findLast((e) => MODEL_TURN_ENTRY_TYPES.has(e.type) || isTurnStoppedEntry(e));
     return last?.type === "tool_result" ? { kind: "continue" } : { kind: "note" };
   }
   if (dangling.length !== 1) return { kind: "note" };
