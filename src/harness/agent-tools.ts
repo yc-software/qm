@@ -110,6 +110,7 @@ export interface ToolContextRef {
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
+  saveGoal?: (goal: GoalRecord) => Promise<void>;
   goalOpenedThisTurn?: boolean;
 
   goalRound?: number;
@@ -3930,6 +3931,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       ref.goal = record;
       ref.goalOpenedThisTurn = true;
+      await ref.saveGoal?.(record);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -4019,6 +4021,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           );
         }
         cancelGoal(goal, p.note);
+        await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4053,6 +4056,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ref.goalOpenedThisTurn = true;
         delete goal.pauseReason;
         delete goal.governor;
+        await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4106,6 +4110,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           };
       if (verdict.verdict !== "complete") {
         const applied = applyGovernorVerdict(goal, verdict);
+        await ref.saveGoal?.(goal);
         let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
         if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
         if (applied.verdict === "pause")
@@ -4121,6 +4126,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
+      await ref.saveGoal?.(goal);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },

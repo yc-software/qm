@@ -116,6 +116,8 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: SessionEntry[];
   goal?: GoalRecord | null;
+  goalContinuation?: boolean;
+  saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string): boolean;

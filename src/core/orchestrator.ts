@@ -19,7 +19,8 @@ import {
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
-import { goalViewFromEntry } from "../runs/turn-stream.ts";
+import { goalView } from "../runs/turn-stream.ts";
+import { openGoal } from "../harness/goal.ts";
 import type {
   CommandApprovalGrant,
   DeliveryProvenance,
@@ -3170,7 +3171,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
-        const runHarnessSegment = (
+        const runHarnessSegment = async (
           harnessInput: string,
           extras: {
             priorTurns?: typeof input.priorTurns;
@@ -3235,10 +3236,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               })();
               const appended = await withManagedRosterVersion(() => deps.sessions.append(lease, stored));
               emittedEntries.push(appended);
-              if (input.runId && deps.turnStream) {
-                const goalView = goalViewFromEntry(appended.type, appended.payload);
-                if (goalView) deps.turnStream.noteGoal(input.runId, goalView);
-              }
               if (appended.type === "user" && spine.turnUserEntrySeq === undefined) {
                 spine.turnUserEntrySeq = appended.seq;
                 if (input.runId && deps.runs)
@@ -3265,6 +3262,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           };
           const initialDocuments = [...documentInputs.documents];
+          const sessionGoal = openGoal((await deps.sessions.goals([session.id])).get(session.id));
           return deps.harness.turns.runTurn({
             session,
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
@@ -3562,6 +3560,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
+            goal: sessionGoal,
+            saveGoal: async (goal) => {
+              await deps.sessions.setGoal(lease, goal);
+              if (input.runId) deps.turnStream?.noteGoal(input.runId, goalView(goal));
+            },
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onDelta: (chunk: string) => {

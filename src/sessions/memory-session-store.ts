@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Session, SessionEntry, ScopeId } from "../types.ts";
+import type { GoalRecord } from "../harness/goal.ts";
 import type {
   AttributedTurn,
   EntrySearchHit,
@@ -70,6 +71,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
   const entries = new Map<string, SessionEntry[]>();
+  const goals = new Map<string, GoalRecord>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
   const llmRequestSeq = new Map<string, number>();
@@ -229,6 +231,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
       sessions.delete(sessionId);
       entries.delete(sessionId);
+      goals.delete(sessionId);
       searchIndex.delete(sessionId);
       llmRequests.delete(sessionId);
       windows.delete(sessionId);
@@ -291,15 +294,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       });
     },
 
-    async getRecentEntries(sessionIds, lookback) {
-      return new Map(
-        sessionIds.map((id) => {
-          const log = entries.get(id) ?? [];
-          const since = Math.max(0, (log.at(-1)?.seq ?? -1) - lookback);
-          return [id, log.filter((entry) => entry.seq >= since)];
-        }),
-      );
-    },
     async getEntries(sessionId, opts?: GetEntriesOptions) {
       const log = entries.get(sessionId) ?? [];
       const since = opts?.sinceSeq ?? 0;
@@ -325,6 +319,25 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async latestEntrySeq(sessionId) {
       return (entries.get(sessionId)?.length ?? 0) - 1;
+    },
+
+    async goals(sessionIds) {
+      const found = new Map<string, GoalRecord>();
+      for (const id of sessionIds) {
+        const goal = goals.get(id);
+        if (goal) found.set(id, structuredClone(goal));
+      }
+      return found;
+    },
+
+    async setGoal(lease, goal, notices = []) {
+      const held = leases.get(lease.sessionId);
+      if (!held || held.token !== lease.token || now() >= held.expiresAt) {
+        throw new Error("set goal without a valid session lease");
+      }
+      if (!sessions.has(lease.sessionId)) throw new Error(`unknown session: ${lease.sessionId}`);
+      if (notices.length) await this.appendMany(lease, notices);
+      goals.set(lease.sessionId, structuredClone(goal));
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest) {

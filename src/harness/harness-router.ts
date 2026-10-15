@@ -18,9 +18,6 @@ import { createGrindMeter } from "./grind.ts";
 import {
   bankGoalTurn,
   enforceGoal,
-  goalSnapshotPayload,
-  latestGoalRecord,
-  rehydrateOpenGoal,
   governGoal,
   goalWorkFromEntries,
   type GoalGovernorInput,
@@ -45,6 +42,7 @@ async function runTurnEnforcingGoal(
   harnessId: HarnessId,
 ): Promise<HarnessTurnResult> {
   const emitted: SessionEntry[] = [];
+  let saved: GoalRecord | undefined;
   const dispatched: HarnessTurnInput = {
     ...input,
     emit: async (entry) => {
@@ -52,11 +50,15 @@ async function runTurnEnforcingGoal(
       emitted.push(stored);
       return stored;
     },
+    saveGoal: async (goal) => {
+      saved = goal;
+      await input.saveGoal?.(goal);
+    },
   };
   const startedAt = Date.now();
   const meter = createGrindMeter(startedAt);
   let result = await adapter.turns.runTurn(dispatched);
-  const goal: GoalRecord | null = latestGoalRecord(emitted) ?? rehydrateOpenGoal(input.history);
+  const goal: GoalRecord | null = saved ?? input.goal ?? null;
   if (!goal) return result;
   const account = () => {
     meter.turns += result.modelCalls ?? 1;
@@ -103,18 +105,20 @@ async function runTurnEnforcingGoal(
         input: note,
         history: [...input.history, ...emitted],
         goal,
+        goalContinuation: true,
         ...(remaining !== undefined ? { turnWallClockMs: Math.max(1, remaining) } : {}),
       });
       account();
       return blocked() ? "halted" : "ok";
     },
   });
+  if (saved && saved !== goal) return result;
   bankGoalTurn(goal, startedAt);
   if (result.stopped && (result.stoppedByUser || !input.cancel?.aborted) && goal.status === "active") {
     goal.status = "paused";
     goal.updatedAt = Date.now();
   }
-  await dispatched.emit({ type: "system", payload: goalSnapshotPayload(goal), scopeLabel: input.scopeLabel });
+  await dispatched.saveGoal!(goal);
   return result;
 }
 

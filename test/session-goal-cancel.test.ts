@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
-import { createGoalRecord, goalSnapshotPayload, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import { createGoalRecord, openGoal } from "../src/harness/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { Principal } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
@@ -34,13 +34,13 @@ async function sessionWithGoal(built: ReturnType<typeof freshApp>, ref: string, 
   goal.status = status;
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
-  await sessions.append(lease, {
-    type: "system",
-    payload: goalSnapshotPayload(goal),
-    scopeLabel: session.scopeId,
-  });
+  await sessions.setGoal(lease, goal);
   await sessions.releaseLease(lease);
   return session;
+}
+
+async function sessionGoal(built: ReturnType<typeof freshApp>, sessionId: string) {
+  return (await built.sessions.goals([sessionId])).get(sessionId) ?? null;
 }
 
 for (const status of ["active", "paused"] as const) {
@@ -55,23 +55,32 @@ for (const status of ["active", "paused"] as const) {
       null,
       "a participant who cannot write to the owner's personal scope cannot cancel",
     );
-    assert.equal(rehydrateOpenGoal(await built.sessions.getEntries(session.id))?.status, status);
+    assert.equal(openGoal(await sessionGoal(built, session.id))?.status, status);
+    assert.equal(
+      (await built.app.getSessionForViewer(session.id, "U1"))?.goal?.status,
+      status,
+      "the chat's goal bar reads the open goal from the session",
+    );
 
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
 
     const entries = await built.sessions.getEntries(session.id);
-    const last = entries.at(-1)!;
-    assert.equal(last.type, "system");
-    assert.equal((last.payload as { cancelledBy?: string }).cancelledBy, "U1");
-    assert.equal(latestGoalRecord(entries)?.status, "cancelled");
-    assert.equal(latestGoalRecord(entries)?.completionNote, undefined, "cancelling is not completing");
-    assert.equal(rehydrateOpenGoal(entries), null, "later turns start with no goal to enforce");
+    assert.deepEqual(entries.at(-1)?.payload, {
+      kind: "goal_cancelled",
+      objective: "old outreach goal",
+      cancelledBy: "U1",
+    });
+    const goal = await sessionGoal(built, session.id);
+    assert.equal(goal?.status, "cancelled");
+    assert.equal(goal?.completionNote, undefined, "cancelling is not completing");
+    assert.equal(openGoal(goal), null, "later turns start with no goal to enforce");
     assert.match(
       JSON.stringify(reconstructMessagesFromHistory(entries)),
       /The user cancelled this goal/,
       "the model is told the goal was cancelled",
     );
     assert.ok(!(await built.app.listSessions("U1")).find((s) => s.id === session.id)?.goal);
+    assert.equal((await built.app.getSessionForViewer(session.id, "U1"))?.goal, undefined, "the goal bar closes");
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), {
       cancelled: false,
       reason: "no_open_goal",
@@ -80,7 +89,7 @@ for (const status of ["active", "paused"] as const) {
 }
 
 for (const status of ["active", "paused"] as const) {
-  test(`cancelling a ${status} goal while a turn runs lands after that turn's own final goal snapshot`, async () => {
+  test(`cancelling a ${status} goal while a turn runs lands after that turn's own final goal save`, async () => {
     const built = freshApp();
     const ref = `web:U1:running-${status}`;
     const session = await sessionWithGoal(built, ref, status);
@@ -100,23 +109,21 @@ for (const status of ["active", "paused"] as const) {
         : "an unrelated reply is left to finish while the goal is paused",
     );
 
-    const final = latestGoalRecord(await built.sessions.getEntries(session.id))!;
+    const final = (await sessionGoal(built, session.id))!;
     final.status = "paused";
-    await built.sessions.append(lease, {
-      type: "system",
-      payload: goalSnapshotPayload(final),
-      scopeLabel: session.scopeId,
-    });
+    final.tokensUsed = 77;
+    await built.sessions.setGoal(lease, final);
     await built.sessions.releaseLease(lease);
     await built.runs.complete(run!.id, run!.leaseToken ?? "", { status: "ok", reply: "done" });
 
     assert.deepEqual(await cancelling, { cancelled: true });
-    const entries = await built.sessions.getEntries(session.id);
+    const goal = await sessionGoal(built, session.id);
+    assert.equal(goal?.status, "cancelled");
+    assert.equal(goal?.tokensUsed, 77, "the cancel builds on the turn's final save");
     assert.deepEqual(
-      entries.filter((e) => (e.payload as { kind?: string }).kind === "goal").map((e) => latestGoalRecord([e])?.status),
-      [status, "paused", "cancelled"],
+      (await built.sessions.getEntries(session.id)).map((e) => (e.payload as { kind?: string }).kind),
+      ["goal_cancelled"],
     );
-    assert.equal(rehydrateOpenGoal(entries), null);
   });
 }
 

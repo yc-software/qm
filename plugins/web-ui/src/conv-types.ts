@@ -100,6 +100,7 @@ export interface ChatSurface {
   drawActiveChat(agent?: Agent | null, opts?: { forceScroll?: boolean }): void;
   setTranscriptWindow(anchorSeq: number | null, earlierCount: number, hasEarlier?: boolean): void;
   setPins(pins: import("./core-bridge").SessionPin[]): void;
+  setGoal(goal: import("./goal-strip").GoalStripState | null): void;
   requestBackgroundPanel(sessionId: string | null, threadRef: string | null): void;
   activePendingApprovals(): PendingApproval[];
   hasUnresolvedApproval(): boolean;

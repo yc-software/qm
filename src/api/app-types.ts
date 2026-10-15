@@ -33,7 +33,7 @@ import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
-import type { TurnStream } from "../runs/turn-stream.ts";
+import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
@@ -297,6 +297,7 @@ export interface App {
       createdAt: number;
       attachments?: Array<{ name: string; mimetype: string; sizeBytes: number }>;
     };
+    goal?: GoalView;
     partial?: string;
     partialStartOffset?: number;
     alive?: boolean;
@@ -337,7 +338,13 @@ export interface App {
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{
+    session: Session;
+    entries: TranscriptEntry[];
+    earlierEntries?: number;
+    pins?: SessionPinView[];
+    goal?: GoalView;
+  } | null>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,

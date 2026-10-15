@@ -1,3 +1,5 @@
+import type { GoalRecord } from "../harness/goal.ts";
+
 export interface GoalView {
   objective: string;
   status: "active" | "paused" | "complete" | "cancelled";
@@ -209,36 +211,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   };
 }
 
-export function goalViewFromEntry(type: string, payload: unknown): GoalView | null {
-  if (type !== "tool_result" && type !== "system") return null;
-  const p = payload as { tool?: unknown; kind?: unknown; goal?: unknown } | null;
-  if (!p || typeof p !== "object") return null;
-  const carrier =
-    type === "system"
-      ? p.kind === "goal"
-      : p.tool === "goal" || p.tool === "create_goal" || p.tool === "update_goal" || p.tool === "get_goal";
-  if (!carrier) return null;
-  const goal = p.goal as
-    | {
-        objective?: unknown;
-        status?: unknown;
-        floor?: Record<string, unknown> | null;
-        createdAt?: unknown;
-        updatedAt?: unknown;
-      }
-    | null
-    | undefined;
-  if (!goal || typeof goal !== "object") return null;
-  if (typeof goal.objective !== "string" || !goal.objective.trim()) return null;
-  const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "cancelled") return null;
-  const floor = formatFloor(goal.floor ?? null);
+export function goalView(goal: GoalRecord): GoalView {
+  const floor = formatFloor((goal.floor as Record<string, unknown> | undefined) ?? null);
   return {
     objective: goal.objective,
-    status,
+    status: goal.status,
     ...(floor ? { floor } : {}),
-    createdAt: typeof goal.createdAt === "number" ? goal.createdAt : Date.now(),
-    updatedAt: typeof goal.updatedAt === "number" ? goal.updatedAt : Date.now(),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
   };
 }
 

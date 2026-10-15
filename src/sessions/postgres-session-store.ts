@@ -10,6 +10,7 @@ import {
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure, reportFailureAs } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
+import type { GoalRecord } from "../harness/goal.ts";
 import type {
   NewSessionPin,
   SessionPin,
@@ -70,6 +71,24 @@ export async function backfillSessionOriginBatch(q: PgPool["q"], limit: number):
     [limit],
   );
   return updated.length;
+}
+
+function rowToGoal(r: Record<string, unknown>): GoalRecord {
+  return {
+    objective: r.objective as string,
+    status: r.status as GoalRecord["status"],
+    tokensUsed: Number(r.tokens_used),
+    createdAt: (r.created_at as Date).getTime(),
+    updatedAt: (r.updated_at as Date).getTime(),
+    ...(r.floor != null ? { floor: r.floor as GoalRecord["floor"] } : {}),
+    ...(r.token_cap != null ? { capTokens: Number(r.token_cap) } : {}),
+    ...(r.active_ms != null ? { activeMs: Number(r.active_ms) } : {}),
+    ...(r.active_since != null ? { activeSince: (r.active_since as Date).getTime() } : {}),
+    ...(r.completion_note != null ? { completionNote: r.completion_note as string } : {}),
+    ...(r.cancel_note != null ? { cancelNote: r.cancel_note as string } : {}),
+    ...(r.governor != null ? { governor: r.governor as GoalRecord["governor"] } : {}),
+    ...(r.pause_reason != null ? { pauseReason: r.pause_reason as string } : {}),
+  };
 }
 
 export function rowToSession(r: Record<string, unknown>): Session {
@@ -822,6 +841,28 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         prepare: PREPARE_TAPE_DROP_SQL,
         statements: DROP_SESSION_TAPE_SQL,
       },
+      {
+        id: "sessions/store/0032-session-goals",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `CREATE TABLE IF NOT EXISTS session_goals(
+             session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+             objective TEXT NOT NULL,
+             status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'complete', 'cancelled')),
+             floor JSONB,
+             token_cap BIGINT,
+             tokens_used BIGINT NOT NULL DEFAULT 0,
+             active_ms BIGINT,
+             active_since TIMESTAMPTZ,
+             completion_note TEXT,
+             cancel_note TEXT,
+             governor JSONB,
+             pause_reason TEXT,
+             created_at TIMESTAMPTZ NOT NULL,
+             updated_at TIMESTAMPTZ NOT NULL
+           )`,
+        ],
+      },
     ],
     [
       {
@@ -865,6 +906,78 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ]);
       return fn(client);
     });
+
+  const insertEntries = async (
+    client: PoolClient,
+    sessionId: string,
+    entries: readonly NewEntry[],
+  ): Promise<SessionEntry[]> => {
+    if (!entries.length) return [];
+    const max = await client.query(
+      "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM session_entries WHERE session_id = $1",
+      [sessionId],
+    );
+    const startSeq = Number(max.rows[0]!.n);
+    const createdAt = now();
+    const full = entries.map((entry, index): SessionEntry => {
+      const seq = startSeq + index;
+      return {
+        sessionId,
+        seq,
+        parentSeq: seq === 0 ? null : seq - 1,
+        type: entry.type,
+        payload: JSON.parse(jsonbSafeStringify(entry.payload ?? null)),
+        scopeLabel: entry.scopeLabel as ScopeId,
+        createdAt,
+      };
+    });
+    const rows = full.map((entry) => ({
+      seq: entry.seq,
+      parent_seq: entry.parentSeq,
+      type: entry.type,
+      payload: JSON.stringify(entry.payload),
+      scope_label: entry.scopeLabel,
+      created_at: entry.createdAt,
+    }));
+    const encoded = JSON.stringify(rows);
+    const userTurns = full.filter(
+      (entry, index) => entry.type === "user" && !rows[index]!.payload.includes('"overheard":true'),
+    );
+    const firstUser = userTurns[0];
+    const lastUser = userTurns[userTurns.length - 1];
+    await client.query(
+      `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
+         SELECT $1, e.seq, e.parent_seq, e.type, e.payload, e.scope_label, e.created_at
+         FROM jsonb_to_recordset($2::jsonb) AS e(
+           seq bigint, parent_seq bigint, type text, payload text, scope_label text, created_at bigint)
+         ORDER BY e.seq`,
+      [sessionId, encoded],
+    );
+    await client.query(
+      `UPDATE sessions
+            SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
+                                     THEN last_activity
+                                     ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
+                messages = $3,
+                turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
+                             THEN (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = $1 AND ${userTurn("t")})
+                             ELSE turns + $4 END,
+                first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
+                                          THEN $6 ELSE first_user_preview END,
+                last_user_preview = COALESCE($7, last_user_preview)
+          WHERE id = $1`,
+      [
+        sessionId,
+        createdAt,
+        startSeq + full.length,
+        userTurns.length,
+        startSeq,
+        firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
+        lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
+      ],
+    );
+    return full;
+  };
 
   type UserPreviews = { first: string; last: string };
   const userPreviews = async (rows: Rows, options: PgQueryOptions): Promise<Map<string, UserPreviews>> => {
@@ -1046,73 +1159,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     },
 
     async appendMany(lease, entries: readonly NewEntry[]): Promise<SessionEntry[]> {
-      return withLease(lease, "append without a valid session lease", async (client) => {
-        if (!entries.length) return [];
-        const max = await client.query(
-          "SELECT COALESCE(MAX(seq), -1) + 1 AS n FROM session_entries WHERE session_id = $1",
-          [lease.sessionId],
-        );
-        const startSeq = Number(max.rows[0]!.n);
-        const createdAt = now();
-        const full = entries.map((entry, index): SessionEntry => {
-          const seq = startSeq + index;
-          return {
-            sessionId: lease.sessionId,
-            seq,
-            parentSeq: seq === 0 ? null : seq - 1,
-            type: entry.type,
-            payload: JSON.parse(jsonbSafeStringify(entry.payload ?? null)),
-            scopeLabel: entry.scopeLabel as ScopeId,
-            createdAt,
-          };
-        });
-        const rows = full.map((entry) => ({
-          seq: entry.seq,
-          parent_seq: entry.parentSeq,
-          type: entry.type,
-          payload: JSON.stringify(entry.payload),
-          scope_label: entry.scopeLabel,
-          created_at: entry.createdAt,
-        }));
-        const encoded = JSON.stringify(rows);
-        const userTurns = full.filter(
-          (entry, index) => entry.type === "user" && !rows[index]!.payload.includes('"overheard":true'),
-        );
-        const firstUser = userTurns[0];
-        const lastUser = userTurns[userTurns.length - 1];
-        await client.query(
-          `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
-           SELECT $1, e.seq, e.parent_seq, e.type, e.payload, e.scope_label, e.created_at
-           FROM jsonb_to_recordset($2::jsonb) AS e(
-             seq bigint, parent_seq bigint, type text, payload text, scope_label text, created_at bigint)
-           ORDER BY e.seq`,
-          [lease.sessionId, encoded],
-        );
-        await client.query(
-          `UPDATE sessions
-              SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
-                                       THEN last_activity
-                                       ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
-                  messages = $3,
-                  turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
-                               THEN (SELECT COUNT(*) FROM session_entries t WHERE t.session_id = $1 AND ${userTurn("t")})
-                               ELSE turns + $4 END,
-                  first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
-                                            THEN $6 ELSE first_user_preview END,
-                  last_user_preview = COALESCE($7, last_user_preview)
-            WHERE id = $1`,
-          [
-            lease.sessionId,
-            createdAt,
-            startSeq + full.length,
-            userTurns.length,
-            startSeq,
-            firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
-            lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
-          ],
-        );
-        return full;
-      });
+      return withLease(lease, "append without a valid session lease", (client) =>
+        insertEntries(client, lease.sessionId, entries),
+      );
     },
 
     async countEntriesBefore(sessionId, beforeSeq, principalId) {
@@ -1138,21 +1187,48 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return Number(rows[0]?.n ?? -1);
     },
 
-    async getRecentEntries(sessionIds, lookback) {
-      const result = new Map<string, SessionEntry[]>(sessionIds.map((id) => [id, []]));
-      if (!sessionIds.length) return result;
-      const rows = await q(
-        `SELECT recent.* FROM unnest($1::text[]) AS sessions(id)
-         CROSS JOIN LATERAL (
-           SELECT * FROM session_entries WHERE session_id = sessions.id
-           AND seq >= GREATEST(0, (SELECT COALESCE(MAX(seq), -1) FROM session_entries WHERE session_id = sessions.id) - $2)
-           ORDER BY seq
-         ) recent ORDER BY recent.session_id, recent.seq`,
-        [[...result.keys()], lookback],
-      );
-      for (const row of rows) result.get(row.session_id as string)!.push(rowToEntry(row));
-      return result;
+    async goals(sessionIds) {
+      const found = new Map<string, GoalRecord>();
+      if (!sessionIds.length) return found;
+      const rows = await q("SELECT * FROM session_goals WHERE session_id = ANY($1::text[])", [[...sessionIds]]);
+      for (const row of rows) found.set(row.session_id as string, rowToGoal(row));
+      return found;
     },
+
+    async setGoal(lease, goal, notices = []) {
+      await withLease(lease, "set goal without a valid session lease", async (client) => {
+        await insertEntries(client, lease.sessionId, notices);
+        await client.query(
+          `INSERT INTO session_goals(session_id, objective, status, floor, token_cap, tokens_used, active_ms,
+                                     active_since, completion_note, cancel_note, governor, pause_reason,
+                                     created_at, updated_at)
+           VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+           ON CONFLICT (session_id) DO UPDATE SET
+             objective = EXCLUDED.objective, status = EXCLUDED.status, floor = EXCLUDED.floor,
+             token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
+             active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
+             cancel_note = EXCLUDED.cancel_note, governor = EXCLUDED.governor, pause_reason = EXCLUDED.pause_reason,
+             created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at`,
+          [
+            lease.sessionId,
+            goal.objective,
+            goal.status,
+            goal.floor ? JSON.stringify(goal.floor) : null,
+            goal.capTokens ?? null,
+            Math.floor(goal.tokensUsed),
+            goal.activeMs === undefined ? null : Math.round(goal.activeMs),
+            goal.activeSince === undefined ? null : new Date(goal.activeSince),
+            goal.completionNote ?? null,
+            goal.cancelNote ?? null,
+            goal.governor ? JSON.stringify(goal.governor) : null,
+            goal.pauseReason ?? null,
+            new Date(goal.createdAt),
+            new Date(goal.updatedAt),
+          ],
+        );
+      });
+    },
+
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2";

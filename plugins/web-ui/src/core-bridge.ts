@@ -15,6 +15,7 @@ import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 import { messageEntrySeqs } from "./message-link.ts";
+import type { GoalStripState } from "./goal-strip.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -348,6 +349,7 @@ export interface TranscriptPage {
   entries: SessionEntry[];
   earlierEntries?: number;
   pins?: SessionPin[];
+  goal?: GoalStripState;
 }
 
 export async function fetchTranscript(
@@ -442,6 +444,7 @@ export interface WorkBlock {
   stale?: boolean;
   activity: ToolActivity[];
   pendingApprovals?: PendingApproval[];
+  goal?: GoalStripState;
 }
 
 export function workPausedForApproval(work: WorkBlock): boolean {
@@ -487,6 +490,7 @@ export type AssistantWork = AssistantMessage & {
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
+  goal?: GoalStripState;
   input?: {
     runId: string;
     seq: number | null;
@@ -1378,6 +1382,10 @@ function applyRun(
     notify?.();
   }
   setWorkStale(work, run.stale === true, notify);
+  if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
+    work.goal = run.goal;
+    notify?.();
+  }
   const p = typeof run.partial === "string" ? run.partial : "";
   const startOffset = run.partialStartOffset ?? 0;
   if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
@@ -1836,9 +1844,9 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
 }
 
 function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
-  const p = payload as { kind?: unknown; cancelledBy?: unknown; goal?: { objective?: unknown } | null } | null;
-  if (p?.kind !== "goal" || typeof p.cancelledBy !== "string" || typeof p.goal?.objective !== "string") return null;
-  return { role: "system-note", note: "goal_cancelled", content: p.goal.objective };
+  const p = payload as { kind?: unknown; objective?: unknown } | null;
+  if (p?.kind !== "goal_cancelled" || typeof p.objective !== "string") return null;
+  return { role: "system-note", note: "goal_cancelled", content: p.objective };
 }
 
 function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
