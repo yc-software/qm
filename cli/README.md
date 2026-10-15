@@ -77,6 +77,10 @@ pinned sandbox base, mounts the host Docker socket into trusted core, and connec
 core to each sandbox's private network. An explicit `sandbox.image` uses that
 runnable local image instead.
 
+Set `sandbox.backend: "freestyle"` to use persistent Freestyle VMs with any
+hosting target. The CLI requires `FREESTYLE_API_KEY` in the core secrets; see
+the [Freestyle sandbox guide](../docs/freestyle-sandbox.md).
+
 On AWS, `up` verifies under the deploy lease that RDS point-in-time recovery
 is current (its `LatestRestorableTime` must lag by at most
 `QM_AWS_DB_MAX_RESTORE_LAG_MS`, default 10 minutes) and records the pre-deploy

@@ -6,6 +6,7 @@ type SecretGate =
   | "postgres"
   | "sprites"
   | "smolmachines"
+  | "freestyle"
   | "e2b"
   | "modal"
   | "porter"
@@ -43,6 +44,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "DATABASE_URL", requiredWhen: "postgres" },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
+  { name: "FREESTYLE_API_KEY", requiredWhen: "freestyle" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
   { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: "e2b" },
@@ -68,6 +70,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => sandboxBackendSelected(env, "sprites"),
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
+  freestyle: (env) => sandboxBackendSelected(env, "freestyle"),
   e2b: (env) => sandboxBackendSelected(env, "e2b"),
   modal: (env) => sandboxBackendSelected(env, "modal"),
   porter: (env) => sandboxBackendSelected(env, "porter"),

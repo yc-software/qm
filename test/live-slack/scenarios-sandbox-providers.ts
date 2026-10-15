@@ -9,6 +9,7 @@ const providerCoverage: Record<SandboxBackendName, true> = {
   aws: true,
   local: true,
   smolmachines: true,
+  freestyle: true,
   e2b: true,
   modal: true,
   porter: true,

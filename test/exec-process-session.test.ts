@@ -307,3 +307,14 @@ test("a session from the current boot keeps running, and one with no boot marker
     "sessions predating this change have no marker and must not be reaped on a guess",
   );
 });
+
+test("guest command failures cannot appear as running or empty process sessions", async () => {
+  const handle: SandboxHandle = { id: "t", rootDir: mkdtempSync(join(tmpdir(), "proc-failed-root-")) };
+  const proc = createExecProcessSessions({
+    run: async () => ({ stdout: "", stderr: "", code: 124, timedOut: true }),
+  });
+  const processId = "00000000-0000-0000-0000-000000000000";
+  await assert.rejects(proc.readProcess(handle, processId), /readProcess failed \(code 124\): timed out/);
+  await assert.rejects(proc.listProcesses(handle), /listProcesses failed \(code 124\): timed out/);
+  await assert.rejects(proc.signalProcess(handle, processId, "TERM"), /signalProcess failed \(code 124\): timed out/);
+});

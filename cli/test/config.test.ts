@@ -895,11 +895,11 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
       sandbox: { backend: "k8s", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "freestyle"/,
     },
     {
       sandbox: { backend: "fly", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "freestyle"/,
     },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
@@ -944,6 +944,21 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
   }
   withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.app"/);
+  });
+});
+
+test("freestyle is a deployment backend and rejects unused Fly settings", () => {
+  for (const target of ["docker", "fly"] as const) {
+    withConfig({ target, sandbox: { backend: "freestyle" } }, ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(sandboxCoreEnv(config), {
+        env: { SANDBOX_BACKEND: "freestyle" },
+        missingSecrets: [],
+      });
+    });
+  }
+  withConfig({ sandbox: { backend: "freestyle", app: "unused" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "freestyle" ignores "sandbox.app"/);
   });
 });
 
@@ -1032,22 +1047,35 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   );
 });
 
-test("Superserve configuration preserves existing backend selection and validation", () => {
-  for (const override of ["agent37", "sprites", "", "   "]) {
+test("sandbox backend overrides select the effective backend consistently", () => {
+  for (const override of ["agent37", "sprites", "freestyle"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: override } } }, ({ path }) => {
       const { config } = loadConfigAt(path);
-      assert.equal(localSandboxActive(config), true);
-      assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
+      assert.equal(localSandboxActive(config), false);
+      assert.notEqual(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "local");
     });
   }
   withConfig({ sandbox: { backend: "agent37" }, env: { core: { SANDBOX_BACKEND: "sprites" } } }, ({ path }) =>
-    assert.equal(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "agent37"),
+    assert.notEqual(sandboxCoreEnv(loadConfigAt(path).config).env.SANDBOX_BACKEND, "agent37"),
   );
+  for (const override of ["", "   "]) {
+    withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: override } } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), /"env.core.SANDBOX_BACKEND" is blank/);
+    });
+  }
   for (const scopes of ["invalid", "[]", "null", "42"]) {
     withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_SCOPE_BACKENDS: scopes } } }, ({ path }) =>
       assert.doesNotThrow(() => loadConfigAt(path)),
     );
   }
+});
+
+test("Freestyle overrides do not prepare the Docker local sandbox", () => {
+  withConfig({ sandbox: { backend: "local" }, env: { core: { SANDBOX_BACKEND: "freestyle" } } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(localSandboxActive(config), false);
+    assert.deepEqual(sandboxCoreEnv(config), { env: { SANDBOX_BACKEND: "freestyle" }, missingSecrets: [] });
+  });
 });
 
 test("sandbox.backend alone makes the backend's credential a required secret on every target", () => {
@@ -1083,6 +1111,11 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     const { config } = loadConfigAt(path);
     assert.equal(config.sandbox?.backend, "sprites");
     assert.equal(config.sandbox?.app, undefined);
+  });
+  withConfig({ target: "aws", aws, sandbox: { backend: "freestyle" } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.equal(config.sandbox?.backend, "freestyle");
+    assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "freestyle");
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "aws" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "aws");

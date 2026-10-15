@@ -231,6 +231,7 @@ import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
+import { createFreestyleSandbox } from "./sandbox/freestyle-sandbox.ts";
 import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
   createConfigEpochResolver,
@@ -925,6 +926,16 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
+  const buildFreestyle = (): Sandbox =>
+    createFreestyleSandbox(workspace, {
+      ...config.freestyleSandbox,
+      namePrefix: config.freestyleSandbox.namePrefix ?? `qm-${config.orgId}`,
+      advisoryLock,
+      extraTools: deploymentLayer.advertisedTools,
+      credentialPaths: deploymentLayer.credentialPaths,
+      layerToolFiles: () => deploymentLayer.installFiles,
+      onError: sandboxOnError,
+    });
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
@@ -1141,6 +1152,7 @@ export function buildApp(
     local: buildLocal,
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
+    freestyle: buildFreestyle,
     e2b: buildE2b,
     modal: buildModal,
     aws: buildAws,

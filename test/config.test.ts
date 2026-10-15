@@ -38,6 +38,18 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
+test("Freestyle requires a key when selected and exposes credentialed routing", () => {
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "freestyle" }), /FREESTYLE_API_KEY/);
+  const config = loadConfig({
+    SANDBOX_BACKEND: "freestyle",
+    FREESTYLE_API_KEY: "test-key",
+    FREESTYLE_SNAPSHOT_ID: "snapshot-test",
+  });
+  assert.equal(config.sandboxBackend, "freestyle");
+  assert.equal(config.freestyleSandbox.snapshotId, "snapshot-test");
+  assert.ok(enabledSandboxBackends(config).includes("freestyle"));
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);

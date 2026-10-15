@@ -21,6 +21,7 @@ export type SandboxBackendName =
   | "aws"
   | "local"
   | "smolmachines"
+  | "freestyle"
   | "e2b"
   | "modal"
   | "porter"

@@ -46,7 +46,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve";
+  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve" | "freestyle";
   app?: string;
   image?: string;
   baseImage?: string;
@@ -214,10 +214,7 @@ const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): str
   config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
 
 export const localSandboxActive = (config: QmConfig): boolean =>
-  config.target === "docker" &&
-  (config.sandbox?.backend === "superserve"
-    ? effectiveSandboxBackend(config) === "local"
-    : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
+  config.target === "docker" && effectiveSandboxBackend(config) === "local";
 
 export function sandboxCoreEnv(
   config: QmConfig,
@@ -232,11 +229,8 @@ export function sandboxCoreEnv(
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
-  const backend =
-    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
-      ? effectiveSandboxBackend(config)
-      : sb.backend;
-  if (backend === "agent37" || backend === "superserve") {
+  const backend = effectiveSandboxBackend(config);
+  if (backend === "agent37" || backend === "superserve" || backend === "freestyle") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
@@ -699,11 +693,7 @@ function validate(raw: unknown, path: string): QmConfig {
     return v;
   });
   const sandbox = validateSandbox(o["sandbox"], path, target);
-  if (
-    sandbox?.backend === "superserve" &&
-    env.core?.SANDBOX_BACKEND !== undefined &&
-    !env.core.SANDBOX_BACKEND.trim()
-  ) {
+  if (sandbox && env.core?.SANDBOX_BACKEND !== undefined && !env.core.SANDBOX_BACKEND.trim()) {
     throw new CliError(
       `${path}: "env.core.SANDBOX_BACKEND" is blank — name the backend core should run, or remove the key; every target forwards env.core verbatim, so a blank value leaves core with no backend`,
     );
@@ -1512,10 +1502,11 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       o["backend"] !== "sprites" &&
       o["backend"] !== "aws" &&
       o["backend"] !== "agent37" &&
-      o["backend"] !== "superserve"
+      o["backend"] !== "superserve" &&
+      o["backend"] !== "freestyle"
     ) {
       throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", or "superserve" (Superserve sandboxes)`,
+        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", "superserve" (Superserve sandboxes), or "freestyle" (Freestyle VMs)`,
       );
     }
     out.backend = o["backend"];
@@ -1579,7 +1570,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve") {
+  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "freestyle") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
@@ -1592,7 +1583,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   }
   if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
-      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
+      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — choose "sprites", "aws", "agent37", "superserve", or "freestyle" (or omit the whole "sandbox" block for the Lambda MicroVM default)`,
     );
   }
   return out;
