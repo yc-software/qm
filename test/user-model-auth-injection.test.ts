@@ -1,15 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";
-import { readFileSync } from "node:fs";
-import { prepareCodexHome } from "../src/harness/codex-harness.ts";
-import { codexOAuthAuthFromValue } from "../src/harness/codex-auth-store.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
@@ -160,38 +154,27 @@ test("routing: anthropic OAuth login -> claude harness (not pi)", () => {
   assert.equal(r?.model, "claude-opus-5");
 });
 
-test("routing: openai OAuth login -> codex harness (not pi)", () => {
+test("routing: openai OAuth login -> pi harness on the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
-  assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "codex");
-  assert.equal(r?.model, "gpt-5.6-sol");
-});
-
-test("routing: requested model provider wins when that provider is connected", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
-  assert.equal(r?.harness, "codex");
-});
-
-test("routing: openai OAuth + pi org -> pi harness on the Codex subscription provider", () => {
-  const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined, "pi");
   assert.equal(r?.kind, "oauth");
   assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-sol");
 });
 
-test("routing: pi org keeps a requested openai model, namespaced to the subscription provider", () => {
-  const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra", "pi");
+test("routing: requested model provider wins when that provider is connected", () => {
+  const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
+  assert.equal(r?.harness, "pi");
+  assert.equal(r?.model, "codex/gpt-5.6-sol");
+});
+
+test("routing: a requested openai model is namespaced to the subscription provider", () => {
+  const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
   assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-terra");
 });
 
-test("routing: a non-pi org still hops to the codex harness", () => {
-  const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined, "codex");
-  assert.equal(r?.harness, "codex");
-});
-
-test("routing: pi org with an anthropic OAuth login still uses the claude harness", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined, "pi");
+test("routing: an anthropic OAuth login still uses the claude harness", () => {
+  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
   assert.equal(r?.harness, "claude");
 });
 
@@ -209,37 +192,9 @@ test("routing: no credentials -> null (falls through to gate, no deployment key)
   assert.equal(resolveIndividualAuthRouting(null, null, undefined), null);
 });
 
-test("per-user codex child auth is derived material: valid chatgpt auth without the refresh token", () => {
-  const userAuth = codexOAuthAuthFromValue({
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: "acc-token",
-      refresh_token: "ref-token",
-      id_token: fakeIdToken("acct_9"),
-      account_id: "acct_9",
-    },
-  });
-  assert.ok(userAuth, "per-user tokens must satisfy the codex auth validator");
-  const jail = mkdtempSync(join(tmpdir(), "codex-inject-"));
-  prepareCodexHome({}, jail, userAuth);
-  const child = JSON.parse(readFileSync(join(jail, "codex-home", "auth.json"), "utf8")) as {
-    auth_mode?: string;
-    tokens?: Record<string, unknown>;
-  };
-  assert.equal(child.auth_mode, "chatgpt");
-  assert.equal(child.tokens?.access_token, "acc-token");
-  assert.equal(child.tokens?.refresh_token, "");
-  assert.ok(!JSON.stringify(child).includes("ref-token"));
-  assert.ok(child.tokens?.id_token);
-});
-
 test("individual OAuth routing preserves exact supported runtime selections", () => {
-  assert.equal(
-    resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5", "claude")?.model,
-    "claude-sonnet-5",
-  );
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra", "codex")?.model, "gpt-6-astra");
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5", "pi")?.model, "codex/gpt-5.5");
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5", "codex")?.model, "gpt-5.5");
-  assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5", "pi"), null);
+  assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
+  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra")?.model, "codex/gpt-6-astra");
+  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5")?.model, "codex/gpt-5.5");
+  assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5"), null);
 });

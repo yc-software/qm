@@ -14,7 +14,6 @@ export interface ResourceCandidate {
   createdBy: string;
   owner: string;
   status?: string;
-  members?: Cron["members"];
   destination?: Cron["destination"];
 }
 export interface ResourceSearchHit {

@@ -1,9 +1,15 @@
-import { fetchRuntimeConfig, updateRuntimeConfig, type RuntimeConfig } from "./core-bridge.ts";
+import { fetchRuntimeConfig, updateRuntimeConfig } from "./core-bridge.ts";
+import {
+  cacheRuntimeConfig,
+  getRuntimeConfig,
+  setRuntimeBootScope,
+  type RuntimeConfig,
+} from "./runtime-config-cache.ts";
 import { swallow } from "../../chassis/src/errors.ts";
 
 type Change = Parameters<typeof updateRuntimeConfig>[1];
 type Entry = {
-  config: RuntimeConfig | null;
+  key: string;
   generation: number;
   fetchedAt: number;
   load: Promise<RuntimeConfig | null> | null;
@@ -13,14 +19,13 @@ type Entry = {
 // Reuse boot/multiview reads briefly; returning to a view still revalidates server policy.
 const FRESH_MS = 30_000;
 const entries = new Map<string, Entry>();
-let bootScope: string | null = null;
 let accountRevision = 0;
 
 export function invalidateRuntimeConfigs(): void {
   accountRevision++;
-  for (const entry of entries.values()) {
+  for (const [key, entry] of entries) {
     entry.generation++;
-    entry.config = null;
+    cacheRuntimeConfig(key, null);
     entry.fetchedAt = 0;
     entry.load = null;
   }
@@ -31,19 +36,15 @@ if (typeof window !== "undefined") window.addEventListener("model-account-change
 function entryFor(scopeId: string): Entry {
   let entry = entries.get(scopeId);
   if (!entry) {
-    entry = { config: null, generation: 0, fetchedAt: 0, load: null, write: null, listeners: new Set() };
+    entry = { key: scopeId, generation: 0, fetchedAt: 0, load: null, write: null, listeners: new Set() };
     entries.set(scopeId, entry);
   }
   return entry;
 }
 
-export function getRuntimeConfig(scopeId: string | null = bootScope): RuntimeConfig | null {
-  return scopeId === null ? null : (entries.get(scopeId)?.config ?? null);
-}
-
 function publish(scopeId: string, entry: Entry, config: RuntimeConfig): void {
   if (config.scopeId !== scopeId) throw new Error("Runtime configuration scope mismatch");
-  entry.config = config;
+  cacheRuntimeConfig(entry.key, config);
   entry.fetchedAt = Date.now();
   for (const listener of entry.listeners) {
     try {
@@ -57,8 +58,8 @@ function publish(scopeId: string, entry: Entry, config: RuntimeConfig): void {
 /** Boot hydration is shared by every pane, not consumed by the first mount. */
 export function seedRuntimeConfig(scopeId: string, config: RuntimeConfig): void {
   const entry = entryFor(scopeId);
-  bootScope = scopeId;
-  if (entry.config || entry.write) return;
+  setRuntimeBootScope(scopeId);
+  if (getRuntimeConfig(scopeId) || entry.write) return;
   ++entry.generation;
   publish(scopeId, entry, config);
 }
@@ -83,13 +84,14 @@ export async function loadRuntimeConfig(
   const entry = entryFor(runtimeConfigKey(scopeId, account)!);
   // Reads started during a save must not race ahead of that save on the server.
   while (entry.write) await entry.write;
-  if (!refresh && entry.config && Date.now() - entry.fetchedAt < FRESH_MS) return entry.config;
+  const cached = getRuntimeConfig(entry.key);
+  if (!refresh && cached && Date.now() - entry.fetchedAt < FRESH_MS) return cached;
   if (entry.load) return entry.load;
   const generation = entry.generation;
   const load = fetchRuntimeConfig(scopeId, account).then(async (config) => {
     if (generation !== entry.generation) {
       while (entry.write) await entry.write;
-      return entry.config;
+      return getRuntimeConfig(entry.key);
     }
     if (config) publish(scopeId, entry, config);
     return config;

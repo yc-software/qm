@@ -4,7 +4,6 @@ export { safeChunks } from "./safe-cut.ts";
 export {
   decodeSlackEntities,
   resolveMentionsInText,
-  stripMention,
   neutralizeMassMentions,
   neutralizeMentions,
   wireMentionKeys,
@@ -144,10 +143,6 @@ export {
   CURATED_ACK_EMOJI,
   stripAckPrefix,
   createAckPresenter,
-  type RunTaskView,
-  renderTaskList,
-  type TaskListPresenter,
-  createTaskListPresenter,
   renderGoalNotice,
   type GoalNoticeView,
   type GoalNoticePresenter,

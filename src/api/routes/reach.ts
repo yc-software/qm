@@ -2,10 +2,15 @@ import { randomUUID } from "node:crypto";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
-import { collectNamedOutbound, MAX_OUTBOUND_FILES, type ArtifactRegistration } from "../../core/attachments.ts";
-import { hasParentPathSegment } from "../../sandbox/sandbox.ts";
+import { collectNamedOutbound, parseOutboundFiles, type ArtifactRegistration } from "../../core/attachments.ts";
+import type { SandboxHandle } from "../../sandbox/sandbox.ts";
+import {
+  accessConversationSandbox,
+  SandboxAccessError,
+  type SandboxResource,
+} from "../../sandbox/sandbox-resources.ts";
 import { resolveEnvironmentId } from "../../environments/environment-store.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { scopeId, type OutgoingAttachment } from "../../types.ts";
 
 type ReachBody = {
@@ -19,22 +24,8 @@ type ReachBody = {
   react?: unknown;
   delete?: unknown;
   files?: unknown;
+  sandbox_id?: unknown;
 };
-
-function parseFiles(v: unknown): { ok: true; files: string[] } | { ok: false; message: string } {
-  if (v === undefined) return { ok: true, files: [] };
-  if (!Array.isArray(v) || v.some((p) => typeof p !== "string" || !p.trim())) {
-    return {
-      ok: false,
-      message: 'files must be an array of workspace-relative path strings, e.g. ["work/report.pdf"]',
-    };
-  }
-  if (v.length > MAX_OUTBOUND_FILES) return { ok: false, message: `too many files (max ${MAX_OUTBOUND_FILES})` };
-  if ((v as string[]).some(hasParentPathSegment)) {
-    return { ok: false, message: "files must stay inside the workspace — no .. path segments" };
-  }
-  return { ok: true, files: v as string[] };
-}
 
 function parseReact(v: unknown): { messageTs: string; emoji: string } | undefined {
   if (!isObj(v)) return undefined;
@@ -89,9 +80,16 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       message: "react and delete are separate actions — send one at a time",
     });
   }
-  const filesParsed = parseFiles(b.files);
+  const filesParsed = parseOutboundFiles(b.files);
   if (!filesParsed.ok) return sendJson(res, 400, { error: "bad_request", message: filesParsed.message });
   const files = filesParsed.files;
+  let requestedSandboxId: string | undefined;
+  if (b.sandbox_id !== undefined) {
+    if (typeof b.sandbox_id !== "string" || !b.sandbox_id.trim()) {
+      return sendJson(res, 400, { error: "bad_request", message: "sandbox_id must be a sandbox id string" });
+    }
+    if (files.some((f) => typeof f === "string")) requestedSandboxId = b.sandbox_id.trim();
+  }
   if (files.length && (react || del)) {
     return sendJson(res, 400, {
       error: "bad_request",
@@ -122,7 +120,8 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   let attachments: OutgoingAttachment[] | undefined;
   if (files.length) {
     const { sandbox, blobTransfer } = deps;
-    if (!sandbox || !blobTransfer) {
+    const needsSandbox = files.some((f) => typeof f === "string");
+    if (!blobTransfer || (needsSandbox && !sandbox) || (requestedSandboxId && !deps.sandboxResources)) {
       return sendJson(res, 501, {
         error: "not_configured",
         message: "file attachments aren't available on this server — the sandbox/blob store isn't wired",
@@ -166,9 +165,34 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
             ),
         }
       : undefined;
-    const handle = await sandbox.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }]);
+    let resource: SandboxResource | undefined;
+    if (requestedSandboxId) {
+      try {
+        resource = await accessConversationSandbox(
+          deps.sandboxResources,
+          capability.actorId,
+          requestedSandboxId,
+          (scope) => scope === capability.scopeId || scope === envScope,
+        );
+      } catch (e) {
+        if (!(e instanceof SandboxAccessError)) throw e;
+        return sendJson(res, 403, {
+          error: "forbidden",
+          message: "sandbox_id isn't a computer this conversation can read files from",
+        });
+      }
+    }
+    let provisioned: Promise<SandboxHandle> | undefined;
+    const handle = () =>
+      (provisioned ??= resource
+        ? sandbox!.provision([{ scopeId: resource.ownerScopeId, mountPath: "", mode: "rw" }], {
+            sandboxId: resource.id,
+          })
+        : sandbox!.provision([{ scopeId: envScope, mountPath: "", mode: "rw" }]));
     try {
-      const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register);
+      const r = await collectNamedOutbound(sandbox, handle, files, blobTransfer, register, [], (id) =>
+        app.openFileForViewer(id, capability.actorId),
+      );
       const bad = [
         ...r.missing.map((p) => `${p} (not found)`),
         ...r.empty.map((p) => `${p} (empty)`),
@@ -177,12 +201,16 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
       if (bad.length) {
         return sendJson(res, 400, {
           error: "attach_failed",
-          message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the path(s) and retry`,
+          message: `couldn't attach: ${bad.join(", ")} — nothing was sent; fix the file(s) and retry`,
         });
       }
       attachments = r.attachments;
     } finally {
-      await sandbox.teardown(handle, { keepWarm: true }).catch(() => {});
+      if (provisioned) {
+        const used = await provisioned.catch(() => undefined);
+        if (used)
+          await sandbox!.teardown(used, { keepWarm: true }).catch(swallowAs("reach: sandbox teardown", undefined));
+      }
     }
   }
   const result = await app.reachNow({

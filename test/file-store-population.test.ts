@@ -1,15 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectNamedOutbound, materializeInbound, type ArtifactRegistration } from "../src/core/attachments.ts";
-import { createToolContext } from "../src/tools/primitives.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createAclStore } from "../src/acl/acl-store.ts";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
@@ -130,7 +124,7 @@ test("materializeInbound registers an 'in' artifact, openable", async () => {
   assert.equal(
     inb.images[0]!.artifactId,
     page.files[0]!.id,
-    "the exact model image carries the same durable ref for tape replay",
+    "the exact model image carries the same durable ref for replay",
   );
 });
 
@@ -163,74 +157,4 @@ test("materializeInbound omits artifactId when registration fails or is absent",
   assert.equal(failed.metas.length, 1, "the file still reaches the inbox");
   assert.equal(failed.metas[0]!.artifactId, undefined, "no artifactId is fabricated on a store fault");
   assert.equal(errors.length, 1);
-});
-
-test("write+share registers an artifact keyed on the SAME (owner, path) as the grant", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "popshare-")));
-  const grantee = scopeId("personal", "U2");
-  const { sandbox } = memSandbox({ "redline.md": "v1 redline" });
-
-  const ctx = createToolContext({
-    sandbox,
-    provision: async () => HANDLE,
-    layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace,
-    deploy: {} as never,
-    acl,
-    files: store,
-    createdBy: "U1",
-    persistWritesToStore: { excludeDirs: ["inbox"] },
-  });
-
-  await ctx.write("redline.md", undefined, [{ scope: grantee, permission: "read" }]);
-
-  assert.equal((await acl.grantsFor(owner, "redline.md")).length, 1);
-  const shared = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "redline.md" }]);
-  assert.equal(shared.length, 1);
-  assert.equal(shared[0]!.name, "redline.md");
-  assert.deepEqual(await drain(store, shared[0]!.id), Buffer.from("v1 redline"));
-});
-
-test("intentional write+share after deletion creates a fresh visible artifact generation", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "republish-")));
-  const grantee = scopeId("personal", "U2");
-  const { sandbox } = memSandbox();
-  const ctx = createToolContext({
-    sandbox,
-    provision: async () => HANDLE,
-    layers: [{ scopeId: owner, mountPath: "", mode: "rw" }],
-    commandPolicy: () => ({}) as never,
-    authorizeCommand: () => false,
-    grantedHandles: [],
-    workspace,
-    deploy: {} as never,
-    acl,
-    files: store,
-    createdBy: "U1",
-    persistWritesToStore: { excludeDirs: ["inbox"] },
-  });
-  const share = [{ scope: grantee, permission: "read" as const }];
-  await Promise.all([
-    ctx.write("report.txt", "first generation", share),
-    ctx.write("report.txt", "first generation", share),
-  ]);
-  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
-  const first = (await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]))[0]!;
-  await ctx.write("report.txt", undefined, share);
-  assert.equal((await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }])).length, 1);
-  await store.delete(first.id);
-  await ctx.write("report.txt", "new generation", share);
-  const current = await store.resolveByOwnerPaths([{ ownerScopeId: owner, path: "report.txt" }]);
-  assert.equal(current.length, 1);
-  assert.notEqual(current[0]!.id, first.id);
-  assert.deepEqual(await drain(store, current[0]!.id), Buffer.from("new generation"));
-  assert.equal(await store.get(first.id, { includeDisabled: true }), null);
-  await assert.rejects(store.publish({ ...first, blobKey: first.blobKey! }), /deleted/);
 });

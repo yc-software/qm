@@ -1,9 +1,15 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
-import { PROVIDERS, type OAuthClientResolver } from "../connectors/oauth.ts";
+import {
+  oauthProviderEntries,
+  PROVIDERS,
+  type OAuthClientResolver,
+  type OAuthProviderConfig,
+} from "../connectors/oauth.ts";
 
 interface ConnectorStatusEntry {
   connected: boolean;
+  mcpLabel?: string;
   expiresAt?: number;
   needsReconnect?: boolean;
   refreshFailedAt?: number;
@@ -47,7 +53,7 @@ export function connectorStatusIsStale(
   return false;
 }
 
-export function bestOAuthTokenStatus(statuses: readonly OAuthTokenStatus[]): OAuthTokenStatus {
+function bestOAuthTokenStatus(statuses: readonly OAuthTokenStatus[]): OAuthTokenStatus {
   return (
     statuses.find((s) => s.connected && !s.needsReconnect) ??
     statuses.find((s) => s.connected) ??
@@ -72,23 +78,39 @@ function mergeStatus(entry: ConnectorStatusEntry, status: OAuthTokenStatus): Con
   return next;
 }
 
+export type HostTokenStatus = OAuthTokenStatus & { host: string };
+
+export async function providerTokenStatuses(
+  tokens: ConnectorTokenStore,
+  principalId: string,
+): Promise<Array<{ name: string; provider: OAuthProviderConfig; hosts: HostTokenStatus[] }>> {
+  const all = await Promise.all(
+    oauthProviderEntries().map(async ([name, provider]) => {
+      const hosts = await Promise.all(
+        provider.hosts.map(async (host) => {
+          const statuses = await Promise.all(
+            CONNECTOR_STATUS_ACCOUNT_TYPES.map((accountType) =>
+              tokens.connectorTokenStatus(host, principalId, accountType),
+            ),
+          );
+          return { host, ...bestOAuthTokenStatus(statuses) };
+        }),
+      );
+      return { name, provider, hosts };
+    }),
+  );
+  return all.filter(({ provider, hosts }) => !provider.mcpLabel || hosts.some((h) => h.connected));
+}
+
 export async function refreshConnectorStatus(
   tokens: ConnectorTokenStore,
   principalId: string,
   now: number,
 ): Promise<ConnectorStatusRecord> {
   const providers: Record<string, ConnectorStatusEntry> = {};
-  for (const [name, provider] of Object.entries(PROVIDERS)) {
-    let entry: ConnectorStatusEntry = { connected: false };
-    for (const host of provider.hosts) {
-      const statuses = await Promise.all(
-        CONNECTOR_STATUS_ACCOUNT_TYPES.map((accountType) =>
-          tokens.connectorTokenStatus(host, principalId, accountType),
-        ),
-      );
-      entry = mergeStatus(entry, bestOAuthTokenStatus(statuses));
-    }
-    providers[name] = entry;
+  for (const { name, provider, hosts } of await providerTokenStatuses(tokens, principalId)) {
+    const entry = hosts.reduce<ConnectorStatusEntry>((acc, status) => mergeStatus(acc, status), { connected: false });
+    providers[name] = provider.mcpLabel ? { ...entry, mcpLabel: provider.mcpLabel } : entry;
   }
   return { principalId, checkedAt: now, providers };
 }

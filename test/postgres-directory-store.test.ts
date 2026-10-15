@@ -85,12 +85,22 @@ test("pg directory: exact channel-id resolution has a matching expression index"
 test("pg directory: slackId round-trips through replace → get/list/resolve; a change re-writes", { skip }, async () => {
   const store = createPostgresDirectoryStore(URL!);
   await store.replace([
-    { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
+    {
+      principalId: "eve@acme.com",
+      displayName: "Eve",
+      type: "internal",
+      slackId: "U9",
+      avatarUrl: "https://avatars.slack-edge.com/eve.png",
+    },
     { principalId: "U5", displayName: "Dana", type: "internal" },
   ]);
   assert.equal((await store.get("eve@acme.com"))?.slackId, "U9");
+  assert.equal((await store.get("eve@acme.com"))?.avatarUrl, "https://avatars.slack-edge.com/eve.png");
   assert.equal((await store.get("U5"))?.slackId, undefined);
   assert.equal((await store.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
+  assert.equal((await store.getBySlackId("U9"))?.principalId, "eve@acme.com");
+  assert.equal((await store.getBySlackId("U5"))?.principalId, "U5");
+  assert.equal(await store.getBySlackId("Eve"), null);
   const r = await store.resolve("Eve");
   assert.equal(r.kind === "one" && r.member.slackId, "U9");
 
@@ -480,4 +490,34 @@ test("pg live channel observations survive older snapshots but yield to later re
   await pool.query("UPDATE directory_sync SET channels_synced_at = NULL, channels_hash = NULL");
   await pool.end();
   await directoryObservationCases(store);
+});
+
+test("pg directory: room membership follows a person's linked identities", { skip }, async () => {
+  const { installPrincipalLinks } = await import("../src/directory/person.ts");
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceChannels(
+    [{ channelId: "C-linked", name: "linked", isPrivate: true }],
+    [{ channelId: "C-linked", principalId: "slack-person@example.com" }],
+  );
+  await store.replaceGroups([{ groupId: "G-linked", principalId: "slack-person@example.com" }], Date.now(), [
+    "G-linked",
+  ]);
+  assert.equal(await store.channelMembership("C-linked", "web-person"), false);
+  installPrincipalLinks({
+    canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
+    aliases: (key) => (key === "web-person" ? ["Slack-Person@Example.com"] : []),
+  });
+  try {
+    assert.equal(await store.channelMembership("C-linked", "web-person"), true);
+    assert.equal(await store.channelMember("C-linked", "web-person"), true);
+    assert.equal(await store.groupMembership("G-linked", "web-person"), true);
+    assert.equal(await store.groupMember("G-linked", "web-person"), true);
+    assert.deepEqual(await store.listGroupsFor("web-person"), ["G-linked"]);
+    assert.ok((await store.listChannelsFor("web-person")).some((c) => c.channelId === "C-linked"));
+    assert.ok(!(await store.listChannelsFor("someone-else")).some((c) => c.channelId === "C-linked"));
+    assert.equal(await store.channelMembership("C-linked", "slack-person@example.com"), true);
+    assert.equal(await store.channelMembership("C-linked", "someone-else"), false);
+  } finally {
+    installPrincipalLinks(null);
+  }
 });

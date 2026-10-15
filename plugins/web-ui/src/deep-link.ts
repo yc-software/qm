@@ -49,7 +49,7 @@ export function parseDeepLink(
   if (pathView === "projects") {
     projectItem = projectKind ? decodeSegment(segments[2] ?? "") : decodeSegment(segments[1] ?? "");
   }
-  const sessionRoute = pathView === "s" || pathView === "c";
+  const sessionRoute = pathView === "s" || pathView === "c" || pathView === "sessions";
   const sessionSeg = sessionRoute ? decodeSegment(segments[1] ?? "") : null;
   const viewFor = (): string | null => {
     if (pathView === "projects") return "contexts";

@@ -75,6 +75,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
         { id: "gpt-6-astra-ultrafast", name: "GPT-6 Astra · Ultrafast (6× cost)", provider: "openai" },
         { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", provider: "openai" },
+        { id: "gpt-6.1-sol-ultrafast", name: "GPT-6.1 Sol · Ultrafast (6× cost)", provider: "openai" },
         { id: "gpt-6-sol", name: "GPT-6 Sol", provider: "openai" },
         { id: "gpt-6-luna", name: "GPT-6 Luna", provider: "openai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
@@ -422,7 +423,6 @@ test("admin scope keeps the selected runtime model visible when its provider is 
         id: "claude-opus-5",
         name: "Claude Opus 5",
         provider: "anthropic",
-        effortLevels: ["auto", "default", "adaptive", "low", "medium", "high", "xhigh", "max", "ultracode"],
       },
     ]);
   } finally {
@@ -430,38 +430,9 @@ test("admin scope keeps the selected runtime model visible when its provider is 
   }
 });
 
-test("managed Pi keys do not advertise unsupported OpenCode or browser credentials", async () => {
-  const srv = start({ harness: "opencode" });
-  try {
-    for (const provider of ["anthropic", "openai"] as const) {
-      const response = await fetch(`${srv.base}/v1/admin/model-providers/${provider}`, {
-        method: "PUT",
-        headers: ADMIN,
-        body: JSON.stringify({ apiKey: `managed-${provider}-key` }),
-      });
-      assert.equal(response.status, 200);
-    }
-    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
-    assert.equal(response.status, 200);
-    const data = (await response.json()) as {
-      baseModelOptions: Array<{ id: string }>;
-      browseModelOptions: Array<{ id: string }>;
-      modelsByHarness: Record<string, Array<{ id: string }>>;
-    };
-    assert.deepEqual(data.baseModelOptions, []);
-    assert.deepEqual(data.browseModelOptions, []);
-    assert.ok(data.modelsByHarness.pi!.some((model) => model.id === "gpt-5.6-sol"));
-    assert.ok(!data.modelsByHarness.opencode!.some((model) => model.id === "gpt-5.6-sol"));
-  } finally {
-    await srv.close();
-  }
-});
-
-test("web turns gate the requested and scope-selected harness against its real key source", async () => {
+test("web turns gate the requested harness against approval and its real key source", async () => {
   const srv = start({ harness: "pi" });
   try {
-    await srv.built.modelCredentials.set("openai", "managed-openai-key", "admin-alice");
-    srv.built.config.setApprovedHarnesses(["pi", "opencode"]);
     const turn = (threadRef: string, overrides: { harness?: string; model?: string } = {}) =>
       srv.built.app.turn({
         surface: "web",
@@ -472,17 +443,13 @@ test("web turns gate the requested and scope-selected harness against its real k
         ...overrides,
       });
 
-    const requested = await turn("web:alice:requested-opencode", { harness: "opencode", model: "gpt-5.6-sol" });
-    assert.equal(requested.status, "refused");
-    assert.match(requested.reason ?? "", /provider isn't configured/);
+    const legacy = await turn("web:alice:legacy", { harness: "opencode", model: "gpt-5.6-sol" });
+    assert.equal(legacy.status, "refused");
+    assert.match(legacy.reason ?? "", /runtime opencode is not approved/);
 
-    await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
-      harnessId: "opencode",
-      modelId: "gpt-5.6-sol",
-    });
-    const configured = await turn("web:alice:configured-opencode");
-    assert.equal(configured.status, "refused");
-    assert.match(configured.reason ?? "", /provider isn't configured/);
+    const unkeyed = await turn("web:alice:unkeyed", { harness: "pi", model: "gpt-5.6-sol" });
+    assert.equal(unkeyed.status, "refused");
+    assert.match(unkeyed.reason ?? "", /provider isn't configured/);
   } finally {
     await srv.close();
   }
@@ -553,8 +520,8 @@ test("surface-config respects an admin-disabled environment provider", async () 
   }
 });
 
-test("surface-config reports Codex ChatGPT OAuth without making it a Pi credential", async () => {
-  const srv = start({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
+  const srv = start({ harness: "pi", codexAuthFile: "/tmp/codex-auth.json" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);

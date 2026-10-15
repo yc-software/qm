@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  automationRunLabel,
+  surfaceOf,
   activityOf,
   cronRowMeta,
   sidebarSessions,
@@ -545,7 +547,13 @@ test("first personal chat opens proactively even when background suggestions alr
     sessions: [],
   };
   assert.equal(shouldStartProactiveOpener(first), true);
-  assert.equal(shouldStartProactiveOpener({ ...first, sessions: [saved("refresh", "cron:refresh:fire:1")] }), true);
+  assert.equal(
+    shouldStartProactiveOpener({
+      ...first,
+      sessions: [{ ...saved("refresh", "cron:refresh:fire:1"), surface: "cron" }],
+    }),
+    true,
+  );
   assert.equal(shouldStartProactiveOpener({ ...first, sessions: [pending("web:alice:draft")] }), true);
   for (const threadRef of ["web:alice:previous", "dm:D123:123.456", "ch:C123:123.456"]) {
     assert.equal(shouldStartProactiveOpener({ ...first, sessions: [saved("previous", threadRef)] }), false);
@@ -564,6 +572,23 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   const orphan = { ...child, id: "orphan", parentSessionId: "missing" };
   const detached = saved("detached", "agent:main:subagent:detached");
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
+});
+
+test("surfaceOf shows only stored web and Slack surfaces as themselves", () => {
+  assert.deepEqual([{ surface: "slack" }, { surface: "web" }, { surface: "swarm" }, {}].map(surfaceOf), [
+    "slack",
+    "web",
+    "core",
+    "core",
+  ]);
+});
+
+test("sidebar excludes cron, webhook, and loop runs but keeps conversations", () => {
+  const web = { ...saved("web", "web:alice:one"), surface: "web" };
+  const slack = { ...saved("slack", "grp:C1:1700000000.000100"), surface: "slack" };
+  const runs = ["cron", "webhook", "loop"].map((surface) => ({ ...saved(surface, `${surface}:x`), surface }));
+  assert.deepEqual(sidebarSessions([web, slack, ...runs]), [web, slack]);
+  assert.deepEqual([...runs, slack].map(automationRunLabel), ["Cron run", "Webhook run", "Loop run", null]);
 });
 
 test("cronRowMeta shows the next fire and the last result of a session's cron", () => {

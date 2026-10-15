@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { RuntimeConfig } from "./core-bridge";
-import { getRuntimeConfig, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
+import { getRuntimeConfig, type RuntimeConfig } from "./runtime-config-cache.ts";
+import { loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
 import {
   defaultEffortForModel,
   harnessSupportsFastMode,
@@ -11,14 +11,12 @@ import {
 } from "./model-options";
 import { createModelPicker } from "./model-picker";
 import {
-  ULTRAFAST_MODEL_ID,
-  ultrafastChoice,
+  loadoutActions,
   loadLoadout,
   saveLoadout,
   reconcileLoadout,
   upsertLoadout,
   effortLevelsForHarness,
-  compatibleHarnessOptions,
   type LoadoutEntry,
 } from "./composer-loadout";
 import { modelSupportsFastMode } from "./pi-models";
@@ -184,46 +182,31 @@ function activeEntry(config: RuntimeConfig): LoadoutEntry {
 function contextPicker(scopeId: string) {
   const current = () => activeEntry(contextModelState.config!);
   const options = () => optionsFor(contextModelState.config!);
-  const apply = (entry: LoadoutEntry) => {
-    if (contextModelState.saving) return;
-    const option = options().find((option) => option.value === entry.value);
-    if (!option) return;
-    const levels = effortLevelsForHarness(option.harnessId, option.model);
-    const normalized = {
-      ...entry,
-      effort: levels.some((level) => level.value === entry.effort) ? entry.effort : levels[0]!.value,
-      fast: entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeId, option.model.id),
-    };
-    void choose(scopeId, normalized.value, normalized.effort, normalized.fast);
-  };
+  const actions = loadoutActions(
+    options,
+    current,
+    (_, entry) => {
+      if (!contextModelState.saving) void choose(scopeId, entry.value, entry.effort, entry.fast);
+    },
+    (modelId) => modelSupportsFastMode(scopeId, modelId),
+  );
   return createModelPicker<void>({
     host: () => document.querySelector<HTMLElement>(".context-model"),
     redraw,
     scopeKey: () => scopeId,
     state: pickerState,
-    entries: () => reconcileLoadout(loadLoadout(), options(), current()),
+    presets: {
+      entries: () => reconcileLoadout(loadLoadout(), options(), current()),
+      save: saveLoadout,
+      add: (option) => {
+        const entry = { value: option.value, effort: defaultEffortForModel(option.model), fast: false };
+        saveLoadout(upsertLoadout(reconcileLoadout(loadLoadout(), options(), current()), entry));
+        pickerState.menuQuery = "";
+        actions.apply(entry);
+      },
+    },
     activeEntry: current,
-    saveEntries: saveLoadout,
-    apply,
-    add: (option) => {
-      const entry = { value: option.value, effort: defaultEffortForModel(option.model), fast: false };
-      saveLoadout(upsertLoadout(reconcileLoadout(loadLoadout(), options(), current()), entry));
-      pickerState.menuQuery = "";
-      apply(entry);
-    },
-    selectEffort: (effort) => apply({ ...current(), effort }),
-    selectHarness: (harnessId) => {
-      const selected = options().find((option) => option.value === current().value);
-      const target =
-        selected &&
-        compatibleHarnessOptions(options(), selected.model.id).find((option) => option.harnessId === harnessId);
-      if (target) apply({ ...current(), value: target.value });
-    },
-    toggleFastMode: () => {
-      const selected = options().find((option) => option.value === current().value);
-      const target = selected?.model.id === ULTRAFAST_MODEL_ID ? ultrafastChoice(options(), selected) : undefined;
-      apply({ ...current(), ...(target ? { value: target.value } : {}), fast: !current().fast });
-    },
+    ...actions,
     effectiveFastMode: () => current().fast,
     changeDefault: () => choose(scopeId, INHERIT),
     showDefaultAction: false,

@@ -107,7 +107,6 @@ function buildOrchestrator(
   maxContextTokens?: number,
   defaultTurnWallClockMs?: number,
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
-  sessionTapeMode?: "serve" | "shadow",
 ) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
@@ -141,7 +140,6 @@ function buildOrchestrator(
     acl,
     maxContextTokens,
     defaultTurnWallClockMs,
-    sessionTapeMode,
     runtime: createRuntimeService(
       { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
@@ -639,12 +637,11 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   );
 });
 
-test("forModelContext strips thinking/text/soul (never laundered into a durable summary)", () => {
+test("forModelContext strips thinking/text (never laundered into a durable summary)", () => {
   const entries: SessionEntry[] = [
     mkEntry({ seq: 0, type: "user" }),
     mkEntry({ seq: 1, type: "thinking", payload: { thinking: "secret reasoning" } }),
     mkEntry({ seq: 2, type: "text", payload: { text: "scaffold" } }),
-    mkEntry({ seq: 3, type: "soul", payload: { text: "soul" } }),
     mkEntry({ seq: 4, type: "assistant" }),
   ];
   assert.deepEqual(
@@ -728,12 +725,6 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal((await summaryEntries(sessions, sid)).length, 0);
-  assert.equal(
-    (await sessions.getTape(sid)).some(
-      (row) => row.kind === "context_event" && (row.payload as { event?: string })?.event === "compaction",
-    ),
-    false,
-  );
 });
 
 function assertSummaryBoundary(history: SessionEntry[], label: string): void {
@@ -786,28 +777,6 @@ test("forModelContext applies the latest-summary boundary: one summary, nothing 
     view.map((e) => e.seq),
     [8, 9, 10],
     "latest summary first, then only uncovered entries",
-  );
-});
-
-test("hiding a tainted latest summary does not expose the raw entries it covers", () => {
-  const entries = [
-    mkEntry({ seq: 0, type: "user", payload: { text: "old clean" } }),
-    mkEntry({ seq: 1, type: "user", payload: { text: "old tainted", securityTainted: true } }),
-    mkEntry({
-      seq: 2,
-      type: "system",
-      payload: { ...createContextSummaryPayload(1, "tainted recap"), securityTainted: true },
-    }),
-    mkEntry({ seq: 3, type: "assistant", payload: { text: "new clean" } }),
-  ];
-
-  assert.deepEqual(
-    forModelContext(entries).map((e) => e.seq),
-    [3],
-  );
-  assert.deepEqual(
-    forModelContext(entries, { includeSecurityTainted: true }).map((e) => e.seq),
-    [2, 3],
   );
 });
 
@@ -1431,7 +1400,6 @@ for (const explicit of [false, true]) {
             return { reply: "not final", runtimeHandoff: { context: "recent" } };
           }
           if (seen.length === (explicit ? 2 : 1)) {
-            assert.equal(input.tapeMode, "shadow");
             assert.ok(estimateHistoryTokens(input.history) <= 600);
             assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
             assert.ok(
@@ -1446,7 +1414,7 @@ for (const explicit of [false, true]) {
         },
       },
     };
-    const { orch, sessions } = buildOrchestrator(harness, 1000, undefined, undefined, "serve");
+    const { orch, sessions } = buildOrchestrator(harness, 1000);
     const sid = await seed(
       sessions,
       explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
@@ -1460,7 +1428,6 @@ for (const explicit of [false, true]) {
     assert.equal(effects, explicit ? 1 : 0);
     assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
     assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
-    assert.equal(seen.at(-1)!.tapeMode, "shadow");
     assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
   });
 }

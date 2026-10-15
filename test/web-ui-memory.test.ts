@@ -11,7 +11,6 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { readMemory } from "../src/memory/memory-service.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
@@ -45,39 +44,39 @@ function asUser(user: string, init: RequestInit = {}): RequestInit {
   };
 }
 
-test("a signed-in user reads, edits, and re-reads their own memory; identity is the cookie", async () => {
+type Facts = { facts: Array<{ id: string; text: string }> };
+
+test("a signed-in user lists, edits and forgets their own facts; identity is the cookie", async () => {
   const empty = await fetch(`${webBase}/api/memory`, asUser("alice"));
   assert.equal(empty.status, 200);
-  assert.equal(((await empty.json()) as { content: string }).content, "");
+  assert.deepEqual(((await empty.json()) as Facts).facts, []);
 
-  const put = await fetch(
+  await built.memory.capture("personal:alice", ["Calls me Al", "Lives in Oakland"], Date.UTC(2026, 0, 2));
+  const [al, oakland] = ((await (await fetch(`${webBase}/api/memory`, asUser("alice"))).json()) as Facts).facts;
+
+  const edit = await fetch(
     `${webBase}/api/memory`,
-    asUser("alice", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- Calls me Al\n" }) }),
+    asUser("alice", { method: "PATCH", body: JSON.stringify({ facts: [{ id: al!.id, text: "Calls me Ally" }] }) }),
   );
-  assert.equal(put.status, 200);
-
-  const back = await fetch(`${webBase}/api/memory`, asUser("alice"));
-  assert.equal(((await back.json()) as { content: string }).content, "# Memory\n\n- Calls me Al\n");
-
-  assert.equal(await readMemory(built.workspace, "personal:alice"), "# Memory\n\n- Calls me Al\n");
-
-  const bob = await fetch(`${webBase}/api/memory`, asUser("bob"));
-  assert.equal(((await bob.json()) as { content: string }).content, "", "another user's memory is separate");
-
-  await fetch(
+  assert.equal(edit.status, 200);
+  const forget = await fetch(
     `${webBase}/api/memory`,
-    asUser("bob", { method: "PUT", body: JSON.stringify({ principalId: "alice", content: "bob was here" }) }),
+    asUser("alice", { method: "DELETE", body: JSON.stringify({ ids: [oakland!.id] }) }),
   );
-  assert.equal(
-    await readMemory(built.workspace, "personal:alice"),
-    "# Memory\n\n- Calls me Al\n",
-    "a spoofed body principalId cannot overwrite alice's memory",
+  assert.deepEqual(
+    ((await forget.json()) as Facts).facts.map((fact) => fact.text),
+    ["Calls me Ally"],
   );
-  assert.equal(
-    await readMemory(built.workspace, "personal:bob"),
-    "bob was here\n",
-    "bob's write lands in bob's own scope",
+
+  const spoofed = await fetch(
+    `${webBase}/api/memory`,
+    asUser("bob", {
+      method: "PATCH",
+      body: JSON.stringify({ principalId: "alice", facts: [{ id: al!.id, text: "bob was here" }] }),
+    }),
   );
+  assert.equal(spoofed.status, 404, "bob's notebook has no such fact; a spoofed principalId is ignored");
+  assert.equal(await built.memory.read("personal:alice"), "- (2026-01-02) Calls me Ally");
 });
 
 test("memory routes require a signed-in principal", async () => {
@@ -85,39 +84,11 @@ test("memory routes require a signed-in principal", async () => {
   assert.equal(
     (
       await fetch(`${webBase}/api/memory`, {
-        method: "PUT",
+        method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: "x" }),
+        body: JSON.stringify({ ids: ["1"] }),
       })
     ).status,
     401,
-  );
-});
-
-test("a non-string content is REJECTED, not coerced to a wipe; an empty string still clears", async () => {
-  await fetch(
-    `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "# Memory\n\n- keep me\n" }) }),
-  );
-  const bad = await fetch(
-    `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: 42 }) }),
-  );
-  assert.equal(bad.status, 400, "non-string content is rejected");
-  assert.equal(
-    await readMemory(built.workspace, "personal:carol"),
-    "# Memory\n\n- keep me\n",
-    "the malformed request did not wipe memory",
-  );
-
-  const clear = await fetch(
-    `${webBase}/api/memory`,
-    asUser("carol", { method: "PUT", body: JSON.stringify({ content: "" }) }),
-  );
-  assert.equal(clear.status, 200);
-  assert.equal(
-    ((await (await fetch(`${webBase}/api/memory`, asUser("carol"))).json()) as { content: string }).content,
-    "",
-    "empty string clears the notebook",
   );
 });

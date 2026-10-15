@@ -9,7 +9,7 @@ import {
 } from "./connection-return";
 import { LitElement, html, nothing } from "lit";
 import { Check } from "lucide";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
 import type { Me } from "./shell-state";
 import "./onboarding-welcome.css";

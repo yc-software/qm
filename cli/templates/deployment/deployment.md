@@ -197,8 +197,8 @@ deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
 `openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
-`HARNESS` `codex` runs OpenAI models alone, `claude` runs Anthropic models
-alone, and `openrouter` needs the default `pi` harness.
+`HARNESS` `claude` runs Anthropic models alone, and `openai` and `openrouter`
+need the default `pi` harness.
 
 An operator may still prefer to hold the key centrally and rotate it from the
 Admin page. That is a deliberate choice, not the default: drop `modelProvider`

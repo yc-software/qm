@@ -1239,7 +1239,7 @@ test("an internal channel mention carries the complete audience and thread conte
     f.client.messagesByChannel.set("C1", [event]);
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].text, "status?");
+    assert.equal(f.core.turns[0].text, "@qmbot status?");
     assert.equal(f.core.turns[0].conversation.threadRef, "ch:C1:104.1");
     assert.equal(f.core.turns[0].conversation.channelRef, "C1");
     assert.deepEqual(f.core.turns[0].conversation.audience.map((a: any) => a.externalId).sort(), ["U1", "U2"]);

@@ -10,6 +10,8 @@ import type { Config } from "../src/config.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } from "../src/onboarding/onboarding.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 
 const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
@@ -38,27 +40,20 @@ test("onboarding memory markers are detected from readable memory bullets", () =
   assert.equal(detectOnboardingStatus("- Onboarding: dismissed v2 on 2026-06-09."), "dismissed");
 });
 
-test("setOnboardingStatus rewrites the marker and round-trips through detect", () => {
-  const completed = setOnboardingStatus("## Notes\n\nsome prefs\n", "completed", "2026-06-22");
+test("setOnboardingStatus replaces the marker fact and round-trips through detect", async () => {
+  const memory = createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "onboarding-mem-"))));
+  const scope = scopeId("personal", "U1");
+  await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
+
+  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", "admin");
+  const completed = await memory.read(scope);
   assert.equal(detectOnboardingStatus(completed), "completed");
-  assert.match(completed, /- Onboarding: completed v2 on 2026-06-22\./);
+  assert.doesNotMatch(completed, /pending/i);
   assert.match(completed, /some prefs/);
 
-  const reset = setOnboardingStatus(completed, "not_started", "2026-06-22");
-  assert.equal(detectOnboardingStatus(reset), "not_started");
-  assert.doesNotMatch(reset, /Onboarding:/);
-  assert.match(reset, /some prefs/);
-
-  const flipped = setOnboardingStatus(
-    "- (2026-01-01) Onboarding: completed v2 on 2026-01-01.\n",
-    "dismissed",
-    "2026-06-22",
-  );
-  assert.equal(detectOnboardingStatus(flipped), "dismissed");
-  assert.doesNotMatch(flipped, /completed/);
-
-  assert.equal(setOnboardingStatus("", "not_started", "2026-06-22"), "");
-  assert.equal(detectOnboardingStatus(setOnboardingStatus("", "pending", "2026-06-22")), "pending");
+  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", "admin");
+  assert.equal(detectOnboardingStatus(await memory.read(scope)), "not_started");
+  assert.match(await memory.read(scope), /some prefs/);
 });
 
 test("a new personal DM offers onboarding through the skills index", async () => {
@@ -80,7 +75,7 @@ test("the opener defers Slack setup until status can be checked without requirin
   assert.match(PROACTIVE_OPENER_PROMPT, /wait for their reply before reading admin-only status/);
   assert.match(PROACTIVE_OPENER_PROMPT, /empty direct OAuth list does not rule out Composio/);
   assert.match(PROACTIVE_OPENER_PROMPT, /skip connections and continue onboarding/);
-  assert.match(PROACTIVE_OPENER_PROMPT, /do not ask them to create OAuth apps or supply project keys/);
+  assert.match(PROACTIVE_OPENER_PROMPT, /Never ask regular users to create OAuth apps or supply project keys/);
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {

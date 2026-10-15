@@ -628,7 +628,6 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
         if (!cron && enable) {
           cron = await ctx.app.createCron({
             loopId: loop.id,
-            runAs: current.runAs,
             ownerScopeId: loop.ownerScopeId,
             owner,
             createdBy: owner,

@@ -1,5 +1,4 @@
 import {
-  codexProviderModelId,
   codexSubscriptionModelId,
   CODEX_SUBSCRIPTION_PROVIDER,
   DEFAULT_AGENT_MODEL_ID,
@@ -17,7 +16,6 @@ import type { UserModelCredential } from "../model/user-model-credential-store.t
 export type IndividualAuthRouting =
   | { kind: "apikey"; provider: ModelProvider; harness: "pi"; model: string | undefined; apiKey: string }
   | { kind: "oauth"; provider: "anthropic"; harness: "claude"; model: string }
-  | { kind: "oauth"; provider: "openai"; harness: "codex"; model: string }
   | { kind: "oauth"; provider: "openai"; harness: "pi"; model: string }
   | null;
 
@@ -25,7 +23,6 @@ export function resolveIndividualAuthRouting(
   anthCred: UserModelCredential | null,
   oaiCred: UserModelCredential | null,
   requestedModel: string | undefined,
-  preferredHarness?: string,
 ): IndividualAuthRouting {
   if (requestedModel && (modelUnavailableReason(requestedModel) || !resolveModel(requestedModel))) return null;
   const rawProvider = requestedModel ? resolveModel(requestedModel)?.provider : undefined;
@@ -75,27 +72,13 @@ export function resolveIndividualAuthRouting(
             : defaultModelForHarness("claude", DEFAULT_AGENT_MODEL_ID),
       };
     }
-    if (preferredHarness === "pi") {
-      // pi-on-ChatGPT: the org runs the pi harness, so serve the
-      // subscription through pi-ai's Codex provider instead of switching
-      // the person onto the codex harness.
-      return {
-        kind: "oauth",
-        provider: "openai",
-        harness: "pi",
-        model: codexSubscriptionModelId(
-          requestedModel && requestedProvider === "openai" ? requestedModel : DEFAULT_CODEX_MODEL_ID,
-        ),
-      };
-    }
     return {
       kind: "oauth",
       provider: "openai",
-      harness: "codex",
-      model:
-        requestedModel && requestedProvider === "openai"
-          ? codexProviderModelId(requestedModel)
-          : defaultModelForHarness("codex", DEFAULT_CODEX_MODEL_ID),
+      harness: "pi",
+      model: codexSubscriptionModelId(
+        requestedModel && requestedProvider === "openai" ? requestedModel : DEFAULT_CODEX_MODEL_ID,
+      ),
     };
   }
   return null;

@@ -112,3 +112,58 @@ test("publisher resumes an existing transfer after new uploads are disabled", as
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("publisher cancels an unfinished upload when the file changed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "qm-publisher-"));
+  const requests: string[] = [];
+  let origin = "";
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) void _;
+    requests.push(`${request.method} ${request.url}`);
+    response.setHeader("content-type", "application/json");
+    const url = request.url!;
+    if (request.method === "DELETE") response.end(JSON.stringify({ ok: true }));
+    else if (request.method === "PUT") response.end();
+    else if (url === "/v1/files/uploads") response.end(JSON.stringify({ upload: { state: "pending" } }));
+    else if (url.endsWith("/parts/1")) response.end(JSON.stringify({ url: origin + "/part", headers: {} }));
+    else if (url.endsWith("/complete")) response.end(JSON.stringify({ file: { id: "published" } }));
+    else response.writeHead(404).end("{}");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  origin = `http://127.0.0.1:${address.port}`;
+  const source = join(directory, "state.md");
+  const token =
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+  await writeFile(source, "new contents");
+  await writeFile(
+    source + ".qm-upload.json",
+    JSON.stringify({
+      id: "a".repeat(32),
+      manifest: { name: "state.md", mimetype: "text/markdown", sizeBytes: 3, checksums: ["old"] },
+      destination: { origin, actor: "user", scope: "personal:user" },
+      next: 1,
+    }),
+  );
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => {
+      const child = spawn(
+        "python3",
+        [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), source],
+        {
+          env: { ...process.env, AGENT_API_URL: origin, AGENT_API_TOKEN: token },
+          stdio: "ignore",
+        },
+      );
+      child.on("error", reject);
+      child.on("exit", resolve);
+    });
+    assert.equal(code, 0);
+    assert.equal(requests[0], `DELETE /v1/files/uploads/${"a".repeat(32)}`);
+    assert.ok(requests.includes("POST /v1/files/uploads"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

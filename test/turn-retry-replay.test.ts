@@ -68,22 +68,10 @@ function buildScenario(interruptAfterToolResult = false) {
         turns.push(turn.input);
         continued.push(turn.continueTurn);
         environments.push(turn.environment);
-        const userEntry = await turn.emit({
+        await turn.emit({
           type: "user",
           payload: { text: turn.input },
           scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: {
-            role: "user",
-            content: [{ type: "text", text: [turn.input, turn.environment].filter(Boolean).join("\n\n") }],
-            timestamp: Date.now(),
-          },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
         });
         if (interruptAfterToolResult && turns.length === 1) {
           await turn.emit({
@@ -99,22 +87,10 @@ function buildScenario(interruptAfterToolResult = false) {
           throw new Error("interrupted after recording a tool result");
         }
         const reply = "it runs on this conversation's computer";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
+        await turn.emit({
           type: "assistant",
           payload: { text: reply },
           scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { subturnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
         });
         return { reply, modelCalls: 1 };
       },
@@ -131,7 +107,6 @@ function buildScenario(interruptAfterToolResult = false) {
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     runs,
     workspace,

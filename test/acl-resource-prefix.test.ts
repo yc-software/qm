@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { cronRef, deployRef, encodeRef, parseRef, serviceCredRef, skillRef } from "../src/acl/resource-ref.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
@@ -190,11 +192,22 @@ test("the prefix filters: a deployment grant is never returned for the service-c
 });
 
 test("file handles exclude non-file grants — a skill/cron/deploy grant never becomes a bogus shared/ file", async () => {
-  const acl = createAclStore();
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  await files.put({
+    id: "F1",
+    ownerScopeId: ORG,
+    createdBy: "admin",
+    name: "doc.md",
+    path: "artifacts/F1/doc.md",
+    mimetype: "text/markdown",
+    data: Buffer.from("hello"),
+    direction: "out",
+  });
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const grantee = scopeId("channel", "C");
   await acl.grant({
     ownerScopeId: ORG,
-    ref: "artifacts/F1/doc.md",
+    ref: "F1",
     granteeScopeId: grantee,
     permission: "read",
     grantedBy: "admin",
@@ -210,14 +223,14 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
   }
   const handles = await acl.handlesFor([grantee]);
   assert.deepEqual(
-    handles.map((h) => h.ownerPath),
-    ["artifacts/F1/doc.md"],
+    handles.map((h) => h.fileId),
+    ["F1"],
     "only the file grant materializes as a handle",
   );
   const audienceHandles = await acl.handlesForAudience([P("U1")], grantee, ORG, principalEntitledToScope);
   assert.deepEqual(
-    audienceHandles.map((h) => h.ownerPath),
-    ["artifacts/F1/doc.md"],
+    audienceHandles.map((h) => h.fileId),
+    ["F1"],
     "audience handles exclude skill/cron/deploy/service-cred grants",
   );
 });

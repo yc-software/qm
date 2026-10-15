@@ -113,7 +113,7 @@ for (const explicit of [
 ]) {
   test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
     const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
-    let defaults = { model: "old-default", harness: "codex", thinkingLevel: "low", fastMode: true };
+    let defaults = { model: "old-default", harness: "pi", thinkingLevel: "low", fastMode: true };
     const preparedInputs: OrchestratorInput[] = [];
     const r = await rig({
       prepareRequest: async (request) => {
@@ -251,7 +251,7 @@ test("write refuses self, cross-scope, and nonparticipant targets", async () => 
   assert.match(nonSubagent.message, /participant/);
 });
 
-test("read lists children with status and renders a child's recent tape", async () => {
+test("read lists children with status and renders a child's recent transcript", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);
   const opened = await syscalls.open({ task: "research callers", name: "research_callers" });
@@ -269,9 +269,9 @@ test("read lists children with status and renders a child's recent tape", async 
   assert.equal(list.children[0]!.status, "pending");
   assert.match(list.children[0]!.lastSaid ?? "", /3 call sites/);
 
-  const tape = await syscalls.read({ target: "research_callers" });
-  assert.ok(tape.ok && tape.mode === "tape");
-  assert.match(tape.rendered, /found 3 call sites/);
+  const transcript = await syscalls.read({ target: "research_callers" });
+  assert.ok(transcript.ok && transcript.mode === "transcript");
+  assert.match(transcript.rendered, /found 3 call sites/);
 });
 
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
@@ -349,7 +349,7 @@ test("a detached child sends no mail; any in-scope session can still be read", a
   assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
 
   const read = await r.syscallsFor(r.room).read({ target: child.id });
-  assert.ok(read.ok && read.mode === "tape");
+  assert.ok(read.ok && read.mode === "transcript");
 });
 
 test("mail envelope attributes stay well-formed and machine-parseable when the title holds quotes", () => {
@@ -398,7 +398,7 @@ test("session reads hide history outside the viewer's participant tenure", async
   await r.sessions.releaseLease(lease);
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
-  assert.ok(view.ok && view.mode === "tape");
+  assert.ok(view.ok && view.mode === "transcript");
   assert.doesNotMatch(view.rendered, /hidden-before-membership/);
 });
 
@@ -432,7 +432,7 @@ test("shared session reads require every audience member to see each entry", asy
     },
   });
   const view = await tool.read({ target: shared.id });
-  assert.ok(view.ok && view.mode === "tape");
+  assert.ok(view.ok && view.mode === "transcript");
   assert.doesNotMatch(view.rendered, /private-only/);
   assert.match(view.rendered, /shared-visible/);
 });
@@ -1026,7 +1026,7 @@ test("delegated automation retains explicit unattended grants and owner-keychain
       actor,
       conversation,
       surface: "slack",
-      origin: { kind: "automation", useOwnerKeychain: true, ownerResourcesRequireOpen: true },
+      origin: { kind: "automation", useOwnerKeychain: true },
       unattendedGrants: ["admin.sessions.read"],
     },
   });
@@ -1037,7 +1037,6 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(queued.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(queued.request.origin.kind === "automation");
   assert.equal(queued.request.origin.useOwnerKeychain, true);
-  assert.equal(queued.request.origin.ownerResourcesRequireOpen, true);
   const claimed = await r.runs.claimById(queued.id, "w1", 60000);
   await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "done" });
   assert.ok((await api.write({ target: child.id, text: "finish the report", followup: true })).ok);
@@ -1045,7 +1044,6 @@ test("delegated automation retains explicit unattended grants and owner-keychain
   assert.deepEqual(followup.request.unattendedGrants, ["admin.sessions.read"]);
   assert.ok(followup.request.origin.kind === "automation");
   assert.equal(followup.request.origin.useOwnerKeychain, true);
-  assert.equal(followup.request.origin.ownerResourcesRequireOpen, true);
 });
 
 test("follow-up tasks cannot inherit a prior caller's automation authority", async () => {
@@ -1449,7 +1447,7 @@ for (const addressed of [true, false]) {
       gatewayContext: { location: "original DM", details: { channel: "D1" }, instructions: "Reply in Slack" },
       timezone: "America/Los_Angeles",
       model: "test-model",
-      harness: "codex",
+      harness: "pi",
       thinkingLevel: "high",
       fastMode: false,
       skipMemory: true,

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
 import { loadConfig } from "../src/config.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService, readMemory } from "../src/memory/memory-service.ts";
+import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";
 import {
   DEFAULT_STRATEGY_FLOORS,
@@ -56,13 +56,13 @@ for (const kind of kinds) {
   for (const conversation of conversations) {
     const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), `membench-${kind}-`)));
     const memory = createMemoryService(workspace);
-    const { strategy } = createMemoryStrategy(kind, { harness: harness.models, memory, workspace });
+    const { strategy } = createMemoryStrategy(kind, { harness: harness.models, memory });
     const scopeId = "user:bench";
-    if (!strategy.onTurnEnd && !strategy.maintain) {
+    if (!strategy.onTurnEnd) {
       console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
     }
     await replayConversation(strategy, scopeId, conversation);
-    const notebook = (await readMemory(workspace, scopeId)) ?? "";
+    const notebook = await memory.read(scopeId);
     const judgeOut = await oneShot(JUDGE_PROMPT, renderJudgeInput(conversation, notebook));
     const verdict = parseJudgeVerdict(judgeOut ?? "");
     results.push({ kind, conversationId: conversation.id, notebook, verdict });

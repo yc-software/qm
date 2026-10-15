@@ -15,7 +15,7 @@ for (const count of [1, 2]) {
         seq: index * 2 + 1,
         type: "tool_result",
         createdAt: 2000,
-        payload: { tool: "execute", callId: String(index), code: 0, stdout: String(index) },
+        payload: { tool: "execute", callId: String(index), code: 0, result: String(index) },
       },
     ]).flat();
     const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
@@ -65,7 +65,7 @@ test("steering separates tool folds with a visible unlabelled user message", asy
       seq: seq + 1,
       type: "tool_result",
       createdAt: (seq + 1) * 1000,
-      payload: { tool: "execute", callId: String(seq), code: 0, stdout: String(seq) },
+      payload: { tool: "execute", callId: String(seq), code: 0, result: String(seq) },
     },
   ];
   const entries = [
@@ -106,7 +106,7 @@ test("steering separates tool folds with a visible unlabelled user message", asy
     user.speaker = "Another person";
     user.edited = true;
     conv.drawActiveChat();
-    assert.equal(document.querySelector(".inline-steer .speaker-label")?.textContent, "Another person");
+    assert.match(document.querySelector(".inline-steer .speaker-label")?.textContent ?? "", /AP\s+Another person/);
     assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(edited)");
     user.deleted = true;
     conv.drawActiveChat();

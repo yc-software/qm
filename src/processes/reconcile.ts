@@ -8,9 +8,7 @@ export async function reconcileProcesses(
   scopeId: string,
   onExit?: (handle: SandboxHandle, processId: string) => Promise<void>,
 ): Promise<void> {
-  const records = (await registry.listByScope(scopeId)).filter(
-    (r) => !r.sandboxId || r.sandboxId === handle.resourceId,
-  );
+  const records = (await registry.listByScope(scopeId)).filter((r) => r.sandboxId === handle.resourceId);
   const running = records.filter((r) => r.status === "running");
   const finished = records.filter((r) => r.status !== "running" && r.credentialsPending).map((r) => r.processId);
   if (running.length) {

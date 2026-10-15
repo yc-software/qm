@@ -1,12 +1,21 @@
-import type { ConversationTurn, OverheardMessage, ScopeId, SessionEntry } from "../types.ts";
+import type {
+  AssistantMessage,
+  ImageContent,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+  ToolResultMessage,
+  Usage,
+  UserMessage,
+} from "@earendil-works/pi-ai";
+import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.ts";
 import { deliveryNote } from "../core/attachments.ts";
+import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
-import { CONTEXT_SUMMARY_HEADER, forModelContext, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
-import { TAPE_IMPORT_MAX_ENTRIES } from "../sessions/session-store.ts";
-import type { Lease, SessionStore, TapeRecord } from "../sessions/session-store.ts";
 
 export { INTERRUPTED_TOOL_RESULT };
 
@@ -89,35 +98,35 @@ export function renderOverheard(p: OverheardEntryPayload): string {
   );
 }
 
-type PiTextBlock = { type: "text"; text: string };
-type PiToolCallBlock = { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
-type PiZeroUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+export interface ReplayImageRef {
+  artifactId?: string;
+  mimeType: string;
+}
+type ReplayImageRefBlock = { type: "image"; ref: ReplayImageRef };
+type ReplayUserMessage = Omit<UserMessage, "content"> & {
+  content: Array<TextContent | ImageContent | ReplayImageRefBlock>;
 };
-export type PiReplayMessage =
-  | { role: "user"; content: PiTextBlock[]; timestamp: number }
-  | {
-      role: "assistant";
-      content: Array<PiTextBlock | PiToolCallBlock>;
-      timestamp: number;
-      stopReason: "stop";
-      usage: PiZeroUsage;
-    }
-  | {
-      role: "toolResult";
-      toolCallId: string;
-      toolName: string;
-      content: PiTextBlock[];
-      isError: boolean;
-      timestamp: number;
-    };
+export type PiReplayMessage = ReplayUserMessage | AssistantMessage | ToolResultMessage;
 
-export function zeroUsage(): PiZeroUsage {
+export type ReplayStep = Pick<AssistantMessage, "api" | "provider" | "model" | "stopReason"> & {
+  id: string;
+  index?: number;
+};
+
+export type ToolCallWire = Partial<Omit<ToolCall, "type" | "id" | "arguments">> & { argumentsJson?: string };
+
+export type StoredResultContent = TextContent | Omit<ImageContent, "data">;
+export type ToolResultWire = Partial<Pick<ToolResultMessage, "isError">> & { content?: StoredResultContent[] };
+
+export const WAKE_KIND = "wake";
+
+export const AGENT_OPENED_TEXT = "[The agent opened this conversation.]";
+
+export const OMITTED_IMAGE_TEXT = "[image omitted from replay]";
+
+const ENVELOPE_KEYS = new Set(["step"]);
+
+export function zeroUsage(): Usage {
   return {
     input: 0,
     output: 0,
@@ -128,12 +137,107 @@ export function zeroUsage(): PiZeroUsage {
   };
 }
 
+export function userPromptText(payload: {
+  text?: unknown;
+  environment?: unknown;
+  goalNote?: unknown;
+  prompt?: unknown;
+}): string {
+  if (typeof payload.prompt === "string") return payload.prompt;
+  return [payload.goalNote, payload.text, payload.environment]
+    .filter((s): s is string => typeof s === "string" && !!s.trim())
+    .join("\n\n");
+}
+
 function entryText(e: SessionEntry): string {
   return String((e.payload as { text?: string } | null)?.text ?? "").trim();
 }
 
-const hasToolCall = (m: PiReplayMessage): boolean =>
-  m.role === "assistant" && m.content.some((c) => c.type === "toolCall");
+function entryStep(e: SessionEntry): ReplayStep | null {
+  const step = (e.payload as { step?: unknown } | null)?.step;
+  return isObj(step) && typeof step.id === "string" ? (step as unknown as ReplayStep) : null;
+}
+
+function storedBlock(payload: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(payload).filter(([key]) => !ENVELOPE_KEYS.has(key)));
+}
+
+export function legacyAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: "",
+    provider: "",
+    model: "",
+    timestamp,
+    stopReason: "stop",
+    usage: zeroUsage(),
+  };
+}
+
+type Positioned = { index: number; block: AssistantMessage["content"][number] };
+
+function stepBlocks(e: SessionEntry, step: ReplayStep): Positioned[] {
+  const p = (e.payload ?? {}) as Record<string, unknown>;
+  const at = step.index ?? 0;
+  if (e.type === "thinking") return [{ index: at, block: { ...storedBlock(p), type: "thinking" } as ThinkingContent }];
+  if (e.type === "text") return [{ index: at, block: { ...storedBlock(p), type: "text" } as TextContent }];
+  if (e.type === "tool_call") {
+    const id = typeof p.callId === "string" ? p.callId : "";
+    if (!id) return [];
+    const { argumentsJson, ...wire } = (p.wire ?? {}) as ToolCallWire;
+    const block: ToolCall = {
+      type: "toolCall",
+      id,
+      name: typeof p.tool === "string" ? p.tool : "tool",
+      arguments:
+        argumentsJson === undefined ? recordedToolArguments(p) : (JSON.parse(argumentsJson) as ToolCall["arguments"]),
+      ...wire,
+    };
+    return [{ index: at, block }];
+  }
+  if (e.type !== "assistant") return [];
+  if (Array.isArray(p.parts))
+    return (p.parts as Array<TextContent & { index: number }>).map(({ index, ...block }) => ({ index, block }));
+  if (step.index === undefined) return [];
+  const extra = isObj(p.textBlock) ? p.textBlock : {};
+  return [{ index: at, block: { ...extra, type: "text", text: String(p.text ?? "") } as TextContent }];
+}
+
+export function recordedToolArguments(p: Record<string, unknown>): Record<string, unknown> {
+  const { tool: _tool, callId: _c, rerun, step: _s, wire: _w, ...recorded } = p;
+  const input = (rerun as { input?: unknown } | undefined)?.input;
+  if (isObj(input)) return { ...input, retrySafe: true };
+  if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
+  if (recorded.action !== "post" && recorded.action !== "reach" && recorded.action !== "edit") return recorded;
+  const { bytes: _b, files: recordedFiles, ...rest } = recorded;
+  return {
+    ...rest,
+    ...(Array.isArray(recordedFiles) ? { files: recordedFiles } : {}),
+    text: "[sent earlier — text not retained]",
+  };
+}
+
+function resultContent(content: StoredResultContent[]): ToolResultMessage["content"] {
+  return content.map((block) =>
+    block.type === "image" && !("data" in block) ? { type: "text", text: OMITTED_IMAGE_TEXT } : (block as TextContent),
+  );
+}
+
+function toolResultMessage(call: ToolCall, re: SessionEntry | undefined, at: number): ToolResultMessage {
+  const base = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name };
+  const text = (value: string) => [{ type: "text" as const, text: value }];
+  if (!re) return { ...base, content: text(INTERRUPTED_TOOL_RESULT), isError: true, timestamp: at };
+  const p = (re.payload ?? {}) as { interrupted?: unknown; isError?: unknown; result?: unknown; wire?: ToolResultWire };
+  if (p.interrupted === true)
+    return { ...base, content: text(INTERRUPTED_TOOL_RESULT), isError: true, timestamp: re.createdAt };
+  return {
+    ...base,
+    content: p.wire?.content ? resultContent(p.wire.content) : text(String(p.result ?? "")),
+    isError: p.wire?.isError ?? p.isError === true,
+    timestamp: re.createdAt,
+  };
+}
 
 export function reconstructMessagesFromHistory(history: readonly SessionEntry[]): PiReplayMessage[] {
   const resultByCallId = new Map<string, SessionEntry>();
@@ -143,23 +247,52 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
     if (typeof cid === "string" && cid) resultByCallId.set(cid, e);
   }
   const raw: PiReplayMessage[] = [];
+  const stepped = new Set<PiReplayMessage>();
+  const steps = new Map<string, AssistantMessage>();
+  const blockIndex = new WeakMap<object, number>();
   const userMsg = (text: string, ts: number): PiReplayMessage => ({
     role: "user",
     content: [{ type: "text", text }],
     timestamp: ts,
   });
-  const asstText = (text: string, ts: number): PiReplayMessage => ({
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: ts,
-    stopReason: "stop",
-    usage: zeroUsage(),
-  });
 
+  let previous: SessionEntry | undefined;
+  let batch: AssistantMessage | undefined;
   for (const e of history) {
+    const prior = previous;
+    previous = e;
     const summary = contextSummaryPayload(e);
     if (summary) {
       raw.push(userMsg(`${CONTEXT_SUMMARY_HEADER}\n${summary.text}`, e.createdAt));
+      continue;
+    }
+    const step = entryStep(e);
+    if (step) {
+      if (step.stopReason === "aborted" || step.stopReason === "error") continue;
+      const blocks = stepBlocks(e, step);
+      if (!blocks.length) continue;
+      let message = steps.get(step.id);
+      if (!message) {
+        message = {
+          role: "assistant",
+          content: [],
+          api: step.api,
+          provider: step.provider,
+          model: step.model,
+          timestamp: e.createdAt,
+          stopReason: step.stopReason,
+          usage: zeroUsage(),
+        };
+        steps.set(step.id, message);
+        stepped.add(message);
+        raw.push(message);
+      }
+      for (const { index, block } of blocks) {
+        blockIndex.set(block, index);
+        const at = message.content.findIndex((b) => blockIndex.get(b)! > index);
+        if (at < 0) message.content.push(block);
+        else message.content.splice(at, 0, block);
+      }
       continue;
     }
     if (e.type === "user") {
@@ -167,68 +300,43 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       if (ov) {
         if (ov.text.trim() || ov.files?.length) raw.push(userMsg(renderOverheard(ov), e.createdAt));
       } else {
-        const environment = (e.payload as { environment?: unknown } | null)?.environment;
-        const t = [entryText(e), typeof environment === "string" ? environment.trim() : ""]
-          .filter(Boolean)
-          .join("\n\n");
-        if (t) raw.push(userMsg(t, e.createdAt));
+        const p = (e.payload ?? {}) as Record<string, unknown>;
+        const t = userPromptText(p);
+        const images = Array.isArray(p.images) ? (p.images as ReplayImageRef[]) : [];
+        if (t || images.length)
+          raw.push({
+            role: "user",
+            content: [{ type: "text", text: t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
+            timestamp: e.createdAt,
+          });
       }
     } else if (e.type === "assistant") {
       const t = entryText(e);
-      if (t) raw.push(asstText(t, e.createdAt));
+      if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
     } else if (e.type === "delivery") {
       const t = entryText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
     } else if (e.type === "system") {
       const revision = messageRevision(e);
+      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown };
       if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
+      else if (p.kind === WAKE_KIND && typeof p.text === "string") raw.push(userMsg(p.text, e.createdAt));
+      else if (p.kind === "goal_cancelled" && typeof p.objective === "string")
+        raw.push(userMsg(goalCancelledNote(p.objective), e.createdAt));
     } else if (e.type === "tool_call") {
       const p = (e.payload ?? {}) as Record<string, unknown>;
       const cid = typeof p.callId === "string" ? p.callId : "";
       if (!cid) continue;
-      const re = resultByCallId.get(cid);
-      const name = typeof p.tool === "string" ? p.tool : "tool";
-      const { tool: _t, callId: _c, rerun, ...recorded } = p;
-      const args = (() => {
-        const input = (rerun as { input?: unknown } | undefined)?.input;
-        if (isObj(input)) return { ...input, retrySafe: true };
-        if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
-        if (recorded.action !== "post" && recorded.action !== "reach" && recorded.action !== "edit") return recorded;
-        const { bytes: _b, files: recordedFiles, ...rest } = recorded;
-        return {
-          ...rest,
-          ...(Array.isArray(recordedFiles) ? { files: recordedFiles } : {}),
-          text: "[sent earlier — text not retained]",
-        };
-      })();
-      raw.push({
-        role: "assistant",
-        content: [{ type: "toolCall", id: cid, name, arguments: args }],
-        timestamp: e.createdAt,
-        stopReason: "stop",
-        usage: zeroUsage(),
-      });
-      if (re) {
-        const rp = (re.payload ?? {}) as Record<string, unknown>;
-        raw.push({
-          role: "toolResult",
-          toolCallId: cid,
-          toolName: name,
-          content: [
-            { type: "text", text: rp.interrupted === true ? INTERRUPTED_TOOL_RESULT : String(rp.result ?? "") },
-          ],
-          isError: rp.isError === true || rp.interrupted === true,
-          timestamp: re.createdAt,
-        });
-      } else {
-        raw.push({
-          role: "toolResult",
-          toolCallId: cid,
-          toolName: name,
-          content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
-          isError: true,
-          timestamp: e.createdAt,
-        });
+      const block: ToolCall = {
+        type: "toolCall",
+        id: cid,
+        name: typeof p.tool === "string" ? p.tool : "tool",
+        arguments: recordedToolArguments(p),
+      };
+      if (prior?.type === "tool_call" && batch && raw.at(-1) === batch) batch.content.push(block);
+      else {
+        batch = legacyAssistant([block], e.createdAt);
+        raw.push(batch);
       }
     }
   }
@@ -236,53 +344,25 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
   const out: PiReplayMessage[] = [];
   for (const m of raw) {
     const prev = out[out.length - 1];
-    if (prev && prev.role === "user" && m.role === "user") {
-      prev.content.push(...m.content);
-      continue;
-    }
-    if (prev && prev.role === "assistant" && m.role === "assistant" && !hasToolCall(prev) && !hasToolCall(m)) {
+    if (
+      prev?.role === "assistant" &&
+      m.role === "assistant" &&
+      !stepped.has(prev) &&
+      !stepped.has(m) &&
+      !prev.content.some((c) => c.type === "toolCall") &&
+      !m.content.some((c) => c.type === "toolCall")
+    ) {
       prev.content.push(...m.content);
       continue;
     }
     out.push(m);
+    if (m.role !== "assistant") continue;
+    for (const c of m.content)
+      if (c.type === "toolCall") out.push(toolResultMessage(c, resultByCallId.get(c.id), m.timestamp));
   }
-  while (out.length && out[0]!.role !== "user") out.shift();
+  if (out[0] && out[0].role !== "user")
+    out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });
   return out;
-}
-
-export function coverageImportViable(entries: readonly SessionEntry[]): boolean {
-  if (!entries.length || entries.length > TAPE_IMPORT_MAX_ENTRIES) return false;
-  if (entries.some((e) => (e.payload as { securityTainted?: unknown } | null)?.securityTainted === true)) return false;
-  return coverageImportEvent(entries).messages.length > 0;
-}
-
-export async function appendCoverageImport(
-  sessions: Pick<SessionStore, "appendTape">,
-  lease: Lease,
-  entries: readonly SessionEntry[],
-  scopeLabel: ScopeId,
-): Promise<TapeRecord | null> {
-  const last = entries[entries.length - 1];
-  if (!last || !coverageImportViable(entries)) return null;
-  return sessions.appendTape(lease, {
-    kind: "context_event",
-    payload: coverageImportEvent(entries),
-    scopeLabel,
-    coversEntrySeq: last.seq,
-  });
-}
-
-export function coverageImportEvent(entries: readonly SessionEntry[]): {
-  event: "legacy_import";
-  messages: PiReplayMessage[];
-  scopes: ScopeId[];
-} {
-  const context = forModelContext([...entries]);
-  return {
-    event: "legacy_import",
-    messages: reconstructMessagesFromHistory(context),
-    scopes: [...new Set(context.map((e) => e.scopeLabel))],
-  };
 }
 
 function normalizeForDedup(text: string): string {

@@ -15,7 +15,7 @@ for (const [key, value] of Object.entries({
 
 const { html, render } = await import("lit");
 const { Archive, Link, X } = await import("lucide");
-const { icon } = await import("../src/ui.ts");
+const { icon } = await import("../src/icons.ts");
 const style = document.createElement("style");
 style.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 document.head.append(style);

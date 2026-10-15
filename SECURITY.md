@@ -191,8 +191,7 @@ these, not through them.
   hours and renews on use. Logout clears the browser cookie but cannot revoke an
   already copied session token before its expiration.
 - **Some model-provider paths bypass the intended gateway.** The ambient Slack judge's
-  model call does not yet use the ModelGateway, and the OpenCode adapter currently
-  supplies its provider key to the supervised sidecar.
+  model call does not yet use the ModelGateway.
 - **Some governance and data-loss controls are absent.** Standing-instruction edits
   are not uniformly bounded by an org floor or human approval, governance changes are
   not uniformly versioned or revertible, provider-side token revocation and an org

@@ -16,6 +16,8 @@ function svc(
     resolve?: () => Promise<DeployEndpoint | null>;
     setAlwaysOn?: DeployProvider["setAlwaysOn"];
     apply?: DeployProvider["apply"];
+    rotationDue?: DeployProvider["rotationDue"];
+    park?: DeployProvider["park"];
   } = {},
 ) {
   const deployStore = createDeployStore();
@@ -30,6 +32,8 @@ function svc(
     },
     destroy: async () => {},
     ...(opts.setAlwaysOn ? { setAlwaysOn: opts.setAlwaysOn } : {}),
+    ...(opts.rotationDue ? { rotationDue: opts.rotationDue } : {}),
+    ...(opts.park ? { park: opts.park } : {}),
     ...(opts.resolve
       ? {
           resolveEndpoint: async () => {
@@ -189,7 +193,7 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
   assert.equal((await deployStore.get(d.id))!.status, "running");
 });
 
-test("keepAlwaysOnWarm re-ensures a live endpoint only for running always-on deployments", async () => {
+test("maintainDeployments re-ensures a live endpoint only for running always-on deployments", async () => {
   const ctx = svc({ resolve: async () => ({ host: "127.0.0.1", port: 5001 }) });
   const { deploy } = ctx;
   const cold = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
@@ -197,13 +201,13 @@ test("keepAlwaysOnWarm re-ensures a live endpoint only for running always-on dep
   await deploy.setDeploymentAlwaysOn(warm.id, true);
   const resolvesBefore = ctx.resolves;
 
-  const warmed = await deploy.keepAlwaysOnWarm();
+  const warmed = await deploy.maintainDeployments();
   assert.equal(warmed, 1);
   assert.equal(ctx.resolves, resolvesBefore + 1);
   assert.ok(cold.id !== warm.id);
 });
 
-test("keepAlwaysOnWarm skips a deployment whose flag was turned off after the list snapshot", async () => {
+test("maintainDeployments skips a deployment whose flag was turned off after the list snapshot", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
@@ -215,22 +219,45 @@ test("keepAlwaysOnWarm skips a deployment whose flag was turned off after the li
     return snapshot;
   };
   const appliesBefore = ctx.applies;
-  const warmed = await deploy.keepAlwaysOnWarm();
+  const warmed = await deploy.maintainDeployments();
   assert.equal(warmed, 0);
   assert.equal(ctx.applies, appliesBefore);
 });
 
-test("keepAlwaysOnWarm relaunches when the platform has torn the app down", async () => {
+test("maintainDeployments relaunches when the platform has torn the app down", async () => {
   const ctx = svc({ resolve: async () => null });
   const { deploy, deployStore } = ctx;
   const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
   await deploy.setDeploymentAlwaysOn(d.id, true);
   const appliesBefore = ctx.applies;
 
-  const warmed = await deploy.keepAlwaysOnWarm();
+  const warmed = await deploy.maintainDeployments();
   assert.equal(warmed, 1);
   assert.ok(ctx.applies > appliesBefore, "expected a re-apply when no live endpoint exists");
   assert.equal((await deployStore.get(d.id))!.status, "running");
+});
+
+test("maintainDeployments replaces a due app's machine in the background and parks the replacement", async () => {
+  const due = new Set<string>();
+  const parked: string[] = [];
+  const ctx = svc({
+    rotationDue: async (d) => due.has(d.id),
+    park: async (d) => {
+      parked.push(d.id);
+      due.delete(d.id);
+    },
+  });
+  const { deploy, deployStore } = ctx;
+  const stale = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+  await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
+  due.add(stale.id);
+  const appliesBefore = ctx.applies;
+
+  const maintained = await deploy.maintainDeployments();
+  assert.equal(maintained, 1, "only the due app is rotated");
+  assert.equal(ctx.applies, appliesBefore + 1);
+  assert.equal((await deployStore.get(stale.id))!.status, "running");
+  assert.deepEqual(parked, [stale.id], "the replacement is suspended so the next visit is a fast resume");
 });
 
 test("always-on reaches the provider before persisting and retains the flag on failure", async () => {

@@ -30,8 +30,9 @@
  */
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
+import { withoutWire } from "./context-compaction.ts";
 
-type GoalStatus = "active" | "paused" | "complete";
+type GoalStatus = "active" | "paused" | "complete" | "cancelled";
 
 export interface GoalRecord {
   objective: string;
@@ -48,6 +49,7 @@ export interface GoalRecord {
   /** When the user last resumed the goal; time before it (while paused) never counts. */
   activeSince?: number;
   completionNote?: string;
+  cancelNote?: string;
   /** The governor's last verdict; a pause is only honored right after a step back. */
   governor?: GovernorVerdict;
   /** Why the governor paused the goal: the question waiting on the user. */
@@ -148,7 +150,7 @@ export function goalContinuationPrompt(goal: GoalRecord, meter: GrindMeter): str
     `- Derive the concrete requirements from the objective; verify each against authoritative current state (files, command output, test results), not memory or intent.`,
     `- Do not redefine success around a smaller, easier, or merely test-passing subset. A narrow check never supports a broad claim.`,
     `- Uncertain or indirect evidence means NOT done: gather stronger evidence or keep working.`,
-    `There is no other way out: you cannot pause, block or abandon this goal, and going quiet does not end it — only the user can stop it. If you feel stuck, that is the signal to change approach: re-read the objective, question your assumptions, try a different method or tool, or break the problem down differently. An independent governor reviews your recent work periodically and decides whether a blocker genuinely needs the user. Keep working.`,
+    `There is no other way out: you cannot pause, block or abandon this goal, and going quiet does not end it — only the user can stop or cancel it. If you feel stuck, that is the signal to change approach: re-read the objective, question your assumptions, try a different method or tool, or break the problem down differently. An independent governor reviews your recent work periodically and decides whether a blocker genuinely needs the user. Keep working.`,
     `If the objective is verifiably achieved, request completion with goal action update "complete" and a note carrying the concrete evidence; a fresh verifier decides from that note alone. Otherwise go deeper on the least-examined requirement now.`,
   ]
     .filter(Boolean)
@@ -206,7 +208,8 @@ export function goalPausedNote(goal: GoalRecord): string {
     `[goal] This session has a PAUSED goal (paused when a turn was stopped or by request):\n` +
     `<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
     `Do not pursue it and do not treat it as enforced. If the user's message explicitly asks to resume it, ` +
-    `call goal action update with status "resume"; never resume it on your own initiative.`
+    `call goal action update with status "resume"; if it explicitly asks to cancel, drop or replace it, call goal action update with status "cancel". ` +
+    `Never do either on your own initiative.`
   );
 }
 
@@ -216,7 +219,7 @@ export function goalSteeringNote(goal: GoalRecord): string {
     `[goal] This session has an active goal registered earlier (status: active` +
     (goal.capTokens ? `, tokens ${goal.tokensUsed}/${goal.capTokens}` : "") +
     `):\n<objective>\n${escapeTags(goal.objective)}\n</objective>\n` +
-    `Unless this message changes or drops the goal, weigh it in everything you do this turn; use goal action get / goal action update to inspect or close it. Only the user stopping it, or goal action update "complete" once it is achieved, ends it.`
+    `Unless this message changes or drops the goal, weigh it in everything you do this turn; use goal action get / goal action update to inspect or close it. Only the user stopping or cancelling it, or goal action update "complete" once it is achieved, ends it.`
   );
 }
 
@@ -250,7 +253,7 @@ export function goalWorkFromEntries(entries: ReadonlyArray<{ type: string; paylo
     if (e.type === "user" || e.type === "assistant" || e.type === "text") {
       if (typeof payload.text === "string") lines.push(`${e.type}: ${payload.text}`);
     } else if (e.type === "tool_call" || e.type === "tool_result") {
-      lines.push(`${e.type}: ${JSON.stringify(e.payload ?? {})}`);
+      lines.push(`${e.type}: ${JSON.stringify(withoutWire(e.payload))}`);
     }
   }
   return goalWorkDigest(lines);
@@ -325,61 +328,28 @@ export function applyGovernorVerdict(goal: GoalRecord, verdict: GovernorVerdict,
   return effective;
 }
 
-export function reviveGoalRecord(goal: GoalRecord): GoalRecord {
-  const floor = sanitizeFloor(goal.floor);
-  const capTokens = positiveInteger(goal.capTokens);
-  const activeMs = finitePositive(goal.activeMs);
-  const activeSince = finitePositive(goal.activeSince);
-  const {
-    floor: _floor,
-    capTokens: _capTokens,
-    activeMs: _activeMs,
-    activeSince: _activeSince,
-    verifierFeedback: _legacy,
-    ...rest
-  } = goal as GoalRecord & { verifierFeedback?: string };
-  return {
-    ...rest,
-    objective: String(goal.objective ?? ""),
-    tokensUsed: Math.floor(finitePositive(goal.tokensUsed) ?? 0),
-    ...(activeMs ? { activeMs } : {}),
-    ...(activeSince ? { activeSince } : {}),
-    ...(capTokens ? { capTokens } : {}),
-    ...(floor ? { floor } : {}),
-  };
+export function goalIsOpen(goal: GoalRecord | null | undefined): goal is GoalRecord {
+  return goal?.status === "active" || goal?.status === "paused";
 }
 
-/**
- * Recover the session's open goal from persisted history, newest snapshot
- * first. Only an open (active/paused) goal survives turns: a terminal
- * snapshot (complete, or a legacy blocked/stopped record) is the goal's final record, and reviving it
- * would re-emit an end-of-turn snapshot — and a fresh "goal complete"
- * notice — on every later turn.
- */
-export function rehydrateOpenGoal(history: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
-  const goal = latestGoalRecord(history);
-  return goal && (goal.status === "active" || goal.status === "paused") ? reviveGoalRecord(goal) : null;
+export function openGoal(goal: GoalRecord | null | undefined): GoalRecord | null {
+  return goalIsOpen(goal) ? goal : null;
 }
 
-export function latestGoalEntry<T extends { type: string; payload?: unknown }>(entries: ReadonlyArray<T>): T | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    if (e.type !== "system" && e.type !== "tool_result") continue;
-    const payload = e.payload as { kind?: string; tool?: string; goal?: GoalRecord | null } | null;
-    const carrier = e.type === "system" ? payload?.kind === "goal" : payload?.tool === "goal";
-    if (carrier && payload?.goal) return e;
-  }
-  return null;
+export function cancelGoal(goal: GoalRecord, note: string, now = Date.now()): void {
+  goal.status = "cancelled";
+  goal.updatedAt = now;
+  goal.cancelNote = note;
+  delete goal.pauseReason;
+  delete goal.governor;
 }
 
-export function latestGoalRecord(entries: ReadonlyArray<{ type: string; payload?: unknown }>): GoalRecord | null {
-  const entry = latestGoalEntry(entries);
-  if (!entry) return null;
-  return reviveGoalRecord((entry.payload as { goal: GoalRecord }).goal);
+export function goalCancelledPayload(goal: GoalRecord, cancelledBy: string) {
+  return { kind: "goal_cancelled", objective: goal.objective, cancelledBy };
 }
 
-export function goalSnapshotPayload(goal: GoalRecord): { kind: "goal"; goal: GoalRecord } {
-  return { kind: "goal", goal: structuredClone(goal) };
+export function goalCancelledNote(objective: string): string {
+  return `[goal] The user cancelled this goal; it is no longer enforced and must not be pursued:\n<objective>\n${escapeTags(objective)}\n</objective>`;
 }
 
 export function goalReport(goal: GoalRecord): string {

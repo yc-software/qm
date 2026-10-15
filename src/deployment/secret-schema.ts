@@ -3,7 +3,6 @@ import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
 type SecretGate =
   | "production"
   | "background-work-control"
-  | "codex"
   | "postgres"
   | "sprites"
   | "smolmachines"
@@ -38,7 +37,7 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
-  { name: "OPENAI_API_KEY", requiredWhen: ["codex", "model-openai"] },
+  { name: "OPENAI_API_KEY", requiredWhen: ["model-openai"] },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   { name: "DATABASE_URL", requiredWhen: "postgres" },
@@ -66,7 +65,6 @@ function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolea
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
-  codex: (env) => env.HARNESS?.trim() === "codex" && !env.CODEX_AUTH_FILE?.trim() && !env.CODEX_AUTH_CREDENTIAL?.trim(),
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
   sprites: (env) => sandboxBackendSelected(env, "sprites"),
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
@@ -86,8 +84,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "email-auth": (env) => env.AUTH_ALLOWED_EMAILS !== undefined,
   "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
   "model-openai": (env) =>
-    env.MODEL_PROVIDER?.trim() === "openai" &&
-    !(env.HARNESS?.trim() === "codex" && (env.CODEX_AUTH_FILE?.trim() || env.CODEX_AUTH_CREDENTIAL?.trim())),
+    env.MODEL_PROVIDER?.trim() === "openai" && !(env.CODEX_AUTH_FILE?.trim() || env.CODEX_AUTH_CREDENTIAL?.trim()),
   "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
 };
 

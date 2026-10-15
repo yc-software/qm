@@ -34,7 +34,7 @@ export function createDeploymentMethods(
   | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
   | "setDeploymentPublic"
-  | "keepAlwaysOnWarm"
+  | "maintainDeployments"
   | "reachDeployment"
   | "deploymentLogsFor"
   | "deploymentGitRepoPath"
@@ -160,8 +160,8 @@ export function createDeploymentMethods(
     setDeploymentPublic(idOrName, isPublic, actor) {
       return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
     },
-    keepAlwaysOnWarm() {
-      return deps.deploy.keepAlwaysOnWarm();
+    maintainDeployments() {
+      return deps.deploy.maintainDeployments();
     },
     async reachDeployment(id, principalId, opts): Promise<Reach> {
       if (opts?.bypassAcl) return deps.deploy.reachDeployment(id, principalId, opts);

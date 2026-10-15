@@ -33,12 +33,9 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   });
   const crons = createCronStore();
   const cron = await crons.create({
-    owner: "U_JOB_OWNER",
-    createdBy: "U_JOB_OWNER",
+    owner: `system:${scope}`,
+    createdBy: `system:${scope}`,
     ownerScopeId: scope,
-    runAs: "scopeFloor",
-    members: [{ id: "U_JOB_OWNER", type: "internal" }],
-    unattendedGrants: ["private-owner-grant"],
     schedule: { everyMs: 60_000 },
     action: "read the dummy account",
     destination: {
@@ -64,7 +61,6 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
       return request.surface === "cron" ? { status: "silent" } : { status: "ok", reply: "dummy result" };
     },
   };
-  await deps.identity.deactivate(cron.owner);
   const threadRef = `cron:${cron.id}:fire:first`;
   await runTrigger(deps, {
     ...cron,
@@ -75,7 +71,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     recipientConsentRequired: true,
   });
   assert.equal(requests.length, 1);
-  assert.equal(requests[0]!.actor.externalId, "U_REQUESTER");
+  assert.equal(requests[0]!.actor.externalId, `system:${scope}`);
   const { ask } = await k.createAsk({
     credentialId: credential.id,
     requesterId: requests[0]!.actor.externalId,
@@ -96,7 +92,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
-  test(`scopeFloor approval resumes another person's credential in ${scope} after the job owner departs`, async () => {
+  test(`scope approval resumes another person's credential for a conversation-owned job in ${scope}`, async () => {
     const f = await fixture(scope);
 
     const outcome = await fireAskResolution(f.deps, f.ask);
@@ -105,7 +101,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(outcome.status, "ok");
     assert.equal(f.requests.length, 1);
     const request = f.requests[0]!;
-    assert.equal(request.actor.externalId, "U_REQUESTER");
+    assert.equal(request.actor.externalId, `system:${scope}`);
     assert.equal(request.triggered, true);
     assert.equal(request.conversation.threadRef, f.ask.requesterThreadRef);
     assert.equal(request.conversation.kind, scope.startsWith("channel:") ? "channel" : "group");
@@ -134,46 +130,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
   });
 }
 
-test("scopeFloor approval reselects the current actor when the original requester also departed", async () => {
-  const f = await fixture();
-  f.state.members = [{ id: "U_NEW_MEMBER", type: "internal" }];
-  await f.deps.identity.deactivate("U_REQUESTER");
-
-  await fireAskResolution(f.deps, f.ask);
-
-  assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0]!.actor.externalId, "U_NEW_MEMBER");
-});
-
-test("scopeFloor approval selects the stored job owner again when they return", async () => {
-  const f = await fixture();
-  await f.deps.identity.reactivate(f.cron.owner);
-  f.state.members = [
-    { id: "U_REQUESTER", type: "internal" },
-    { id: f.cron.owner, type: "internal" },
-  ];
-
-  await fireAskResolution(f.deps, f.ask);
-
-  assert.equal(f.requests[0]!.actor.externalId, f.cron.owner);
-});
-
-for (const members of [[], [{ id: "U_JOB_OWNER", type: "internal" as const }]]) {
-  test(`scopeFloor approval fails closed with no active internal member (${members.length} stale members)`, async () => {
-    const f = await fixture();
-    f.state.members = members;
-
-    const outcome = await fireAskResolution(f.deps, f.ask);
-
-    assert.equal(outcome.authzFailed, true);
-    assert.equal(outcome.ran, false);
-    assert.equal(f.requests.length, 0);
-    assert.equal((await f.deliveries.pending("principal")).length, 0);
-    assert.equal((await f.k.getGrant(f.grant.id))?.status, "active");
-  });
-}
-
-test("substituted scopeFloor requester still needs recipient consent for delivery to themselves", async () => {
+test("a scope approval still needs recipient consent for delivery", async () => {
   const f = await fixture();
   await f.crons.setRecipientConsent(f.cron.id, { recipientId: "U_REQUESTER", status: "declined" });
 
@@ -181,24 +138,8 @@ test("substituted scopeFloor requester still needs recipient consent for deliver
 
   assert.equal(outcome.status, "refused");
   assert.equal(f.requests.length, 1);
-  const pending = await f.deliveries.pending("principal");
-  assert.equal(pending.length, 1);
-  assert.equal(pending[0]!.destination.target, "U_JOB_OWNER");
-  assert.ok(pending.every((delivery) => !delivery.idempotencyKey?.endsWith(":fallback")));
+  assert.equal((await f.deliveries.pending("principal")).length, 0, "nobody's DM gets a conversation-owned notice");
 });
-
-for (const runAs of ["owner", "scopeShared"] as const) {
-  test(`approval cannot substitute a requester after the cron changes to ${runAs}`, async () => {
-    const f = await fixture();
-    await f.crons.update(f.cron.id, { runAs });
-
-    const outcome = await fireAskResolution(f.deps, f.ask);
-
-    assert.equal(outcome.authzFailed, true);
-    assert.equal(f.requests.length, 0);
-    assert.equal((await f.deliveries.pending("principal")).length, 0);
-  });
-}
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
   test(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {

@@ -159,7 +159,8 @@ export function createDirectory(deps: {
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
-        byId.set(u.id, { actor, ...(timezone ? { timezone } : {}) });
+        const avatarUrl = u.profile?.image_72;
+        byId.set(u.id, { actor, ...(timezone ? { timezone } : {}), ...(avatarUrl ? { avatarUrl } : {}) });
         if (!u.deleted) {
           indexName(u.name, u.id);
           indexName(u.profile?.display_name, u.id);
@@ -461,6 +462,7 @@ export function createDirectory(deps: {
           displayName: a.displayName ?? a.externalId,
           type: "internal" as const,
           ...(slackId && slackId !== a.externalId ? { slackId } : {}),
+          ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
         };
       });
     const fetched = await fetchChannels(client, invalidations, targetChannelIds);

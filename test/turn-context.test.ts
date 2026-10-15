@@ -12,6 +12,7 @@ import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import type { Resolution, Session } from "../src/types.ts";
+import { renderRecall } from "../src/memory/cross-scope.ts";
 
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
@@ -29,7 +30,7 @@ async function fixture() {
     sharingPosture: "open",
     grantedHandles: [],
   } as unknown as Resolution;
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const input: Parameters<typeof resolveTurnContext>[0] = {
     actor: { id: "alice", type: "internal" },
     audience: [{ id: "alice", type: "internal" }],
@@ -43,14 +44,22 @@ async function fixture() {
     resolution,
     memoryPolicy: { recall: "visible", capture: "writable" },
     useMemory: true,
-    workspace,
     memory,
     files,
     auditLog,
   };
-  await memory.replace("personal:alice", "# Memory\n\n- LOCAL_FACT");
-  await memory.replace("channel:eng", `# Memory\n\n- SHARED_FACT\n- ${"long fact ".repeat(1500)}\n- LAST_FACT`);
-  await workspace.write("channel:eng", "plan.txt", "PLAN_CONTENT");
+  await memory.capture("personal:alice", ["LOCAL_FACT"], Date.now());
+  await memory.capture("channel:eng", ["SHARED_FACT", "long fact ".repeat(1500), "LAST_FACT"], Date.now());
+  await files.put({
+    id: "1".repeat(32),
+    ownerScopeId: "channel:eng",
+    createdBy: "alice",
+    name: "plan.txt",
+    path: "plan.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("PLAN_CONTENT"),
+    direction: "in",
+  });
   return {
     input,
     acl,
@@ -63,14 +72,27 @@ async function fixture() {
   };
 }
 
-test("one context loads full source-labelled notebooks and shares authority with search and files", async () => {
+test("one context recalls capped, source-labelled memory and shares authority with reads, search, and files", async () => {
   const { input, auditLog } = await fixture();
   const context = await resolveTurnContext(input);
-  const recalled = (await context.memorySnapshot()).recalled;
+  const recalled = renderRecall(await context.recallMemory(""), new Map());
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
-  assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT[\s\S]*LAST_FACT/);
-  assert.ok(recalled.length > 12000, "no relevance or per-notebook recall truncation");
-  assert.deepEqual(await context.searchMemory("LAST_FACT"), ["[channel:eng] LAST_FACT"]);
+  assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
+  assert.ok(recalled.length <= 6000 && !recalled.includes("long fact"), "prompt memory stays capped");
+  assert.equal((await context.memorySnapshot()).held.get("channel:eng")!.size, 3);
+  const full = await context.readMemory("channel:eng");
+  assert.match(full ?? "", /SHARED_FACT[\s\S]*LAST_FACT/);
+  assert.ok(full!.length > 12000, "explicit reads still return the whole notebook");
+  assert.match(
+    (await context.searchMemory("SHARED_FACT", 20, "channel:eng"))!.join(),
+    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) SHARED_FACT$/,
+  );
+  assert.equal(await context.readMemory("personal:other"), null);
+  assert.equal(await context.searchMemory("SHARED_FACT", 20, "personal:other"), null);
+  assert.match(
+    (await context.searchMemory("LAST_FACT"))!.join(),
+    /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
+  );
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
   assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
   assert.equal(context.memoryAccess?.write, "personal:alice");
@@ -81,7 +103,7 @@ test("one context loads full source-labelled notebooks and shares authority with
   assert.equal(await context.readFile("shared/open-channel-other/plan.txt"), null);
   const events = await auditLog.events();
   assert.ok(events.some((e) => e.resource === "memory" && e.detail?.includes("channel:eng")));
-  assert.ok(events.some((e) => e.resource === "plan.txt" && e.detail?.includes("channel:eng")));
+  assert.ok(events.some((e) => e.resource === "1".repeat(32) && e.detail?.includes("channel:eng")));
 });
 
 for (const mode of [
@@ -105,8 +127,10 @@ for (const mode of [
     if (mode === "memory-writable") input.memoryPolicy.recall = "writable";
     if (mode === "memory-skip") input.useMemory = false;
     const context = await resolveTurnContext(input);
-    assert.doesNotMatch((await context.memorySnapshot()).recalled, /SHARED_FACT|LAST_FACT/);
+    assert.doesNotMatch(renderRecall(await context.recallMemory(""), new Map()), /SHARED_FACT|LAST_FACT/);
     assert.deepEqual((await context.searchMemory("LAST_FACT")) ?? [], []);
+    assert.equal(await context.readMemory("channel:eng"), null);
+    assert.equal(await context.searchMemory("LAST_FACT", 20, "channel:eng"), null);
     if (!mode.startsWith("memory-")) {
       assert.deepEqual(context.listFiles(), []);
       assert.equal(await context.readFile("shared/open-channel-eng/plan.txt"), null);
@@ -116,10 +140,11 @@ for (const mode of [
 
 test("fresh turn re-resolves membership after an earlier successful read", async () => {
   const { input, removeMember } = await fixture();
-  assert.match((await (await resolveTurnContext(input)).memorySnapshot()).recalled, /SHARED_FACT/);
+  assert.match(renderRecall(await (await resolveTurnContext(input)).recallMemory(""), new Map()), /LAST_FACT/);
   removeMember();
   const next = await resolveTurnContext(input);
-  assert.doesNotMatch((await next.memorySnapshot()).recalled, /SHARED_FACT/);
+  assert.doesNotMatch(renderRecall(await next.recallMemory(""), new Map()), /LAST_FACT/);
+  assert.equal(await next.readMemory("channel:eng"), null);
   assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
 });
 
@@ -157,8 +182,8 @@ test("skill discovery uses the same included scopes and audience-filtered explic
 test("ambiguous file aliases fail closed in the shared reader", async () => {
   const { input } = await fixture();
   input.resolution.grantedHandles = [
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "one.txt", permission: "read" },
-    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", ownerPath: "two.txt", permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "1".repeat(32), permission: "read" },
+    { handlePath: "shared/plan.txt", ownerScopeId: "personal:alice", fileId: "2".repeat(32), permission: "read" },
   ];
   const result = await (await resolveTurnContext(input)).readFile("shared/plan.txt");
   assert.ok(result && "error" in result);

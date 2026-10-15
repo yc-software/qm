@@ -1,4 +1,4 @@
-import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
+import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
@@ -84,7 +84,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   if (Array.isArray(b.members)) {
     const members = b.members
       .filter(
-        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string } =>
+        (m): m is DirectoryMember =>
           isObj(m) && typeof m.principalId === "string" && typeof m.displayName === "string" && isPrincipalType(m.type),
       )
       .map((m) => ({
@@ -92,6 +92,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         displayName: m.displayName,
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
+        ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;

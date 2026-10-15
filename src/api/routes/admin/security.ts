@@ -29,27 +29,3 @@ export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
   });
   sendJson(ctx.res, 200, { flags });
 }
-
-export async function releaseSecurityTaint(ctx: ApiCtx): Promise<void> {
-  const scope = orgScope();
-  const actor = await authorizeAdmin(ctx, scope);
-  if (!actor) return;
-  const sessionId = (ctx.body as { sessionId?: unknown } | null)?.sessionId;
-  if (typeof sessionId !== "string" || !sessionId.trim()) {
-    sendJson(ctx.res, 400, { error: "bad_request", message: "sessionId required" });
-    return;
-  }
-  const released = (await ctx.deps.sessions?.clearSecurityTaint(sessionId)) ?? false;
-  if (!released) {
-    sendJson(ctx.res, 404, { error: "not_found" });
-    return;
-  }
-  audit(ctx.deps, {
-    principalId: actor.id,
-    action: "security_posture.release",
-    resource: sessionId,
-    scopeLabel: scope,
-    status: "ok",
-  });
-  sendJson(ctx.res, 200, { released: true, sessionId });
-}

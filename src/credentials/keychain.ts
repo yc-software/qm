@@ -1665,59 +1665,63 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
 }
 
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
-  const groups = new Map<string, Map<string, string>>();
-  const put = (ownerId: string, id: string, text: string): void => {
+  const groups = new Map<string, Map<string, { text: string; note: string; purpose?: string }>>();
+  const put = (ownerId: string, id: string, text: string, note = "", purpose?: string): void => {
     const owner = personKey(ownerId);
     let rows = groups.get(owner);
     if (!rows) groups.set(owner, (rows = new Map()));
-    rows.set(id, text);
+    rows.set(id, { text, note, ...(purpose ? { purpose } : {}) });
   };
   const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
   const openSpeaker = input.openSpeakerKeychain === true && input.conversationKind !== "dm";
   const isOwn = (ownerId: string): boolean => (ownPersonal || openSpeaker) && samePerson(ownerId, input.actorId);
   const grants = new Map(input.scopeGrants.map(({ grant, credential }) => [credential.id, grant]));
   const execution = input.execution ?? [];
-  const access = (ownerId: string, id: string): string => {
-    if (grants.has(id)) return grantNote(id);
-    if (isOwn(ownerId))
-      return openSpeaker
-        ? "own; Open live turn only, isolated owner execution"
-        : "own; no grant needed (including background turns)";
-    return grantNote(id);
-  };
-  const grantNote = (id: string): string => {
+  const scopeCounts = new Map<string, number>();
+  for (const entry of execution) scopeCounts.set(entry.scope, (scopeCounts.get(entry.scope) ?? 0) + 1);
+  const common = [...scopeCounts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0]?.[0];
+  const handle = (entry: (typeof execution)[number]): string =>
+    `\`${entry.handle}\`${entry.scope === common ? "" : ` (execute scope \`${entry.scope}\`)`}`;
+  const access = (ownerId: string, id: string): [string, string?] => {
     const grant = grants.get(id);
-    if (!grant) return "no grant for this conversation";
-    return `${grant.mode === "standing" ? "STANDING" : "one-time"} grant \`${grant.id}\` (purpose: "${grant.purpose}")${
-      grant.expiresAt === undefined ? "" : `; expires at ${new Date(grant.expiresAt).toISOString()}`
-    }`;
+    if (grant)
+      return [
+        `${grant.mode === "standing" ? "STANDING" : "one-time"} grant \`${grant.id}\`${
+          grant.expiresAt === undefined ? "" : `, expires at ${new Date(grant.expiresAt).toISOString()}`
+        }`,
+        grant.purpose,
+      ];
+    if (!isOwn(ownerId)) return ["no grant for this conversation"];
+    return [
+      openSpeaker
+        ? "own; Open live turn only, isolated owner execution"
+        : "own; no grant needed (including background turns)",
+    ];
   };
+  const handles = (credentialId: string): string =>
+    execution
+      .filter((entry) => entry.credentialId === credentialId)
+      .map(handle)
+      .sort()
+      .join(", ") || `credential id \`${credentialId}\``;
   const entries = new Map(input.scopeGrants.map(({ credential }) => [credential.id, credential]));
   for (const member of input.members)
     for (const credential of input.entriesByOwner.get(member.id) ?? []) entries.set(credential.id, credential);
-  for (const credential of entries.values()) {
-    const handles = execution
-      .filter((entry) => entry.credentialId === credential.id)
-      .map((entry) => `\`${entry.handle}\` (execute scope \`${entry.scope}\`)`)
-      .sort();
+  for (const credential of entries.values())
     put(
       credential.ownerId,
       credential.id,
-      `- ${handles.join(", ") || `credential id \`${credential.id}\``} — ${credentialDescription(credential, now, isOwn(credential.ownerId))}; ${access(credential.ownerId, credential.id)}`,
+      `- ${handles(credential.id)} — ${credentialDescription(credential, now, isOwn(credential.ownerId))}`,
+      ...access(credential.ownerId, credential.id),
     );
-  }
   for (const member of input.members) {
-    for (const connector of input.connectorsByOwner?.get(member.id) ?? []) {
-      const handles = execution
-        .filter((entry) => entry.credentialId === connector.credentialId)
-        .map((entry) => `\`${entry.handle}\` (execute scope \`${entry.scope}\`)`)
-        .sort();
+    for (const connector of input.connectorsByOwner?.get(member.id) ?? [])
       put(
         member.id,
         connector.credentialId,
-        `- ${handles.join(", ") || `credential id \`${connector.credentialId}\``} — ${connectorDescription(connector)}; ${access(member.id, connector.credentialId)}`,
+        `- ${handles(connector.credentialId)} — ${connectorDescription(connector)}`,
+        ...access(member.id, connector.credentialId),
       );
-    }
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
     for (const service of input.detectedByOwner?.get(member.id) ?? [])
       if (!registered.has(service.toLowerCase()))
@@ -1725,18 +1729,27 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   }
   for (const entry of execution) {
     if (entry.credentialId && groups.get(personKey(entry.ownerId))?.has(entry.credentialId)) continue;
-    put(entry.ownerId, entry.handle, `- \`${entry.handle}\` — ${entry.description}; execute scope \`${entry.scope}\``);
+    put(entry.ownerId, entry.handle, `- ${handle(entry)} — ${entry.description}`);
   }
   const lines = [
     "## Credentials",
-    "Execution handles are shown in backticks; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.",
+    `Execution handles are shown in backticks${common ? ` and run in execute scope \`${common}\` unless marked` : ""}; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.`,
   ];
-  for (const [ownerId, rows] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [ownerId, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     const member = input.members.find((member) => personKey(member.id) === ownerId);
+    const rows = [...group.values()].sort((a, b) => a.text.localeCompare(b.text));
+    const notes = new Set(rows.map((row) => row.note));
+    const shared = notes.size === 1 && rows.every((row) => !row.purpose) ? rows[0]!.note : "";
+    const purposes = new Set<string>();
     lines.push(
       "",
-      `### ${member?.displayName ? `${member.displayName} (${ownerId})` : ownerId}`,
-      ...[...rows.values()].sort(),
+      `### ${member?.displayName ? `${member.displayName} (${ownerId})` : ownerId}${shared ? ` — ${shared}` : ""}`,
+      ...rows.map((row) => {
+        const said = row.purpose !== undefined && purposes.has(row.purpose);
+        if (row.purpose) purposes.add(row.purpose);
+        const purpose = row.purpose ? ` (purpose: ${said ? "as above" : `"${row.purpose}"`})` : "";
+        return `${row.text}${row.note && !shared ? `; ${row.note}` : ""}${purpose}`;
+      }),
     );
   }
   if (!groups.size) lines.push("", "No credentials available.");

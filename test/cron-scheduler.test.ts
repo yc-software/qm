@@ -53,8 +53,6 @@ function harness(
   return { crons, deliveries, calls, scheduler, identity };
 }
 
-const member = (id: string) => ({ id, type: "internal" as const });
-
 test("scheduler threads stored unattended grants into owner-mode turns", async () => {
   const { crons, calls, scheduler } = harness();
   const cron = await crons.create({
@@ -197,8 +195,6 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
     action: "remind Eve to confirm",
     owner: "eve@acme.com",
     createdBy: "eve@acme.com",
-    runAs: "scopeShared",
-    members: [member("eve@acme.com"), member("U5")],
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
   });
@@ -218,7 +214,6 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
     action: "nudge me",
     owner: "U1",
     createdBy: "U1",
-    members: [member("U1")],
     ownerScopeId: scopeId("personal", "U1"),
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
   });
@@ -429,55 +424,42 @@ test("only the leader instance fires due crons on tick (non-leader skips)", asyn
   assert.equal(calls.length, 1, "the leader fires the due cron");
 });
 
-test("a scopeFloor cron fires with the member snapshot as the turn audience (floor execution)", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [member("U1"), member("U2"), member("U3")],
-  });
-  await runNowSettled(scheduler, cron.id);
-  const aud = (calls[0]?.conversation.audience ?? []).map((a) => a.externalId).sort();
-  assert.deepEqual(aud, ["U1", "U2", "U3"]);
-});
-
-test("a scopeFloor cron survives the creator leaving — runs as a remaining internal member", async () => {
+test("a conversation-owned cron keeps running as the conversation, whoever created it", async () => {
   const { crons, calls, scheduler, identity } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
+    owner: "system:channel:C1",
+    createdBy: "system:channel:C1",
     ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [member("U1"), member("U2")],
   });
   await identity.deactivate("U1");
   await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.actor.externalId, "U2");
+  assert.equal(calls[0]?.actor.externalId, "system:channel:C1");
   assert.equal((await crons.get(cron.id))?.enabled, true);
 });
 
-test("a scopeFloor cron with no internal members left fails closed (disabled, nothing runs)", async () => {
-  const { crons, calls, scheduler, identity } = harness();
+test("a person-owned cron is deleted once its owner has left the conversation", async () => {
+  const directory = createDirectoryStore();
+  await directory.replace([
+    { principalId: "U1", displayName: "Ann", type: "internal" },
+    { principalId: "U2", displayName: "Bo", type: "internal" },
+  ]);
+  await directory.replaceChannels(
+    [{ channelId: "C1", name: "eng", isPrivate: true }],
+    [{ channelId: "C1", principalId: "U2" }],
+  );
+  const { crons, calls, scheduler } = harness("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
-    action: "post the standup",
+    action: "my digest",
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [member("U1")],
   });
-  await identity.deactivate("U1");
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
-  assert.equal((await crons.get(cron.id))?.enabled, false);
+  assert.equal(await crons.get(cron.id), null);
 });
 
 test("an owner cron still disables when its owner leaves (unchanged)", async () => {
@@ -908,38 +890,6 @@ test("a calendar cron uses the scheduled instant for a missed tick idempotency k
   const stored = await crons.get(cron.id);
   assert.equal(stored?.lastFiredAt, firedAt);
   assert.equal(stored?.nextFireAt, Date.parse("2026-06-19T16:00:00.000Z"));
-});
-
-test("a scopeFloor fallback actor is never a non-internal (Slack-Connect) member", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [{ id: "X1", type: "guest" }, member("U2")],
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.actor.externalId, "U2", "the Slack-Connect member must not be picked as the actor");
-});
-
-test("a scopeFloor cron whose only members are non-internal fails closed", async () => {
-  const { crons, calls, scheduler } = harness();
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "post the standup",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("channel", "C1"),
-    runAs: "scopeFloor",
-    members: [{ id: "X1", type: "guest" }],
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 0);
-  assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
 test("a failing cron fire is logged, not swallowed", async (t) => {
@@ -1896,39 +1846,6 @@ test("manual cron preparation and detached fire retain admission across pause", 
   assert.equal(resumed.started, true);
   if (resumed.started) await resumed.settled;
   await scheduler.stop();
-});
-
-test("scheduler rechecks durable Open authorization on each marked shared fire", async () => {
-  const crons = createCronStore();
-  const calls: TurnRequest[] = [];
-  let open = true;
-  const scheduler = createScheduler({
-    crons,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
-    isOpenScopeMember: async () => open,
-    run: async (request) => {
-      calls.push(request);
-      return { status: "ok", reply: "done" };
-    },
-  });
-  const cron = await crons.create({
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("group", "G1"),
-    runAs: "scopeShared",
-    ownerResourcesRequireOpen: true,
-    members: [member("U1")],
-    action: "digest",
-    schedule: { everyMs: 60_000 },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls[0]?.ownerResourcesRequireOpen, true);
-  open = false;
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal((await crons.get(cron.id))?.enabled, false);
 });
 
 test("scheduled and manual fires use the saved runtime; clearing it restores inherited behavior", async () => {

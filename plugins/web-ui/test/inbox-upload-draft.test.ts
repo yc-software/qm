@@ -85,10 +85,20 @@ test("a submission freezes the edited draft before upload and never retries a co
       state.inboxTestComposer!.state.attachments = [
         { id: "file", type: "document", fileName: "notes.txt", mimeType: "text/plain", size: 1, content: "eA==" },
       ];
+      assert.equal(
+        window.dispatchEvent(new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } })),
+        false,
+        "staged attachments block restart",
+      );
       const saving = inbox.persistDraft(item);
       await until(() => Boolean(releaseEdit));
       host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
       await until(() => Boolean(releaseUpload));
+      assert.equal(
+        window.dispatchEvent(new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } })),
+        false,
+        "in-flight upload blocks restart after clearing composer",
+      );
       releaseEdit!();
       await saving;
       releaseUpload!();

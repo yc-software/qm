@@ -172,27 +172,12 @@ test("runResultDelivery carries the surface's edit checkpoint into the destinati
   assert.equal(d?.destination.editRef, "171.002");
 });
 
-test("runResultDelivery carries a durable terminal task projection", () => {
-  const d = runResultDelivery(run({ deliveryState: { editRef: "171.002" } }), [
-    {
-      id: "task-1",
-      sessionId: "s1",
-      originRunId: "r-1",
-      title: "research",
-      status: "failed",
-      createdAt: 1,
-      updatedAt: 2,
-    },
-  ]);
-  assert.deepEqual(d?.destination.taskList, [{ id: "task-1", title: "research", status: "failed" }]);
-});
-
 test("runResultDelivery links the admin error page when a resolver is wired", () => {
   const failed = run({
     status: "failed",
     result: { status: "failed", sessionId: "b6f3f9e2-0000-4000-8000-000000000001", reason: "boom" },
   });
-  const d = runResultDelivery(failed, [], (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
+  const d = runResultDelivery(failed, (sessionId) => `https://portal.example.com/admin/?session=${sessionId}`);
   assert.equal(
     d?.text,
     "⚠️ I couldn't finish that turn: something went wrong on my end — full error: https://portal.example.com/admin/?session=b6f3f9e2-0000-4000-8000-000000000001",
@@ -387,15 +372,6 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
     message: "I couldn't finish that turn: something went wrong on my end",
     runId: "r-1",
   });
-  const tape = await sessions.getTape(session.id);
-  assert.equal(tape.length, 2);
-  assert.equal(
-    tape.filter((row) => (row.payload as { turnEnd?: boolean }).turnEnd === true).length,
-    1,
-    "exactly one turnEnd checkpoint keeps model coverage intact",
-  );
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
-  assert.equal(await sessions.tapeCoverage(session.id), entries.at(-1)!.seq);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
   assert.equal((await sessions.getEntries(session.id)).length, 1);
@@ -442,7 +418,7 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const { sessions, session } = await failureSessions();
   const { runs } = createMemoryRunStore();
   const deliveries = createDeliveryStore();
-  wireRunResultDeliveries(runs, deliveries, undefined, undefined, sessions);
+  wireRunResultDeliveries(runs, deliveries, undefined, sessions);
 
   const parked = (await runs.enqueue({ sessionId: "slack:D1", request: turn("p", "D1:171.001"), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);

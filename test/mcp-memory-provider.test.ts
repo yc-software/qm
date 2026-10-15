@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import type { McpClient } from "../src/mcp/mcp-client.ts";
+import { recallText } from "./support/recall-text.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
@@ -36,7 +37,10 @@ test("MCP provider passes query, actor, and explicit writes through configured t
       sourceArg: "source",
     },
   });
-  assert.equal(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 }), "result");
+  assert.equal(
+    recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1", maxChars: 2000 })),
+    "result",
+  );
   assert.equal(await memory.capture("org:acme", ["decision"], 10, "u1", { mode: "explicit", actorId: "u1" }), 1);
   assert.deepEqual(calls, [
     { tool: "search_knowledge", args: { query: "launch", acting_user: "u1", namespace: "org:acme", max_chars: 2000 } },
@@ -52,7 +56,7 @@ test("MCP recall is locally bounded and times out", async () => {
   const bounded = createMcpMemoryProvider({
     read: { client: client(calls, "abcdefgh"), tool: "read", timeoutMs: 100 },
   });
-  assert.equal(await bounded.recall("org:acme", { maxChars: 4 }), "abcd");
+  assert.equal(recallText(await bounded.recall("org:acme", { maxChars: 4 })), "abcd");
 
   const hanging: McpClient = {
     base: "http://knowledge.internal",

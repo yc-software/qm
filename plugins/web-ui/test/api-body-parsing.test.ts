@@ -67,8 +67,8 @@ test("an empty body on a strict route is refused, not read as a field-clearing o
   for (const [method, path] of [
     ["POST", "/api/deployments/d1/display-name"],
     ["POST", "/api/deployments/d1/name"],
-    ["POST", "/api/memory/restore"],
-    ["PUT", "/api/memory"],
+    ["PATCH", "/api/memory"],
+    ["DELETE", "/api/memory"],
     ["POST", "/api/sessions/s1"],
     ["POST", "/api/connectors/revoke"],
     ["POST", "/api/keychain/drops"],
@@ -111,17 +111,6 @@ test("a steer forwards a server-built TurnRequest; client-supplied identity fiel
   assert.equal(body.request?.surface, "web");
   assert.equal(body.request?.text, "louder");
   assert.deepEqual(body.request?.conversation, { kind: "dm", threadRef });
-});
-
-test("a steer claiming a thread the user does not own is refused before reaching core", async () => {
-  const before = calls.length;
-  const r = await fetch(`${base}/api/runs/r1/signal`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ kind: "steer", text: "louder", threadRef: "web:bob:stolen" }),
-  });
-  assert.equal(r.status, 403);
-  assert.equal(calls.length, before, "nothing is forwarded to core");
 });
 
 test("ordinary steering without conversation context and abort preserve bare signal forwarding", async () => {

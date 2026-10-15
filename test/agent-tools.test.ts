@@ -5,6 +5,7 @@ import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
+import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
@@ -20,7 +21,11 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async attach(files) {
       return {
         ok: true,
-        files: files.map((name) => ({ name, mimetype: "text/plain", sizeBytes: 1 })),
+        files: files.map((name) => ({
+          name: typeof name === "string" ? name : name.file_id,
+          mimetype: "text/plain",
+          sizeBytes: 1,
+        })),
         staged: files.length,
       };
     },
@@ -39,14 +44,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ? { content: "data", sourceScopeId: "personal:U1" }
         : { content: null, sourceScopeId: null };
     },
-    async write(_path, _data, share) {
-      return {
-        shared: (share ?? []).map((s) => ({
-          scope: s.scope === "org" ? "org:default-org" : s.scope,
-          permission: s.permission ?? "read",
-        })),
-      };
-    },
+    async write() {},
     async publish(input) {
       return {
         id: "dep-1",
@@ -67,10 +65,13 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async memoryRead() {
       return "# Memory\n- (2026-05-31) Owns the billing service\n";
     },
-    async memoryRemember(facts) {
+    async memoryAdd(facts) {
       return facts.length;
     },
-    async memoryRewrite() {
+    async memoryEdit() {
+      return true;
+    },
+    async memoryDelete() {
       return true;
     },
     async history(q) {
@@ -397,7 +398,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   await call(read, { action: "read", path: "a.txt" });
   await call(write, { action: "write", path: "out.txt", data: "xyz" });
-  await call(write, { action: "share", path: "out.txt", scope: "org" });
+  await call(write, { action: "share", id: "file-id", toScope: "org" });
 
   assert.deepEqual(
     emitted.map((e) => `${e.type}:${e.payload.tool}`),
@@ -415,7 +416,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   assert.equal(emitted[1]!.payload.code, 0);
   assert.equal(emitted[3]!.payload.found, true);
   assert.equal(emitted[5]!.payload.bytes, 3);
-  assert.equal(emitted[7]!.payload.shared[0].scope, "org:default-org");
+  assert.equal(emitted[7]!.payload.verb, "share");
   assert.equal(
     emitted.every((e) => e.scopeLabel === "personal:U1"),
     true,
@@ -722,7 +723,73 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   const payload = emitted.find((e) => e.type === "tool_result")!.payload;
   assert.equal(payload.result, seen, "the replay record is exactly what the model saw");
   assert.equal(payload.resultTruncated, true, "the entry is flagged so renderers can surface the loss");
-  assert.ok((payload.stdout as string).length <= 100_000, "persisted payload strings are capped too");
+  assert.equal(payload.stdout, undefined, "raw stdout is not stored beside the result");
+  assert.equal(payload.stderr, undefined, "raw stderr is not stored beside the result");
+});
+
+test("execute stores its output once and replays exactly what the model saw", async () => {
+  const emitted: Emitted[] = [];
+  const tc = {
+    ...fakeToolContext(),
+    execute: async () => ({ stdout: "built 3 files", stderr: "warning: slow disk", code: 2, timedOut: false }),
+  };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const [execute] = createAgentTools(ref);
+
+  const live = (await call(execute, { command: "make", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const stored = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.deepEqual(
+    { stdout: stored.stdout, stderr: stored.stderr, code: stored.code, timedOut: stored.timedOut },
+    { stdout: undefined, stderr: undefined, code: 2, timedOut: false },
+  );
+  assert.equal(stored.result, "built 3 files\n[stderr]\nwarning: slow disk\n[exit 2]");
+
+  const history: SessionEntry[] = [
+    { type: "user" as const, payload: { text: "build it" } },
+    ...emitted.map((e) => ({ type: e.type, payload: e.payload })),
+  ].map((e, i) => ({ ...e, sessionId: "s", seq: i + 1, parentSeq: null, scopeLabel: "personal:U1", createdAt: i + 1 }));
+  const replayed = reconstructMessagesFromHistory(history).find((m) => m.role === "toolResult") as {
+    content: Array<{ type: string; text: string }>;
+    isError: boolean;
+  };
+  assert.deepEqual(replayed.content, live.content);
+  assert.equal(replayed.isError, false);
+});
+
+test("background start and poll store their output only in result", async () => {
+  const emitted: Emitted[] = [];
+  const ref: ToolContextRef = {
+    current: fakeToolContext(),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const tools = createAgentTools(ref, { sandboxResources: true });
+  await call(
+    tools.find((t) => t.name === "execute"),
+    { command: "serve", purpose: "Start server", background: true },
+  );
+  await call(
+    tools.find((t) => t.name === "background"),
+    { action: "poll", process_id: "bg-1" },
+  );
+  const [started, polled] = emitted.filter((e) => e.type === "tool_result").map((e) => e.payload);
+  assert.deepEqual(
+    { output: started.output, cursor: started.cursor, result: started.result },
+    { output: undefined, cursor: 7, result: "started bg-1\nstarted serve\n[cursor 7 | running]" },
+  );
+  assert.equal(polled.chunks, undefined);
+  assert.equal(polled.cursor, 18);
+  assert.match(polled.result, /^more output\n\[cursor 18 \| /);
 });
 
 test("Auto can quarantine a tool result before the model or durable replay sees it", async () => {
@@ -1379,7 +1446,7 @@ test("each action dispatches to exactly its matching tool-context method", async
   } as unknown as ToolContext;
   const slack = surfaceTool({ current: tc, scopeLabel: "channel:C1" });
 
-  await call(slack, { action: "post", text: "hi" });
+  await call(slack, { action: "post", text: "hi", files: [{ file_id: "saved" }], sandbox_id: "box" });
   await call(slack, { action: "react", ts: "1.1", emoji: "eyes" });
   await call(slack, { action: "edit", ref: "1.1", text: "y" });
   await call(slack, { action: "delete", ref: "1.1" });
@@ -1388,14 +1455,14 @@ test("each action dispatches to exactly its matching tool-context method", async
   await call(slack, { action: "search", query: "q", source: "slack" });
   await call(slack, { action: "read_members" });
   await call(slack, { action: "read_file", ref: "aaaa" });
-  await call(slack, { action: "reach", text: "hi", channel: "eng" });
+  await call(slack, { action: "reach", text: "hi", channel: "eng", files: ["report.md"], sandbox_id: "box" });
 
   assert.deepEqual(
     calls.map((c) => c[0]),
     ["post", "react", "edit", "delete", "readThread", "whatsNew", "search", "readMembers", "readFile", "reach"],
   );
-  assert.deepEqual(calls[0]![1], ["hi", {}, undefined]);
-  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, undefined]);
+  assert.deepEqual(calls[0]![1], ["hi", {}, [{ file_id: "saved" }], "box"]);
+  assert.deepEqual(calls[9]![1], ["hi", { channel: "eng" }, ["report.md"], "box"]);
   assert.deepEqual(calls[1]![1], [{ ts: "1.1", emoji: "eyes" }]);
   assert.deepEqual(calls[2]![1], [{ ref: "1.1", text: "y" }]);
   assert.deepEqual(calls[3]![1], [{ ref: "1.1" }]);
@@ -1581,24 +1648,6 @@ const callWith = (tool: ReturnType<typeof createAgentTools>[number] | undefined,
   return (tool.execute as unknown as (i: string, p: unknown) => Promise<unknown>)(id, params);
 };
 
-test("a cross-scope result's classified label is recorded by callId for the tape writer", async () => {
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    emit: () => {},
-    scopeLabel: "channel:C1",
-    orgScopeId: "org:acme",
-  };
-  const [execute, , read] = createAgentTools(ref);
-
-  await callWith(read, "call-private", { action: "read", path: "a.txt" });
-  await callWith(read, "call-missing", { action: "read", path: "missing.txt" });
-  await callWith(execute, "call-exec", { command: "echo hi", purpose: "Run test command" });
-
-  assert.equal(ref.tapeResultScopes?.get("call-private"), "personal:U1", "the tape row gets the source scope");
-  assert.equal(ref.tapeResultScopes?.has("call-missing"), false, "session-scoped results are not recorded");
-  assert.equal(ref.tapeResultScopes?.has("call-exec"), false);
-});
-
 test("tool entries carry the call id + faithful model-facing result (WAL replay record)", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
@@ -1629,134 +1678,6 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
   assert.match(result("call-recall").result, /Owns the billing service/);
   assert.match(result("call-exec").result, /ran echo hi/);
   assert.match(result("call-exec").result, /\[exit 0\]/);
-});
-
-test("memory remember accepts facts as a single string and records coercion", async () => {
-  const emitted: Emitted[] = [];
-  const remembered: string[][] = [];
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      async memoryRemember(facts) {
-        remembered.push(facts);
-        return facts.length;
-      },
-    },
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-  };
-  const memory = createAgentTools(ref).find((tool) => tool.name === "memory");
-
-  await call(memory, { action: "remember", facts: "Owns billing." });
-
-  assert.deepEqual(remembered, [["Owns billing."]]);
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
-  assert.equal(result.coercedFrom, "facts");
-  assert.equal(result.added, 1);
-});
-
-test("memory remember falls back to content lines with bullets", async () => {
-  const emitted: Emitted[] = [];
-  const remembered: string[][] = [];
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      async memoryRemember(facts) {
-        remembered.push(facts);
-        return facts.length;
-      },
-    },
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-  };
-  const memory = createAgentTools(ref).find((tool) => tool.name === "memory");
-
-  await call(memory, { action: "remember", facts: [], content: "\n- Owns billing.\n- Likes short updates.\n\n" });
-
-  assert.deepEqual(remembered, [["Owns billing.", "Likes short updates."]]);
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
-  assert.equal(result.coercedFrom, "content");
-  assert.equal(result.added, 2);
-});
-
-test("memory remember falls back to query when facts and content are empty", async () => {
-  const emitted: Emitted[] = [];
-  const remembered: string[][] = [];
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      async memoryRemember(facts) {
-        remembered.push(facts);
-        return facts.length;
-      },
-    },
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-  };
-  const memory = createAgentTools(ref).find((tool) => tool.name === "memory");
-
-  await call(memory, { action: "remember", facts: [], content: "  ", query: "Prefers email summaries." });
-
-  assert.deepEqual(remembered, [["Prefers email summaries."]]);
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
-  assert.equal(result.coercedFrom, "query");
-  assert.equal(result.added, 1);
-});
-
-test("memory remember keeps normal facts arrays unchanged", async () => {
-  const emitted: Emitted[] = [];
-  const remembered: string[][] = [];
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      async memoryRemember(facts) {
-        remembered.push(facts);
-        return facts.length;
-      },
-    },
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-  };
-  const memory = createAgentTools(ref).find((tool) => tool.name === "memory");
-
-  await call(memory, { action: "remember", facts: ["Owns billing.", "Likes short updates."] });
-
-  assert.deepEqual(remembered, [["Owns billing.", "Likes short updates."]]);
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
-  assert.equal(result.coercedFrom, undefined);
-  assert.equal(result.added, 2);
-});
-
-test("memory remember all-empty error names the supplied fields", async () => {
-  const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "personal:U1",
-  };
-  const memory = createAgentTools(ref).find((tool) => tool.name === "memory");
-
-  const ret = (await call(memory, { action: "remember", facts: [], content: "", query: "" })) as {
-    content: Array<{ text: string }>;
-  };
-
-  assert.equal(
-    ret.content[0]!.text,
-    "[error] memory remember requires `facts` (a non-empty list). Received: facts, content, query (use facts instead).",
-  );
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "memory")!.payload;
-  assert.equal(result.isError, true);
-  assert.equal(result.error, "facts required");
 });
 
 test("not-found read and denied command record isError + the faithful error text", async () => {
@@ -3638,7 +3559,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     ["files", { action: "read", path: "a" }, { action: "read", path: "a", data: "oops" }],
     [
       "files",
-      { action: "share", path: "a", scope: "org" },
+      { action: "share", id: "file-id", toScope: "org" },
       { action: "write", path: "a", data: "x", share: [{ scope: "org" }] },
     ],
     [
@@ -3669,7 +3590,6 @@ test("resource actions preserve sharing targets, transfer semantics and file con
     ...fakeToolContext(),
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
-      return { shared: [{ scope: "org:test", permission: "read" as const }] };
     },
     async setDeploymentPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
@@ -3683,12 +3603,18 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const tools = createAgentTools({ current: tc }, { controlTools: true });
   const files = tools.find((tool) => tool.name === "files")!;
   await call(files, { action: "write", path: "notes", data: "" });
-  await call(files, { action: "share", path: "notes", scope: "org" });
-  assert.deepEqual(writes, [
-    ["notes", ""],
-    ["notes", undefined, [{ scope: "org", permission: undefined }]],
-  ]);
+  const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
+  assert.ok(Check(files.parameters, pathShare));
+  const rejected = await call(files, pathShare);
+  assert.match(textOut(rejected), /upload it with POST \/v1\/files\/uploads first/);
+  assert.deepEqual(writes, [["notes", "", undefined]]);
+  const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
+  const apps = tools.find((tool) => tool.name === "apps")!;
+  assert.ok(Check(apps.parameters, invalidAppShare));
+  assert.match(textOut(await call(apps, invalidAppShare)), /Invalid arguments/);
+  assert.deepEqual(shares, []);
   for (const [name, type, action] of [
+    ["files", "file", "share"],
     ["apps", "deploy", "share"],
     ["apps", "deploy", "move"],
     ["skills", "skill", "share"],
@@ -4107,7 +4033,7 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   const subagents = tools.find((tool) => tool.name === "subagents")!;
   const sessions = tools.find((tool) => tool.name === "sessions")!;
   assert.match(subagents.description, /does not get its own sidebar entry/);
-  assert.match(subagents.description, /does not inherit this conversation/);
+  assert.match(subagents.description, /or see this conversation/);
   assert.match(sessions.description, /web sidebar/);
   for (const action of ["open", "followup_task", "wait"])
     assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);
@@ -4476,7 +4402,7 @@ test("native skills discovery exposes list and search with validated pagination"
   }
 });
 
-test("skill discovery records the page's source scope for history and tape filtering", async () => {
+test("skill discovery records the page's source scope for history filtering", async () => {
   const emitted: Emitted[] = [];
   const ctx = fakeToolContext();
   ctx.listSkills = async () => ({
@@ -4494,7 +4420,7 @@ test("skill discovery records the page's source scope for history and tape filte
   };
   const tool = createAgentTools(ref).find((t) => t.name === "skills")!;
   await callWith(tool, "discovery", { action: "list" });
-  assert.equal(ref.tapeResultScopes?.get("discovery"), "personal:U1");
+  assert.equal(emitted.find((e) => e.type === "tool_result")?.scopeLabel, "personal:U1");
   const history = emitted.map((e, seq) => ({ ...e, seq, createdAt: seq, sessionId: "s" })) as SessionEntry[];
   const visible = filterHistoryForAudience(history, [{ id: "U2", type: "internal" }], "channel:C1", "org:default-org");
   assert.doesNotMatch(JSON.stringify(visible), /Private description|private-helper/);

@@ -57,6 +57,7 @@ test("connected-apps block: lists only admin-configured providers and the exact 
   const unavailable = renderConnectedAppsBlock(null, [], url);
   assert.match(unavailable, /No direct OAuth app connections are configured/);
   assert.match(unavailable, /does not describe app access through separately authorized credentials/);
+  assert.match(unavailable, /Connection page: https:\/\/qm\.example\/keychain/);
 
   const none: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { google: { connected: false } } };
   const available = renderConnectedAppsBlock(none, ["google"], url);
@@ -111,4 +112,23 @@ test("connected-apps block is canonical across provider and status insertion ord
     renderConnectedAppsBlock(reversed, [...available].reverse()),
   );
   assert.deepEqual(Object.keys(providers), ["slack", "google", "github", "dropbox"]);
+});
+
+test("connected-apps block: names linked per-user MCP sign-ins by label", () => {
+  const rec: ConnectorStatusRecord = {
+    principalId: "U1",
+    checkedAt: 1,
+    providers: {
+      google: { connected: true },
+      orders: { connected: true, mcpLabel: "Orders" },
+    },
+  };
+  const out = renderConnectedAppsBlock(rec, ["google"], "https://qm.example/keychain");
+  assert.match(out, /Connected: Google, Orders\./);
+  assert.doesNotMatch(out, /Available to connect: .*Orders/);
+
+  const mcpOnly = renderConnectedAppsBlock(rec, [], "https://qm.example/keychain");
+  assert.match(mcpOnly, /No direct OAuth app connections are configured/);
+  assert.match(mcpOnly, /Connected: Orders\./);
+  assert.doesNotMatch(mcpOnly, /Google/);
 });

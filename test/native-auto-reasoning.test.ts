@@ -9,8 +9,8 @@ import { setGatewayModels } from "../src/model/gateway-models.ts";
 const adaptiveId = "claude-sonnet-4-6";
 
 test("native Auto is model and harness specific, while legacy auto remains valid", () => {
-  for (const harnessId of ["pi", "codex", "claude", "opencode"] as const) {
-    const modelId = harnessId === "codex" ? "gpt-5.4" : adaptiveId;
+  for (const harnessId of ["pi", "claude"] as const) {
+    const modelId = adaptiveId;
     assert.equal(validateRuntimeChoice({ harnessId, modelId, effortLevel: "auto" }), null);
     assert.equal(
       validateRuntimeChoice({ harnessId, modelId, effortLevel: "adaptive" }),

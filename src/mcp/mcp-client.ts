@@ -26,8 +26,9 @@ export type McpFetch = (
 
 const realFetch: McpFetch = (url, init) => fetch(url, { ...init, redirect: "error" });
 
-function baseUrl(mcpUrl: string): string {
-  return mcpUrl.replace(/\/+$/g, "").replace(/\/mcp$/g, "");
+function endpointUrl(mcpUrl: string): string {
+  const trimmed = mcpUrl.replace(/\/+$/g, "");
+  return new URL(trimmed).pathname === "/" ? `${trimmed}/mcp` : trimmed;
 }
 
 function hostOf(base: string): string {
@@ -127,7 +128,8 @@ export function createMcpClient(opts: {
 }): McpClient {
   const fetchImpl = opts.fetchImpl ?? realFetch;
   const now = opts.now ?? (() => Date.now());
-  const base = baseUrl(opts.url);
+  const endpoint = endpointUrl(opts.url);
+  const base = endpoint.replace(/\/mcp$/g, "");
   const host = hostOf(base);
   let cached: CachedToken | null = null;
   let rpcId = 0;
@@ -161,7 +163,7 @@ export function createMcpClient(opts: {
 
   async function rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = ++rpcId;
-    const res = await fetchImpl(`${base}/mcp`, {
+    const res = await fetchImpl(endpoint, {
       method: "POST",
       headers: {
         ...(await authHeaders()),

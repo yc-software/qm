@@ -90,7 +90,7 @@ const mutations: Record<string, (input: OrchestratorInput) => void> = {
     i.model = "forged-model";
   },
   harness: (i) => {
-    i.harness = "codex";
+    i.harness = "claude";
   },
   effort: (i) => {
     i.thinkingLevel = "high";

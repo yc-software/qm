@@ -12,7 +12,7 @@ const object = Type.Record(Type.String(), Type.Unknown());
 type Operation = {
   description: string;
   parameters: ReturnType<typeof Type.Object>;
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
 };
 
@@ -50,9 +50,25 @@ export const adminOperations = {
   ),
   memory_scopes: operation("List notebook scopes and metadata.", "GET", "/memory/scopes"),
   memory: operation("Read a notebook.", "GET", "/memory", scope),
-  replace_memory: operation("Replace a notebook after reading it and confirming the full change.", "PUT", "/memory", {
+  add_memory: operation("Add notebook facts after confirming.", "POST", "/memory", {
     ...scope,
-    value: Type.Object({ content: string }, { additionalProperties: false }),
+    value: Type.Object({ facts: Type.Array(string) }, { additionalProperties: false }),
+  }),
+  edit_memory: operation(
+    "Edit notebook facts by id after reading them and confirming the change.",
+    "PATCH",
+    "/memory",
+    {
+      ...scope,
+      value: Type.Object(
+        { facts: Type.Array(Type.Object({ id: string, text: string }, { additionalProperties: false })) },
+        { additionalProperties: false },
+      ),
+    },
+  ),
+  delete_memory: operation("Forget notebook facts by id after confirming.", "DELETE", "/memory", {
+    ...scope,
+    value: Type.Object({ ids: Type.Array(string) }, { additionalProperties: false }),
   }),
   sessions: operation("List conversations using the returned cursor for the next page.", "GET", "/sessions", {
     ...scope,
@@ -170,9 +186,6 @@ export const adminOperations = {
     value: Type.Object({ action: Type.Literal("retire"), sandboxId: string }, { additionalProperties: false }),
   }),
   security_flags: operation("Read security screening flags.", "GET", "/security/flags", { limit }),
-  release_security: operation("Release a conversation's security taint. Confirm first.", "POST", "/security/release", {
-    value: Type.Object({ sessionId: string }, { additionalProperties: false }),
-  }),
   slack_installation: operation("Read Slack installation metadata, never tokens.", "GET", "/slack-installation"),
   slack_start: operation("Start Slack setup or installation. Confirm first.", "POST", "/slack-installation/start", {
     value: Type.Object(

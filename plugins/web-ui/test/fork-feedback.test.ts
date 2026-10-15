@@ -16,6 +16,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
     id: "source",
     threadRef: "web:tester:source",
     scopeId: "personal:tester",
+    canContinue: true,
     type: "dm",
     createdAt: Date.now(),
     title: "Source conversation",

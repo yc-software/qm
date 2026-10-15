@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
@@ -98,6 +97,7 @@ test("stopping returns Send immediately and queues every submit path without int
         },
         activePendingApprovals: () => [],
         hasUnresolvedApproval: () => false,
+        turnRuntime: () => null,
         isStopping: () => stopping,
         drawActiveChat: draw,
         stopLiveRun: async () => {
@@ -215,9 +215,4 @@ test("stopping returns Send immediately and queues every submit path without int
       else delete (globalThis as Record<string, unknown>)[key];
     }
   }
-});
-
-test("disabled Stop shares Send's muted styling", () => {
-  const css = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
-  assert.match(css, /\.send-btn:disabled,\s*\.stop-btn:disabled\s*\{[^}]*opacity: 0\.35;[^}]*cursor: not-allowed;/);
 });

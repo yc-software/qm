@@ -13,7 +13,14 @@ function evidence(sandboxId = "box", stdout = "nonce\n"): unknown[] {
     { type: "tool_call", payload: { tool: "execute", sandbox_id: sandboxId, callId: "call" } },
     {
       type: "tool_result",
-      payload: { tool: "execute", callId: "call", isError: false, code: 0, timedOut: false, stdout },
+      payload: {
+        tool: "execute",
+        callId: "call",
+        isError: false,
+        code: 0,
+        timedOut: false,
+        result: `${stdout}\n[exit 0]`,
+      },
     },
   ];
 }
@@ -27,8 +34,9 @@ test("provider execution requires correlated success on the exact sandbox", () =
     { isError: true },
     { code: 1 },
     { timedOut: true },
-    { stdout: "wrong\n" },
-    { stdout: undefined, result: "nonce\n" },
+    { result: "wrong\n\n[exit 0]" },
+    { result: "nonce\n" },
+    { result: undefined, stdout: "nonce\n" },
   ]) {
     const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
     Object.assign(entries[1]!.payload, patch);

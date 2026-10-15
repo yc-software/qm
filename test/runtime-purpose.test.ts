@@ -16,7 +16,7 @@ const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effor
 
 function setup() {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "codex", "claude"]);
+  config.setApprovedHarnesses(["pi", "claude"]);
   config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
   config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
   return config;
@@ -95,7 +95,7 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
   const config = setup();
   await config.setPurposeRuntime("cron", category);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "opencode" }, "cron"),
+    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "mock" }, "cron"),
     /not approved/,
   );
   assert.throws(
@@ -158,7 +158,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     },
   ] as SessionEntry[];
   const restored = recoveredRuntime(entries, "run", "alice");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored, "cron"), {
+  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",

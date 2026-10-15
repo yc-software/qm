@@ -10,6 +10,16 @@ import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/adviso
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { swallow } from "../util/errors.ts";
+import {
+  APP_PID_PATH,
+  appGone,
+  appLaunch,
+  appLogs,
+  appReporter,
+  listeningOn,
+  waitAppReady,
+  type AppErrorSink,
+} from "./shared-deploy-provider.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -28,21 +38,15 @@ const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
 const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
-const PID_PATH = "/tmp/qm-app.pid";
-const LOG_PATH = "/tmp/qm-app.log";
 const APP_READY_WINDOW_SEC = 60;
-const APP_READY_EXEC_TIMEOUT_SEC = 90;
 const APP_PORT_RELEASE_TICKS = 40;
 const APP_START_EXEC_TIMEOUT_SEC = 60;
 const EXIT_APP_PORT_HELD = 97;
-const EXIT_APP_EXITED = 98;
-
-const LISTENING_ON_APP_PORT = (port: number): string =>
-  `listening() { curl -s -o /dev/null --max-time 1 http://127.0.0.1:${port}/; [ "$?" != "7" ]; }`;
 
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
 const RESOLVE_CACHE_MS = 15_000;
+const ROTATE_AHEAD_MS = 30 * 60_000;
 
 const DEFAULT_INGRESS = (region: string): string =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -57,6 +61,7 @@ export interface StoredDeployBody {
   lastSnapshotMs?: number;
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
+  replacementMicrovmId?: string;
   orgId?: string;
 }
 
@@ -86,6 +91,7 @@ export interface AwsDeployProviderOptions {
   fetchImpl?: typeof fetch;
   s3?: Pick<S3Client, "send">;
   sts?: Pick<STSClient, "send">;
+  onError?: AppErrorSink;
 }
 
 export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployProvider {
@@ -100,7 +106,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const store = opts.store ?? createMemoryMap<StoredDeployBody>();
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
-  const resolveCache = new Map<string, { endpoint: DeployEndpoint; untilMs: number }>();
+  const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();
   const bumpResolveGen = (id: string): void => {
@@ -123,8 +129,13 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const appPort = opts.appPort ?? APP_PORT_DEFAULT;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
   const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
+  const rotateDueMs = Math.max(0, rotateAfterMs - ROTATE_AHEAD_MS);
+  const rotationDue = (stored: StoredDeployBody): boolean =>
+    Date.now() - stored.createdAtMs > rotateDueMs &&
+    !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
-  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? 3600;
+  const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
+  const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
   const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
@@ -345,23 +356,35 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
   async function ensureBody(d: Deployment): Promise<{ id: string; endpoint: string; fresh: boolean }> {
     return launchQueue(d.id, async () => {
-      const stored = await store.get(d.id);
+      let stored = await store.get(d.id);
+      if (stored?.replacementMicrovmId) {
+        await api
+          .terminate(stored.replacementMicrovmId)
+          .catch((e) => swallow("aws-deploy: terminate orphaned replacement", e));
+        const { replacementMicrovmId: _, ...rest } = stored;
+        stored = rest;
+        await store.put(d.id, stored);
+      }
+      let next: { id: string; endpoint: string } | undefined;
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        const stale = Date.now() - stored.createdAtMs > rotateAfterMs;
-        if (alive && !stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint);
+        if (alive && !rotationDue(stored)) {
+          await ensureRunning(stored.microvmId, stored.endpoint, desc);
           return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
         }
-        if (alive && stale) {
-          await ensureRunning(stored.microvmId, stored.endpoint).catch(() => {});
+        if (alive) {
+          next = await launchBody(d.id, d.alwaysOn);
+          const replacement = next;
+          await store.put(d.id, { ...stored, replacementMicrovmId: replacement.id });
+          await ensureRunning(stored.microvmId, stored.endpoint, desc).catch(() => {});
           const defer = async (
             label: string,
             e: unknown,
             extra: Partial<StoredDeployBody> = {},
           ): Promise<{ id: string; endpoint: string; fresh: boolean }> => {
             swallow(label, e);
+            await api.terminate(replacement.id).catch((e2) => swallow("aws-deploy: abandon replacement", e2));
             await store.put(d.id, { ...stored, rotateNotBeforeMs: Date.now() + 5 * 60_000, ...extra });
             return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
           };
@@ -382,7 +405,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           }
         }
       }
-      const body = await launchBody(d.id, d.alwaysOn);
+      const body = next ?? (await launchBody(d.id, d.alwaysOn));
       try {
         await hydrateData(d.id, body.id, body.endpoint);
       } catch (e) {
@@ -428,17 +451,17 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     for (const f of files) await writeAbs(id, endpoint, posixJoin(root, normalizeRelPath(f.path)), bytes(f.data));
   }
 
-  async function startApp(id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: Deployment, id: string, endpoint: string, version: DeploymentVersion): Promise<void> {
     const envExports = Object.entries(version.env ?? {})
       .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
       .map(([k, v]) => `export ${k}=${shq(v)}`)
       .join("; ");
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
     const script = [
-      LISTENING_ON_APP_PORT(appPort),
-      `old=$(cat ${shq(PID_PATH)} 2>/dev/null || true)`,
+      listeningOn(appPort),
+      `old=$(cat ${shq(APP_PID_PATH)} 2>/dev/null || true)`,
       `if [ -n "$old" ]; then kill -TERM "-$old" 2>/dev/null || true; sleep 0.5; kill -KILL "-$old" 2>/dev/null || true; fi`,
-      `rm -f ${shq(PID_PATH)}`,
+      `rm -f ${shq(APP_PID_PATH)}`,
       `for i in $(seq 1 ${APP_PORT_RELEASE_TICKS}); do listening || break; sleep 0.25; done`,
       `listening && exit ${EXIT_APP_PORT_HELD}`,
       ...(s3 ? [`mkdir -p ${shq(DATA_DIR)}`] : []),
@@ -446,7 +469,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       `export PORT=${appPort}`,
       ...(s3 ? [`export DATA_DIR=${shq(DATA_DIR)}`] : []),
       ...(envExports ? [envExports] : []),
-      `setsid sh -c ${shq(inner)} > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`,
+      appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(id, endpoint, script, APP_START_EXEC_TIMEOUT_SEC);
     if (r.code === EXIT_APP_PORT_HELD) {
@@ -455,27 +478,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       );
     }
     if (r.code !== 0) throw new Error(`aws deploy app start failed: ${r.stderr.slice(0, 300)}`);
-    await waitAppReady(id, endpoint);
-  }
-
-  async function waitAppReady(id: string, endpoint: string): Promise<void> {
-    const probe =
-      `pid=$(cat ${shq(PID_PATH)} 2>/dev/null || true); died=0; ` +
-      `end=$(( $(date +%s) + ${APP_READY_WINDOW_SEC} )); ` +
-      `while [ "$(date +%s)" -lt "$end" ]; do ` +
-      `curl -s --max-time 2 -o /dev/null http://127.0.0.1:${appPort}/ && exit 0; ` +
-      `kill -0 -"$pid" 2>/dev/null || died=1; ` +
-      `sleep 0.5; done; [ "$died" = 1 ] && exit ${EXIT_APP_EXITED}; exit 1`;
-    const r = await execRaw(id, endpoint, probe, APP_READY_EXEC_TIMEOUT_SEC);
-    if (r.code === 0) return;
-    const log = await execRaw(id, endpoint, `tail -c 2000 ${shq(LOG_PATH)} 2>/dev/null || true`, 30)
-      .then((out) => `${out.stdout}${out.stderr}`.trim())
-      .catch(() => "");
-    const why =
-      r.code === EXIT_APP_EXITED
-        ? `the version's entrypoint exited without binding port ${appPort}`
-        : `app never listened on port ${appPort} within ${APP_READY_WINDOW_SEC}s`;
-    throw new Error(why + (log ? `; last output from the entrypoint:\n${log}` : "; the entrypoint produced no output"));
+    await waitAppReady((script, timeoutSec) => execRaw(id, endpoint, script, timeoutSec), {
+      appPort,
+      windowSec: APP_READY_WINDOW_SEC,
+      report: appReporter(opts.onError, d, version.env),
+    });
   }
 
   async function materialize(
@@ -528,7 +535,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         if (cur) await store.put(d.id, { ...cur, dataCredsAtMs: Date.now() });
       });
     }
-    await startApp(id, endpoint, version);
+    await startApp(d, id, endpoint, version);
   }
 
   async function endpointFor(d: Deployment, microvmId: string, endpoint: string): Promise<DeployEndpoint> {
@@ -546,7 +553,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     return result;
   }
 
-  const resolveLive = async (d: Deployment, genCurrent: () => boolean): Promise<DeployEndpoint | null> => {
+  const resolveLive = async (
+    d: Deployment,
+    version: DeploymentVersion,
+    genCurrent: () => boolean,
+  ): Promise<DeployEndpoint | null> => {
     const stored = await store.get(d.id);
     if (!stored) return null;
     try {
@@ -563,7 +574,11 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs)
       )
         return null;
-      await ensureRunning(stored.microvmId, stored.endpoint);
+      await ensureRunning(stored.microvmId, stored.endpoint, desc);
+      const exec = (script: string, timeoutSec: number) =>
+        execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
+      const report = appReporter(opts.onError, d, version.env);
+      if (await appGone(exec, { appPort, report })) return null;
     } catch (e) {
       if (!(e instanceof AwsApiError && (e.status >= 500 || e.status === 429))) throw e;
     }
@@ -629,30 +644,55 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
 
     apply: (d, version) => place(d, version),
 
+    async rotationDue(d): Promise<boolean> {
+      const stored = await store.get(d.id);
+      return !!stored && rotationDue(stored);
+    },
+
     reconcile: (d, version, input) => place(d, version, input),
 
-    async resolveEndpoint(d, _version): Promise<DeployEndpoint | null> {
-      const cached = resolveCache.get(d.id);
-      if (cached && Date.now() < cached.untilMs) return cached.endpoint;
-      const inflight = inflightResolves.get(d.id);
-      if (inflight) return inflight;
+    async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const gen = resolveGens.get(d.id) ?? 0;
       const genCurrent = (): boolean => (resolveGens.get(d.id) ?? 0) === gen;
-      const resolve = resolveLive(d, genCurrent)
-        .then((endpoint) => {
-          if (endpoint && genCurrent()) {
-            if (resolveCache.size > 500) {
-              for (const [k, v] of resolveCache) if (Date.now() >= v.untilMs) resolveCache.delete(k);
+      const revalidate = (): Promise<DeployEndpoint | null> => {
+        const inflight = inflightResolves.get(d.id);
+        if (inflight) return inflight;
+        const resolve = resolveLive(d, version, genCurrent)
+          .then((endpoint) => {
+            if (!genCurrent()) return endpoint;
+            if (!endpoint) {
+              resolveCache.delete(d.id);
+              return endpoint;
             }
-            resolveCache.set(d.id, { endpoint, untilMs: Date.now() + RESOLVE_CACHE_MS });
-          }
-          return endpoint;
-        })
-        .finally(() => {
-          if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
-        });
-      inflightResolves.set(d.id, resolve);
-      return resolve;
+            if (resolveCache.size > 500) {
+              for (const [k, v] of resolveCache) if (Date.now() - v.usedMs >= awakeForMs) resolveCache.delete(k);
+            }
+            resolveCache.set(d.id, { endpoint, checkedMs: Date.now(), usedMs: Date.now() });
+            return endpoint;
+          })
+          .finally(() => {
+            if (inflightResolves.get(d.id) === resolve) inflightResolves.delete(d.id);
+          });
+        inflightResolves.set(d.id, resolve);
+        return resolve;
+      };
+      const cached = resolveCache.get(d.id);
+      const samePlacement = !d.endpoint || d.endpoint.host === cached?.endpoint.host;
+      if (cached && samePlacement && Date.now() - cached.usedMs < awakeForMs) {
+        cached.usedMs = Date.now();
+        if (Date.now() - cached.checkedMs >= RESOLVE_CACHE_MS)
+          void revalidate().catch((e) => swallow("aws-deploy: background revalidate", e));
+        return cached.endpoint;
+      }
+      return revalidate();
+    },
+
+    async park(d): Promise<void> {
+      if (d.alwaysOn) return;
+      const stored = await store.get(d.id);
+      if (!stored) return;
+      resolveCache.delete(d.id);
+      await api.suspend(stored.microvmId);
     },
 
     async logs(d, opts): Promise<string | null> {
@@ -660,14 +700,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       const stored = await store.get(d.id);
       if (!stored) return null;
       await ensureRunning(stored.microvmId, stored.endpoint);
-      const lines = Math.max(1, Math.min(2000, Math.floor(opts.tailLines)));
-      const r = await execRaw(
-        stored.microvmId,
-        stored.endpoint,
-        `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`,
-        30,
+      return appLogs(
+        (script, timeoutSec) => execRaw(stored.microvmId, stored.endpoint, script, timeoutSec),
+        opts.tailLines,
       );
-      return r.stdout;
     },
 
     async destroy(d): Promise<void> {

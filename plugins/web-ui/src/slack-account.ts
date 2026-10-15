@@ -1,7 +1,8 @@
 import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check, Link2, UserRound } from "lucide";
-import { icon, slackMark } from "./ui";
+import { slackMark } from "./ui";
+import { icon } from "./icons";
 import "./slack-account.css";
 import { withBase } from "./core-bridge";
 

@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -16,6 +17,8 @@ import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
+import { MemoryFactsMissing } from "../memory/facts.ts";
+import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { redactSecrets } from "./redact-secrets.ts";
@@ -24,8 +27,10 @@ import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
+  cancelGoal,
   createGoalRecord,
   goalFloorMeter,
+  goalIsOpen,
   goalReport,
   GOAL_STEP_BACK_PROMPT,
   type GoalGovernor,
@@ -82,7 +87,6 @@ export interface ToolContextRef {
   emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
-  tapeResultScopes?: Map<string, ScopeId>;
   llmCapture?: Array<{
     envelope: unknown;
     truncated: boolean;
@@ -106,6 +110,8 @@ export interface ToolContextRef {
   silentRequested?: boolean;
 
   goal?: GoalRecord | null;
+  saveGoal?: (goal: GoalRecord) => Promise<void>;
+  goalOpenedThisTurn?: boolean;
 
   goalRound?: number;
 
@@ -166,44 +172,6 @@ function capPayloadStrings(v: unknown): unknown {
 
 function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
-}
-
-function contentFactLines(content: string): string[] {
-  return content
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, "")
-        .trim(),
-    )
-    .filter(Boolean);
-}
-
-function passedRememberFields(params: { facts?: unknown; content?: unknown; query?: unknown }): string {
-  const fields = ["facts", "content", "query"].filter((field) => params[field as keyof typeof params] !== undefined);
-  return fields.length ? fields.join(", ") : "none";
-}
-
-function rememberFacts(params: { facts?: unknown; content?: unknown; query?: unknown }): {
-  facts: string[];
-  coercedFrom?: "facts" | "content" | "query";
-} {
-  if (typeof params.facts === "string") {
-    const fact = params.facts.trim();
-    if (fact) return { facts: [fact], coercedFrom: "facts" };
-  }
-  const facts = Array.isArray(params.facts) ? params.facts.map((fact) => String(fact).trim()).filter(Boolean) : [];
-  if (facts.length) return { facts };
-  if (typeof params.content === "string") {
-    const contentFacts = contentFactLines(params.content);
-    if (contentFacts.length) return { facts: contentFacts, coercedFrom: "content" };
-  }
-  if (typeof params.query === "string") {
-    const fact = params.query.trim();
-    if (fact) return { facts: [fact], coercedFrom: "query" };
-  }
-  return { facts: [] };
 }
 
 function fmtStatus(s: { state: "running" } | { state: "exited"; code: number }): string {
@@ -419,10 +387,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
       sourceScopeId,
     });
-    if (type === "tool_result" && scopeLabel !== ref.scopeLabel) {
-      const callId = (payload as { callId?: unknown } | null)?.callId;
-      if (typeof callId === "string" && callId) (ref.tapeResultScopes ??= new Map()).set(callId, scopeLabel);
-    }
     if (type === "tool_result" && ref.shutdown?.aborted && isObj(payload)) payload = { ...payload, interrupted: true };
     await ref.emit({ type, payload, scopeLabel });
   };
@@ -694,12 +658,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       command: params.command,
       purpose: params.purpose,
       ...scopeNote,
-      ...(params.sandbox_id ? { sandbox_id: params.sandbox_id } : {}),
+      ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
     });
     try {
       if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
-        ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
+        ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
         ...(route?.scratch ? { scratch: true } : {}),
         ...(route?.ownerAuth ? { ownerAuth: true } : {}),
@@ -708,6 +672,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(ref.abortSignal ? { signal: ref.abortSignal } : {}),
       };
       const r = await tc.execute(params.command, Object.keys(execOpts).length ? execOpts : undefined);
+      const { stdout: _stdout, stderr: _stderr, ...execMeta } = r;
       const parts = [r.stdout, r.stderr ? `[stderr]\n${r.stderr}` : ""].filter(Boolean).join("\n");
       const reachedPrefix = r.reached ? `[ran on ${r.reached.label}'s computer]\n` : "";
       const localExec = !route?.scratch && !route?.ownerAuth && route?.reachTarget === undefined && !r.reached;
@@ -717,7 +682,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : "";
       return recordResult(
         callId,
-        { tool: "execute", ...scopeNote, ...r },
+        { tool: "execute", ...scopeNote, ...execMeta },
         {
           content: [
             {
@@ -764,8 +729,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
   const SCOPED_EPHEMERAL_ERROR =
     '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
+  const outboundFilesSchema = Type.Array(
+    Type.Union([
+      Type.String({ minLength: 1 }),
+      Type.Object({ file_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+    ]),
+    { maxItems: MAX_OUTBOUND_FILES, description: 'Workspace paths or {file_id: "stored Files ID"} objects.' },
+  );
+  const outboundSandboxSchema = Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+    }),
+  );
+  const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
   const FILE_SEND_GUIDANCE =
-    "The files and apps tools use the default sandbox; execute can target sandbox_id. To send a file, write it to a workspace path and name that path to whichever tool sends: the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
+    "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
   const DURABLE_PARAM_DESC =
     "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn; owner is invocation-only. Publish durable code to git and artifacts to Files.";
 
@@ -1102,7 +1081,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
         ...(p.source ? { source: p.source } : {}),
-        ...(p.sandbox_id ? { sandboxId: p.sandbox_id } : {}),
+        ...(p.sandbox_id !== undefined ? { sandboxId: p.sandbox_id } : {}),
         ...(signal ? { signal } : {}),
       });
       signal?.throwIfAborted();
@@ -1136,14 +1115,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description: "Read a file from the workspace (scope, then global). Returns its contents.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
+      sandbox_id: sandboxSelector("Sandbox to read from; omit for the default. Shared files ignore it."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "read", path: params.path });
+      await recordCall(callId, {
+        tool: "files",
+        action: "read",
+        path: params.path,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
+      });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, shared } = await tc.read(params.path, signal);
+      const { content, sourceScopeId, shared } = await tc.read(params.path, signal, params.sandbox_id);
       signal?.throwIfAborted();
       return recordResult(
         callId,
@@ -1168,20 +1153,28 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope, durable across sessions. Use files action share to grant access separately.",
+      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
       data: Type.String({ description: "File contents, including an empty string to empty the file." }),
+      sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      await recordCall(callId, { tool: "files", action: "write", path: params.path, bytes: params.data.length });
+      const sandboxNote = params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {};
+      await recordCall(callId, {
+        tool: "files",
+        action: "write",
+        path: params.path,
+        bytes: params.data.length,
+        ...sandboxNote,
+      });
       try {
-        await tc.write(params.path, params.data);
+        await tc.write(params.path, params.data, params.sandbox_id);
         return recordResult(
           callId,
-          { tool: "files", action: "write", path: params.path, bytes: params.data.length },
+          { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
           text(`wrote ${params.path} (${params.data.length} bytes)`),
         );
       } catch (e) {
@@ -1262,6 +1255,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1272,9 +1266,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         dir: params.dir,
         entrypoint: params.entrypoint,
         name: params.name,
+        ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
       });
       try {
-        const r = await tc.publish(params as PublishInput);
+        const { sandbox_id: sandboxId, ...input } = params;
+        const r = await tc.publish({ ...(input as PublishInput), ...(sandboxId !== undefined ? { sandboxId } : {}) });
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
@@ -1316,44 +1312,58 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
       "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
-      "you're a colleague who remembers, not a fresh chat each time); this conversation can only " +
-      "ever touch its OWN memory, no one else's, by design. " +
+      "you're a colleague who remembers, not a fresh chat each time). Reads may span authorized " +
+      "notebooks; writes only change this conversation's own notebook. " +
       'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
       "across every notebook this conversation may read — check what you already know before asking. " +
-      "Every line is loaded into your context on every future turn, so memory is your most " +
-      "expensive storage: it is an index, not a datastore. Save pointers to data, never the data " +
+      "Only a bounded selection of memories is loaded into context; search the full notebooks " +
+      "for facts missing from that selection. Keep memory concise. Save pointers to data, never the data " +
       "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
       "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
       "it holds. If a fact is a list that grows, it's a file. Files are this " +
       "conversation's own (a pointer read from another conversation is a hint of where state " +
       "lives, not a path you can open). " +
-      'action="remember" appends durable `facts` now — short, self-contained bullets (a preference, ' +
+      'action="add" saves new `facts` ([{text}, …]) now — short, self-contained facts (a preference, ' +
       "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
       "one-off trivia, or anything already recorded somewhere you can look up. " +
-      'action="read" returns the whole notebook. ' +
-      'action="rewrite" REPLACES the whole notebook with `content` — for curation (merge ' +
-      "duplicates, update or delete stale and wrong lines): read first, then write back the full " +
-      "corrected notebook, never a fragment.",
+      'action="read" lists this conversation\'s notebook, each fact with its #id; pass `scope` from a search result to read another authorized notebook. ' +
+      'action="edit" replaces the text of existing facts (`facts`: [{id, text}, …]); ' +
+      'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a contradicting one, ' +
+      "and delete what is wrong or stale. Ids come from search or read; an edit or delete that names any id " +
+      "not in this conversation's notebook changes nothing and says which ids were bad.",
     parameters: Type.Object({
       action: Type.Union(
-        [Type.Literal("search"), Type.Literal("remember"), Type.Literal("read"), Type.Literal("rewrite")],
-        {
-          description: "search remembered facts, remember new facts, read the whole notebook, or rewrite (replace) it.",
-        },
+        [
+          Type.Literal("search"),
+          Type.Literal("read"),
+          Type.Literal("add"),
+          Type.Literal("edit"),
+          Type.Literal("delete"),
+        ],
+        { description: "search facts, read this notebook, or add, edit, or delete facts." },
       ),
       query: Type.Optional(
         Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
       ),
       limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
-      facts: Type.Optional(
-        Type.Array(Type.String(), {
+      scope: Type.Optional(
+        Type.String({
           description:
-            "remember only: the durable facts to save, one short self-contained sentence each — pointers to data, never the data itself.",
+            "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
         }),
       ),
-      content: Type.Optional(
-        Type.String({ description: "rewrite only: the FULL new notebook content (replaces the whole notebook)." }),
+      facts: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.Optional(Type.String({ description: "edit only: the fact's id, e.g. #42." })),
+            text: Type.String({
+              description: "one short self-contained fact — a pointer to data, never the data itself.",
+            }),
+          }),
+          { description: "add: [{text}, …]; edit: [{id, text}, …]." },
+        ),
       ),
+      ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1362,11 +1372,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       await recordCall(callId, {
         tool: "memory",
         action,
+        ...(params.scope !== undefined ? { scope: params.scope } : {}),
         ...(params.query !== undefined ? { query: params.query } : {}),
         ...(params.limit !== undefined ? { limit: params.limit } : {}),
         ...(params.facts !== undefined ? { facts: params.facts } : {}),
-        ...(typeof params.content === "string" ? { chars: params.content.length } : {}),
+        ...(params.ids !== undefined ? { ids: params.ids } : {}),
       });
+      const fail = (error: string) =>
+        recordResult(callId, { tool: "memory", action, error }, text(`[error] ${error}`), true);
       const unavailable = () =>
         recordResult(
           callId,
@@ -1374,7 +1387,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           text("[memory isn't available in this conversation]"),
           true,
         );
-      if (opts?.readOnly && (action === "remember" || action === "rewrite")) {
+      if (params.scope !== undefined && action !== "search" && action !== "read") {
+        return recordResult(
+          callId,
+          { tool: "memory", action, error: "scope is read-only" },
+          text("[error] scope is only allowed for memory search/read; writes stay in this conversation."),
+          true,
+        );
+      }
+      if (opts?.readOnly && action !== "search" && action !== "read") {
         return recordResult(
           callId,
           { tool: "memory", action, readOnly: true },
@@ -1382,76 +1403,68 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      switch (action) {
-        case "search": {
-          const query = params.query ?? "";
-          if (!query.trim())
+      const facts = (params.facts ?? []).map((fact) => ({ id: fact.id?.trim() ?? "", text: fact.text.trim() }));
+      try {
+        switch (action) {
+          case "search": {
+            const query = params.query ?? "";
+            if (!query.trim()) return fail("memory search requires `query`.");
+            const hits = await tc.memorySearch(query, params.limit, params.scope);
+            if (hits === null) return unavailable();
             return recordResult(
               callId,
-              { tool: "memory", action, error: "query required" },
-              text("[error] memory search requires `query`."),
-              true,
-            );
-          const hits = await tc.memorySearch(query, params.limit);
-          if (hits === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, query, count: hits.length },
-            text(hits.length ? hits.map((h) => `- ${h}`).join("\n") : `[no remembered facts match "${query}"]`),
-          );
-        }
-        case "read": {
-          const body = await tc.memoryRead();
-          if (body === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, chars: body.length },
-            text(body.trim() ? body : "(you have nothing remembered here yet)"),
-          );
-        }
-        case "remember": {
-          const resolved = rememberFacts(params);
-          const { facts } = resolved;
-          if (!facts.length)
-            return recordResult(
-              callId,
-              { tool: "memory", action, error: "facts required" },
-              text(
-                `[error] memory remember requires \`facts\` (a non-empty list). Received: ${passedRememberFields(
-                  params,
-                )} (use facts instead).`,
-              ),
-              true,
-            );
-          const added = await tc.memoryRemember(facts);
-          if (added === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, added, ...(resolved.coercedFrom ? { coercedFrom: resolved.coercedFrom } : {}) },
-            text(
-              added
-                ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
-                : "Already remembered — nothing new to save.",
-            ),
-          );
-        }
-        case "rewrite": {
-          if (typeof params.content !== "string") {
-            return recordResult(
-              callId,
-              { tool: "memory", action, error: "content required" },
-              text("[error] memory rewrite requires `content` (the full new notebook)."),
-              true,
+              { tool: "memory", action, query, count: hits.length },
+              text(hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`),
             );
           }
-          const ok = await tc.memoryRewrite(params.content);
-          if (ok === null) return unavailable();
-          return recordResult(
-            callId,
-            { tool: "memory", action, rewritten: true },
-            text("Rewrote your memory notebook."),
-          );
+          case "read": {
+            const body = await tc.memoryRead(params.scope);
+            if (body === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, chars: body.length },
+              text(body.trim() ? body : "(you have nothing remembered here yet)"),
+            );
+          }
+          case "add": {
+            const texts = facts.map((fact) => fact.text).filter(Boolean);
+            if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
+            const added = await tc.memoryAdd(texts);
+            if (added === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, added },
+              text(
+                added
+                  ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
+                  : "Already remembered — nothing new to save.",
+              ),
+            );
+          }
+          case "edit": {
+            if (!facts.length || facts.some((fact) => !fact.id || !fact.text))
+              return fail("memory edit requires `facts` as a non-empty list of {id, text}.");
+            if ((await tc.memoryEdit(facts)) === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, edited: facts.length },
+              text(`Updated ${facts.length} fact${facts.length === 1 ? "" : "s"}.`),
+            );
+          }
+          case "delete": {
+            const ids = (params.ids ?? []).map((id) => id.trim()).filter(Boolean);
+            if (!ids.length) return fail("memory delete requires `ids` (a non-empty list).");
+            if ((await tc.memoryDelete(ids)) === null) return unavailable();
+            return recordResult(
+              callId,
+              { tool: "memory", action, deleted: ids.length },
+              text(`Forgot ${ids.length} fact${ids.length === 1 ? "" : "s"}.`),
+            );
+          }
         }
+      } catch (e) {
+        if (e instanceof MemoryFactsMissing || e instanceof MemoryDisclosureDenied) return fail(e.message);
+        throw e;
       }
     },
   });
@@ -1529,7 +1542,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "subagents",
     label: "subagents",
     description:
-      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry and does not inherit this conversation, so give it a complete standalone task with the context and authorization it needs. Its final answer comes back to you as an internal message. " +
+      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry or see this conversation, so pass what it needs to know. Brief it as you would a colleague just as capable as you are, if not more so: the goal, why it matters, what you already know, and any real limits. Leave the approach to them; keep it short and state preferences as preferences. Its final answer comes back to you as an internal message. " +
       "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
       '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
       "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
@@ -1559,7 +1572,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       task: Type.Optional(
         Type.String({
-          description: "open and followup_task: the complete standalone instruction the subagent works from.",
+          description: "open and followup_task: the short task brief, with relevant context and real limits.",
         }),
       ),
       name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
@@ -1897,9 +1910,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
       });
+      const { output: _output, ...startMeta } = r;
       return recordResult(
         callId,
-        { tool: "execute", background: true, ...r },
+        { tool: "execute", background: true, ...startMeta },
         {
           content: [
             {
@@ -2059,9 +2073,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
             });
+            const { chunks: _chunks, ...pollMeta } = r;
             return recordResult(
               callId,
-              { tool: "background", action: params.action, ...r },
+              { tool: "background", action: params.action, ...pollMeta },
               {
                 content: [
                   { type: "text" as const, text: `${r.chunks}\n[cursor ${r.cursor} | ${fmtStatus(r.status)}]` },
@@ -2310,16 +2325,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
       "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
       "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
-      "MODE (runAs) — who can edit it and whose access it runs with. A cron always runs with the combined " +
-      "keychain of its owner and its scope:\n" +
-      "  • a cron in your DM is just you — your access, only you can edit it.\n" +
-      '  • a cron in a channel/group defaults to "scopeShared": it runs with YOUR keychain plus what the ' +
-      "scope shares, any member can edit it, and you're notified of every edit you didn't make. This is the " +
-      "default for a shared scope and is usually what you want.\n" +
-      '  • pass runAs="owner" to keep a channel cron editable only by you (still your access).\n' +
-      '  • pass runAs="scopeFloor" to run with ONLY what the whole scope shares, excluding your personal ' +
-      "keychain — for team crons that shouldn't touch your private access.\n" +
-      "The mode is editable later via action=patch (runAs=...), but only by the cron's owner.\n" +
+      "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
+      "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
+      "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
+      "If the owner leaves the conversation, the cron is deleted.\n" +
       "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
       "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
       "action=get inspects one in full; " +
@@ -2407,7 +2416,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       scope: Type.Optional(
         Type.Literal("personal", {
           description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey or runAs=scopeFloor.",
+            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
         }),
       ),
       participants: Type.Optional(
@@ -2431,12 +2440,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
         }),
       ),
-      runAs: Type.Optional(
-        Type.Union([Type.Literal("owner"), Type.Literal("scopeFloor"), Type.Literal("scopeShared")], {
-          description:
-            'create or patch: the cron\'s mode. "scopeShared" (default in a channel/group) = your keychain + the scope\'s, any member edits, you\'re notified of others\' edits; "owner" = your access, only you edit (the default in a DM); "scopeFloor" = only what the whole scope shares, any member edits. On patch, only the owner may change the mode.',
-        }),
-      ),
       note: Type.Optional(
         Type.String({
           maxLength: CRON_FIRE_NOTE_MAX_CHARS,
@@ -2450,12 +2453,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union([
-                Type.Literal("pi"),
-                Type.Literal("opencode"),
-                Type.Literal("codex"),
-                Type.Literal("claude"),
-              ]),
+              harnessId: Type.Union([Type.Literal("pi"), Type.Literal("claude")]),
               modelId: Type.String(),
               effortLevel: Type.Optional(
                 Type.Union([
@@ -2525,7 +2523,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.scope !== undefined ? { scope: params.scope } : {}),
             ...(Array.isArray(params.participants) ? { participants: params.participants } : {}),
             ...(params.destinationKey !== undefined ? { destinationKey: params.destinationKey } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
@@ -2657,7 +2654,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
             ...(params.archived !== undefined ? { archived: params.archived } : {}),
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
-            ...(params.runAs !== undefined ? { runAs: params.runAs } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
@@ -3114,73 +3110,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const fileShare = defineTool({
-    name: "share",
-    label: "share",
-    description:
-      "Grant access to an existing workspace file without changing its contents. The file stays in its current home; recipients see it under shared/.",
-    parameters: Type.Object(
-      {
-        path: Type.Optional(Type.String({ description: "Workspace file path; pair with scope." })),
-        id: Type.Optional(Type.String({ description: "Existing file artifact ID; pair with toScope." })),
-        toScope: Type.Optional(Type.String({ description: "Destination scope or teammate name for an artifact ID." })),
-        scope: Type.Optional(
-          Type.String({ description: 'Destination: "org", personal:<userId>, channel:<id>, or team:<id>.' }),
-        ),
-        permission: Type.Optional(
-          Type.Union([Type.Literal("read"), Type.Literal("write")], {
-            description: "read = view (default); write = view/manage.",
-          }),
-        ),
-      },
-      {
-        anyOf: [
-          { required: ["path", "scope"], properties: { id: false, toScope: false } },
-          { required: ["id", "toScope"], properties: { path: false, scope: false } },
-        ],
-      },
-    ),
-    async execute(callId, params) {
-      const tc = ref.current;
-      if (!tc) return text("[error] no active tool context");
-      if (params.id !== undefined && params.toScope !== undefined) {
-        if (!controlTools) return unavailable(callId, "files");
-        return sharingTool("file").execute(
-          callId,
-          { id: params.id, toScope: params.toScope, permission: params.permission },
-          undefined,
-          undefined,
-          undefined as never,
-        );
-      }
-      await recordCall(callId, { tool: "files", action: "share", ...params });
-      try {
-        const result = await tc.write(params.path!, undefined, [
-          { scope: params.scope!, permission: params.permission },
-        ]);
-        return recordResult(
-          callId,
-          { tool: "files", action: "share", path: params.path, shared: result.shared },
-          text(
-            result.shared.map((grant) => `shared ${params.path} with ${grant.scope} (${grant.permission})`).join("; "),
-          ),
-        );
-      } catch (e) {
-        return recordResult(
-          callId,
-          { tool: "files", action: "share", path: params.path, error: errMessage(e) },
-          text(`[share failed] ${errMessage(e)}`),
-          true,
-        );
-      }
-    },
-  });
-
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
     let description =
       "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    if (type === "file")
+      description =
+        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
     if (move)
       description =
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
@@ -3327,14 +3264,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
         )
         .join("\n\n"),
-      parameters: Type.Object(properties, { additionalProperties: false }),
+      parameters: Type.Object(properties, { additionalProperties: true }),
       async execute(callId, params, signal, onUpdate, ctx) {
         const index = groups.findIndex((group) => group.actions.includes(String(params.action)));
         if (index < 0 || !Check(variants[index]!, params)) {
           return recordResult(
             callId,
             { tool: name, action: params.action, error: "invalid_arguments" },
-            text(`[error] Invalid arguments for ${name} action ${String(params.action)}.`),
+            text(
+              `[error] Invalid arguments for ${name} action ${String(params.action)}. ${groups[index]?.operation.description ?? ""}`,
+            ),
             true,
           );
         }
@@ -3458,12 +3397,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "post: set true to post at THIS channel's top level instead of in the current thread — a deliberate wider-audience announcement. Default (unset) replies in the thread you're in. Ignored in a DM.",
         }),
       ),
-      files: Type.Optional(
-        Type.Array(Type.String(), {
-          description:
-            'post/reach: workspace-relative file paths to upload WITH your message — images, PDFs, code snippets, whatever. Write the file to an ordinary workspace path (e.g. "work/cover.png") and list that path here; it\'s attached to the message at its destination, like a person attaching a file. Short code can just go in `text` as a ``` block; use a file for anything downloadable.',
-        }),
-      ),
+      sandbox_id: outboundSandboxSchema,
+      files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
       ref: Type.Optional(
         Type.String({
@@ -3536,7 +3471,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             text: capText(params.text),
             ...(params.files?.length ? { files: params.files } : {}),
           });
-          const r = await tc.post(params.text, opts, params.files);
+          const r = await tc.post(params.text, opts, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3579,7 +3514,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             bytes: params.text.length,
             ...(params.files?.length ? { files: params.files.length } : {}),
           });
-          const r = await tc.reach(params.text, target, params.files);
+          const r = await tc.reach(params.text, target, params.files, params.sandbox_id);
           return recordResult(
             callId,
             {
@@ -3840,22 +3775,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "attach",
     label: "Attach",
     description:
-      "Send file(s) along with this turn's reply. Name workspace-relative paths of files you have " +
-      "already written; they ride out with the reply as real uploads. Call it again to add more — " +
-      "re-naming the same path replaces it. The result lists exactly what will be delivered; if a " +
-      "path is wrong nothing is staged and the result says so, so never claim you sent a file you " +
-      "have not seen confirmed here.",
+      "Send files with this turn's reply, using workspace paths or stored Files IDs. " +
+      "Repeated sources replace their staged copy. Any invalid file stages nothing; the result lists what will be delivered.",
     parameters: Type.Object({
-      files: Type.Array(Type.String(), {
-        description: 'Workspace-relative paths of files to deliver with this reply, e.g. ["report.md"].',
-      }),
+      files: outboundFilesSchema,
+      sandbox_id: outboundSandboxSchema,
     }),
-    async execute(callId, params: { files?: string[] }) {
+    async execute(callId, params: { files?: OutboundFile[]; sandbox_id?: string }) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
-      const files = (params.files ?? []).map((f) => String(f ?? "").trim()).filter(Boolean);
-      await recordCall(callId, { tool: "attach", files });
-      const r = await tc.attach(files);
+      const files = params.files ?? [];
+      await recordCall(callId, { tool: "attach", files, sandbox_id: params.sandbox_id });
+      const r = await tc.attach(files, params.sandbox_id);
       if (!r.ok) return recordResult(callId, { tool: "attach", ok: false }, text(`[not attached] ${r.message}`), true);
       const list = r.files.map((f) => `${f.name} (${f.sizeBytes} bytes, ${f.mimetype})`).join("; ");
       const total = r.staged > r.files.length ? ` ${r.staged} file(s) are now staged for this reply.` : "";
@@ -3916,11 +3847,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     tc: typeof ref.current,
     paths: readonly string[] | undefined,
     signal?: AbortSignal,
+    sandboxId?: string,
   ): Promise<string[]> {
     const out: string[] = [];
     for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
       const content = tc
-        ? await tc.read(path, signal).then(
+        ? await tc.read(path, signal, sandboxId).then(
             (r) => r.content,
             () => null,
           )
@@ -3972,11 +3904,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
-      if (ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
+      if (goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "goal_exists" },
-          text("A goal is already registered (active or paused) — goal action get shows it."),
+          text(
+            'A goal is already registered (active or paused) — goal action get shows it. If the user asked to replace it, cancel it first (goal action update "cancel").',
+          ),
           true,
         );
       }
@@ -3996,6 +3930,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         );
       }
       ref.goal = record;
+      ref.goalOpenedThisTurn = true;
+      await ref.saveGoal?.(record);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -4033,12 +3969,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
       "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
       'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
-      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap.",
+      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap. " +
+      'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
+      "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
     parameters: Type.Object({
-      status: Type.Union([Type.Literal("complete"), Type.Literal("resume")]),
+      status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
       note: Type.String({
         description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume: quote the user's request to resume.",
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -4046,10 +3984,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "Workspace paths of the deliverables; the governor reads them directly.",
         }),
       ),
+      sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
     }),
     async execute(callId, params) {
-      const p = params as { status?: "complete" | "resume"; note: string; files?: string[] };
-      const status = p.status === "resume" ? "resume" : "complete";
+      const p = params as {
+        status?: "complete" | "resume" | "cancel";
+        note: string;
+        files?: string[];
+        sandbox_id?: string;
+      };
+      const status = p.status === "resume" || p.status === "cancel" ? p.status : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -4057,6 +4001,35 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.note ? { note: p.note } : {}),
       });
       const goal = ref.goal;
+      if (status === "cancel") {
+        if (!goalIsOpen(goal)) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "no_open_goal" },
+            text("No active or paused goal to cancel."),
+            true,
+          );
+        }
+        if (ref.current?.humanTurn !== true || (ref.goalRound ?? 0) > 0 || ref.goalOpenedThisTurn) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "human_required" },
+            text(
+              "Only the user's own message can cancel a goal, and the message you are answering is not one that came after this goal started (it is a keep-going prompt, an automated run, or the goal was started or resumed this turn). The goal is unchanged. If the user asked to cancel, tell them to use the cancel button on the goal bar, or to stop this reply and ask again.",
+            ),
+            true,
+          );
+        }
+        cancelGoal(goal, p.note);
+        await ref.saveGoal?.(goal);
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", goal },
+          text(
+            "The goal is cancelled at the user's request: it is no longer enforced and was not completed. A new goal can be registered now if the user asked for one.",
+          ),
+        );
+      }
       if (status === "resume") {
         if (goal?.status !== "paused") {
           return recordCoreAuthoredResult(
@@ -4080,8 +4053,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         goal.status = "active";
         goal.updatedAt = goal.activeSince = Date.now();
+        ref.goalOpenedThisTurn = true;
         delete goal.pauseReason;
         delete goal.governor;
+        await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "update", goal },
@@ -4112,7 +4087,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
       }
-      const evidence = [p.note ?? "", ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal))].join("\n");
+      const evidence = [
+        p.note ?? "",
+        ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
+      ].join("\n");
       const verdict = ref.governGoal
         ? await ref
             .governGoal({
@@ -4132,6 +4110,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           };
       if (verdict.verdict !== "complete") {
         const applied = applyGovernorVerdict(goal, verdict);
+        await ref.saveGoal?.(goal);
         let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
         if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
         if (applied.verdict === "pause")
@@ -4147,6 +4126,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       goal.status = "complete";
       goal.updatedAt = Date.now();
       goal.completionNote = p.note;
+      await ref.saveGoal?.(goal);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "update", goal },
@@ -4283,7 +4263,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     async execute(callId, params) {
       const request = params as RuntimeRequest;
       await recordCall(callId, { tool: "runtime", ...request });
-      if (request.action !== "get" && ref.goal && (ref.goal.status === "active" || ref.goal.status === "paused")) {
+      if (request.action !== "get" && goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "runtime", error: "goal_in_progress" },
@@ -4322,7 +4302,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", { read, write, share: fileShare }),
+    resourceTool("files", { read, write, ...(controlTools ? { share: sharingTool("file") } : {}) }),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),

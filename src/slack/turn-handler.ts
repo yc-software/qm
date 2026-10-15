@@ -15,12 +15,10 @@ import {
   type ConversationTurn,
   type OverheardMessage,
   type ReactionTally,
-  type RunTaskView,
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
   type SlackFile,
-  type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
   REACTION_INSTRUCTION,
@@ -28,13 +26,11 @@ import {
   buildReactionTurnText,
   createAckPresenter,
   createDeduper,
-  createTaskListPresenter,
   createThreadTracker,
   decodeSlackEntities,
   dedupeKey,
   dedupedRun,
   deliveryCandidatesFor,
-  deliveryMetadata,
   statusPlaceholderKey,
   channelThreadRef,
   dmThreadRef,
@@ -56,10 +52,10 @@ import {
   refusalDelivery,
   refusalNote,
   renderConversationView,
+  resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
-  stripMention,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
@@ -220,7 +216,10 @@ export function createTurnHandler(deps: {
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const text = resolveMentions(
+      decodeSlackEntities(inc.rawText).trim(),
+      ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
+    );
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
@@ -292,7 +291,6 @@ export function createTurnHandler(deps: {
 
     let queuedRunId: string | undefined;
     let accepted = false;
-    let taskList: TaskListPresenter | undefined;
     let goalNotice: GoalNoticePresenter | undefined;
 
     if (inc.kind === "channel") {
@@ -373,6 +371,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
         text,
+        botHandle: ids.botHandle,
         threadRef,
         getInFlightRun: async (ref) =>
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
@@ -390,10 +389,14 @@ export function createTurnHandler(deps: {
         taskManaged,
         postAck: async (text) => {
           const rendered = toSlackMrkdwn(text);
-          if (await taskList?.addLead(rendered)) return;
           const ts = await postReply(rendered, undefined, statusKey());
-          if (ts) {
-            await taskList?.attach(ts, rendered);
+          if (ts && queuedRunId && !inc.unprompted) {
+            try {
+              await core.reportRunEditRef(queuedRunId, ts);
+            } catch (error) {
+              await client.chat.delete({ channel: inc.channel, ts }).catch(() => {});
+              throw error;
+            }
           }
         },
         addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
@@ -412,28 +415,6 @@ export function createTurnHandler(deps: {
       }));
     const acknowledges = !inc.unprompted || !inc.synthetic;
     if (!inc.unprompted) startAck();
-    if (!inc.unprompted) {
-      taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks, statusKey()),
-        update: (ts, text, blocks, metadata) =>
-          client.chat
-            .update({
-              channel: inc.channel,
-              ts,
-              text,
-              blocks,
-              ...(metadata ? { metadata } : {}),
-              ...botIdentityArgs(),
-            })
-            .then(() => {}),
-        checkpoint: async (ts) => {
-          if (queuedRunId) await core.reportRunEditRef(queuedRunId, ts);
-        },
-        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
-        onSurfacePosted: () => ack?.onSurfacePosted(),
-        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
-      });
-    }
     if (!inc.unprompted) {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
@@ -620,14 +601,6 @@ export function createTurnHandler(deps: {
                 onSurfacePosted: () => startAck().onSurfacePosted(),
               }
             : {}),
-          ...(taskList
-            ? {
-                onTasks: async (tasks: RunTaskView[]) => {
-                  await ack?.drain();
-                  await taskList?.onTasks(tasks);
-                },
-              }
-            : {}),
           ...(goalNotice
             ? {
                 onGoal: (goal: GoalNoticeView) => {
@@ -637,7 +610,6 @@ export function createTurnHandler(deps: {
             : {}),
         },
       );
-      await taskList?.settle();
       await goalNotice?.settle();
     } catch (err) {
       await settleAck();
@@ -713,10 +685,7 @@ export function createTurnHandler(deps: {
           }
         }
         await ack?.drain();
-        const finalizedTaskList = postText
-          ? ((await taskList?.finalize(postText, runKey ? deliveryMetadata(runKey) : undefined)) ?? false)
-          : false;
-        if (postText && !finalizedTaskList) await postReply(postText, undefined, runKey);
+        if (postText) await postReply(postText, undefined, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);

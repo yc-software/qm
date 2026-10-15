@@ -2,13 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import {
   bankGoalTurn,
   goalContinuationPrompt,
   goalFloorUnmet,
-  goalPausedNote,
-  goalSnapshotPayload,
-  rehydrateOpenGoal,
+  openGoal,
+  type GoalRecord,
 } from "../src/harness/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
@@ -21,6 +21,11 @@ function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
     governGoal: async () => ({ verdict: "complete", reasons: "proven" }),
     ...(screenToolResult ? { screenToolResult } : {}),
   };
+  let row: GoalRecord | null = null;
+  ref.saveGoal = async (goal) => {
+    row = structuredClone(goal);
+  };
+  const saved = () => row;
   const tools = createAgentTools(ref);
   type Res = { content: Array<{ type: string; text?: string }>; isError?: boolean };
   const by = (action: string) => {
@@ -30,7 +35,7 @@ function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
         (tool.execute as unknown as (id: string, p: unknown) => Promise<Res>)(id, { ...(params as object), action }),
     };
   };
-  return { ref, tools, by, create: by("create"), get: by("get"), update: by("update") };
+  return { ref, tools, by, saved, create: by("create"), get: by("get"), update: by("update") };
 }
 
 const textOf = (r: { content: Array<{ type: string; text?: string }> }) =>
@@ -248,11 +253,7 @@ test("resume is refused on turns no person started, and the goal stays paused", 
 });
 
 test("a person's own request resumes a paused goal with its objective, floor and banked time intact", async () => {
-  const { ref, create, update } = toolbox();
-  const entries: Array<{ type: string; payload: unknown }> = [];
-  ref.emit = async (entry) => {
-    entries.push(structuredClone(entry));
-  };
+  const { ref, saved, create, update } = toolbox();
   await create.execute("c1", { objective: "long haul", floor: { minMs: 60_000 }, token_cap: 500 });
   ref.goal!.status = "paused";
   ref.goal!.activeMs = 1234;
@@ -263,35 +264,27 @@ test("a person's own request resumes a paused goal with its objective, floor and
   assert.deepEqual(ref.goal?.floor, { minMs: 60_000 });
   assert.equal(ref.goal?.capTokens, 500);
   assert.equal(ref.goal?.activeMs, 1234);
-  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
+  assert.equal(openGoal(saved())?.status, "active");
   const floored = await update.execute("u2", { status: "complete", note: "done" });
   assert.match(textOf(floored as never), /work floor is not met/);
 });
 
 test("stop, then a later human turn resumes from the persisted pause and completes", async () => {
-  const history: Array<{ type: string; payload: unknown }> = [];
   const first = toolbox();
-  first.ref.emit = async (entry) => {
-    history.push(structuredClone(entry));
-  };
   await first.create.execute("c1", { objective: "ship it" });
-  first.ref.goal!.status = "paused"; // what the harness does on a user stop
-  history.push({ type: "system", payload: goalSnapshotPayload(first.ref.goal!) });
+  first.ref.goal!.status = "paused";
+  await first.ref.saveGoal!(first.ref.goal!);
 
   const next = toolbox();
-  next.ref.emit = first.ref.emit;
-  next.ref.goal = rehydrateOpenGoal(history);
+  next.ref.saveGoal = first.ref.saveGoal;
+  next.ref.goal = openGoal(first.saved());
   assert.equal(next.ref.goal?.status, "paused");
-  assert.match(
-    goalPausedNote(next.ref.goal!),
-    /explicitly asks to resume[\s\S]*never resume it on your own initiative/,
-  );
   next.ref.current = { humanTurn: true } as never;
   await next.update.execute("u1", { status: "resume", note: "user: resume the goal" });
-  assert.equal(rehydrateOpenGoal(history)?.status, "active");
+  assert.equal(openGoal(first.saved())?.status, "active");
   await next.update.execute("u2", { status: "complete", note: "verified" });
   assert.equal(next.ref.goal?.status, "complete");
-  assert.equal(rehydrateOpenGoal(history), null);
+  assert.equal(openGoal(first.saved()), null);
 });
 
 test("time spent while paused never counts toward the floor after a resume", async () => {
@@ -322,19 +315,20 @@ test("resume only applies to a paused goal", async () => {
   assert.equal(ref.goal?.status, "complete");
 });
 
-test("goal mutation receipts are durable before returning and rehydrate without an end-of-turn snapshot", async () => {
-  const { ref, create, update } = toolbox();
+test("goal mutations save the session goal before returning, without writing goal log entries", async () => {
+  const { ref, saved, create, update } = toolbox();
   const entries: Array<{ type: string; payload: unknown }> = [];
   ref.emit = async (entry) => {
     entries.push(structuredClone(entry));
   };
   await create.execute("c1", { objective: "keep working", floor: { minMs: 1000 } });
   ref.goal!.activeMs = 1000;
-  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
+  assert.equal(openGoal(saved())?.status, "active");
   await update.execute("u1", { status: "paused" });
-  assert.equal(rehydrateOpenGoal(entries)?.status, "active");
+  assert.equal(openGoal(saved())?.status, "active");
   await update.execute("u3", { status: "complete", note: "verified" });
-  assert.equal(rehydrateOpenGoal(entries), null);
+  assert.equal(saved()?.status, "complete");
+  assert.equal(openGoal(saved()), null);
   assert.ok(entries.every((entry) => entry.type !== "system"));
 });
 
@@ -347,10 +341,11 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema offers only complete and resume", () => {
+test("goal update schema offers only complete, resume and cancel", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
   assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);
+  assert.match(JSON.stringify(goal.parameters), /"cancel"/);
 });
 
 test("invalid goal status cannot fall through to completion", async () => {
@@ -377,4 +372,114 @@ test("update reads named workspace files into the governor's evidence", async ()
   assert.match(seen, /<file path="report.md">\n# Findings\nthree candidates\n<\/file>/);
   assert.match(seen, /<file path="gone.md">\n\[missing: no such file\]/);
   assert.equal(ref.goal?.status, "complete");
+});
+
+function nextTurn(goal: GoalRecord) {
+  const box = toolbox();
+  box.ref.goal = openGoal(structuredClone(goal));
+  return box;
+}
+
+for (const start of ["active", "paused"] as const) {
+  test(`cancel of a ${start} goal is refused on turns no person started, and the goal is unchanged`, async () => {
+    const first = toolbox();
+    await first.create.execute("c1", { objective: "long haul" });
+    first.ref.goal!.status = start;
+    const { ref, create, update } = nextTurn(first.ref.goal!);
+    const before = structuredClone(ref.goal);
+    for (const current of [null, {}, { humanTurn: false }]) {
+      ref.current = current as never;
+      const result = await update.execute("u1", { status: "cancel", note: "giving up" });
+      assert.match(textOf(result as never), /Only the user's own message can cancel/);
+    }
+    assert.deepEqual(ref.goal, before);
+    assert.match(textOf((await create.execute("c2", { objective: "another" })) as never), /already registered/);
+  });
+
+  test(`a person's request cancels a ${start} goal without completing it, and a replacement can be registered`, async () => {
+    const first = toolbox();
+    await first.create.execute("c1", { objective: "old research", floor: { minTurns: 50 } });
+    first.ref.goal!.status = start;
+    const { ref, saved, create, update } = nextTurn(first.ref.goal!);
+    let governorCalls = 0;
+    ref.governGoal = async () => {
+      governorCalls++;
+      return { verdict: "complete", reasons: "proven" };
+    };
+    ref.current = { humanTurn: true } as never;
+    const result = await update.execute("u1", {
+      status: "cancel",
+      note: "user: drop the old goal and start the new one",
+    });
+    assert.match(textOf(result as never), /cancelled at the user's request/);
+    assert.equal(ref.goal?.status, "cancelled");
+    assert.equal(ref.goal?.cancelNote, "user: drop the old goal and start the new one");
+    assert.equal(ref.goal?.completionNote, undefined);
+    assert.equal(governorCalls, 0, "cancelling never asks the governor to call the work complete");
+    assert.equal(saved()?.status, "cancelled");
+    assert.equal(openGoal(saved()), null, "a cancelled goal is not revived by a later turn");
+    const replaced = await create.execute("c2", { objective: "broader research and sending" });
+    assert.match(textOf(replaced as never), /registered and now enforced/);
+    assert.equal(ref.goal?.objective, "broader research and sending");
+    assert.equal(ref.goal?.status, "active");
+  });
+}
+
+test("the agent cannot cancel from a keep-going round or a goal it started or resumed this turn", async () => {
+  const first = toolbox();
+  await first.create.execute("c1", { objective: "grind on QA for 30 minutes" });
+  first.ref.current = { humanTurn: true } as never;
+  const same = await first.update.execute("u0", { status: "cancel", note: "user: grind on QA" });
+  assert.match(textOf(same as never), /Only the user's own message can cancel/);
+  assert.equal(first.ref.goal?.status, "active");
+
+  const keepGoing = nextTurn(first.ref.goal!);
+  keepGoing.ref.current = { humanTurn: true } as never;
+  keepGoing.ref.goalRound = 1;
+  assert.match(
+    textOf((await keepGoing.update.execute("u1", { status: "cancel", note: "this is hopeless" })) as never),
+    /Only the user's own message can cancel/,
+  );
+  assert.equal(keepGoing.ref.goal?.status, "active");
+
+  first.ref.goal!.status = "paused";
+  const resumed = nextTurn(first.ref.goal!);
+  resumed.ref.current = { humanTurn: true } as never;
+  await resumed.update.execute("u2", { status: "resume", note: "user: resume" });
+  assert.match(
+    textOf((await resumed.update.execute("u3", { status: "cancel", note: "user: resume" })) as never),
+    /Only the user's own message can cancel/,
+  );
+  assert.equal(resumed.ref.goal?.status, "active");
+});
+
+test("cancel needs an open goal", async () => {
+  const { ref, create, update } = toolbox();
+  ref.current = { humanTurn: true } as never;
+  assert.match(
+    textOf((await update.execute("u0", { status: "cancel", note: "x" })) as never),
+    /No active or paused goal/,
+  );
+  await create.execute("c1", { objective: "ship it" });
+  await update.execute("u1", { status: "complete", note: "done" });
+  assert.equal(ref.goal?.status, "complete");
+  assert.match(
+    textOf((await update.execute("u2", { status: "cancel", note: "x" })) as never),
+    /No active or paused goal/,
+  );
+  assert.equal(ref.goal?.status, "complete");
+});
+
+test("a turn resumed mid-way cannot cancel: it is not answering a fresh message from the person", async () => {
+  const first = toolbox();
+  await first.create.execute("c1", { objective: "long haul" });
+  const resumed = nextTurn(first.ref.goal!);
+  Object.assign(
+    resumed.ref,
+    harnessToolContext({ continueTurn: true, history: [], tools: { humanTurn: true } } as never),
+    { goal: resumed.ref.goal },
+  );
+  const result = await resumed.update.execute("u1", { status: "cancel", note: "user: cancel" });
+  assert.match(textOf(result as never), /Only the user's own message can cancel/);
+  assert.equal(resumed.ref.goal?.status, "active");
 });

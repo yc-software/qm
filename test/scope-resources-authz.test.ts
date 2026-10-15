@@ -20,7 +20,7 @@ function makeDeps() {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const crons = createCronStore();
   const webhooks = createWebhookStore();
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
     isInternal: (p: { type: string }) => p.type === "internal",
@@ -56,7 +56,7 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   });
   await deps.acl.grant({
     ownerScopeId: scopeId("personal", "U2"),
-    ref: "report.pdf",
+    ref: "f-channel",
     granteeScopeId: orgScope,
     permission: "read",
     grantedBy: "U2",
@@ -281,7 +281,7 @@ test("every file a context lists is one the viewer is authorized to open", async
     assert.ok(art, "the listed file exists");
     const myScopes = [scopeId("personal", U1), orgScope];
     const ownedByViewer = myScopes.includes(art!.ownerScopeId);
-    const grants = await deps.acl.grantsFor(art!.ownerScopeId, art!.path);
+    const grants = await deps.acl.grantsFor(art!.ownerScopeId, art!.id);
     const sharedToViewer = grants.some((g) => myScopes.includes(g.granteeScopeId));
     assert.ok(ownedByViewer || sharedToViewer, `${f.name} is openable by U1 (owned or ACL-granted)`);
   }

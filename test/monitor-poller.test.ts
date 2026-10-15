@@ -128,6 +128,7 @@ async function harness(opts?: {
   await processes.register({
     processId: "p-1",
     scopeId: SCOPE,
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm run build",
     ttlMs: 600_000,

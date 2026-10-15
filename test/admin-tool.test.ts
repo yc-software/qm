@@ -1,5 +1,3 @@
-import { openCodeToolDefinitions } from "../src/harness/opencode-harness.ts";
-import type { TSchema } from "typebox";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -93,9 +91,7 @@ test("ordinary turns only receive the inexpensive admin status action", () => {
   assert.equal(Check(tool.parameters, { action: "memory", scope: "org:test" }), false);
 });
 
-test("definition-only harnesses get admin schemas and cancelled calls never reach HTTP", async () => {
-  const tool = openCodeToolDefinitions({ controlTools: true }).find((t) => t.name === "admin")!;
-  assert.equal(Check(tool.parameters as TSchema, { action: "memory", scope: "org:test" }), true);
+test("cancelled admin calls never reach HTTP", async () => {
   const signal = AbortSignal.abort(new Error("synthetic stop"));
   const call = createAdminCall("http://127.0.0.1:1", "synthetic-capability");
   await assert.rejects(() => call({ action: "whoami" }, signal), /synthetic stop/);
@@ -164,12 +160,12 @@ test("strict approval of an admin read cannot authorize an admin mutation", asyn
   await tool.execute("read", { action: "whoami" }, undefined, undefined, {} as never);
   const blocked = await tool.execute(
     "write",
-    { action: "replace_memory", scope: "org:test", value: { content: "synthetic replacement" } },
+    { action: "delete_memory", scope: "org:test", value: { ids: ["1"] } },
     undefined,
     undefined,
     {} as never,
   );
   assert.deepEqual(calls, ["whoami"]);
-  assert.equal(approvals[0]?.approvalKey, "tool:admin:replace_memory");
+  assert.equal(approvals[0]?.approvalKey, "tool:admin:delete_memory");
   assert.match((blocked.content[0] as { text: string }).text, /needs human approval/);
 });

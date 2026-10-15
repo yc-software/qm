@@ -1,11 +1,13 @@
 import { html, type TemplateResult } from "lit";
 import { Plus } from "lucide";
-import { icon, initials } from "./ui";
+import { avatarTpl } from "./ui";
+import { icon } from "./icons";
 
 export interface DirectoryMatch {
   principalId: string;
   displayName: string;
   type: string;
+  avatarUrl?: string;
 }
 
 export function peopleResults(
@@ -17,7 +19,7 @@ export function peopleResults(
     ${matches.map(
       (person) =>
         html` <button class="project-member-result" type="button" ?disabled=${busy} @click=${() => select(person)}>
-          <span class="project-member-avatar" aria-hidden="true">${initials(person.displayName)}</span>
+          ${avatarTpl({ key: person.principalId, name: person.displayName, avatarUrl: person.avatarUrl })}
           <span class="project-member-name" dir="auto">${person.displayName}</span>${icon(Plus, 15)}
         </button>`,
     )}

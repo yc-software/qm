@@ -18,7 +18,6 @@ import {
 } from "lucide";
 import {
   api,
-  isContinuable,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -27,11 +26,12 @@ import {
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
-import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
+import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
+import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
-import { activityOf } from "./session-list";
+import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo } from "./sessions";
+import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
@@ -286,7 +286,7 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
 }
 
 function sessionsIn(scopeId: string): CoreSession[] {
-  return sessionsState.list
+  return sidebarSessions(sessionsState.list)
     .filter((s) => s.scopeId === scopeId && !s.archived)
     .sort((a, b) => activityOf(b) - activityOf(a));
 }
@@ -697,10 +697,11 @@ function projectMembersSection(context: CoreContext): TemplateResult {
       <div class="project-member-list">
         ${projectPeople(context).map((principalId) => {
           const label = memberLabel(context, principalId);
-          const viaChannel = Boolean(project.members.find((member) => member.principalId === principalId)?.viaChannel);
+          const member = project.members.find((m) => m.principalId === principalId);
+          const viaChannel = Boolean(member?.viaChannel);
           return html`
             <div class="project-member-row">
-              <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
+              ${avatarTpl({ key: principalId, name: label, avatarUrl: member?.avatarUrl })}
               <span class="project-member-name" dir="auto">${label}</span>
               ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
               ${
@@ -1381,7 +1382,7 @@ async function loadScopeResources(scopeId: string): Promise<void> {
 
 function contextSessionRow(s: CoreSession): TemplateResult {
   const surface = surfaceOf(s);
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>

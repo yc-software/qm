@@ -4,6 +4,8 @@ import {
   compatibleHarnessOptions,
   effortLevelsForHarness,
   loadoutModelId,
+  loadoutActions,
+  ultrafastChoice,
   modelLoadoutOptions,
   parseLoadout,
   reconcileLoadout,
@@ -55,10 +57,10 @@ test("invalid persistence cannot create a loadout or invent an effort level", ()
         { value: "pi:bad", effort: "extreme", fast: true },
         { value: "pi:missing" },
         { value: "pi:valid", effort: "low", fast: "true" },
-        { value: "codex:other", effort: "xhigh", fast: true },
+        { value: "claude:other", effort: "xhigh", fast: true },
       ]),
     ),
-    [entry("pi:valid", "low"), entry("codex:other", "xhigh", true)],
+    [entry("pi:valid", "low"), entry("claude:other", "xhigh", true)],
   );
 });
 
@@ -75,10 +77,10 @@ test("persistence keeps the first valid model settings and eight unique models i
 test("legacy harness pairs merge into one model preference while preserving the first settings", () => {
   const first = entry("claude:one", "high", true);
   const legacy = entry("two", "low");
-  assert.deepEqual(parseLoadout(JSON.stringify([first, entry("pi:one", "max"), legacy, entry("codex:two", "xhigh")])), [
-    first,
-    legacy,
-  ]);
+  assert.deepEqual(
+    parseLoadout(JSON.stringify([first, entry("pi:one", "max"), legacy, entry("claude:two", "xhigh")])),
+    [first, legacy],
+  );
   assert.deepEqual(parseLoadout(JSON.stringify([legacy, entry("pi:two"), first])), [legacy, first]);
 });
 
@@ -88,30 +90,30 @@ test("model identity preserves colon-containing model ids and unqualified legacy
   assert.equal(loadoutModelId("legacy"), "legacy");
   const free = entry("pi:provider/model:free", "high");
   const paid = entry("pi:provider/model:paid", "low");
-  assert.deepEqual(parseLoadout(JSON.stringify([free, entry("opencode:provider/model:free"), paid])), [free, paid]);
+  assert.deepEqual(parseLoadout(JSON.stringify([free, entry("claude:provider/model:free"), paid])), [free, paid]);
 });
 
 test("reconciliation removes unavailable models and keeps a valid active model's position and current tweaks", () => {
-  const saved = [entry("pi:gone"), entry("codex:one", "high"), entry("pi:two", "low", true)];
+  const saved = [entry("pi:gone"), entry("claude:one", "high"), entry("pi:two", "low", true)];
   const snapshot = structuredClone(saved);
-  const active = entry("codex:one", "xhigh", true);
-  assert.deepEqual(reconcileLoadout(saved, [option("pi:two"), option("codex:one")], active), [active, saved[2]]);
+  const active = entry("claude:one", "xhigh", true);
+  assert.deepEqual(reconcileLoadout(saved, [option("pi:two"), option("claude:one")], active), [active, saved[2]]);
   assert.deepEqual(saved, snapshot);
 });
 
 test("reconciliation never restores an unavailable active model", () => {
-  const saved = [entry("pi:gone", "max", true), entry("codex:one", "medium")];
-  assert.deepEqual(reconcileLoadout(saved, [option("codex:one")], saved[0]!), [saved[1]]);
+  const saved = [entry("pi:gone", "max", true), entry("claude:one", "medium")];
+  assert.deepEqual(reconcileLoadout(saved, [option("claude:one")], saved[0]!), [saved[1]]);
   assert.deepEqual(reconcileLoadout(saved, [], saved[0]!), []);
 });
 
 test("an unavailable saved harness falls back to another harness for the same model in the same slot", () => {
   const saved = [entry("claude:one", "high", true), entry("pi:two", "low"), entry("codex:gone")];
   const snapshot = structuredClone(saved);
-  const options = [option("opencode:two"), option("pi:one"), option("claude:two")];
+  const options = [option("claude:two"), option("pi:one")];
   assert.deepEqual(reconcileLoadout(saved, options, entry("codex:gone")), [
     entry("pi:one", "high", true),
-    entry("opencode:two", "low"),
+    entry("claude:two", "low"),
   ]);
   assert.deepEqual(saved, snapshot);
 });
@@ -126,7 +128,7 @@ test("reconciliation qualifies legacy values and replaces duplicate harness pair
 
 test("a new active model remains selectable even when eight saved models fill the loadout", () => {
   const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(`pi:${id}`));
-  const active = entry("codex:nine", "xhigh", true);
+  const active = entry("claude:nine", "xhigh", true);
   const options = [...saved, active].map(({ value }) => option(value));
   assert.deepEqual(reconcileLoadout(saved, options, active), [...saved.slice(0, 7), active]);
   assert.deepEqual(reconcileLoadout([], options, active), [active]);
@@ -134,7 +136,7 @@ test("a new active model remains selectable even when eight saved models fill th
 
 test("editing a setup preserves order and other models' independent effort and fast settings", () => {
   const first = entry("pi:first", "low", true);
-  const second = entry("codex:second", "high");
+  const second = entry("claude:second", "high");
   const saved = [first, second];
   const updated = entry(second.value, "xhigh", true);
   const next = upsertLoadout(saved, updated);
@@ -145,7 +147,7 @@ test("editing a setup preserves order and other models' independent effort and f
 
 test("adding at capacity preserves the newly selected model and never duplicates an existing setup", () => {
   const saved = ["one", "two", "three", "four", "five", "six", "seven", "eight"].map((id) => entry(`pi:${id}`));
-  const active = entry("codex:nine", "xhigh", true);
+  const active = entry("claude:nine", "xhigh", true);
   assert.deepEqual(upsertLoadout(saved, active), [...saved.slice(0, 7), active]);
   assert.deepEqual(upsertLoadout([...saved, active], active), [...saved.slice(0, 7), active]);
   const updated = entry(saved[1]!.value, "max", true);
@@ -166,7 +168,7 @@ test("changing a model's harness updates its existing slot even at capacity", ()
 });
 
 test("compatible harness choices never substitute another model and deduplicate a harness", () => {
-  const options = [option("pi:one"), option("codex:two"), option("claude:one"), option("pi:one")];
+  const options = [option("pi:one"), option("claude:two"), option("claude:one"), option("pi:one")];
   assert.deepEqual(compatibleHarnessOptions(options, "one"), [options[0], options[2]]);
   assert.deepEqual(compatibleHarnessOptions(options, "two"), [options[1]]);
   assert.deepEqual(compatibleHarnessOptions(options, "missing"), []);
@@ -177,13 +179,13 @@ test("the model catalog has one row per model and remembers each model's saved h
     option("pi:one"),
     option("pi:two"),
     option("claude:one"),
-    option("codex:two"),
-    option("codex:three"),
-    option("codex:two"),
+    option("claude:two"),
+    option("claude:three"),
+    option("claude:two"),
   ];
   const saved = [entry("claude:one"), entry("pi:one"), entry("pi:two")];
-  assert.deepEqual(modelLoadoutOptions(options, saved, "codex"), [options[2], options[1], options[4]]);
-  assert.deepEqual(modelLoadoutOptions(options, [], "codex"), [options[0], options[3], options[4]]);
+  assert.deepEqual(modelLoadoutOptions(options, saved, "claude"), [options[2], options[1], options[4]]);
+  assert.deepEqual(modelLoadoutOptions(options, [], "claude"), [options[2], options[3], options[4]]);
   assert.deepEqual(modelLoadoutOptions(options, []), [options[0], options[1], options[4]]);
 });
 
@@ -204,13 +206,9 @@ test("harness effort choices exclude unsupported settings and label extra high c
     effortLevelsForHarness("claude").map(({ value }) => value),
     ["auto", "low", "medium", "high", "xhigh", "max"],
   );
-  assert.deepEqual(
-    effortLevelsForHarness("codex").map(({ value }) => value),
-    ["auto", "low", "medium", "high", "xhigh"],
-  );
-  for (const harnessId of ["pi", "claude", "codex"])
+  for (const harnessId of ["pi", "claude"])
     assert.equal(effortLevelsForHarness(harnessId).find(({ value }) => value === "xhigh")?.label, "Extra high");
-  for (const harnessId of ["opencode", "mock", "unknown"])
+  for (const harnessId of ["mock", "unknown"])
     assert.deepEqual(effortLevelsForHarness(harnessId), [{ value: "auto", label: "Default" }]);
 });
 
@@ -229,8 +227,7 @@ test("native reasoning choices require model and harness metadata and always off
     { value: "low", label: "Low" },
     { value: "high", label: "High" },
   ]);
-  for (const harness of ["claude", "codex"])
-    assert.ok(effortLevelsForHarness(harness, model).every(({ value }) => value !== "adaptive" && value !== "default"));
+  assert.ok(effortLevelsForHarness("claude", model).every(({ value }) => value !== "adaptive" && value !== "default"));
   assert.ok(
     effortLevelsForHarness("pi", option("pi:one").model).every(
       ({ value }) => value !== "adaptive" && value !== "default",
@@ -242,12 +239,32 @@ test("native reasoning choices require model and harness metadata and always off
   assert.deepEqual(parseLoadout(JSON.stringify(saved)), saved);
 });
 
-test("Astra speed variants share a preset and preserve a saved tier", () => {
-  const base = option("pi:gpt-6-astra");
-  const ultra = option("pi:gpt-6-astra-ultrafast");
-  const saved = entry(ultra.value, "high");
-  assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
-  assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
-  assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
-  assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
-});
+for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
+  test(`${modelId} speed variants share a preset and preserve a saved tier`, () => {
+    const base = option(`pi:${modelId}`);
+    const ultra = option(`pi:${modelId}-ultrafast`);
+    const saved = entry(ultra.value, "high");
+    assert.deepEqual(modelLoadoutOptions([ultra, base], [], "pi"), [base]);
+    assert.deepEqual(modelLoadoutOptions([base, ultra], [saved], "pi"), [ultra]);
+    assert.deepEqual(modelLoadoutOptions([ultra], [], "pi"), [ultra]);
+    assert.deepEqual(upsertLoadout([entry(base.value)], saved), [saved]);
+    assert.deepEqual(parseLoadout(JSON.stringify([saved, entry(base.value)])), [saved]);
+    assert.equal(ultrafastChoice([base, ultra], base), ultra);
+    assert.equal(ultrafastChoice([base, ultra], ultra), base);
+    assert.equal(ultrafastChoice([base], base), undefined);
+    assert.equal(ultrafastChoice([base, ultra], option(`claude:${modelId}`)), undefined);
+    let current = saved;
+    const actions = loadoutActions(
+      () => [base, ultra],
+      () => current,
+      (_, next) => {
+        current = next;
+      },
+      (id) => id === modelId,
+    );
+    actions.toggleFastMode();
+    assert.deepEqual(current, entry(base.value, "high", true));
+    actions.toggleFastMode();
+    assert.deepEqual(current, entry(base.value, "high", false));
+  });
+}

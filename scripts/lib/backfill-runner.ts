@@ -3,7 +3,7 @@ import type { Lease, SessionStore } from "../../src/sessions/session-store.ts";
 import type { Session } from "../../src/types.ts";
 import { errMessage } from "../../src/util/errors.ts";
 
-export function argValue(name: string): string | undefined {
+function argValue(name: string): string | undefined {
   const at = process.argv.indexOf(name);
   if (at < 0) return undefined;
   const value = process.argv[at + 1];

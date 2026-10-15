@@ -168,29 +168,6 @@ test("cron credential approval does not restore a removed delivery destination",
   assert.equal((await f.deliveries.pending("principal")).length, 0);
 });
 
-test("cron credential approval preserves scopeShared execution and checks current membership", async () => {
-  const f = await fixture({ recipientId: "U_BOB", status: "accepted" });
-  await f.crons.update(f.cron.id, {
-    runAs: "scopeShared",
-    members: [{ id: "U_ALICE", type: "internal" }],
-    unattendedGrants: ["owner-only-grant"],
-  });
-  f.deps.currentScopeMembers = async () => [{ id: "U_ALICE", type: "internal" }];
-
-  await fireAskResolution(f.deps, f.ask);
-
-  assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0]!.ownerKeychainUnion, true);
-  assert.equal(f.requests[0]!.unattendedGrants, undefined);
-
-  f.deps.currentScopeMembers = async () => [{ id: "U_BOB", type: "internal" }];
-  const outcome = await fireAskResolution(f.deps, { ...f.ask, id: "later-ask" });
-
-  assert.equal(outcome.ran, false);
-  assert.equal(f.requests.length, 1);
-  assert.equal((await f.deliveries.pending("principal")).length, 1);
-});
-
 for (const schedule of [{ everyMs: 60_000 }, { cron: "0 9 * * *", timezone: "UTC" }]) {
   test(`cron credential approval does not resume a paused recurring job (${JSON.stringify(schedule)})`, async () => {
     const f = await fixture({ recipientId: "U_BOB", status: "accepted" });
@@ -216,21 +193,4 @@ test("cron credential approval resumes a disabled one-shot job in its original f
   assert.equal(f.requests.length, 1);
   assert.equal(f.requests[0]!.conversation.threadRef, f.ask.requesterThreadRef);
   assert.equal((await f.deliveries.pending("principal")).length, 1);
-});
-
-test("credential resumption retains the originating cron's Open requirement and rechecks it", async () => {
-  const f = await fixture({ recipientId: "U_BOB", status: "accepted" });
-  await f.crons.update(f.cron.id, {
-    runAs: "scopeShared",
-    ownerResourcesRequireOpen: true,
-    members: [{ id: "U_ALICE", type: "internal" }],
-  });
-  let open = true;
-  f.deps.isOpenScopeMember = async () => open;
-  await fireAskResolution(f.deps, f.ask);
-  assert.equal(f.requests[0]?.ownerResourcesRequireOpen, true);
-  open = false;
-  const out = await fireAskResolution(f.deps, { ...f.ask, id: "revoked-open-ask" });
-  assert.equal(out.authzFailed, true);
-  assert.equal(f.requests.length, 1);
 });

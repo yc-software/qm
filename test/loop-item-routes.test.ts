@@ -863,6 +863,7 @@ test("inbox list refreshes open Gmail items before returning counts, but not ano
     featureFlags: { enabled: async () => true },
     items: w.loops.items,
     tokens: { connectorAccessToken: async () => "synthetic" },
+    directory: { getBySlackId: async () => null },
     fetchImpl: async (url) => {
       refreshes.push(String(url));
       return Response.json({ messages: [{ internalDate: "2000", labelIds: ["SENT"], snippet: "Already replied" }] });
@@ -1189,6 +1190,7 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
     items: w.loops.items,
     featureFlags: { enabled },
     tokens: { connectorAccessToken: async () => assert.fail("disabled Inbox must not read credentials") },
+    directory: { getBySlackId: async () => assert.fail("disabled Inbox must not read the directory") },
     fetchImpl: async () => assert.fail("disabled Inbox must not call Slack"),
   });
   const result = await call(w, {

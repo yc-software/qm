@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTurnStream, goalViewFromEntry } from "../src/runs/turn-stream.ts";
+import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -74,7 +74,8 @@ test("caps a run's buffer at maxChars", () => {
   const s = createTurnStream({ maxChars: 5 });
   s.publish("r1", "abc");
   s.publish("r1", "defghij");
-  assert.equal(s.snapshot("r1"), "abcde", "buffer stops growing past the cap");
+  assert.equal(s.snapshot("r1"), "ij", "buffer retains the newest text past the cap");
+  assert.equal(s.startOffset("r1"), 8);
 });
 
 test("end() evicts a finished run's buffer after the grace period", async () => {
@@ -166,35 +167,6 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
   } finally {
     await built.runtime.stop();
   }
-});
-
-test("getRun projects durable tasks for its surface poller", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "ts-")),
-      workers: 0,
-      leaseTtlMs: 5_000,
-      reaperIntervalMs: 60_000,
-    }),
-  );
-  const ack = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "task-view" },
-    text: "hello",
-    async: true,
-  });
-  await built.tasks.create({
-    id: "task-1",
-    sessionId: "task-view",
-    originRunId: ack.runId!,
-    title: "research",
-    status: "in_progress",
-  });
-
-  assert.deepEqual((await built.app.getRun(ack.runId!))?.tasks, [
-    { id: "task-1", title: "research", status: "in_progress" },
-  ]);
 });
 
 test("a queued run exposes the agent's in-flight reply via getRun().partial", async () => {
@@ -431,29 +403,29 @@ test("turn-stream: noteGoal/goal snapshots", () => {
   assert.equal(stream.goal("r1")?.status, "complete");
 });
 
-test("goalViewFromEntry extracts goal snapshots from tool results and system entries", () => {
+test("goalView renders a goal record's status and floor", () => {
   const record = {
     objective: "work for a while",
-    status: "active",
+    status: "active" as const,
     floor: { minMs: 1_800_000, minTurns: 3 },
+    tokensUsed: 0,
     createdAt: 10,
     updatedAt: 20,
   };
-  const fromTool = goalViewFromEntry("tool_result", { tool: "goal", action: "create", goal: record });
-  assert.equal(fromTool?.objective, "work for a while");
-  assert.equal(fromTool?.status, "active");
-  assert.equal(fromTool?.floor, "30m, 3 turns");
-  const fromSystem = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "complete" } });
-  assert.equal(fromSystem?.status, "complete");
-  const paused = goalViewFromEntry("system", { kind: "goal", goal: { ...record, status: "paused" } });
-  assert.equal(paused?.status, "paused");
-  assert.equal(goalViewFromEntry("tool_result", { tool: "execute", goal: record }), null);
-  assert.equal(goalViewFromEntry("tool_result", { tool: "get_goal", goal: null }), null);
-  assert.equal(goalViewFromEntry("system", { kind: "compaction" }), null);
-  assert.equal(
-    goalViewFromEntry("tool_result", { tool: "update_goal", goal: { objective: "", status: "active" } }),
-    null,
-  );
+  assert.deepEqual(goalView(record), {
+    objective: "work for a while",
+    status: "active",
+    floor: "30m, 3 turns",
+    createdAt: 10,
+    updatedAt: 20,
+  });
+  const { floor: _floor, ...bare } = record;
+  assert.deepEqual(goalView({ ...bare, status: "paused" }), {
+    objective: "work for a while",
+    status: "paused",
+    createdAt: 10,
+    updatedAt: 20,
+  });
 });
 
 test("monitor wakes persist engagement after the reply gate", async () => {

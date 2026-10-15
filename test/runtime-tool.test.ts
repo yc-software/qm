@@ -16,7 +16,7 @@ const claims: CapabilityClaims = {
 };
 async function setup(allowed = true) {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
+  config.setApprovedHarnesses(["pi", "claude"]);
   await config.flushScope("org:default-org");
   await config.setRuntimeSelectionLatest("org:default-org", active);
   const service = createRuntimeService(
@@ -68,7 +68,7 @@ test("runtime changes reject revoked access, bots, triggers and foreign personal
 
 test("runtime rejects unsupported effort and fast mode instead of silently dropping them", async () => {
   const { service } = await setup();
-  assert.deepEqual(await service(claims, active, { action: "set", harness: "opencode" }), {
+  assert.deepEqual(await service(claims, active, { action: "set", harness: "claude", effort: "ultracode" }), {
     ok: false,
     error: "effort_not_supported",
   });
@@ -105,7 +105,7 @@ test("runtime recovery uses only durable decisions belonging to the same run and
     entry("other", "alice", "claude-sonnet-5"),
     entry("run", "bob", "claude-opus-5"),
   ];
-  assert.equal(recoveredRuntime(entries, "run", "alice")?.modelId, "gpt-6-astra");
+  assert.equal(recoveredRuntime(entries, "run", "alice")?.choice.modelId, "gpt-6-astra");
   assert.equal(recoveredRuntime(entries, "new", "alice"), undefined);
 });
 

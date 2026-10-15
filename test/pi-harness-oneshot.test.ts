@@ -22,7 +22,6 @@ import {
   sanitizeLlmPayload,
   trimPayloadToByteBudget,
   seedRawMessagesIntoSession,
-  thinkingBlocksFromContent,
   toPiMessage,
   transportFromModel,
 } from "../src/harness/pi-harness.ts";
@@ -863,30 +862,6 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
   assert.match(prompt, /NEWEST message:\nyes, send it/);
 });
 
-test("thinkingBlocksFromContent extracts reasoning, KEEPS signatures (complete WAL), keeps redacted, skips text/tool/empty", () => {
-  const content = [
-    { type: "thinking", thinking: "Let me check the docs first.", thinkingSignature: "AAAA-opaque-base64-token" },
-    { type: "text", text: "On it." },
-    { type: "toolCall", id: "t1", name: "execute", arguments: { command: "ls" } },
-    { type: "thinking", thinking: "   ", thinkingSignature: "sig" },
-    { type: "thinking", thinking: "", thinkingSignature: "encrypted-payload", redacted: true },
-    { type: "thinking", thinking: "No signature here." },
-  ];
-  const out = thinkingBlocksFromContent(content);
-  assert.deepEqual(out, [
-    { thinking: "Let me check the docs first.", thinkingSignature: "AAAA-opaque-base64-token" },
-    { thinking: "", redacted: true, thinkingSignature: "encrypted-payload" },
-    { thinking: "No signature here." },
-  ]);
-});
-
-test("thinkingBlocksFromContent is defensive: non-arrays and non-thinking content yield nothing", () => {
-  assert.deepEqual(thinkingBlocksFromContent(undefined), []);
-  assert.deepEqual(thinkingBlocksFromContent(null), []);
-  assert.deepEqual(thinkingBlocksFromContent("a string"), []);
-  assert.deepEqual(thinkingBlocksFromContent([{ type: "text", text: "hi" }]), []);
-});
-
 test("resolveConfiguredModelId: known ids pass through, unknown ids fall back to the default", () => {
   assert.equal(resolveConfiguredModelId("claude-opus-4-8"), "claude-opus-4-8");
   assert.equal(resolveConfiguredModelId(undefined), DEFAULT_AGENT_MODEL_ID);
@@ -1006,4 +981,43 @@ test("Pi judge uses supported reasoning effort when configured with Astra", asyn
   assert.ok(request);
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
+});
+
+test("oneShot stops a request whose abort lands before Pi starts its run", { timeout: 10_000 }, async (t) => {
+  let requests = 0;
+  const server = createServer((request) => {
+    requests += 1;
+    request.resume();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const baseModel = getBuiltinModel("anthropic", "claude-haiku-4-5");
+  assert(baseModel);
+  const model = { ...baseModel, baseUrl: `http://127.0.0.1:${address.port}` };
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const subscribe = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    subscribe(...args);
+    controller.abort();
+  }) as AbortSignal["addEventListener"];
+
+  const outcome = await oneShot("pi-abort-test", model, "test-key", "system", "hello", { signal }).then(
+    (text) => ({ text }),
+    (error: unknown) => ({ error }),
+  );
+
+  assert.deepEqual(outcome, { text: undefined });
+  assert.equal(requests, 0);
 });

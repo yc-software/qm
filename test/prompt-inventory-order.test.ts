@@ -38,7 +38,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
     ids.map((id) => ({
       handlePath: `shared/${id}`,
       ownerScopeId: "personal:U1",
-      ownerPath: `${id}.txt`,
+      fileId: id,
       permission: "read",
     })),
     sharedManifest,

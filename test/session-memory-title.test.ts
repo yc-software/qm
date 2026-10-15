@@ -86,7 +86,7 @@ test("participant can read child history and title across memory checkpoints", a
   await r.sessions.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "PRIVATE_SENTINEL" } });
   await r.sessions.releaseLease(lease);
   const result = await r.syscallsFor(r.room).read({ target: child.id });
-  assert.ok(result.ok && result.mode === "tape");
+  assert.ok(result.ok && result.mode === "transcript");
   assert.equal(result.title, "PRIVATE_SENTINEL");
   assert.match(result.rendered, /PRIVATE_SENTINEL/);
   const listed = await r.syscallsFor(r.room).read({});

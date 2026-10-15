@@ -15,7 +15,6 @@ import {
   sentMailTpl,
 } from "./sent-mail";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -49,7 +48,8 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, icon, initials, relTime, sheenLabel, slackMark, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, avatarTpl, relTime, sheenLabel, slackMark, workingWave } from "./ui";
+import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
 
@@ -1162,41 +1162,6 @@ function participantsOf(item: InboxItem): Participant[] {
     if (!found.has(key)) found.set(key, { key, name, avatarUrl: slack ? message.avatarUrl : undefined });
   }
   return [...found.values()];
-}
-
-function avatarHue(key: string): number {
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) % 360;
-  return hash;
-}
-
-function avatarTpl(person: Participant): TemplateResult {
-  const photo = person.avatarUrl?.startsWith("https://") ? person.avatarUrl : undefined;
-  return html`<span
-    class="inbox-avatar"
-    style=${`--avatar-hue:${avatarHue(person.key)}`}
-    ${tip(person.name)}
-    aria-hidden="true"
-  >
-    ${initials(person.name)}
-    ${
-      photo
-        ? keyed(
-            photo,
-            html`<img
-              src=${photo}
-              alt=""
-              loading="lazy"
-              decoding="async"
-              referrerpolicy="no-referrer"
-              @error=${(event: Event) => {
-                (event.currentTarget as HTMLImageElement).hidden = true;
-              }}
-            />`,
-          )
-        : nothing
-    }
-  </span>`;
 }
 
 const AVATARS_SHOWN = 4;

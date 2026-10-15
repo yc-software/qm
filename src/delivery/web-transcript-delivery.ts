@@ -1,20 +1,16 @@
 import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
-import {
-  appendEntryOutsideTurn,
-  entryDeliveryKey,
-  type SessionStore,
-  type TranscriptAppendSessions,
-} from "../sessions/session-store.ts";
-import { messageTag } from "../util/message-tag.ts";
+import { entryDeliveryKey, type SessionStore } from "../sessions/session-store.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
 const WRITE_GIVEUP_MS = 10 * 60_000;
 
-type WebTranscriptSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "getByThread" | "acquireLease" | "releaseLease" | "getEntries">;
+type WebTranscriptSessions = Pick<
+  SessionStore,
+  "append" | "getByThread" | "acquireLease" | "releaseLease" | "getEntries"
+>;
 
 export function turnRecordedFailure(
   tail: readonly SessionEntry[],
@@ -74,18 +70,7 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
             type: "assistant" as const,
             payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
           };
-      await appendEntryOutsideTurn(
-        sessions,
-        lease,
-        { ...entry, scopeLabel },
-        failure
-          ? undefined
-          : (appended) =>
-              messageTag(
-                { from: "agent", ...(via ? { via } : {}), sentAt: new Date(appended.createdAt).toISOString() },
-                d.text,
-              ),
-      );
+      await sessions.append(lease, { ...entry, scopeLabel });
       return true;
     } finally {
       await sessions.releaseLease(lease);

@@ -4,7 +4,7 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
-import type { RuntimeConfig } from "../src/core-bridge.ts";
+import type { RuntimeConfig } from "../src/runtime-config-cache.ts";
 import type { ModelMetadata } from "../src/pi-models.ts";
 import type { LoadoutEntry } from "../src/composer-loadout.ts";
 
@@ -125,12 +125,10 @@ test("the personal-account picker preserves composer choices and saves context d
   }
   const config: RuntimeConfig = {
     scopeId: "personal:tester",
-    approvedHarnesses: ["pi", "claude", "opencode", "codex"],
+    approvedHarnesses: ["pi", "claude"],
     modelsByHarness: {
-      pi: ["alpha", "gamma", "delta", "epsilon"],
+      pi: ["alpha", "beta", "gamma", "delta", "epsilon"],
       claude: ["alpha", "delta"],
-      opencode: ["alpha"],
-      codex: ["beta"],
     },
     modelCatalog: {
       alpha: model("alpha", "Alpha"),
@@ -148,7 +146,7 @@ test("the personal-account picker preserves composer choices and saves context d
   localStorage.setItem(
     "web-ui:loadout",
     JSON.stringify([
-      { value: "codex:beta", effort: "xhigh", fast: false },
+      { value: "pi:beta", effort: "xhigh", fast: false },
       { value: "claude:alpha", effort: "high", fast: true },
       { value: "pi:alpha", effort: "low", fast: false },
       { value: "pi:gamma", effort: "medium", fast: false },
@@ -179,6 +177,7 @@ test("the personal-account picker preserves composer choices and saves context d
         },
         activePendingApprovals: () => [],
         hasUnresolvedApproval: () => false,
+        turnRuntime: () => null,
         hasLiveRun: () => false,
         drawActiveChat: draw,
       },
@@ -260,9 +259,8 @@ test("the personal-account picker preserves composer choices and saves context d
     button(".loadout-button").click();
     await tick();
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
-    assert.ok(pick("Beta").querySelector('[aria-label="Codex"]'));
+    assert.ok(pick("Beta").querySelector('[aria-label="OpenAI"]'));
     assert.ok(pick("Gamma").querySelector('[aria-label="OpenAI"]'));
-    assert.equal(pick("Gamma").querySelector('[aria-label="Codex"]'), null);
     assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Claude Code");
     assert.equal(host.querySelectorAll(".loadout-default").length, 1);
     assert.equal(pick("Alpha").querySelector(".loadout-default")?.textContent, "my default");
@@ -277,19 +275,8 @@ test("the personal-account picker preserves composer choices and saves context d
     const choices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
     assert.deepEqual(
       choices.map((choice) => choice.textContent?.trim()),
-      ["Pi", "Claude Code", "OpenCode", "Codex"],
+      ["Pi", "Claude Code"],
     );
-    assert.equal(choices[3]!.getAttribute("aria-disabled"), "true");
-    assert.equal(choices[3]!.getAttribute("aria-description"), "Codex cannot run Alpha.");
-    choices[3]!.dispatchEvent(new MouseEvent("mouseenter"));
-    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Codex cannot run Alpha.");
-    const beforeDisabledClick = saved();
-    const beforeDisabledUpdates = updates.length;
-    choices[3]!.click();
-    assert.equal(composer!.currentModelOption()?.value, "claude:alpha");
-    assert.deepEqual(saved(), beforeDisabledClick);
-    assert.equal(updates.length, beforeDisabledUpdates);
-    assert.ok(host.querySelector(".loadout-submenu"));
     assert.equal(choices[1]!.getAttribute("aria-checked"), "true");
     assert.equal(document.activeElement, choices[1]);
     choices[0]!.click();
@@ -301,7 +288,7 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(document.activeElement, button('[data-loadout-section="harness"]'));
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.deepEqual(saved(), [
-      { value: "codex:beta", effort: "xhigh", fast: false },
+      { value: "pi:beta", effort: "xhigh", fast: false },
       { value: "pi:alpha", effort: "high", fast: true },
       { value: "pi:gamma", effort: "medium", fast: false },
     ]);
@@ -314,19 +301,27 @@ test("the personal-account picker preserves composer choices and saves context d
     button(".loadout-back").click();
 
     pick("Beta").click();
-    assert.equal(composer!.currentModelOption()?.value, "codex:beta");
+    assert.equal(composer!.currentModelOption()?.value, "pi:beta");
     button('[data-loadout-section="harness"]').click();
     await tick();
     const betaChoices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
     assert.deepEqual(
       betaChoices.map((choice) => choice.getAttribute("aria-disabled")),
-      ["true", "true", "true", "false"],
+      ["false", "true"],
     );
     const claude = betaChoices[1]!;
+    assert.equal(claude.getAttribute("aria-description"), "Claude Code cannot run Beta.");
+    claude.dispatchEvent(new MouseEvent("mouseenter"));
+    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Claude Code cannot run Beta.");
     claude.focus();
     assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Claude Code cannot run Beta.");
+    const beforeDisabledClick = saved();
+    const beforeDisabledUpdates = updates.length;
     claude.click();
-    assert.equal(composer!.currentModelOption()?.value, "codex:beta");
+    assert.equal(composer!.currentModelOption()?.value, "pi:beta");
+    assert.deepEqual(saved(), beforeDisabledClick);
+    assert.equal(updates.length, beforeDisabledUpdates);
+    assert.ok(host.querySelector(".loadout-submenu"));
     button(".loadout-back").click();
     pick("Alpha").click();
     assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
@@ -354,21 +349,21 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Pi");
 
     button('[data-loadout-section="harness"]').click();
-    const openCode = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')].find(
-      (choice) => choice.textContent?.trim() === "OpenCode",
+    const claudeCode = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')].find(
+      (choice) => choice.textContent?.trim() === "Claude Code",
     );
-    assert.ok(openCode);
-    openCode.click();
-    assert.equal(composer!.currentModelOption()?.value, "opencode:alpha");
+    assert.ok(claudeCode);
+    claudeCode.click();
+    assert.equal(composer!.currentModelOption()?.value, "claude:alpha");
     assert.equal(agent.state.model.id, "alpha");
-    assert.equal(composer!.state.effortLevel, "auto");
+    assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, true);
-    assert.deepEqual(saved()[1], { value: "opencode:alpha", effort: "auto", fast: true });
-    assert.equal(host.querySelector('[data-loadout-section="effort"]'), null);
-    const openCodeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
-    assert.equal(openCodeFast.disabled, false);
-    assert.equal(openCodeFast.getAttribute("aria-checked"), "true");
-    openCodeFast.click();
+    assert.deepEqual(saved()[1], { value: "claude:alpha", effort: "high", fast: true });
+    assert.ok(host.querySelector('[data-loadout-section="effort"]'));
+    const claudeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
+    assert.equal(claudeFast.disabled, false);
+    assert.equal(claudeFast.getAttribute("aria-checked"), "true");
+    claudeFast.click();
     assert.equal(composer!.state.fastMode, false);
 
     button('[data-loadout-section="harness"]').click();
@@ -378,7 +373,7 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.ok(pi);
     pi.click();
     assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
-    assert.equal(composer!.state.effortLevel, "auto");
+    assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, false);
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, false);
@@ -421,7 +416,7 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(updates.length, 1);
     assert.deepEqual(updates[0], {
-      harnessId: "codex",
+      harnessId: "pi",
       modelId: "beta",
       effortLevel: "xhigh",
       fastMode: false,
@@ -437,7 +432,7 @@ test("the personal-account picker preserves composer choices and saves context d
     );
     assert.equal(
       siblingComposer!.currentModelOption()?.value,
-      "codex:beta",
+      "pi:beta",
       "failed save did not pin an untouched sibling",
     );
     assert.equal(siblingComposer!.state.effortLevel, "xhigh", "sibling follows the new default effort");
@@ -636,7 +631,7 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.deepEqual(updates.at(-1), {
       scopeId: staleScope,
-      harnessId: "codex",
+      harnessId: "pi",
       modelId: "beta",
       effortLevel: "auto",
       fastMode: false,
@@ -684,36 +679,80 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(updates.at(-1)?.effortLevel, "adaptive");
     assert.equal(context.contextModelState.config.effective.effortLevel, "adaptive");
-    config.modelsByHarness.pi.push("gpt-6-astra", "gpt-6-astra-ultrafast");
-    config.modelCatalog!["gpt-6-astra"] = model("gpt-6-astra", "Astra", "openai");
-    config.modelCatalog!["gpt-6-astra-ultrafast"] = model("gpt-6-astra-ultrafast", "Astra Ultrafast", "openai");
-    config.fastModeModelIds!.push("gpt-6-astra");
-    config.effective = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "high", fastMode: true };
-    ctx.chat.state.threadRef = "web:tester:ultrafast";
+    for (const [modelId, label] of [
+      ["gpt-6-astra", "Astra"],
+      ["gpt-6.1-sol", "Sol 6.1"],
+    ]) {
+      config.modelsByHarness.pi.push(modelId, `${modelId}-ultrafast`);
+      config.modelCatalog![modelId] = model(modelId, label, "openai");
+      config.modelCatalog![`${modelId}-ultrafast`] = model(`${modelId}-ultrafast`, `${label} Ultrafast`, "openai");
+      config.fastModeModelIds!.push(modelId);
+      config.effective = { harnessId: "pi", modelId: modelId, effortLevel: "high", fastMode: true };
+      ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast`;
+      localStorage.removeItem("web-ui:loadout");
+      await composer!.refreshRuntimeSelection(null, agent, true);
+      await mount();
+      button('[aria-label="Ultrafast"]').click();
+      assert.equal(button(".loadout-button").getAttribute("aria-label"), `Model: ${label}, High effort, Ultrafast`);
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
+      assert.deepEqual(
+        saved().filter(({ value }) => value.startsWith(`pi:${modelId}`)),
+        [{ value: `pi:${modelId}-ultrafast`, effort: "high", fast: false }],
+      );
+      ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast-new-thread`;
+      await mount();
+      assert.match(button(".loadout-button").getAttribute("aria-label")!, /High effort, Ultrafast/);
+      button('[data-loadout-section="add"]').click();
+      assert.equal(host.querySelector(`[aria-label="Add ${label} Ultrafast to presets"]`), null);
+      button('button[aria-label="Fast"]').click();
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "true");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+      button('[aria-label="Ultrafast"]').click();
+      button('[aria-label="Ultrafast"]').click();
+      assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
+      assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
+      assert.equal(composer!.state.effortLevel, "high");
+    }
+    config.effective = { harnessId: "pi", modelId: "gamma" };
     localStorage.removeItem("web-ui:loadout");
+    ctx.chat.state.threadRef = "web:tester:server-default";
     await composer!.refreshRuntimeSelection(null, agent, true);
     await mount();
-    button('[aria-label="Ultrafast"]').click();
-    assert.match(button(".loadout-button").getAttribute("aria-label")!, /Astra, High effort, Ultrafast/);
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
-    assert.deepEqual(
-      saved().filter(({ value }) => value.includes("astra")),
-      [{ value: "pi:gpt-6-astra-ultrafast", effort: "high", fast: false }],
+    assert.equal(composer!.followsDefault(), true, "a chat on the default leaves the model to the server");
+    const routed = { harnessId: "pi", modelId: "beta", label: "Beta", change: { rule: "hard-task" } };
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => routed;
+    draw();
+    assert.equal(host.querySelector(".loadout-button .menu-label")?.textContent?.trim(), "Beta");
+    assert.equal(
+      button(".loadout-button").getAttribute("aria-label"),
+      "Model: Beta, routed by hard-task for this turn; your setting is Gamma",
     );
-    ctx.chat.state.threadRef = "web:tester:ultrafast-new-thread";
+    localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picked", "pi:beta"]]));
+    window.dispatchEvent(new dom.window.StorageEvent("storage", { key: "web-ui:model-picks" }));
+    ctx.chat.state.threadRef = "web:tester:picked";
     await mount();
-    assert.match(button(".loadout-button").getAttribute("aria-label")!, /High effort, Ultrafast/);
-    button('[data-loadout-section="add"]').click();
-    assert.equal(host.querySelector('[aria-label="Add Astra Ultrafast to presets"]'), null);
-    button('button[aria-label="Fast"]').click();
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "true");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
-    button('[aria-label="Ultrafast"]').click();
-    button('[aria-label="Ultrafast"]').click();
-    assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
-    assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
-    assert.equal(composer!.state.effortLevel, "high");
+    assert.equal(composer!.followsDefault(), false, "an explicit pick is sent with each message");
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Beta, /);
+    ctx.chat.state.threadRef = "web:tester:server-default";
+    await mount();
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
+      harnessId: "pi",
+      modelId: "beta",
+      change: { agent: "task" },
+    });
+    draw();
+    assert.equal(
+      button(".loadout-button").getAttribute("aria-label"),
+      "Model: Beta, switched for this request; your setting is Gamma",
+    );
+    (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
+      harnessId: "pi",
+      modelId: "beta",
+      change: { agent: "scope" },
+    });
+    draw();
+    assert.match(button(".loadout-button").getAttribute("aria-label")!, /^Model: Gamma, /);
   } finally {
     resetContext?.();
     composer?.dispose();

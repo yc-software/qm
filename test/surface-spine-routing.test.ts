@@ -293,13 +293,6 @@ test("addressed + no post → exactly one nudge → the agent posts on the conti
     await sleep(300);
     const all = (await built.deliveries.pending("slack")) as any[];
     assert.equal(all.filter((d) => d.text === "nudged reply").length, 1, "the nudge fires at most once");
-    const session = await built.sessions.getByThread("ch:C-nudge:700.1");
-    const entries = await built.sessions.getEntries(session!.id);
-    assert.equal(
-      await built.sessions.tapeCoverage(session!.id),
-      entries.at(-1)!.seq,
-      "the watermark is a write-completeness claim: no append failed, so a nudged turn still advances it",
-    );
   } finally {
     await built.runtime.stop();
   }
@@ -395,20 +388,12 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
   }
 });
 
-test("nudge tape reread failure falls back to refreshed history, never the stale pre-turn fold", async () => {
+test("the nudge continuation is rebuilt from history containing the first sub-turn", async () => {
   const built = freshApp();
   built.runtime.start();
   try {
     await built.app.turn(mention("!post prior", "C-nudge-read", "711.1"));
     assert.ok(await pollFor(built.deliveries, (d) => d.text === "prior"));
-
-    const originalGetTape = built.sessions.getTape.bind(built.sessions);
-    let reads = 0;
-    built.sessions.getTape = async (sessionId) => {
-      reads++;
-      if (reads >= 2) throw new Error("nudge tape read failed");
-      return originalGetTape(sessionId);
-    };
 
     await built.app.turn(mention("!shedmute", "C-nudge-read", "711.1"));
     assert.ok(await pollFor(built.deliveries, (d) => d.text === "worklog: did the thing but never posted"));
@@ -420,9 +405,8 @@ test("nudge tape reread failure falls back to refreshed history, never the stale
       nudgeRequest.messages?.some(
         (message) => message.role === "assistant" && message.content === "worklog: did the thing but never posted",
       ),
-      "a failed reread reconstructs from history containing the first sub-turn",
+      "the nudge sees the first sub-turn",
     );
-    assert.ok(reads >= 2, "the nudge attempted a fresh tape read");
   } finally {
     await built.runtime.stop();
   }

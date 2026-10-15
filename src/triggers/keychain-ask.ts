@@ -45,7 +45,7 @@ export async function fireAskResolution(
       cron.archived ||
       (!cron.enabled && (cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined)) ||
       cron.ownerScopeId !== ask.requesterScopeId ||
-      (cron.runAs !== "scopeFloor" && !samePerson(cron.owner, ask.requesterId)))
+      !samePerson(cron.owner, ask.requesterId))
   ) {
     return {
       ran: false,

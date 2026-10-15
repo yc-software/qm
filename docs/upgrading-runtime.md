@@ -43,6 +43,17 @@ retention also removes expired entries from the legacy table, preventing a later
 restart from importing them again. The legacy table remains available for older
 binaries.
 
+Upgrading from a release that still writes `session_tape` copies its step metadata
+into `legacy_tape_steps` during startup migrations, then drops the tape. Stop every
+older core and worker before starting the new release: a tape write after the copy
+starts makes the drop refuse, and that startup fails with the reset to run. The copy
+runs on the direct migration connection without a statement timeout and resumes
+after an interrupted startup. It walks every session at roughly 30 sessions per
+second, so a few thousand sessions take a couple of minutes; above that, run
+`node src/migrate-main.ts` with the release's configuration before starting the
+servers so readiness checks do not time out. Instances that start meanwhile wait for the copy on
+the migration lock, so a database or role `statement_timeout` must allow that wait.
+
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those
 records remain stored in `cron_fires`. Validate both old and new readers against the

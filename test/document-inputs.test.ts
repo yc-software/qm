@@ -262,14 +262,13 @@ test("steered reuploads already in the turn do not consume another document slot
   assert.equal(opens(), 1);
 });
 
-test("document replay follows compaction boundaries and excludes security-tainted uploads", () => {
+test("document replay follows compaction boundaries", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };
   const history = [
     { seq: 0, type: "user", payload: { attachments: [meta] } },
     { seq: 1, type: "user", payload: { attachments: [recent] } },
     { seq: 2, type: "system", payload: { kind: "context_summary", text: "Prior upload", throughSeq: 0 } },
-    { seq: 3, type: "user", payload: { attachments: [meta], securityTainted: true } },
   ] as SessionEntry[];
   assert.deepEqual(historicalDocumentMetas(history), [recent]);
   assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);

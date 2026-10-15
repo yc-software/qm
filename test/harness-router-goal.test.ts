@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createGoalRecord, latestGoalRecord, rehydrateOpenGoal } from "../src/harness/goal.ts";
+import { createGoalRecord, openGoal, type GoalRecord } from "../src/harness/goal.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
@@ -29,8 +31,13 @@ function fakeAdapter(rounds: Round, selfEnforcing = false): { harness: Harness; 
   return { harness, calls };
 }
 
+const rows = new WeakMap<SessionEntry[], GoalRecord[]>();
+const saves = (emitted: SessionEntry[]) => rows.get(emitted) ?? [];
+const savedGoal = (emitted: SessionEntry[]) => saves(emitted).at(-1) ?? null;
+
 function stubTurn(emitted: SessionEntry[], extra: Partial<HarnessTurnInput> = {}): HarnessTurnInput {
   let seq = 0;
+  rows.set(emitted, []);
   return {
     session: { id: "s1" },
     input: "build the thing",
@@ -44,14 +51,17 @@ function stubTurn(emitted: SessionEntry[], extra: Partial<HarnessTurnInput> = {}
       emitted.push(stored);
       return stored;
     },
+    saveGoal: async (goal: GoalRecord) => {
+      rows.get(emitted)!.push(structuredClone(goal));
+    },
     ...extra,
   } as unknown as HarnessTurnInput;
 }
 
 function router(harness: Harness): Harness {
-  return createHarnessRouter(new Map([["codex", harness]]), createMockHarness(), async () => ({
-    harnessId: "codex",
-    modelId: "gpt-5.6-codex",
+  return createHarnessRouter(new Map([["claude", harness]]), createMockHarness(), async () => ({
+    harnessId: "claude",
+    modelId: "claude-opus-5-5",
   }));
 }
 
@@ -63,6 +73,7 @@ async function emitGoalCreate(turn: HarnessTurnInput, objective: string) {
     payload: { tool: "goal", action: "create", goal, callId: "c1" },
     scopeLabel: scope,
   });
+  await turn.saveGoal?.(goal);
   return goal;
 }
 
@@ -81,11 +92,6 @@ test("an active goal left open by a non-enforcing harness is continued until the
       return { reply: "working" };
     }
     turn.goal!.status = "complete";
-    await turn.emit({
-      type: "tool_result",
-      payload: { tool: "goal", action: "update", goal: { ...turn.goal }, callId: "c3" },
-      scopeLabel: scope,
-    });
     return { reply: "done" };
   });
 
@@ -96,13 +102,8 @@ test("an active goal left open by a non-enforcing harness is continued until the
   assert.equal(calls[1]!.history.length, 3, "the continuation replays this turn's entries");
   assert.ok(calls[1]!.turnWallClockMs! <= 600_000);
   assert.equal(calls[2]!.goal, calls[1]!.goal, "rounds share one goal record");
-  const last = emitted.at(-1)!;
-  assert.equal(last.type, "system");
-  assert.deepEqual(
-    (last.payload as { kind: string; goal: { status: string } }).goal.status,
-    "complete",
-    "the final goal snapshot is persisted for later turns",
-  );
+  assert.equal(savedGoal(emitted)?.status, "complete", "the final goal is saved on the session for later turns");
+  assert.ok(!emitted.some((entry) => entry.type === "system"), "no goal snapshot entries");
 });
 
 test("a harness that enforces goals itself is left alone", async () => {
@@ -115,6 +116,10 @@ test("a harness that enforces goals itself is left alone", async () => {
   assert.equal(calls.length, 1);
   assert.equal(result.reply, "pi handles it");
   assert.ok(!emitted.some((entry) => entry.type === "system"));
+  assert.deepEqual(
+    saves(emitted).map((goal) => goal.status),
+    ["active"],
+  );
 });
 
 test("a stopped turn pauses the goal instead of continuing it", async () => {
@@ -125,9 +130,7 @@ test("a stopped turn pauses the goal instead of continuing it", async () => {
   });
   await router(harness).turns.runTurn(stubTurn(emitted));
   assert.equal(calls.length, 1);
-  const snapshot = emitted.at(-1)!.payload as { kind: string; goal: { status: string } };
-  assert.equal(snapshot.kind, "goal");
-  assert.equal(snapshot.goal.status, "paused");
+  assert.equal(savedGoal(emitted)?.status, "paused");
 });
 
 test("turns without a goal pass through untouched", async () => {
@@ -140,20 +143,18 @@ test("turns without a goal pass through untouched", async () => {
     emitted.map((entry) => entry.type),
     ["user"],
   );
+  assert.deepEqual(saves(emitted), []);
 });
 
-test("an open goal from an earlier turn is picked up from history", async () => {
+test("an open goal from an earlier turn is picked up from the session", async () => {
   const emitted: SessionEntry[] = [];
   const prior = createGoalRecord({ objective: "carried over" });
-  const history = [
-    { type: "system", payload: { kind: "goal", goal: prior }, sessionId: "s1", seq: 0, parentSeq: null, createdAt: 1 },
-  ] as SessionEntry[];
   const { harness, calls } = fakeAdapter(async (turn, round) => {
     if (round === 0) return { reply: "forgot about the goal" };
     turn.goal!.status = "complete";
     return { reply: "now done" };
   });
-  const result = await router(harness).turns.runTurn(stubTurn(emitted, { history }));
+  const result = await router(harness).turns.runTurn(stubTurn(emitted, { goal: prior }));
   assert.equal(calls.length, 2);
   assert.match(calls[1]!.input, /carried over/);
   assert.equal(result.reply, "now done");
@@ -168,10 +169,10 @@ test("rounds without progress never waive the goal; only a user stop ends it", a
   const result = await router(harness).turns.runTurn(stubTurn(emitted));
   assert.equal(calls.length, 21);
   assert.doesNotMatch(result.reply, /waived/);
-  assert.equal(latestGoalRecord(emitted)?.status, "paused");
+  assert.equal(savedGoal(emitted)?.status, "paused");
 });
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} preserves an active goal on infrastructure cancellation and resumes after reload`, async () => {
     const emitted: SessionEntry[] = [];
     const cancel = new AbortController();
@@ -186,20 +187,20 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
         modelId: "unused",
       }));
     await routed(stopped.harness).turns.runTurn(stubTurn(emitted, { cancel: cancel.signal }));
-    assert.equal((emitted.at(-1)!.payload as { goal: { status: string } }).goal.status, "active");
+    assert.equal(savedGoal(emitted)?.status, "active");
     const resumed = fakeAdapter(async (turn, round) => {
       if (round === 0) return { reply: "continue" };
       assert.match(turn.input, /survive shutdown/);
       turn.goal!.status = "complete";
       return { reply: "verified" };
     });
-    const result = await routed(resumed.harness).turns.runTurn(stubTurn([], { history: emitted }));
+    const result = await routed(resumed.harness).turns.runTurn(stubTurn([], { goal: openGoal(savedGoal(emitted)) }));
     assert.equal(resumed.calls.length, 2);
     assert.equal(result.reply, "verified");
   });
 }
 
-for (const harnessId of ["codex", "claude", "opencode"] as const) {
+for (const harnessId of ["claude"] as const) {
   test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
     const signals = createMemoryRunSignalStore();
     const cancel = new AbortController();
@@ -227,7 +228,89 @@ for (const harnessId of ["codex", "claude", "opencode"] as const) {
     }));
     await routed.turns.runTurn(stubTurn(emitted, { cancel: cancel.signal }));
     assert.equal(calls.length, 1);
-    assert.equal(latestGoalRecord(emitted)?.status, "paused");
-    assert.equal(rehydrateOpenGoal(emitted)?.status, "paused");
+    assert.equal(openGoal(savedGoal(emitted))?.status, "paused");
   });
 }
+
+function goalTools(turn: HarnessTurnInput) {
+  const ref = harnessToolContext(turn);
+  ref.current = { humanTurn: true } as ToolContextRef["current"];
+  const goal = createAgentTools(ref).find((tool) => tool.name === "goal")!;
+  const call = (id: string, params: Record<string, unknown>) =>
+    (goal.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text?: string }> }>)(id, params);
+  return { ref, call };
+}
+
+function earlierGoal(objective: string): GoalRecord {
+  return createGoalRecord({ objective });
+}
+
+test("a person's message cancels the goal and registers a replacement, which the router then enforces", async () => {
+  const emitted: SessionEntry[] = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      const { call } = goalTools(turn);
+      await call("c1", { action: "update", status: "cancel", note: "user: cancel the old goal, start the new one" });
+      await call("c2", { action: "create", objective: "broader research and sending" });
+      return { reply: "replaced" };
+    }
+    assert.match(turn.input, /broader research and sending/);
+    if (round > 1) return { reply: "", stopped: true };
+    return { reply: "working" };
+  });
+
+  await router(harness).turns.runTurn(
+    stubTurn(emitted, { goal: earlierGoal("old outreach goal"), turnWallClockMs: 600_000 }),
+  );
+
+  assert.ok(calls.length >= 2, "the replacement goal is enforced in the same turn");
+  const goals = saves(emitted).map((g) => `${g.objective}:${g.status}`);
+  assert.deepEqual(goals.slice(0, 2), ["old outreach goal:cancelled", "broader research and sending:active"]);
+  assert.equal(savedGoal(emitted)?.objective, "broader research and sending");
+  assert.equal(openGoal(savedGoal(emitted))?.status, "paused");
+});
+
+test("the agent cannot cancel its goal from a keep-going round", async () => {
+  const emitted: SessionEntry[] = [];
+  const refusals: string[] = [];
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) return { reply: "starting" };
+    const { call } = goalTools(turn);
+    const result = await call(`c${round}`, { action: "update", status: "cancel", note: "this is hopeless" });
+    refusals.push(result.content.map((c) => c.text ?? "").join(""));
+    if (round > 1) return { reply: "", stopped: true };
+    return { reply: "giving up" };
+  });
+
+  await router(harness).turns.runTurn(
+    stubTurn(emitted, { goal: earlierGoal("ship the migration"), turnWallClockMs: 600_000 }),
+  );
+
+  assert.equal(calls.length, 3, "the goal keeps going after the refused cancel");
+  assert.match(refusals[0]!, /Only the user's own message can cancel/);
+  assert.equal(savedGoal(emitted)?.status, "paused", "only the stop paused it; it was never cancelled");
+});
+
+test("the router reports the runtime each turn runs on, and the rule that routed it", async () => {
+  const reported: unknown[] = [];
+  const reply: Round = async (turn) => {
+    await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+    return { reply: "done" };
+  };
+  const routed = createHarnessRouter(
+    new Map([["claude", fakeAdapter(reply).harness]]),
+    createMockHarness(),
+    async (_input, routedBy) => {
+      routedBy("hard-task");
+      return { harnessId: "claude", modelId: "claude-haiku-5-5" };
+    },
+  );
+  await routed.turns.runTurn(stubTurn([], { onRuntime: (runtime) => reported.push(runtime) }));
+  await router(fakeAdapter(reply).harness).turns.runTurn(
+    stubTurn([], { onRuntime: (runtime) => reported.push(runtime) }),
+  );
+  assert.deepEqual(reported, [
+    { harnessId: "claude", modelId: "claude-haiku-5-5", label: "Haiku 5.5", change: { rule: "hard-task" } },
+    { harnessId: "claude", modelId: "claude-opus-5-5", label: "Opus 5.5" },
+  ]);
+});

@@ -109,12 +109,22 @@ describe("member slackId (the real <@…> mention id for an email principal)", (
   it("round-trips slackId through replace → get → list, and resolve", async () => {
     const d = createDirectoryStore();
     await d.replace([
-      { principalId: "eve@acme.com", displayName: "Eve", type: "internal", slackId: "U9" },
+      {
+        principalId: "eve@acme.com",
+        displayName: "Eve",
+        type: "internal",
+        slackId: "U9",
+        avatarUrl: "https://avatars.slack-edge.com/eve.png",
+      },
       { principalId: "U5", displayName: "Dana", type: "internal" },
     ]);
     assert.equal((await d.get("eve@acme.com"))?.slackId, "U9");
+    assert.equal((await d.get("eve@acme.com"))?.avatarUrl, "https://avatars.slack-edge.com/eve.png");
     assert.equal((await d.get("U5"))?.slackId, undefined);
     assert.equal((await d.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
+    assert.equal((await d.getBySlackId("U9"))?.principalId, "eve@acme.com");
+    assert.equal((await d.getBySlackId("U5"))?.principalId, "U5");
+    assert.equal(await d.getBySlackId("Eve"), null);
     const r = await d.resolve("Eve");
     assert.equal(r.kind === "one" && r.member.slackId, "U9");
   });

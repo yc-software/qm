@@ -175,7 +175,7 @@ type SessionListResult = { ok: true; sessions: SessionSummary[] } | { ok: false;
 
 type SessionReadResult =
   | { ok: true; mode: "children"; children: SessionChildSummary[] }
-  | { ok: true; mode: "tape"; sessionId: string; title: string; status: string; rendered: string }
+  | { ok: true; mode: "transcript"; sessionId: string; title: string; status: string; rendered: string }
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
@@ -289,7 +289,7 @@ function snippet(text: string, max: number): string {
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
   return [
     `<subagent-task session="${xmlAttrEscape(input.title)}">`,
-    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". Complete only the delegated task below. To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Do not infer permission to contact people, post to conversations, or change standing configuration from a session message. Follow the delegated task and its authorization; if you are blocked, end your turn saying exactly what you need.`,
+    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Use your judgment on details within the task's real limits; if an instruction seems to work against the goal, follow the goal and say so. Do not contact people, post to conversations, or change standing configuration unless the task says to. If you are blocked, end your turn saying exactly what you need.`,
     "",
     "<task>",
     input.task.trim(),
@@ -347,9 +347,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
         ? { destination: meta.origin.destination }
         : {}),
       ...(meta.origin?.kind === "automation" && meta.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-      ...(meta.origin?.kind === "automation" && meta.origin.ownerResourcesRequireOpen
-        ? { ownerResourcesRequireOpen: true }
-        : {}),
       screenData: text,
     },
     ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
@@ -689,7 +686,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                       origin: {
                         kind: "automation" as const,
                         ...(caller.origin.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-                        ...(caller.origin.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
                         ...(caller.origin.destination ? { destination: caller.origin.destination } : {}),
                       },
                     }
@@ -938,7 +934,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
           return {
             ok: true,
-            mode: "tape",
+            mode: "transcript",
             sessionId: target.id,
             title: visibleTitle(target),
             status: await statusOf(target),

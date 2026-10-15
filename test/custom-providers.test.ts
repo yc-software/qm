@@ -79,8 +79,6 @@ test("custom models are gated to pi and mock harnesses", () => {
   assert.equal(modelSupportedByHarness("acme-large", "pi"), true);
   assert.equal(modelSupportedByHarness("acme-large", "mock"), true);
   assert.equal(modelSupportedByHarness("acme-large", "claude"), false);
-  assert.equal(modelSupportedByHarness("acme-large", "codex"), false);
-  assert.equal(modelSupportedByHarness("acme-large", "opencode"), true);
 });
 
 test("a registered custom model is serviceable regardless of built-in key availability", () => {
@@ -157,26 +155,6 @@ test("registered models surface in the catalog and vanish on unregister", () => 
   assert.equal(entry!.provider, "deepseek");
   setCustomProviders([]);
   assert.ok(!builtInModelCatalog().some((m) => m.id === "deepseek-chat"));
-});
-
-test("opencode modelRef routes slashed custom model ids to the registered provider, not a phantom slash-prefix", async () => {
-  const { modelRef } = await import("../src/harness/opencode-harness.ts");
-  setCustomProviders([
-    {
-      id: "litellm",
-      name: "LiteLLM",
-      protocol: "openai",
-      baseUrl: "https://litellm.example.com/v1",
-      models: [{ id: "bedrock/claude-opus-5" }],
-    },
-  ]);
-  try {
-    assert.deepEqual(modelRef("bedrock/claude-opus-5"), { providerID: "litellm", modelID: "bedrock/claude-opus-5" });
-    // built-in slash convention untouched
-    assert.deepEqual(modelRef("openrouter/auto"), { providerID: "openrouter", modelID: "auto" });
-  } finally {
-    setCustomProviders([]);
-  }
 });
 
 test("catalog cache invalidates immediately when the custom registry changes", async () => {

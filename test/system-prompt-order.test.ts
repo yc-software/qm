@@ -30,7 +30,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
-import { scopeId, type Conversation, type Principal, type TurnRequest } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 
@@ -218,20 +218,23 @@ test("Open carries only the live actor's personal reads into a shared turn and a
   const personal = scopeId("personal", actor.id);
   const teammatePersonal = scopeId("personal", teammate.id);
   const channelScope = scopeId("channel", "C1");
-  await workspace.write(personal, "private.txt", "ACTOR_PRIVATE_FILE");
-  await workspace.write(teammatePersonal, "teammate.txt", "TEAMMATE_PRIVATE_FILE");
-  await workspace.write(personal, "private.bin", new Uint8Array([255, 254, 0, 1]));
-  const artifactId = "2".repeat(32);
-  await files.put({
-    id: artifactId,
-    ownerScopeId: personal,
-    createdBy: actor.id,
-    name: "private-artifact.txt",
-    path: `artifacts/${artifactId}/private-artifact.txt`,
-    mimetype: "text/plain",
-    data: Buffer.from("ACTOR_PRIVATE_ARTIFACT"),
-    direction: "in",
-  });
+  const put = (id: string, ownerScopeId: ScopeId, name: string, mimetype: string, data: Uint8Array | string) =>
+    files.put({
+      id,
+      ownerScopeId,
+      createdBy: actor.id,
+      name,
+      path: name,
+      mimetype,
+      data: Buffer.from(data),
+      direction: "in",
+    });
+  const privateId = "1".repeat(32);
+  const teammateId = "3".repeat(32);
+  const binaryId = "4".repeat(32);
+  await put(privateId, personal, "private.txt", "text/plain", "ACTOR_PRIVATE_FILE");
+  await put(teammateId, teammatePersonal, "teammate.txt", "text/plain", "TEAMMATE_PRIVATE_FILE");
+  await put(binaryId, personal, "private.bin", "application/octet-stream", new Uint8Array([255, 254, 0, 1]));
   const channel = (thread: string, text: string, origin: OrchestratorInput["origin"]): OrchestratorInput => ({
     surface: "test",
     actor,
@@ -251,29 +254,22 @@ test("Open carries only the live actor's personal reads into a shared turn and a
 
   await config.setSharingPosture(scopeId("org", ORG), "open");
   const open = await orchestrator.handleTurn(
-    channel("C1:open", "!read shared/open-personal-U1/private.txt", { kind: "human" }),
+    channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
   );
   assert.equal(open.reply, "ACTOR_PRIVATE_FILE");
   const binary = await orchestrator.handleTurn(
-    channel("C1:binary", "!read shared/open-personal-U1/private.bin", { kind: "human" }),
+    channel("C1:binary", `!read shared/open-personal-U1/${binaryId}/private.bin`, { kind: "human" }),
   );
-  assert.match(binary.reply ?? "", /Binary files require an explicit share/);
-  const artifact = await orchestrator.handleTurn(
-    channel("C1:artifact", `!read shared/open-personal-U1/artifacts/${artifactId}/private-artifact.txt`, {
-      kind: "human",
-    }),
-  );
-  assert.equal(artifact.reply, "ACTOR_PRIVATE_ARTIFACT");
+  assert.match(binary.reply ?? "", new RegExp(`Files ID ${binaryId}`));
   const teammateRead = await orchestrator.handleTurn(channel("C1:teammate", "!sysprompt", { kind: "human" }));
-  assert.doesNotMatch(teammateRead.reply ?? "", /shared\/open-personal-U2\/teammate\.txt/);
-  await workspace.write(personal, "private.txt", "NEW_PRIVATE_CONTENT");
+  assert.doesNotMatch(teammateRead.reply ?? "", /shared\/open-personal-U2\//);
   const nextActor = await orchestrator.handleTurn({
-    ...channel("C1:open", "!read shared/open-personal-U1/private.txt", { kind: "human" }),
+    ...channel("C1:open", `!read shared/open-personal-U1/${privateId}/private.txt`, { kind: "human" }),
     actor: teammate,
   });
-  assert.doesNotMatch(nextActor.reply ?? "", /NEW_PRIVATE_CONTENT/);
+  assert.doesNotMatch(nextActor.reply ?? "", /ACTOR_PRIVATE_FILE/);
   const nextActorOwn = await orchestrator.handleTurn({
-    ...channel("C1:open", "!read shared/open-personal-U2/teammate.txt", { kind: "human" }),
+    ...channel("C1:open", `!read shared/open-personal-U2/${teammateId}/teammate.txt`, { kind: "human" }),
     actor: teammate,
   });
   assert.equal(nextActorOwn.reply, "TEAMMATE_PRIVATE_FILE");
@@ -378,7 +374,7 @@ test("Open advertises the source and audits a carried skill read without grantin
 
 test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
   let member = true;
-  const { orchestrator, config, memory, workspace } = buildOrchestrator({
+  const { orchestrator, config, memory, files } = buildOrchestrator({
     sandbox: readSandbox(),
     isCurrentSharedScopeMember: async (principalId, sourceScope) =>
       member && principalId === actor.id && sourceScope === scopeId("channel", "C1"),
@@ -420,9 +416,19 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     }),
   );
   assert.match(search.reply ?? "", /\[channel:C1\].*ROOM_ONLY_MEMORY/);
-  await workspace.write(channelScope, "decision.txt", "ROOM_DECISION_FILE");
+  const decisionId = "5".repeat(32);
+  await files.put({
+    id: decisionId,
+    ownerScopeId: channelScope,
+    createdBy: actor.id,
+    name: "decision.txt",
+    path: "decision.txt",
+    mimetype: "text/plain",
+    data: Buffer.from("ROOM_DECISION_FILE"),
+    direction: "in",
+  });
   const sharedFile = await orchestrator.handleTurn(
-    dm("dm:U1:room-file", "!read shared/open-channel-C1/decision.txt", { origin: { kind: "human" } }),
+    dm("dm:U1:room-file", `!read shared/open-channel-C1/${decisionId}/decision.txt`, { origin: { kind: "human" } }),
   );
   assert.equal(sharedFile.reply, "ROOM_DECISION_FILE");
 
@@ -443,7 +449,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
   );
   assert.doesNotMatch(revoked.reply ?? "", /ROOM_ONLY_MEMORY/);
   const revokedFile = await orchestrator.handleTurn(
-    dm("dm:U1:room-file", "!read shared/open-channel-C1/decision.txt", { origin: { kind: "human" } }),
+    dm("dm:U1:room-file", `!read shared/open-channel-C1/${decisionId}/decision.txt`, { origin: { kind: "human" } }),
   );
   assert.doesNotMatch(revokedFile.reply ?? "", /ROOM_DECISION_FILE/);
 
@@ -1173,18 +1179,20 @@ for (const surfaceTools of [false, true]) {
     };
     const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
     const personal = scopeId("personal", actor.id);
-    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- BETA_MARKER");
+    await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
     const input = slackDm("memory-once", "hello", { surfaceTools });
     const first = await orchestrator.handleTurn(input);
     assert.equal(first.status, "ok");
     assert.match(seen[0]!.environment!, /ALPHA_MARKER/);
     await orchestrator.handleTurn({ ...input, text: "next" });
     assert.doesNotMatch(seen[1]!.environment ?? "", /ALPHA_MARKER|BETA_MARKER|What you remember/);
-    await memory.replace(personal, "# Memory\n- ALPHA_MARKER\n- GAMMA_MARKER");
+    const beta = (await memory.facts!(personal)).find((fact) => fact.text.includes("BETA_MARKER"))!;
+    await memory.delete!(personal, [beta.id]);
+    await memory.capture(personal, ["GAMMA_MARKER"], Date.now());
     await orchestrator.handleTurn({ ...input, text: "third" });
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
-    assert.match(seen[2]!.environment!, /personal:U1: 1 earlier fact was consolidated or removed/);
+    assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
     const entries = await sessions.getEntries(first.sessionId!);
     const users = entries.filter((entry) => entry.type === "user");
     assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);

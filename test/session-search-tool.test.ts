@@ -17,7 +17,9 @@ const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };
 
 test("session search reuses indexed search with audience intersection, tenure windows and bounded references", async () => {
-  const { app, sessions } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-search-tool-")) }));
+  const { app, sessions } = buildApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-search-tool-")), publicWebUrl: "https://qm.example" }),
+  );
   const scope = scopeId("group", "room");
   const current = await sessions.getOrCreateByThread("web:room", "group", scope);
   const source = await sessions.getOrCreateByThread("web:source", "group", scopeId("group", "source"));
@@ -74,8 +76,8 @@ test("session search reuses indexed search with audience intersection, tenure wi
   assert.deepEqual(result.failedBackends, []);
   assert.equal(result.hits.length, 1);
   assert.deepEqual(
-    result.hits.map((h) => [h.metadata?.sessionId, h.metadata?.seq, h.snippet]),
-    [[source.id, shared.seq, "memo shared"]],
+    result.hits.map((h) => [h.metadata?.sessionId, h.metadata?.seq, h.snippet, h.url]),
+    [[source.id, shared.seq, "memo shared", `https://qm.example/s/${source.id}`]],
   );
   assert.equal((await tools.search!({ query: "memo shared", limit: 1 })).hits.length, 1);
   assert.deepEqual((await app.search("private-only", [bob])).hits, []);
