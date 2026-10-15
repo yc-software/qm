@@ -27,6 +27,7 @@ PROFILE=$(curl -fsS -X POST https://api.browser-use.com/api/v4/profiles \
   -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" -H 'content-type: application/json' \
   -d '{"name":"qm"}' \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+[ -n "$PROFILE" ] || { echo "profile create returned no id" >&2; exit 1; }
 export "$PROFILE_ENV"="$PROFILE"
 ```
 
@@ -47,7 +48,27 @@ sites the profile holds state for.
 
 ## Create the browser
 
-In a DM, with the person's profile:
+In a DM, with the person's profile. First make sure no browser is still running on the
+person's key — state is written only when a browser stops, so one left running holds the
+profile, and the v4 list doesn't say which profile a session is on (with one profile per
+person, any active browser on their key is holding theirs). Stopping it is also what
+saves it, so nothing is lost:
+
+```bash
+ACTIVE=$(curl -fsS "https://api.browser-use.com/api/v4/browsers?filterBy=active" \
+  -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" \
+  | python3 -c "import sys,json;print(' '.join(b['id'] for b in json.load(sys.stdin)['items'] if b.get('status')=='active'))")
+if [ -n "$ACTIVE" ]; then
+  for B in $ACTIVE; do
+    curl -fsS -X PATCH "https://api.browser-use.com/api/v4/browsers/$B" \
+      -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" -H 'content-type: application/json' \
+      -d '{"action":"stop"}' > /dev/null
+  done
+  sleep 10
+fi
+```
+
+Then create:
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.browser-use.com/api/v4/browsers \
@@ -91,47 +112,39 @@ import fs from "fs";
 const [, , wsUrl, filePath, selector] = process.argv;
 const ws = new WebSocket(wsUrl);
 let id = 0; const pending = new Map();
-const send = (method, params = {}) => new Promise(r => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => { const i = ++id; pending.set(i, m => (m.error ? reject(new Error(m.error.message)) : resolve(m))); ws.send(JSON.stringify({ id: i, ...(sessionId ? { sessionId } : {}), method, params })); });
 ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
 await new Promise(r => ws.onopen = r);
 const { targetInfos } = (await send("Target.getTargets")).result;
 const page = targetInfos.find(t => t.type === "page");
+if (!page) throw new Error("no page target on the browser");
 const { sessionId } = (await send("Target.attachToTarget", { targetId: page.targetId, flatten: true })).result;
 const b64 = fs.readFileSync(filePath).toString("base64");
 const name = filePath.split("/").pop();
 const expression = `(()=>{const s=atob(${JSON.stringify(b64)});const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);
 const dt=new DataTransfer();dt.items.add(new File([u],${JSON.stringify(name)}));const el=document.querySelector(${JSON.stringify(selector)});
-el.files=dt.files;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));return el.files[0].size})()`;
-const id2 = ++id;
-const done = new Promise(r => pending.set(id2, r));
-ws.send(JSON.stringify({ id: id2, sessionId, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
-console.log(JSON.stringify((await done).result?.result));
+if(!el)throw new Error("no element matches the selector");el.files=dt.files;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));return el.files[0].size})()`;
+const { result } = await send("Runtime.evaluate", { expression, returnByValue: true }, sessionId);
+if (result.exceptionDetails) throw new Error(`page rejected the injection: ${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text}`);
+console.log(JSON.stringify(result.result));
 ws.close();
 JS
 node /tmp/bu-attach.mjs "$CDP_URL" /tmp/receipt.jpg "$SELECTOR"
 ```
 
-Then run the task telling the agent the file is already attached. Keep files small
-(this inlines the bytes); a site that reads the file only through a native picker dialog
-won't see it.
+The script exits non-zero when a protocol call fails or the page throws (a selector that
+matches nothing, a blocked page) — treat that as the attach having failed: read the error
+and fix it, don't re-run the task assuming the file is attached. Then run the task telling
+the agent the file is already attached. Keep files small (this inlines the bytes); a site
+that reads the file only through a native picker dialog won't see it.
 
 ## Routing a sign-in wall
 
 The person signs in THEMSELVES through the live view; the profile keeps them signed in
-afterwards. Reuse the task browser — it already holds the profile — and steer it to the
-wall:
+afterwards. Reuse the task browser — it already holds the profile — and steer it to the wall with SKILL.md's shared `browse-nav.py`:
 
 ```bash
-cat > /tmp/bu-nav.py <<'PY'
-import os
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp(os.environ["CDP_URL"])
-    ctx = b.contexts[0]
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
-PY
-CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/bu-nav.py
+CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/browse-nav.py
 printf '%s\n' "$LIVE_VIEW"
 ```
 
@@ -141,8 +154,7 @@ shows them signed in, then STOP the browser (that is what writes the profile), w
 replays cookies; it cannot answer a challenge, so a site that re-verifies on every visit
 needs the person again next time.
 
-A mid-session verification check on a live task browser needs no stop — hand over
-`$LIVE_VIEW`, wait for done, re-run on the same browser.
+A mid-session verification check needs no stop — SKILL.md's live-view rule covers it.
 
 ## Clean up
 

@@ -256,11 +256,30 @@ The last stdout line is the typed outcome:
   a domain the task didn't name). Then follow your provider doc's "Routing a sign-in wall"
   section — every provider
   flow ends the same way: the person signs in once, the sign-in lands durably in THEIR
-  profile (or the provider's managed store), and you relaunch the browser and re-run the
+  profile, and you relaunch the browser and re-run the
   task. Two rules hold for all providers: sign-in and live-view links are single-audience
   bearer material — hand them to the person in a DM, never open them yourself; and a
   mid-session verification check (already signed in, then challenged) is cleared on the LIVE
   browser — hand the person `$LIVE_VIEW`, wait for done, re-run.
+
+Steering the live browser to the wall is one shared script, written once per session (the
+provider doc says which CDP websocket to pass):
+
+```bash
+cat > /tmp/browse-nav.py <<'PY'
+import os
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.connect_over_cdp(os.environ["CDP_URL"])
+    ctx = b.contexts[0]
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
+    b.close()
+PY
+```
+
+It drives the browser's existing context (`contexts[0]`) — a fresh context doesn't carry
+the profile — and closing the CDP connection afterwards stops no browser and saves nothing.
 
 ## 3. Clean up
 

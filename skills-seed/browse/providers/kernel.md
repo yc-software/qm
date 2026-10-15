@@ -47,14 +47,15 @@ PX=$(curl -fsS -X POST https://api.onkernel.com/proxies \
   -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
   -d '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+[ -n "$PX" ] || { echo "proxy create returned no id; nothing registered" >&2; exit 1; }
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
   -H 'content-type: application/json' \
   -d "{\"service\":\"kernel-proxy\",\"envKey\":\"KERNEL_PROXY_ID\",\"secret\":\"$PX\"}" > /dev/null
 ```
 
 ISP proxies exist in US, GB, FR, DE and SG; pick the person's country. Use the person's
-own `KERNEL_API_KEY` for this when they have one (the org's brokered Kernel credential
-only allows `/browsers` and `/profiles`). The first session from the new IP may ask the
+own `KERNEL_API_KEY` for this when they have one (a shared brokered Kernel credential
+may only allow `/browsers` and `/profiles`). The first session from the new IP may ask the
 person to verify once on sites they were already signed in to elsewhere; after that it is
 stable. If a create fails on the proxy (`proxy_id` not found), check it with
 `POST /proxies/$KERNEL_PROXY_ID/check` and tell the person rather than silently launching
@@ -110,22 +111,12 @@ The person signs in once on the live browser; the profile keeps it.
 
 1. Navigate the live browser to the wall URL (read from `/tmp/wall-url.txt`, never shell
    source) so the person lands on the login page, then hand them `$LIVE_VIEW` in the DM —
-   bearer material, never open it yourself:
+   bearer material, never open it yourself. SKILL.md's shared `browse-nav.py` (written in
+   its wall step) does the steering:
 
    ```bash
-   cat > /tmp/k-nav.py <<'PY'
-   import os
-   from playwright.sync_api import sync_playwright
-   with sync_playwright() as p:
-       b = p.chromium.connect_over_cdp(os.environ["CDP_URL"])
-       ctx = b.contexts[0]
-       page = ctx.pages[0] if ctx.pages else ctx.new_page()
-       page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
-   PY
-   CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/k-nav.py
+   CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/browse-nav.py
    ```
-
-   Use the existing context (`contexts[0]`): a new context doesn't carry the profile.
 
 2. They sign in, finish any 2FA, and say done. If the browser was launched with
    `SAVE=false` (another browser holds the profile), stop that one first and relaunch, or

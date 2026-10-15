@@ -113,25 +113,13 @@ SIGNIN_SID=$(printf '%s' "$SIGNIN" | python3 -c "import sys,json;print(json.load
 SIGNIN_CDP=$(printf '%s' "$SIGNIN" | python3 -c "import sys,json;print(json.load(sys.stdin).get('connectUrl',''))")
 ```
 
-It opens on a blank page, so steer it to the wall, then fetch the live-view link
+It opens on a blank page, so steer it to the wall with SKILL.md's shared
+`browse-nav.py`, then fetch the live-view link
 (`keepAlive` is what lets the session survive the nav script disconnecting — without it
 the person would open a dead live view):
 
 ```bash
-cat > /tmp/bb-nav.py <<'PY'
-import os
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp(os.environ["SIGNIN_CDP"])
-
-
-
-    ctx = b.contexts[0]
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
-    b.close()
-PY
-SIGNIN_CDP="$SIGNIN_CDP" /opt/browser-engine/venv/bin/python /tmp/bb-nav.py
+CDP_URL="$SIGNIN_CDP" /opt/browser-engine/venv/bin/python /tmp/browse-nav.py
 curl -fsS "https://api.browserbase.com/v1/sessions/$SIGNIN_SID/debug" \
   -H "X-BB-API-Key: $BROWSERBASE_API_KEY" \
   | python3 -c "import sys,json;print(json.load(sys.stdin).get('debuggerFullscreenUrl',''))"
