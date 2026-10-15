@@ -3,6 +3,7 @@ import path from "node:path";
 import { assert, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { assertRuntimeHandoff } from "./runtime-handoff.ts";
+import { succeededWithStdout } from "./scenarios-sandbox-providers.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
 import { deployAccessScenarios } from "./scenarios-deploy-access.ts";
@@ -177,10 +178,7 @@ export const scenarios: Scenario[] = [
         (e: any) =>
           e.type === "tool_result" &&
           (e.payload?.tool === "execute" || (e.payload?.tool === "sandbox" && e.payload.action === "exec")) &&
-          e.payload.isError === false &&
-          e.payload.code === 0 &&
-          e.payload.timedOut === false &&
-          e.payload.result === `${marker}\n\n[exit 0]`,
+          succeededWithStdout(e.payload, `${marker}\n`),
       );
       assert.ok(ran, "core transcript has no successful command execution — cannot evaluate performance");
 
