@@ -20,6 +20,7 @@ import {
   delegatedAuthorizationOrigin,
   stopSessionTree,
 } from "../src/sessions/session-syscalls.ts";
+import type { Run } from "../src/runs/run-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
@@ -1901,4 +1902,37 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     assert.equal(out.ok, false);
   }
   assert.equal(started.length, 4);
+});
+
+test("stopping a session tree tells every stopped run who stopped it", async () => {
+  const sent: Array<{ runId: string; signal: unknown }> = [];
+  const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
+  const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
+  const stopped = await stopSessionTree(
+    {
+      sessions: { childrenOf: async (id: string) => (id === "root" ? [child] : []) },
+      runs: {
+        inFlightForThread: async (threadRef: string) =>
+          [{ id: `run-${threadRef}`, status: "running" }] as unknown as Run[],
+        withdraw: async () => true,
+        get: async () => null,
+      },
+      signals: {
+        send: async (runId: string, signal: unknown) => {
+          sent.push({ runId, signal });
+          return true;
+        },
+      },
+    },
+    root,
+    "the parent agent interrupted it",
+  );
+  assert.equal(stopped, true);
+  assert.deepEqual(
+    sent.map((s) => s.signal),
+    [
+      { kind: "abort", reason: "the parent agent interrupted it" },
+      { kind: "abort", reason: "the parent agent interrupted it" },
+    ],
+  );
 });

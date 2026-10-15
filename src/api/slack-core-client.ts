@@ -390,7 +390,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async signalRunAbort(runId) {
-      const outcome = await deps.app.signalRun(runId, { kind: "abort" });
+      const outcome = await deps.app.signalRun(runId, { kind: "abort", reason: "a person stopped it" });
       if (!outcome.accepted) throw new Error(`signal abort not accepted: ${outcome.reason ?? "unknown"}`);
     },
 

@@ -33,3 +33,27 @@ test("legacy stopped placeholders are recognized without treating ordinary repli
     assert.equal(message.stopReason, reason);
   }
 });
+
+test("a stop note renders as the stopped state, once, and never as a user message", () => {
+  const note = (seq: number): SessionEntry => ({
+    type: "user",
+    payload: { text: "[system] Turn stopped: a person stopped it.", hidden: true, stopped: true },
+    createdAt: 5000,
+    seq,
+  });
+  const request: SessionEntry = { type: "user", payload: { text: "do the thing" }, createdAt: 1000, seq: 1 };
+
+  const bare = entriesToMessages([request, note(2)]);
+  assert.equal(bare.length, 2);
+  assert.equal((bare[1] as AssistantWork).stopReason, "aborted");
+  assert.deepEqual((bare[1] as AssistantWork).content, [{ type: "text", text: "" }]);
+
+  const withPartial = entriesToMessages([
+    request,
+    { type: "assistant", payload: { text: "Partial answer", stopped: true }, createdAt: 4000, seq: 2 },
+    note(3),
+  ]);
+  assert.equal(withPartial.length, 2, "the partial answer already shows the stopped state");
+  assert.equal((withPartial[1] as AssistantWork).stopReason, "aborted");
+  assert.deepEqual((withPartial[1] as AssistantWork).content, [{ type: "text", text: "Partial answer" }]);
+});

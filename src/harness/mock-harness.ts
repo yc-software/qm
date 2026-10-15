@@ -11,7 +11,7 @@ import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
-import { recordStoppedReply } from "./harness-shared.ts";
+import { recordStoppedTurn } from "./harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -216,7 +216,7 @@ export function createMockHarness(): Harness {
             if (!turn.cancel || turn.cancel.aborted) resolve();
             else turn.cancel.addEventListener("abort", () => resolve(), { once: true });
           });
-          await recordStoppedReply(turn, "(stopped)");
+          await recordStoppedTurn(turn, "");
           return { reply: "(stopped)", stopped: true, modelCalls: 1 };
         } else if (command0.startsWith("!post-lost-result ")) {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);

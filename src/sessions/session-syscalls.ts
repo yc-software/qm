@@ -467,12 +467,13 @@ export async function stopSessionTree(
     signals: Pick<RunSignalStore, "send">;
   },
   root: Session,
+  reason?: string,
 ): Promise<boolean> {
   let stopped = false;
   for (const session of await treeSessions(deps.sessions, root)) {
     if (session.scopeId !== root.scopeId) continue;
     for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-      await deps.signals.send(run.id, { kind: "abort" });
+      await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       stopped = true;
     }
@@ -805,7 +806,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: false, message: "ordinary sessions accept private messages, not interrupts" };
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
-                const stopped = await stopSessionTree(deps, target);
+                const stopped = await stopSessionTree(deps, target, "the parent agent interrupted it");
                 return stopped
                   ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
                   : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };

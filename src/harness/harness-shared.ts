@@ -73,13 +73,32 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
 
-export async function recordStoppedReply(
+export const STOPPED_FALLBACK_REASON = "it was stopped before it finished";
+
+export function stoppedNote(reason: string): string {
+  return `[system] Turn stopped: ${reason}.`;
+}
+
+/**
+ * Records a stopped turn: whatever the model actually wrote before the stop (never a placeholder),
+ * then a system note saying who or what stopped it. The note is a user-side entry, hidden in the UI.
+ */
+export async function recordStoppedTurn(
   turn: HarnessTurnInput,
-  text: string,
+  partial: string,
+  reason: string = STOPPED_FALLBACK_REASON,
   replay: Record<string, unknown> = {},
 ): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
-  return turn.emit({ type: "assistant", payload: { text, stopped: true, ...replay }, scopeLabel: turn.scopeLabel });
+  const answer = partial.trim()
+    ? await turn.emit({ type: "assistant", payload: { text: partial, stopped: true, ...replay }, scopeLabel: turn.scopeLabel })
+    : null;
+  const note = await turn.emit({
+    type: "user",
+    payload: { text: stoppedNote(reason), hidden: true, stopped: true },
+    scopeLabel: turn.scopeLabel,
+  });
+  return note ?? answer;
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {

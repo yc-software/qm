@@ -41,6 +41,8 @@ import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
 
+const USER_STOP = "a person stopped it";
+
 export function attributedSteerText(
   steerer: { id: string; displayName?: string | undefined },
   runOwnerId: string | null,
@@ -92,8 +94,8 @@ export function createTurnMethods(
     const signals = deps.signals;
     const stop = async () => {
       const session = await deps.sessions.getByThread(run.sessionId);
-      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session);
-      await signals.send(run.id, { kind: "abort" });
+      if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
+      await signals.send(run.id, { kind: "abort", reason: USER_STOP });
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
@@ -793,7 +795,7 @@ export function createTurnMethods(
       const stop = async () => {
         const session = await deps.sessions.getByThread(threadRef);
         if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
-        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session);
+        return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session, USER_STOP);
       };
       return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
     },

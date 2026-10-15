@@ -2094,6 +2094,15 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
+      if (payload?.stopped === true) {
+        // The stop note closes the turn; render it as the stopped state, not as a user message.
+        spillHeldPosts();
+        const prev = out.at(-1) as { role?: string; stopReason?: string } | undefined;
+        if (pending.length || !(prev?.role === "assistant" && prev.stopReason === "aborted"))
+          flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);
+        posted = false;
+        continue;
+      }
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
