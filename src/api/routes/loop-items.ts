@@ -4,7 +4,7 @@ import { canonicalJson } from "../../util/objects.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   canAdministerLoop,
@@ -678,22 +678,24 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-  { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-  { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
-  { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
   { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/action",
-    auth: "either",
-    handle: serializeItemAction(actOnItem),
-  },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/followup",
-    auth: "either",
-    handle: serializeItemAction(followUpOnItem),
-  },
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
+    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+    { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
+    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/action",
+      auth: "either",
+      handle: serializeItemAction(actOnItem),
+    },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/followup",
+      auth: "either",
+      handle: serializeItemAction(followUpOnItem),
+    },
+  ]),
 ];

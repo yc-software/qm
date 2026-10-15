@@ -174,5 +174,5 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
 }
 
 export const runEventRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/runs/:id/events", auth: "source", handle: streamRun },
+  { method: "GET", path: "/v1/runs/:id/events", actor: "person", auth: "source", handle: streamRun },
 ];

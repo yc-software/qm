@@ -81,5 +81,5 @@ async function putDeploymentLayer(ctx: ApiCtx): Promise<void> {
 
 export const deploymentLayerRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/deployment-layer", auth: "source", handle: getDeploymentLayer },
-  { method: "PUT", path: "/v1/deployment-layer", auth: "source", handle: putDeploymentLayer },
+  { method: "PUT", path: "/v1/deployment-layer", actor: "system", auth: "source", handle: putDeploymentLayer },
 ];

@@ -20,7 +20,7 @@ import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 export interface LoopServiceDeps {
   lock?: AdvisoryLock;
@@ -676,15 +676,17 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
 }
 
 export const loopRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
-  { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
-  { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },
-  { method: "PATCH", path: "/v1/loops/:id", auth: "either", handle: patchLoop },
-  { method: "DELETE", path: "/v1/loops/:id", auth: "either", handle: deleteLoop },
-  { method: "POST", path: "/v1/loops/:id/fire", auth: "either", handle: fireLoopNow },
   { method: "POST", path: "/v1/loops/:id/triage/preview", auth: "source", handle: previewLoopTriage },
-  { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
-  { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
-  { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },
-  { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
+  ...withActor("query.principalId", [
+    { method: "POST", path: "/v1/loops", auth: "either", handle: createLoop },
+    { method: "GET", path: "/v1/loops", auth: "either", handle: listLoops },
+    { method: "GET", path: "/v1/loops/:id", auth: "either", handle: getLoop },
+    { method: "PATCH", path: "/v1/loops/:id", auth: "either", handle: patchLoop },
+    { method: "DELETE", path: "/v1/loops/:id", auth: "either", handle: deleteLoop },
+    { method: "POST", path: "/v1/loops/:id/fire", auth: "either", handle: fireLoopNow },
+    { method: "POST", path: "/v1/loops/:id/outputs/:outputId/decide", auth: "either", handle: decideOutput },
+    { method: "POST", path: "/v1/loops/:id/grants", auth: "either", handle: graduateShipAction },
+    { method: "POST", path: "/v1/loops/:id/autopilot", auth: "either", handle: setAutopilot },
+    { method: "DELETE", path: "/v1/loops/:id/grants/:grantId", auth: "either", handle: revokeShipGrant },
+  ]),
 ];

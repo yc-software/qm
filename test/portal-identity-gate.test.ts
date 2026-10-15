@@ -11,7 +11,6 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
-import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 
@@ -394,16 +393,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 });
 
 describe("service-to-service writes are classified", () => {
-  it("every auth:source write route is classified, so production gating cannot demand a portal identity from a plugin", () => {
-    const unclassified = authBrokerRoutes
-      .filter((route) => "path" in route && route.auth === "source")
-      .map((route) => route as { method: string; path: string })
-      .filter((route) => isUnclassifiedWrite(route.method, route.path))
-      .map((route) => `${route.method} ${route.path}`);
+  it("every auth-broker source write declares its actor, so production gating cannot demand a portal identity from a plugin", () => {
+    const undeclared = authBrokerRoutes
+      .filter((route) => "path" in route && route.auth === "source" && route.method !== "GET" && !route.actor)
+      .map((route) => `${(route as { method: string }).method} ${(route as { path: string }).path}`);
     assert.deepEqual(
-      unclassified,
+      undeclared,
       [],
-      "an unclassified write requires a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; add it to SYSTEM in user-scoped-routes.ts",
+      'a write defaults to requiring a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; declare actor: "system" or "person" on the route',
     );
   });
 });

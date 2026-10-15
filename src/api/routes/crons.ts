@@ -10,7 +10,7 @@ import { isObj } from "./shared.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -451,19 +451,21 @@ async function cronById(ctx: ApiCtx): Promise<void> {
 }
 
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/crons", auth: "either", handle: createCron },
-  { method: "GET", path: "/v1/crons", auth: "either", handle: listCrons },
-  { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
-  { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
-  { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
+  { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "either", handle: createCron },
+  { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
-  { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
-  {
-    match: (m, p) =>
-      p.startsWith("/v1/crons/") &&
-      !p.slice("/v1/crons/".length).includes("/") &&
-      (m === "GET" || m === "PATCH" || m === "DELETE"),
-    auth: "either",
-    handle: cronById,
-  },
+  ...withActor("query.principalId", [
+    { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
+    { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
+    { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
+    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    {
+      match: (m, p) =>
+        p.startsWith("/v1/crons/") &&
+        !p.slice("/v1/crons/".length).includes("/") &&
+        (m === "GET" || m === "PATCH" || m === "DELETE"),
+      auth: "either",
+      handle: cronById,
+    },
+  ]),
 ];
