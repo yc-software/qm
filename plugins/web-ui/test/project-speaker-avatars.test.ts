@@ -11,12 +11,14 @@ test("project speaker photos follow authenticated identity, not duplicate or rea
     threadRef: "web:project:chat",
   };
   const speakers = [
-    { name: "Alex", speakerId: "person-a" },
-    { name: "Alex", speakerId: "person-b" },
-    { name: "Old Name", speakerId: "person-c" },
-    { name: "Alex" },
-    { name: "Old Name" },
-    { name: "Departed", speakerId: "missing-person" },
+    { name: "Alex", label: "alex", speakerId: "person-a" },
+    { name: "Alex", label: "alex", speakerId: "person-b" },
+    { name: "Old Name", label: "old", speakerId: "person-c" },
+    { name: "Alex", label: "alex" },
+    { name: "Old Name", label: "old" },
+    { name: "Departed", label: "departed", speakerId: "missing-person" },
+    { name: "  ÉLODIE\tMoreau  ", label: "élodie" },
+    { name: "Mary-Jane Watson", label: "mary-jane" },
   ];
   const h = await harness({
     path: `/s/${session.id}`,
@@ -65,7 +67,8 @@ test("project speaker photos follow authenticated identity, not duplicate or rea
       const row = label.closest(".named-user-row")!;
       assert.ok(row);
       assert.equal(label.parentElement, row);
-      assert.equal(label.querySelector(":scope > span:not(.inbox-avatar)")?.textContent, speakers[index]!.name);
+      assert.equal(label.querySelector(":scope > span:not(.inbox-avatar)")?.textContent, speakers[index]!.label);
+      assert.equal(label.querySelector(":scope > span[title]")?.getAttribute("title"), speakers[index]!.name.trim());
       assert.equal(
         row.querySelector<HTMLElement & { content: string }>(":scope > .user-bubble > .pin-content > qm-markdown")
           ?.content,
@@ -76,11 +79,20 @@ test("project speaker photos follow authenticated identity, not duplicate or rea
     }
     assert.deepEqual(
       labels.map((label) => label.querySelector("img")?.getAttribute("src") ?? null),
-      ["https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png", null, null, null],
+      [
+        "https://example.com/a.png",
+        "https://example.com/b.png",
+        "https://example.com/c.png",
+        null,
+        null,
+        null,
+        null,
+        null,
+      ],
     );
-    assert.match(labels[2]!.textContent!, /Old Name/);
-    assert.match(labels[3]!.textContent!, /AL\s+Alex/);
-    assert.match(labels[4]!.textContent!, /ON\s+Old Name/);
+    assert.match(labels[2]!.textContent!, /old/);
+    assert.match(labels[3]!.textContent!, /AL\s+alex/);
+    assert.match(labels[4]!.textContent!, /ON\s+old/);
     const assistantLabel = () => document.querySelector(".named-assistant-row > .speaker-label");
     assert.equal(assistantLabel()?.textContent?.trim(), "QM");
     assert.ok(assistantLabel()?.querySelector(".brand-mark"));

@@ -378,7 +378,8 @@ export function createChatSurface(
     const member = speakerMember(message);
     return html`<div class="speaker-label">
       ${avatarTpl({ key: member?.principalId ?? speaker, name: speaker, avatarUrl: member?.avatarUrl })}<span
-        >${speaker}</span
+        title=${speaker}
+        >${speaker.split(/\s+/, 1)[0]!.toLowerCase()}</span
       >
     </div>`;
   }

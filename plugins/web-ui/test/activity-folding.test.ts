@@ -106,7 +106,7 @@ test("steering separates tool folds with a visible unlabelled user message", asy
     user.speaker = "Another person";
     user.edited = true;
     conv.drawActiveChat();
-    assert.match(document.querySelector(".inline-steer .speaker-label")?.textContent ?? "", /AP\s+Another person/);
+    assert.match(document.querySelector(".inline-steer .speaker-label")?.textContent ?? "", /AP\s+another/);
     assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(edited)");
     user.deleted = true;
     conv.drawActiveChat();
