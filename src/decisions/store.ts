@@ -4,16 +4,15 @@ import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRu
 
 interface DecisionWriter {
   actorId: string;
-  agent: boolean;
 }
 
 export interface DecisionStore {
   providers(ids?: readonly string[]): Promise<DecisionProvider[]>;
   rules(hook?: DecisionHook): Promise<DecisionRule[]>;
   saveProvider(provider: DecisionProvider, by: DecisionWriter): Promise<void>;
-  removeProvider(id: string, by: DecisionWriter): Promise<void>;
+  removeProvider(id: string): Promise<void>;
   saveRule(rule: DecisionRule, by: DecisionWriter): Promise<void>;
-  removeRule(id: string, by: DecisionWriter): Promise<void>;
+  removeRule(id: string): Promise<void>;
 }
 
 const SCHEMA = [
@@ -54,19 +53,14 @@ const RULES = "SELECT * FROM decision_rules";
 const CACHE_MS = 10_000;
 const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
-const ENFORCED_RULE = "SELECT 1 FROM decision_rules WHERE rule_id = $1 AND mode = 'enforce'";
-const ENFORCED_PROVIDER = "SELECT 1 FROM decision_rules WHERE provider_id = $1 AND mode = 'enforce'";
-const AGENT_LIMIT =
-  "agents can't enforce decision rules or change enforced rules and their providers; an admin does that from the dashboard";
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
   const { q, pool } = createPgPool(connectionString, "decisions/0001", SCHEMA);
   const active = new Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>();
   let known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;
-  const write = async (by: DecisionWriter, guard: string, id: string, fn: (db: PoolClient) => Promise<unknown>) => {
+  const write = async (fn: (db: PoolClient) => Promise<unknown>) => {
     await withPgTransaction(await pool(), async (db) => {
       await db.query("LOCK TABLE decision_rules IN SHARE ROW EXCLUSIVE MODE");
-      if (by.agent && (await db.query(guard, [id])).rows.length) throw new Error(AGENT_LIMIT);
       await fn(db);
     });
     active.clear();
@@ -98,7 +92,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
       return rules;
     },
     saveProvider: (p, by) =>
-      write(by, ENFORCED_PROVIDER, p.id, async (db) => {
+      write(async (db) => {
         const { rows } = await db.query("SELECT count(*)::int AS n FROM decision_providers WHERE provider_id <> $1", [
           p.id,
         ]);
@@ -111,11 +105,9 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
           [p.id, p.protocol, p.baseUrl ?? null, p.credential ?? null, by.actorId, Date.now()],
         );
       }),
-    async removeProvider(id, by) {
+    async removeProvider(id) {
       try {
-        await write(by, ENFORCED_PROVIDER, id, (db) =>
-          db.query("DELETE FROM decision_providers WHERE provider_id = $1", [id]),
-        );
+        await write((db) => db.query("DELETE FROM decision_providers WHERE provider_id = $1", [id]));
       } catch (error) {
         if ((error as { code?: string }).code === "23503")
           throw new Error(`decision provider ${id} is still used by a rule`, { cause: error });
@@ -123,8 +115,7 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
       }
     },
     saveRule: (rule, by) =>
-      write(by, ENFORCED_RULE, rule.id, async (db) => {
-        if (by.agent && rule.mode === "enforce") throw new Error(AGENT_LIMIT);
+      write(async (db) => {
         const { rows } = await db.query("SELECT count(*)::int AS n FROM decision_rules WHERE rule_id <> $1", [rule.id]);
         if (rows[0].n >= MAX_STORED_RULES)
           throw new Error(`at most ${MAX_STORED_RULES} decision rules; remove one first`);
@@ -151,7 +142,6 @@ export function createPostgresDecisionStore(connectionString: string): DecisionS
           ],
         );
       }),
-    removeRule: (id, by) =>
-      write(by, ENFORCED_RULE, id, (db) => db.query("DELETE FROM decision_rules WHERE rule_id = $1", [id])),
+    removeRule: (id) => write((db) => db.query("DELETE FROM decision_rules WHERE rule_id = $1", [id])),
   };
 }

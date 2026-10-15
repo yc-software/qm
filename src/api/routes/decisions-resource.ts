@@ -10,7 +10,7 @@ export const decisionsResource: AdminResource = {
   kind: "custom",
   target: "org",
   label:
-    "Decision providers and rules. Send { provider }, { removeProvider: id }, { rule } or { removeRule: id }. A provider names a wire protocol (chat-completions, decisions or systemone); leave baseUrl unset to use the model gateway, or set baseUrl plus an org service credential. A rule asks a classifier a question at a hook and applies the chosen option's action. Rule mode is off, observe or enforce. Agents can save off or observe rules; only an admin enforces a rule or changes an enforced rule or its provider.",
+    "Decision providers and rules. Send { provider }, { removeProvider: id }, { rule } or { removeRule: id }. A provider names a wire protocol (chat-completions, decisions or systemone); leave baseUrl unset to use the model gateway, or set baseUrl plus an org service credential. A rule asks a classifier a question at a hook and applies the chosen option's action. Rule mode is off, observe or enforce.",
   readKey: "decisions",
   get: async (deps, scope) =>
     deps.decisions && {
@@ -25,14 +25,14 @@ export const decisionsResource: AdminResource = {
     const store = ctx.deps.decisions;
     if (!store) return { error: "not available on this deployment", status: 404 };
     const body = (ctx.body ?? {}) as Record<string, unknown>;
-    const by = { actorId: actor.id, agent: !!ctx.capability };
+    const by = { actorId: actor.id };
     let change: [string, string];
     try {
       if (typeof body.removeProvider === "string") {
-        await store.removeProvider(body.removeProvider, by);
+        await store.removeProvider(body.removeProvider);
         change = ["decision.provider.remove", body.removeProvider];
       } else if (typeof body.removeRule === "string") {
-        await store.removeRule(body.removeRule, by);
+        await store.removeRule(body.removeRule);
         change = ["decision.rule.remove", body.removeRule];
       } else if (body.provider !== undefined) {
         const parsed = parseDecisionProvider(body.provider);
