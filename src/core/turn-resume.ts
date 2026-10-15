@@ -1,5 +1,7 @@
 import type { RuntimeChoice } from "../harness/harness.ts";
-import { INTERRUPTED_TOOL_RESULT } from "../harness/context-compaction.ts";
+import { unrecordedToolResult } from "../harness/context-compaction.ts";
+
+export { unrecordedToolResult };
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { entryDeliveryKey, isOverheardEntry } from "../sessions/session-store.ts";
@@ -163,29 +165,7 @@ function providerDetail(cause: { code?: string; status?: number }): string {
   return `${cause.code}${cause.status !== undefined ? `, HTTP ${cause.status}` : ""}`;
 }
 
-/** What interrupted a tool call, as the subject of "... interrupted this call". */
-function interruptedBy(cause: ResumeCause | undefined): string | null {
-  switch (cause?.kind) {
-    case "shutdown":
-      return "A routine platform deploy";
-    case "lease_expired":
-      return "A worker crash";
-    case "error":
-      return cause.code ? `A model-provider failure (${providerDetail(cause)})` : "An internal error";
-    default:
-      return null;
-  }
-}
-
 const QUIET = "Don't mention this.";
-
-/** The recorded result of a tool call whose outcome was lost when the attempt running it stopped. */
-export function unrecordedToolResult(cause: ResumeCause | undefined): string {
-  const by = interruptedBy(cause);
-  return by
-    ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying. ${QUIET}`
-    : INTERRUPTED_TOOL_RESULT;
-}
 
 export function resumeNote(opts?: {
   strategy?: ResumeStrategy;

@@ -596,3 +596,13 @@ test("reconstructMessagesFromHistory keeps parallel tool calls in one assistant 
     ["user", "a,b", "toolResult", "toolResult", "c", "toolResult", "text"],
   );
 });
+
+test("a tool result cut off by a deploy says so in its replayed result", () => {
+  const history: SessionEntry[] = [
+    ent("user", { text: "deploy it" }, 1),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "make deploy" }, 2),
+    ent("tool_result", { callId: "c1", result: "[exit 143]", interrupted: true, stop: { kind: "shutdown" } }, 3),
+  ];
+  const text = JSON.stringify(reconstructMessagesFromHistory(history));
+  assert.match(text, /A routine platform deploy interrupted this call/);
+});
