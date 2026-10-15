@@ -1778,11 +1778,12 @@ a.chat-row-open {
   user-select: none;
 }
 
-.user-row.named-user-row,
+.user-row.named-user-row {
+  padding-right: 48px;
+}
 .named-assistant-row {
   align-items: stretch;
   padding-left: 48px;
-  min-height: 60px;
 }
 .named-user-row > .speaker-label,
 .named-assistant-row > .speaker-label {
@@ -1793,44 +1794,30 @@ a.chat-row-open {
   color: var(--foreground);
   font-size: max(min(12px, var(--chat-font-size)), calc(var(--chat-font-size) * var(--text-scale)));
   line-height: 1.45;
+  pointer-events: auto;
 }
 .named-user-row > .speaker-label > .inbox-avatar,
 .named-assistant-row > .speaker-label > .brand-mark {
   position: absolute;
   top: 2px;
-  left: -48px;
   width: 36px;
   height: 36px;
   font-size: 12px;
 }
-.named-user-row > .user-bubble {
-  --bubble-bg: var(--background);
-  max-width: 100%;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+.named-user-row > .speaker-label > .inbox-avatar {
+  right: -48px;
 }
-.named-user-row > .user-bubble > .pin-toggle {
-  right: 0;
-  bottom: 0;
+.named-assistant-row > .speaker-label > .brand-mark {
+  left: -48px;
 }
-.user-row.named-user-row > .attachment-gallery {
-  align-items: flex-start;
-  margin: 4px 0 8px;
+.user-row.named-user-row > .message-meta {
+  right: 48px;
 }
-.user-row.named-user-row > .attachment-gallery > * {
-  justify-content: flex-start;
-}
-.user-row.named-user-row > .message-meta,
 .named-assistant-row > .assistant-body > .message-meta {
   left: 48px;
   right: auto;
 }
-.message-stack .named-user-row.latest-prompt {
-  margin-bottom: 0;
-}
-.message-stack .named-user-row.stuck > :is(.speaker-label, .user-bubble, .attachment-gallery) {
+.message-stack .named-user-row.stuck > .speaker-label {
   background: var(--background);
 }
 
