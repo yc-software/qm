@@ -23,12 +23,11 @@ import {
 } from "../auth/source-auth.ts";
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
-import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
+import { findRoute, run, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -140,6 +139,8 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
     /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"
   );
 }
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {
   const h = req.headers[CAPABILITY_HEADER];
@@ -257,8 +258,9 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  routeAuth: RouteAuth | undefined,
+  route: Pick<Route, "auth" | "actor"> | undefined,
 ): Promise<GateResult | null> {
+  const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAud = typeof routeAuth === "object" ? routeAuth.aud : null;
@@ -344,20 +346,18 @@ async function gate(
         body !== null &&
         typeof body === "object" &&
         (body as { surface?: unknown }).surface === "web";
+      const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
       const needsActor =
-        isUserScoped(method, pathname) ||
-        webTurn ||
-        pathname.startsWith("/v1/admin/") ||
-        isUnclassifiedWrite(method, pathname);
+        webTurn || pathname.startsWith("/v1/admin/") || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
         if (!psecret || !actor) {
           sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
           return null;
         }
-        const field = webTurn ? undefined : userScopedField(method, pathname);
+        const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
         let asserted: unknown = null;
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActor(field, url, body, req);
+        else if (field) asserted = assertedActorField(field, url, body);
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
         if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
@@ -368,6 +368,13 @@ async function gate(
     }
   }
   return { body, capability, actor };
+}
+
+function assertedActorField(field: string, url: URL, body: unknown): unknown {
+  const [where, name] = field.split(".", 2) as [string, string];
+  if (where === "query") return url.searchParams.get(name);
+  const value = body && typeof body === "object" ? (body as Record<string, unknown>)[name] : undefined;
+  return typeof value === "string" ? value : null;
 }
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
@@ -419,7 +426,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       const base = baseCtx(req, res, wiring);
       const raw = rawBodies.get(req) ?? "";
       const found = findRoute(matchRoutes, base.method, base.pathname);
-      const g = await gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route.auth);
+      const g = await gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route);
       if (!g) return;
       if (found) {
         const ctx: ApiCtx = {
@@ -474,7 +481,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       url.pathname,
       url,
       raw,
-      request.routeOptions.config.route?.auth,
+      request.routeOptions.config.route,
     );
     if (!result) {
       reply.hijack();

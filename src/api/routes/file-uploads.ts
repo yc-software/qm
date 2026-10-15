@@ -3,7 +3,7 @@ import { sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/direct-file-upload.ts";
 import { isObj, audit } from "./shared.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 async function handleUpload(ctx: ApiCtx): Promise<void> {
   const { res, deps, app, capability, actor, params, method, pathname } = ctx;
@@ -78,10 +78,12 @@ async function handleUpload(ctx: ApiCtx): Promise<void> {
 }
 
 export const fileUploadRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/files/upload-client", auth: "either", handle: handleUpload },
-  { method: "POST", path: "/v1/files/uploads", auth: "either", handle: handleUpload },
-  { method: "GET", path: "/v1/files/uploads/:id", auth: "either", handle: handleUpload },
-  { method: "POST", path: "/v1/files/uploads/:id/parts/:part", auth: "either", handle: handleUpload },
-  { method: "POST", path: "/v1/files/uploads/:id/complete", auth: "either", handle: handleUpload },
-  { method: "DELETE", path: "/v1/files/uploads/:id", auth: "either", handle: handleUpload },
+  { method: "GET", path: "/v1/files/upload-client", actor: "query.viewer", auth: "either", handle: handleUpload },
+  { method: "GET", path: "/v1/files/uploads/:id", actor: "query.viewer", auth: "either", handle: handleUpload },
+  ...withActor("body.principalId", [
+    { method: "POST", path: "/v1/files/uploads", auth: "either", handle: handleUpload },
+    { method: "POST", path: "/v1/files/uploads/:id/parts/:part", auth: "either", handle: handleUpload },
+    { method: "POST", path: "/v1/files/uploads/:id/complete", auth: "either", handle: handleUpload },
+    { method: "DELETE", path: "/v1/files/uploads/:id", auth: "either", handle: handleUpload },
+  ]),
 ];

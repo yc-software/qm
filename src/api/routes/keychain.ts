@@ -315,13 +315,13 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 }
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: handleKeychain },
-  { method: "DELETE", path: "/v1/keychain/credentials/:id", auth: "either", handle: handleKeychain },
+  { method: "DELETE", path: "/v1/keychain/credentials/:id", actor: "system", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/grants/:id/revoke", auth: "either", handle: handleKeychain },
-  { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/grants/:id/revoke", actor: "system", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/asks", actor: "system", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/approvals/:id", auth: "source", handle: handleApproval },
 ];

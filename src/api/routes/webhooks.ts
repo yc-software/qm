@@ -193,10 +193,22 @@ export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/webhooks", auth: "either", handle: createWebhook },
-  { method: "GET", path: "/v1/webhooks", auth: "either", handle: listWebhooks },
-  { method: "GET", path: "/v1/webhooks/:id/events", auth: "either", handle: listWebhookEvents },
-  { method: "POST", path: "/v1/webhooks/:id/update", auth: "either", handle: updateWebhook },
-  { method: "POST", path: "/v1/webhooks/:id/disable", auth: "either", handle: disableWebhook },
+  { method: "POST", path: "/v1/webhooks", actor: "body.createdBy", auth: "either", handle: createWebhook },
+  { method: "GET", path: "/v1/webhooks", actor: "query.viewer", auth: "either", handle: listWebhooks },
+  { method: "GET", path: "/v1/webhooks/:id/events", actor: "query.viewer", auth: "either", handle: listWebhookEvents },
+  {
+    method: "POST",
+    path: "/v1/webhooks/:id/update",
+    actor: "query.principalId",
+    auth: "either",
+    handle: updateWebhook,
+  },
+  {
+    method: "POST",
+    path: "/v1/webhooks/:id/disable",
+    actor: "query.principalId",
+    auth: "either",
+    handle: disableWebhook,
+  },
   { method: "POST", path: "/v1/webhooks/:id/enable", auth: "either", handle: enableWebhook },
 ];
