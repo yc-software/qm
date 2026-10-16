@@ -2,12 +2,13 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "use_runtime"], decide: "most_confident" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
 } as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start"];
+const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end"];
 const rank = (hook: DecisionHook, action: string) =>
   (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
 

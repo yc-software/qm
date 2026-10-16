@@ -927,7 +927,7 @@ function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | 
 }
 
 /** Codes that retry the turn on the configured fallback model. */
-const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
+const FALLBACK_CODES = new Set(["model_unavailable"]);
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
@@ -951,7 +951,7 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
-export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
+export function providerFallbackError(session: AssistantTextSession, messagesBefore?: number): string | null {
   const err = piAssistantFailure(messagesSince(session, messagesBefore));
   return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
@@ -2137,7 +2137,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           const recoverRefusedRound = async (): Promise<void> => {
             if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
-            const refusal = providerRefusalError(entry.agentSession, messagesBefore);
+            const refusal = providerFallbackError(entry.agentSession, messagesBefore);
             if (!refusal) return;
             try {
               await attemptRefusalFallback(refusal);

@@ -447,28 +447,6 @@ test("gateway-routed Claude requests carry neither the binding beta nor block_bi
   assert.equal("block_binding" in (payloads[0]!.thinking as object), false);
 });
 
-test("a refusal fallback prices each step on its actual model and tier", async () => {
-  const { rows, payloads } = await runTurn("refusal-fallback-pricing", "claude-sonnet-5", true, (_payload, index) =>
-    index === 0
-      ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal")
-      : anthropicReply("recovered", ANTHROPIC_WIRE_USAGE),
-  );
-  assert.equal(payloads.length, 2);
-  assert.equal(payloads[0]?.model, "claude-sonnet-5");
-  assert.equal("speed" in payloads[0]!, false);
-  assert.equal(payloads[1]?.model, "claude-opus-5");
-  assert.equal(payloads[1]?.speed, "fast");
-  assert.deepEqual(
-    rows.map((r) => [r.step, r.model]),
-    [
-      [0, "claude-sonnet-5"],
-      [1, "claude-opus-5"],
-    ],
-  );
-  assertUsd(rows[0]!.usage!.costUsd, 0.03); // a stop_reason refusal is a billed 200 response
-  assertUsd(rows[1]!.usage!.costUsd, 0.15);
-});
-
 for (const [baseId, cost] of [
   ["gpt-6-astra", 1.8],
   ["gpt-6.1-sol", 0.33],
@@ -491,19 +469,16 @@ for (const [baseId, cost] of [
   }
 }
 
-test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
-  const { payloads } = await runTurn(
-    "refusal-configured-fallback",
-    "claude-sonnet-5",
-    false,
-    (_payload, index) =>
-      index === 0 ? anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal") : responsesReply("recovered", ASTRA_WIRE_USAGE),
-    false,
-    { resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol", effortLevel: "low" }) },
+test("a structured refusal reaches the shared turn-end decision without an internal model switch", async () => {
+  let requests = 0;
+  await assert.rejects(
+    runTurn("refusal", "claude-sonnet-5", false, () => {
+      requests++;
+      return anthropicReply("", ANTHROPIC_WIRE_USAGE, "refusal");
+    }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "refusal",
   );
-  assert.equal(payloads.length, 2);
-  assert.equal(payloads[1]?.model, "gpt-6-sol");
-  assert.equal((payloads[1]?.reasoning as { effort?: string } | undefined)?.effort, "low");
+  assert.equal(requests, 1);
 });
 
 test("an unavailable gateway model fails the turn without fallback (no structured signal)", async () => {

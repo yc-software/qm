@@ -13,7 +13,7 @@ import {
   piHarnessConfigOptions,
   piLastAssistantTextOrThrow,
   piTurnError,
-  providerRefusalError,
+  providerFallbackError,
   refusalFallbackNote,
   refusalFallbackModelId,
   REFUSAL_FALLBACK_MODEL_IDS,
@@ -908,7 +908,7 @@ test("Pi provider errors are classified once into a typed code from structured f
   }
 });
 
-test("providerRefusalError finds this prompt's refusal but never a prior turn's", () => {
+test("providerFallbackError leaves refusals to the shared turn-end handler", () => {
   const refusalMsg = {
     role: "assistant",
     stopReason: "error",
@@ -920,9 +920,9 @@ test("providerRefusalError finds this prompt's refusal but never a prior turn's"
   const session = {
     getLastAssistantText: () => undefined,
     messages: [refusalMsg, { role: "user", content: [] }],
-  } as unknown as Parameters<typeof providerRefusalError>[0];
-  assert.match(providerRefusalError(session) ?? "", /Terms of Service/);
-  assert.equal(providerRefusalError(session, 2), null);
+  } as unknown as Parameters<typeof providerFallbackError>[0];
+  assert.equal(providerFallbackError(session), null);
+  assert.equal(providerFallbackError(session, 2), null);
 });
 
 test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {

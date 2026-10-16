@@ -1,3 +1,5 @@
+import type { HarnessTurnInput, HarnessTurnResult } from "../harness/harness.ts";
+import type { ProviderTurnError } from "../core/turn-error.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { runHook, type DecisionBackend, type DecisionHook, type DecisionResult } from "./decisions.ts";
 import type { DecisionStore } from "./store.ts";
@@ -76,4 +78,86 @@ export async function routeTurnRuntime<C extends { harnessId: string; modelId: s
   ]);
   const changed = !!otherwise && (otherwise.harnessId !== choice.harnessId || otherwise.modelId !== choice.modelId);
   return changed ? { choice, routedBy: decision.ruleId } : { choice };
+}
+
+export function turnEndState(turn: Parameters<typeof turnStartState>[0], reply: string, refusal?: string): string {
+  return JSON.stringify({
+    request: turn.input.slice(-2_000),
+    runtime: turn.runtime,
+    response: reply.slice(-5_000),
+    ...(refusal ? { providerError: { code: "refusal", message: refusal.slice(0, 500) } } : {}),
+  });
+}
+
+export function createTurnEndHook(decide: ReturnType<typeof createDecisionHooks>) {
+  return async (
+    input: HarnessTurnInput,
+    result: HarnessTurnResult,
+    error?: ProviderTurnError,
+  ): Promise<HarnessTurnResult> => {
+    if (!input.runtimeControl || !input.runtime?.harnessId || !input.runtime.modelId || input.readOnly) return result;
+    const decision = await decide("turn_end", turnEndState(input, result.reply, error?.message), {
+      actorId: input.runtimeActorId,
+      scopeLabel: input.scopeLabel,
+      sessionId: input.session.id,
+      runId: input.runId,
+      cancel: input.cancel,
+    });
+    if (!decision?.runtime || decision.runtime.modelId === input.runtime.modelId) return result;
+    const switched = await input.runtimeControl(
+      { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId },
+      {
+        action: "set",
+        harness: "pi",
+        model: decision.runtime.modelId,
+        effort: decision.runtime.effortLevel ?? "auto",
+        fastMode: decision.runtime.fastMode ?? false,
+        lifetime: "task",
+      },
+      input.cancel,
+    );
+    if (!switched.ok) {
+      await input.emit({
+        type: "tool_result",
+        scopeLabel: input.scopeLabel,
+        payload: { tool: "runtime", action: "set", decisionRule: decision.ruleId, ...switched },
+      });
+      return result;
+    }
+    if (!switched.handoff) return result;
+    const fromSeq = input.history.at(-1)?.seq;
+    if (typeof fromSeq === "number") {
+      await input.emit({
+        type: "system",
+        scopeLabel: input.scopeLabel,
+        payload: {
+          kind: "retraction",
+          fromSeq,
+          cause: error ? "provider_refusal" : "refusal_reply",
+          decisionRule: decision.ruleId,
+        },
+      });
+    }
+    await input.emit({
+      type: "tool_result",
+      scopeLabel: input.scopeLabel,
+      payload: {
+        tool: "runtime",
+        action: "set",
+        ok: true,
+        runtimeHandoff: switched.handoff,
+        runId: input.runId,
+        actorId: input.runtimeActorId,
+        decisionRule: decision.ruleId,
+      },
+    });
+    await input.emit({
+      type: "system",
+      scopeLabel: input.scopeLabel,
+      payload: {
+        text: `A refusal triggered a switch to ${switched.handoff.choice.modelId}. Prefer this runtime for the rest of this conversation; switch again if the user asks or the task needs it.`,
+      },
+    });
+    return { ...result, runtimeHandoff: switched.handoff };
+  };
 }

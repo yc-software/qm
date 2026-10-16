@@ -280,9 +280,15 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     assert.ok(events[0]?.sessionId);
     assert.match(events[0]!.payload, /agent message for worklog/);
     const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
-    const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
-    assert.equal(worklog.status, 200);
-    assert.match(JSON.stringify(await worklog.json()), /agent message for worklog/);
+    let worklogJson = "";
+    for (let i = 0; i < 100; i++) {
+      const worklog = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
+      assert.equal(worklog.status, 200);
+      worklogJson = JSON.stringify(await worklog.json());
+      if (/agent message for worklog/.test(worklogJson)) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.match(worklogJson, /agent message for worklog/);
     const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
     assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
   } finally {

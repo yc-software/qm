@@ -14,7 +14,7 @@ import {
 import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
-import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
 import { createGrindMeter } from "./grind.ts";
 import {
   bankGoalTurn,
@@ -275,6 +275,11 @@ export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
   resolve: (input: HarnessTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
+  afterTurn?: (
+    input: HarnessTurnInput,
+    result: HarnessTurnResult,
+    error?: ProviderTurnError,
+  ) => Promise<HarnessTurnResult>,
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
@@ -321,9 +326,28 @@ export function createHarnessRouter(
               }
             : {}),
         };
-        return adapter.profile.capabilities.has("goal-enforcement")
-          ? adapter.turns.runTurn(dispatched)
-          : runTurnEnforcingGoal(adapter, dispatched, choice.harnessId);
+        let result: HarnessTurnResult;
+        try {
+          result = await (adapter.profile.capabilities.has("goal-enforcement")
+            ? adapter.turns.runTurn(dispatched)
+            : runTurnEnforcingGoal(adapter, dispatched, choice.harnessId));
+        } catch (error) {
+          if (!afterTurn || !(error instanceof ProviderTurnError) || error.code !== "refusal" || input.cancel?.aborted)
+            throw error;
+          let recovered: HarnessTurnResult;
+          try {
+            recovered = await afterTurn(dispatched, { reply: "" }, error);
+          } catch (recoveryError) {
+            throw new AggregateError([error, recoveryError], "Provider refusal recovery failed", {
+              cause: recoveryError,
+            });
+          }
+          if (!recovered.runtimeHandoff) throw error;
+          return recovered;
+        }
+        return afterTurn && turnCompleted(result) && !result.silent && result.reply.trim() && !input.cancel?.aborted
+          ? afterTurn(dispatched, result)
+          : result;
       },
       async resetSession(sessionId) {
         lastHarness.delete(sessionId);

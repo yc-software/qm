@@ -45,12 +45,35 @@ export function withoutWire(payload: unknown): Record<string, unknown> {
   return { ...(payload as Record<string, unknown> | null), step: undefined, wire: undefined };
 }
 
+export interface RetractionMarker {
+  fromSeq: number;
+  throughSeq: number;
+}
+
+function retractionMarkers(entries: SessionEntry[]): RetractionMarker[] {
+  return entries.flatMap((entry) => {
+    const payload = entry.payload as { kind?: unknown; fromSeq?: unknown } | null;
+    return isObj(payload) && payload.kind === "retraction" && typeof payload.fromSeq === "number"
+      ? [{ fromSeq: payload.fromSeq, throughSeq: entry.seq }]
+      : [];
+  });
+}
+
+function retractedByMarker(entry: SessionEntry, markers: RetractionMarker[]): boolean {
+  const payload = (entry.payload as { step?: unknown; callId?: unknown } | null) ?? {};
+  const runOutput = isObj(payload.step) || (typeof payload.callId === "string" && payload.callId !== "");
+  return runOutput && markers.some((marker) => entry.seq > marker.fromSeq && entry.seq < marker.throughSeq);
+}
+
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
+  const markers = retractionMarkers(entries);
   return memoryBoundedEntries(entries).filter(
     (e) =>
       ((e.type !== "thinking" && e.type !== "text") || isObj((e.payload as { step?: unknown } | null)?.step)) &&
       e.type !== "soul" &&
-      (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
+      (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure" &&
+      (e.payload as { kind?: unknown } | null)?.kind !== "retraction" &&
+      !retractedByMarker(e, markers),
   );
 }
 
