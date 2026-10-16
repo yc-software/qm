@@ -257,7 +257,10 @@ The last stdout line is the typed outcome:
   section — every provider
   flow ends the same way: the person signs in once, the sign-in lands durably in THEIR
   profile, and you relaunch the browser and re-run the
-  task. Two rules hold for all providers: sign-in and live-view links are single-audience
+  task. (Where the write-back happens differs — Kernel and Browser Use save from the task
+  browser itself, on delete or stop; Browserbase and Anchor save only from a dedicated
+  sign-in session — the provider doc says which its flow uses.) Two rules hold for all
+  providers: sign-in and live-view links are single-audience
   bearer material — hand them to the person in a DM, never open them yourself; and a
   mid-session verification check (already signed in, then challenged) is cleared on the LIVE
   browser — hand the person `$LIVE_VIEW`, wait for done, re-run.

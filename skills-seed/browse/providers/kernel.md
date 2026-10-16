@@ -80,7 +80,9 @@ LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(
 ```
 
 `CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
-when you report: anything this run signs in to won't be kept.
+when you report: anything this run signs in to won't be kept. The check is not a lock —
+two creates in the same moment can both see an empty list — so keep one browse run at a
+time on a person's profile.
 
 In a channel or group, OMIT the profile AND `proxy_id` entirely (per the DM-only rule) —
 never send a personal profile name or proxy there:

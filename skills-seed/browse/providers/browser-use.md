@@ -55,7 +55,9 @@ creates is tagged with its profile id in `metadata`, and the check stops only ta
 holders of this profile. An active browser with no tag is not yours to stop sight unseen:
 on a shared key it is someone else's task (leave it and say so), and on the person's own
 key it can only be one of their older browsers — stop it by hand before creating.
-Stopping a holder is also what saves it, so nothing is lost:
+Stopping a holder is also what saves it, so nothing is lost. The check is not a lock —
+two creates in the same moment can both pass it — so keep one browse run at a time on a
+person's profile:
 
 ```bash
 ACTIVE=$(curl -fsS "https://api.browser-use.com/api/v4/browsers?filterBy=active" \
