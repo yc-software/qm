@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -164,4 +164,20 @@ test("port ownership excludes clients connected to the listener", async () => {
     await child.stop();
     rmSync(lock, { recursive: true, force: true });
   }
+});
+
+test("readiness is detected after earlier multibyte log output", async () => {
+  const lock = mkdtempSync(join(tmpdir(), "qm-child-"));
+  const port = await freeTcpPort();
+  writeFileSync(join(lock, "web.log"), `${"\u00e9".repeat(4096)}\n`);
+  const child = new Child(
+    spec(lock, port),
+    lock,
+    () => {},
+    () => {},
+  );
+  const res = await child.start();
+  assert.equal(res.ok, true);
+  await child.stop();
+  rmSync(lock, { recursive: true, force: true });
 });
