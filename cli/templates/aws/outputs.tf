@@ -1,4 +1,5 @@
 output "alb_hostname" { value = aws_lb.this.dns_name }
+output "egress_proxy_hostname" { value = try(aws_lb.egress_proxy["egress-proxy"].dns_name, null) }
 output "cloudfront_hostname" { value = aws_cloudfront_distribution.portal.domain_name }
 output "cluster" { value = aws_ecs_cluster.this.name }
 output "deploy_role_arn" { value = aws_iam_role.github_deploy.arn }

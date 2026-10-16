@@ -8,6 +8,7 @@ locals {
   public_path_services    = { for name, service in var.services : name => service.public_paths if length(service.public_paths) > 0 }
   public_service_names    = concat(local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"], keys(local.public_path_services))
   ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
+  egress_proxy            = { for name, service in var.services : name => service if name == "egress-proxy" }
   direct_path_services    = merge(local.has_portal ? {} : { core = ["/v1/*"] }, local.public_path_services)
   alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
   service_security_groups = [aws_security_group.services.id]
@@ -830,6 +831,62 @@ resource "aws_lb_listener" "public" {
   }
 }
 
+resource "aws_security_group" "egress_proxy" {
+  for_each = local.egress_proxy
+  name     = "${var.cluster_name}-egress-proxy"
+  vpc_id   = local.vpc_id
+  ingress {
+    from_port   = each.value.internal_port
+    to_port     = each.value.internal_port
+    protocol    = "tcp"
+    cidr_blocks = [aws_vpc.this.cidr_block]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = local.tags
+}
+
+resource "aws_lb" "egress_proxy" {
+  for_each           = local.egress_proxy
+  name               = "${substr(var.cluster_name, 0, 20)}-egr-${substr(sha1("${var.cluster_name}:${each.key}"), 0, 6)}"
+  load_balancer_type = "network"
+  subnets            = local.subnet_ids
+  tags               = local.tags
+}
+
+resource "aws_lb_target_group" "egress_proxy" {
+  for_each    = local.egress_proxy
+  name        = "${substr(var.cluster_name, 0, 20)}-egr-${substr(sha1("${var.cluster_name}:${each.key}:tcp"), 0, 6)}"
+  port        = each.value.internal_port
+  protocol    = "TCP"
+  target_type = "ip"
+  vpc_id      = local.vpc_id
+  tags        = local.tags
+}
+
+resource "aws_lb_listener" "egress_proxy" {
+  for_each          = local.egress_proxy
+  load_balancer_arn = aws_lb.egress_proxy[each.key].arn
+  port              = 443
+  protocol          = "TLS"
+  certificate_arn   = var.certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.egress_proxy[each.key].arn
+  }
+  lifecycle {
+    precondition {
+      condition     = var.certificate_arn != ""
+      error_message = "the egress-proxy service requires certificate_arn: sandboxes present capability tokens to it, so it only listens on TLS"
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "portal" {
   enabled         = true
   is_ipv6_enabled = true
@@ -975,7 +1032,7 @@ resource "aws_ecs_task_definition" "bootstrap" {
 
 resource "aws_ecs_service" "service" {
   for_each        = var.services
-  depends_on      = [aws_lb_listener.public, aws_lb_listener_rule.production, aws_iam_role_policy_attachment.ecs_load_balancer]
+  depends_on      = [aws_lb_listener.public, aws_lb_listener_rule.production, aws_lb_listener.egress_proxy, aws_iam_role_policy_attachment.ecs_load_balancer]
   name            = each.value.ecs_service
   cluster         = aws_ecs_cluster.this.id
   task_definition = aws_ecs_task_definition.bootstrap[each.key].arn
@@ -983,7 +1040,7 @@ resource "aws_ecs_service" "service" {
   launch_type     = "FARGATE"
   network_configuration {
     subnets          = local.subnet_ids
-    security_groups  = local.service_security_groups
+    security_groups  = contains(keys(local.egress_proxy), each.key) ? [aws_security_group.egress_proxy[each.key].id] : local.service_security_groups
     assign_public_ip = true
   }
   service_connect_configuration {
@@ -1008,8 +1065,8 @@ resource "aws_ecs_service" "service" {
     rollback = true
   }
   deployment_configuration {
-    strategy             = "BLUE_GREEN"
-    bake_time_in_minutes = var.ecs_blue_green_bake_minutes
+    strategy             = contains(keys(local.egress_proxy), each.key) ? "ROLLING" : "BLUE_GREEN"
+    bake_time_in_minutes = contains(keys(local.egress_proxy), each.key) ? null : var.ecs_blue_green_bake_minutes
   }
   dynamic "alarms" {
     for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
@@ -1034,6 +1091,14 @@ resource "aws_ecs_service" "service" {
         production_listener_rule   = aws_lb_listener_rule.production[load_balancer.value].arn
         role_arn                   = aws_iam_role.ecs_load_balancer.arn
       }
+    }
+  }
+  dynamic "load_balancer" {
+    for_each = contains(keys(local.egress_proxy), each.key) ? [each.key] : []
+    content {
+      target_group_arn = aws_lb_target_group.egress_proxy[load_balancer.value].arn
+      container_name   = each.key
+      container_port   = each.value.internal_port
     }
   }
   lifecycle {

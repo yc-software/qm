@@ -165,3 +165,64 @@ test(
     }
   },
 );
+
+test(
+  "AWS init plans the egress proxy behind its own TLS network load balancer",
+  { skip: !terraformRequested && !terraformBin ? "Terraform is unavailable" : false },
+  () => {
+    assert.ok(terraformBin, `QM_TEST_TERRAFORM is not executable: ${process.env.QM_TEST_TERRAFORM}`);
+    const dir = tmp("aws-egress-proxy");
+    try {
+      const initialized = runCli(["init", dir, "--org", "egress", "--target", "aws", "--model-provider", "anthropic"]);
+      assert.equal(initialized.code, 0, initialized.out);
+      configureAwsCoordinates(dir);
+      const path = join(dir, "qm.config.jsonc");
+      writeFileSync(
+        path,
+        readFileSync(path, "utf8")
+          .replace('"services": [', '"services": ["egress-proxy", ')
+          .replace(
+            '"services": {',
+            '"services": { "egress-proxy": { "ecrRepository": "egress-proxy", "ecsService": "egress-proxy", "cpu": 512, "memory": 1024 },',
+          ),
+      );
+      configureTerraform(dir);
+      const rendered = runCli(["infra", "render", "--config", path]);
+      assert.equal(rendered.code, 0, rendered.out);
+      writeFileSync(
+        join(dir, "infra", "egress.tftest.hcl"),
+        `mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["us-west-2a", "us-west-2b"] }
+  }
+}
+mock_provider "random" {}
+run "tls" {
+  command = plan
+  variables { certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000" }
+  assert {
+    condition = aws_lb.egress_proxy["egress-proxy"].load_balancer_type == "network" && aws_lb_listener.egress_proxy["egress-proxy"].port == 443 && aws_lb_listener.egress_proxy["egress-proxy"].protocol == "TLS"
+    error_message = "the proxy is not behind a TLS network load balancer"
+  }
+  assert {
+    condition = aws_lb_target_group.egress_proxy["egress-proxy"].protocol == "TCP" && aws_lb_target_group.egress_proxy["egress-proxy"].port == 48080 && length(aws_ecs_service.service["egress-proxy"].load_balancer) == 1 && !contains(keys(aws_lb_target_group.service), "egress-proxy")
+    error_message = "the proxy is not attached to its TCP target group alone"
+  }
+  assert {
+    condition = aws_ecs_service.service["egress-proxy"].deployment_configuration[0].strategy == "ROLLING" && aws_ecs_service.service["core"].deployment_configuration[0].strategy == "BLUE_GREEN"
+    error_message = "unexpected rollout strategies"
+  }
+}
+run "plaintext" {
+  command = plan
+  expect_failures = [aws_lb_listener.egress_proxy]
+}
+`,
+      );
+      terraform(dir, terraformBin, ["init", "-backend=false"]);
+      assert.match(terraform(dir, terraformBin, ["test", "-verbose"]), /Success!.*2 passed, 0 failed/s);
+    } finally {
+      rmDir(dir);
+    }
+  },
+);

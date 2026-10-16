@@ -193,3 +193,22 @@ for (const name of ["v1", "d", "key", "models", "slack"]) {
     }
   });
 }
+
+test("the egress proxy may sit behind its own load balancer while other private services may not", () => {
+  const f = fixture();
+  try {
+    const loaded = loadConfigAt(f.configPath).config;
+    const proxy = { ecrRepository: "egress-proxy", ecsService: "egress-proxy", cpu: 256, memory: 512 };
+    const config = {
+      ...loaded,
+      services: [...loaded.services, "egress-proxy" as const],
+      aws: { ...loaded.aws!, services: { ...loaded.aws!.services, "egress-proxy": proxy } },
+    };
+    const services = new Map([...f.services, ["egress-proxy", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] }]]);
+    assert.equal(assertAwsPublicRouting(config, services).has("egress-proxy"), false);
+    services.set("web-ui", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] });
+    assert.throws(() => assertAwsPublicRouting(config, services), /private ECS service web-ui is attached/);
+  } finally {
+    f.close();
+  }
+});
