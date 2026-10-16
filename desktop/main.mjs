@@ -319,7 +319,7 @@ async function start() {
       ![...workspaceWindows].some((page) => !page.isDestroyed() && page.webContents === event.sender) ||
       event.senderFrame !== event.sender.mainFrame ||
       !target ||
-      new URL(event.senderFrame.url).origin !== new URL(target).origin
+      event.senderFrame.origin !== new URL(target).origin
     ) {
       throw new Error("Untrusted workspace request");
     }
@@ -337,7 +337,7 @@ async function start() {
     await shell.openExternal(destination.href);
   });
   const deskOwner = (event, clientId) => {
-    if (typeof clientId !== "string" || !/^[0-9a-f-]{36}$/.test(clientId)) throw new Error("Invalid desktop client");
+    if (typeof clientId !== "string" || clientId.length !== 36) throw new Error("Invalid desktop client");
     return `${event.sender.id}:${clientId}`;
   };
   registerComputerRuntime(handleComputerReply);

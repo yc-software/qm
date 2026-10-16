@@ -17,6 +17,7 @@ let activeOwner;
 let queue = Promise.resolve();
 let next = 1;
 let generation = 0;
+let retiring = Promise.resolve();
 const cancelled = new Set();
 
 function stop(message = "Desktop computer access ended", owner) {
@@ -26,7 +27,17 @@ function stop(message = "Desktop computer access ended", owner) {
   const proc = child;
   child = undefined;
   pending?.finish({ type: "error", code: "action_failed", message, action: null });
-  proc?.kill("SIGKILL");
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    retiring = new Promise((resolve) => {
+      const kill = setTimeout(() => proc.kill("SIGKILL"), 1000);
+      proc.once("exit", () => {
+        clearTimeout(kill);
+        resolve();
+      });
+      proc.stdin.end();
+      proc.kill("SIGTERM");
+    });
+  }
 }
 
 function start() {
@@ -64,8 +75,9 @@ function start() {
 function request(cmd, owner, deadline = Date.now() + 45_000) {
   const expiresAt = Math.min(deadline, Date.now() + 45_000);
   const submitted = generation;
-  const run = () =>
-    new Promise((resolve) => {
+  const run = async () => {
+    await retiring;
+    return new Promise((resolve) => {
       if (submitted !== generation || cancelled.has(owner) || Date.now() >= expiresAt)
         return resolve({
           type: "error",
@@ -96,6 +108,7 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
       };
       proc.stdin.write(`${JSON.stringify({ id, cmd })}\n`);
     });
+  };
   const result = queue.then(run);
   queue = result.catch(() => {});
   return result;

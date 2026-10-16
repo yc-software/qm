@@ -74,60 +74,68 @@ test("a failed result submission does not replay the physical action", async () 
   assert.equal(actions, 1);
 });
 
-test("stream loss cancels an in-flight native action and never reconnects", { timeout: 3000 }, async () => {
-  const { serveDesktopRun } = await import("../src/desktop-computer.ts");
-  const originalFetch = globalThis.fetch;
-  const globals = globalThis as unknown as { window?: EventTarget };
-  const originalWindow = globals.window;
-  const started = Promise.withResolvers<void>();
-  const stopped = Promise.withResolvers<void>();
-  let fetches = 0;
-  let stream: ReadableStreamDefaultController<Uint8Array>;
-  globals.window = Object.assign(new EventTarget(), {
-    qmDesktop: {
-      platform: "darwin",
-      computer: {
-        ...desk(async () => {
-          started.resolve();
-          await stopped.promise;
-          return { content: "stopped", isError: true };
-        }),
-        stop: async () => {
-          stopped.resolve();
+for (const ending of ["disconnect", "lease loss", "requeued"]) {
+  test(`${ending} cancels an in-flight native action and never reconnects`, { timeout: 3000 }, async () => {
+    const { serveDesktopRun } = await import("../src/desktop-computer.ts");
+    const originalFetch = globalThis.fetch;
+    const globals = globalThis as unknown as { window?: EventTarget };
+    const originalWindow = globals.window;
+    const started = Promise.withResolvers<void>();
+    const stopped = Promise.withResolvers<void>();
+    let fetches = 0;
+    let stream: ReadableStreamDefaultController<Uint8Array>;
+    globals.window = Object.assign(new EventTarget(), {
+      qmDesktop: {
+        platform: "darwin",
+        computer: {
+          ...desk(async () => {
+            started.resolve();
+            await stopped.promise;
+            return { content: "stopped", isError: true };
+          }),
+          stop: async () => {
+            stopped.resolve();
+          },
         },
       },
-    },
+    });
+    globalThis.fetch = async () => {
+      fetches++;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream = controller;
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ type: "CUSTOM", name: "run", value: { desktopClientId: "mine", status: "running", alive: true, activity: [entry("click")] } })}\n\n`,
+              ),
+            );
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    };
+    try {
+      const serving = serveDesktopRun(
+        "run",
+        "mine",
+        (path) => `http://localhost${path}`,
+        async () => {},
+      );
+      await started.promise;
+      if (ending === "disconnect") stream!.close();
+      else
+        stream!.enqueue(
+          new TextEncoder().encode(
+            `data: ${JSON.stringify({ type: "CUSTOM", name: "run", value: { desktopClientId: "mine", status: ending === "requeued" ? "pending" : "running", alive: false, activity: [] } })}\n\n`,
+          ),
+        );
+      await stopped.promise;
+      await serving;
+      assert.equal(fetches, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globals.window = originalWindow;
+    }
   });
-  globalThis.fetch = async () => {
-    fetches++;
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          stream = controller;
-          controller.enqueue(
-            new TextEncoder().encode(
-              `data: ${JSON.stringify({ type: "CUSTOM", name: "run", value: { desktopClientId: "mine", status: "running", alive: true, activity: [entry("click")] } })}\n\n`,
-            ),
-          );
-        },
-      }),
-      { headers: { "content-type": "text/event-stream" } },
-    );
-  };
-  try {
-    const serving = serveDesktopRun(
-      "run",
-      "mine",
-      (path) => `http://localhost${path}`,
-      async () => {},
-    );
-    await started.promise;
-    stream!.close();
-    await stopped.promise;
-    await serving;
-    assert.equal(fetches, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-    globals.window = originalWindow;
-  }
-});
+}

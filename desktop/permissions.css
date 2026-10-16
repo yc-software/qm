@@ -1,9 +1,11 @@
 :root {
   font:
-    14px/1.5 -apple-system,
-    BlinkMacSystemFont,
+    14px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
     sans-serif;
-  color: #272923;
+  color: #1b3043;
   background: #f7f6f2;
 }
 * {
@@ -18,7 +20,7 @@ main {
 .eyebrow {
   font-size: 11px;
   letter-spacing: 1.8px;
-  color: #656c5c;
+  color: #6b706f;
   margin: 0 0 10px;
 }
 h1 {
@@ -28,7 +30,7 @@ h1 {
   margin: 0 0 12px;
 }
 .intro {
-  color: #62665d;
+  color: #6b706f;
   margin: 0 0 22px;
 }
 section {
@@ -52,7 +54,7 @@ h2 {
 }
 .row p {
   font-size: 12px;
-  color: #686c62;
+  color: #6b706f;
   margin: 3px 0;
 }
 .status {
@@ -74,7 +76,7 @@ button {
 }
 button:focus-visible,
 #drag:focus-visible {
-  outline: 3px solid #749b80;
+  outline: 3px solid #8394a0;
   outline-offset: 2px;
 }
 button:disabled {
@@ -85,7 +87,7 @@ button:disabled {
   border: 0;
   padding: 4px 0;
   background: none;
-  color: #4a694e;
+  color: #1b3043;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -97,7 +99,7 @@ button:disabled {
 }
 .guide p {
   font-size: 12px;
-  color: #65695e;
+  color: #6b706f;
   margin: 0;
 }
 #drag {
@@ -118,11 +120,11 @@ button:disabled {
 }
 #drag span {
   font-size: 10px;
-  color: #686c62;
+  color: #6b706f;
 }
 #message {
   font-size: 12px;
-  color: #686c62;
+  color: #6b706f;
   min-height: 36px;
 }
 footer {
@@ -132,9 +134,9 @@ footer {
   margin-top: 20px;
 }
 .primary {
-  background: #344d3b;
+  background: #1b3043;
   color: #fff;
-  border-color: #344d3b;
+  border-color: #1b3043;
 }
 [hidden] {
   display: none !important;
@@ -157,8 +159,8 @@ footer {
 }
 #drag {
   flex-basis: 140px;
-  background: #eef2e9;
-  border: 2px dashed #738568;
+  background: #eef1f3;
+  border: 2px dashed #8394a0;
 }
 #drag span {
   text-align: center;
@@ -174,7 +176,7 @@ footer {
   margin: 0;
 }
 .help {
-  color: #686c62;
+  color: #6b706f;
   font-size: 12px;
   margin: 8px 0 0;
 }

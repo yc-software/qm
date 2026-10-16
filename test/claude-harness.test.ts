@@ -166,3 +166,17 @@ test("Claude resource hook denies child transfers while permitting the parent's 
     continue: true,
   });
 });
+
+test("Claude MCP results preserve screenshots alongside text", async () => {
+  const { bridgedToolContent } = await import("../src/harness/harness-shared.ts");
+  const result = bridgedToolContent({
+    content: [
+      { type: "text", text: "Calculator" },
+      { type: "image", mimeType: "image/jpeg", data: "aW1hZ2U=" },
+    ],
+  });
+  assert.deepEqual(result, [
+    { type: "text", text: "Calculator" },
+    { type: "image", mimeType: "image/jpeg", data: "aW1hZ2U=" },
+  ]);
+});

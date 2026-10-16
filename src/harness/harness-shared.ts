@@ -249,11 +249,14 @@ export async function resumeInterruptedToolCall(
   };
 }
 
-export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
-  return (result.content ?? [])
-    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n");
+export function bridgedToolContent(result: Awaited<ReturnType<BridgedTool["execute"]>>) {
+  return (result.content ?? []).flatMap<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+  >((item) => {
+    if (item.type === "image" && item.data && item.mimeType)
+      return [{ type: "image", data: item.data, mimeType: item.mimeType }];
+    return typeof item.text === "string" ? [{ type: "text", text: item.text }] : [];
+  });
 }
 
 export type OneShotRunner = (

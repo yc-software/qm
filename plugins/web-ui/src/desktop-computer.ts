@@ -92,6 +92,7 @@ export async function serveDesktopRun(
   );
   try {
     let connected = false;
+    let active = false;
     const transport = fetchServerSentEvents(base(`/api/runs/${encodeURIComponent(runId)}/events`), {
       credentials: "same-origin",
       fetchClient: async (input, init) => {
@@ -127,7 +128,14 @@ export async function serveDesktopRun(
     for await (const event of transport.joinRun(runId, controller.signal)) {
       if (event.type !== "CUSTOM" || event.name !== "run") continue;
       const run = event.value as DesktopRun;
-      if (run.desktopClientId !== clientId || run.status === "done" || run.status === "failed") return;
+      if (
+        run.desktopClientId !== clientId ||
+        run.status === "done" ||
+        run.status === "failed" ||
+        (active && (run.status !== "running" || !run.alive))
+      )
+        return;
+      if (run.status === "running" && run.alive) active = true;
       void execute(run).catch((error) => {
         failure = error;
         stop();

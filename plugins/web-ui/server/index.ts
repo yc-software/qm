@@ -2490,7 +2490,7 @@ const apiRoutes: readonly WebRoute[] = [
       try {
         const p = JSON.parse(await readBody(req));
         text = String(p.text ?? "");
-        if (typeof p.desktopClientId === "string" && /^[0-9a-f-]{36}$/.test(p.desktopClientId))
+        if (typeof p.desktopClientId === "string" && p.desktopClientId.length === 36)
           desktopClientId = p.desktopClientId;
         idempotencyKey = namespacedSendKey(user, p.idempotencyKey);
         if (

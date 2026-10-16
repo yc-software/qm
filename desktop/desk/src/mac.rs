@@ -1,3 +1,4 @@
+use crate::cancellation;
 use crate::protocol::*;
 use base64::Engine;
 use core_foundation::array::CFArray;
@@ -62,6 +63,7 @@ struct App {
 
 struct Snapshot {
     window: u32,
+    window_element: El,
     origin: (f64, f64),
     elements: Vec<(u32, El)>,
     lines: HashMap<u32, String>,
@@ -196,17 +198,19 @@ fn click_at(pid: i32, win: u32, p: CGPoint, button: Button, count: u8, mods: &[M
         Button::Middle => (CGEventType::OtherMouseDown, CGEventType::OtherMouseUp, CGMouseButton::Center),
     };
     for n in 1..=count.max(1) as i64 {
+        active()?;
         mouse(pid, win, down, p, b, n, flags(mods))?;
-        std::thread::sleep(Duration::from_millis(hold.min(10_000) as u64));
+        cancellation::wait(Duration::from_millis(hold.min(10_000) as u64));
         mouse(pid, win, up, p, b, n, flags(mods))?;
     }
     Ok(())
 }
 
 fn key(pid: i32, code: u16, flags: CGEventFlags, text: Option<&str>, hold: u32) -> Result<(), Failure> {
+    active()?;
     for down in [true, false] {
         if !down {
-            std::thread::sleep(Duration::from_millis(hold.min(10_000) as u64));
+            cancellation::wait(Duration::from_millis(hold.min(10_000) as u64));
         }
         let e = CGEvent::new_keyboard_event(source()?, code, down).map_err(|_| fail(ErrorCode::ActionFailed, "key event"))?;
         e.set_flags(flags);
@@ -216,6 +220,14 @@ fn key(pid: i32, code: u16, flags: CGEventFlags, text: Option<&str>, hold: u32) 
         post(e, pid);
     }
     Ok(())
+}
+
+fn active() -> Result<(), Failure> {
+    if cancellation::cancelled() {
+        Err(fail(ErrorCode::ActionFailed, "Computer action cancelled"))
+    } else {
+        Ok(())
+    }
 }
 
 fn keycode(k: &str) -> Option<u16> {
@@ -583,6 +595,7 @@ impl Desk {
             app.pid,
             Snapshot {
                 window: win,
+                window_element: w.clone(),
                 origin: walk.origin,
                 elements: walk.elements,
                 lines: walk.lines.into_iter().collect(),
@@ -593,9 +606,9 @@ impl Desk {
     }
 
     fn settle(&self, w: &El) {
-        std::thread::sleep(Duration::from_millis(1000));
+        cancellation::wait(Duration::from_millis(1000));
         for _ in 0..16 {
-            if !busy(w, 0, &mut 0) {
+            if cancellation::cancelled() || !busy(w, 0, &mut 0) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(300));
@@ -623,7 +636,7 @@ impl Desk {
                 (Some(_), Err(e)) => Err(e),
                 _ => Ok(()),
             };
-            if let Err(mut e) = paced.and_then(|_| self.step(&app, &ax, &w, win, a)) {
+            if let Err(mut e) = paced.and_then(|_| self.validate_window(&app)).and_then(|_| self.step(&app, &ax, &w, win, a)) {
                 e.action = Some(i as u32);
                 failure = Some(e);
                 break;
@@ -639,6 +652,17 @@ impl Desk {
             None => (None, None),
         };
         Ok(Reply::Acted { completed, failure, observation, observation_failure })
+    }
+
+    fn validate_window(&self, app: &App) -> Result<(), Failure> {
+        active()?;
+        let (_, current) = window(app)?;
+        let snapshot = self.cache.get(&app.pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
+        let origin = frame(&current).map(|f| (f.x, f.y));
+        if current != snapshot.window_element || origin != Some(snapshot.origin) {
+            return Err(fail(ErrorCode::BadIndex, "The window changed or moved; observe again before acting"));
+        }
+        Ok(())
     }
 
     fn element(&self, pid: i32, index: u32) -> Result<El, Failure> {
@@ -715,6 +739,7 @@ impl Desk {
                     Amount::Pages(n) => (n.clamp(0.0, 20.0) * 0.85 * if vertical { view.h } else { view.w }) as i32,
                 };
                 while left > 0 {
+                    active()?;
                     let n = left.min(120);
                     left -= n;
                     let (dy, dx) = match direction {
@@ -734,20 +759,20 @@ impl Desk {
                 let (a, b) = (self.point(pid, Target::Point(*from))?, self.point(pid, Target::Point(*to))?);
                 let none = CGEventFlags::empty();
                 mouse(pid, win, CGEventType::LeftMouseDown, a, CGMouseButton::Left, 1, none)?;
-                for s in 1..=12 {
-                    let t = s as f64 / 12.0;
-                    mouse(
-                        pid,
-                        win,
-                        CGEventType::LeftMouseDragged,
-                        pt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t),
-                        CGMouseButton::Left,
-                        1,
-                        none,
-                    )?;
-                    std::thread::sleep(Duration::from_millis(12));
-                }
-                mouse(pid, win, CGEventType::LeftMouseUp, b, CGMouseButton::Left, 1, none)
+                let mut last = a;
+                let dragged = (|| {
+                    for s in 1..=12 {
+                        active()?;
+                        let t = s as f64 / 12.0;
+                        let point = pt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                        mouse(pid, win, CGEventType::LeftMouseDragged, point, CGMouseButton::Left, 1, none)?;
+                        last = point;
+                        cancellation::wait(Duration::from_millis(12));
+                    }
+                    Ok(())
+                })();
+                let released = mouse(pid, win, CGEventType::LeftMouseUp, last, CGMouseButton::Left, 1, none);
+                dragged.and(released)
             }
             Action::SetValue { index, value } => match set_attr(&self.element(pid, *index)?, "AXValue", &cfs(value).as_CFType()) {
                 0 => Ok(()),
@@ -758,11 +783,14 @@ impl Desk {
                 perform(&self.element(pid, *index)?, &name)
             }
             Action::Raise => {
-                set_attr(ax, "AXFrontmost", &CFBoolean::true_value().as_CFType());
+                let status = set_attr(ax, "AXFrontmost", &CFBoolean::true_value().as_CFType());
+                if status != 0 {
+                    return Err(fail(ErrorCode::ActionFailed, format!("setting AXFrontmost failed (AXError {status})")));
+                }
                 perform(w, "AXRaise")
             }
             Action::Wait { ms } => {
-                std::thread::sleep(Duration::from_millis((*ms).min(10_000) as u64));
+                cancellation::wait(Duration::from_millis((*ms).min(10_000) as u64));
                 Ok(())
             }
         }

@@ -1,3 +1,4 @@
+mod cancellation;
 mod protocol;
 
 #[cfg(target_os = "macos")]
@@ -34,6 +35,7 @@ fn main() {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    cancellation::install()?;
     let mut desk = mac::Desk::default();
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| USAGE.to_string());
     let png = args.iter().position(|a| a == "--png").and_then(|i| args.get(i + 1).cloned());
@@ -104,6 +106,9 @@ fn serve(desk: &mut mac::Desk) -> Result<(), String> {
     let mut out = std::io::stdout().lock();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(line) = lines.next() {
+        if cancellation::cancelled() {
+            break;
+        }
         let line = line.map_err(|e| e.to_string())?;
         if line.trim().is_empty() {
             continue;

@@ -65,10 +65,7 @@ const clientResultSchema = z.object({
     images: z
       .array(
         z.object({
-          data: z
-            .string()
-            .max(4_000_000)
-            .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+          data: z.string().max(4_000_000).base64(),
           mimeType: z.enum(["image/png", "image/jpeg"]),
         }),
       )
@@ -118,10 +115,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
   const { clientTools: rawClientTools, ...rest } = safeBody;
-  if (
-    rest.desktopClientId !== undefined &&
-    (typeof rest.desktopClientId !== "string" || !/^[0-9a-f-]{36}$/.test(rest.desktopClientId))
-  )
+  if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;
   if (rawClientTools !== undefined) {
