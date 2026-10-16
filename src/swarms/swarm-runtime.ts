@@ -1,10 +1,8 @@
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isHarnessId, THINKING_LEVELS } from "../model/pi-models.ts";
 
-/** Runtime fields a spawn may choose for the workers it creates. */
 export type SwarmMemberRuntime = Pick<OrchestratorInput, "harness" | "model" | "thinkingLevel" | "fastMode">;
 
-/** Spawn request fields, in API order. */
 export const SPAWN_RUNTIME_FIELDS = ["model", "effort", "fastMode", "harness"] as const;
 export type SpawnRuntimeFields = Partial<Record<(typeof SPAWN_RUNTIME_FIELDS)[number], unknown>>;
 
@@ -31,7 +29,6 @@ export function spawnRuntime(input: SpawnRuntimeFields): SwarmMemberRuntime {
   return runtime;
 }
 
-/** A child keeps every field its spawner chose and replaces only the fields it names. */
 export function inheritRuntime(
   parent: SwarmMemberRuntime | undefined,
   chosen: SwarmMemberRuntime,
@@ -40,10 +37,6 @@ export function inheritRuntime(
   return Object.keys(runtime).length ? runtime : undefined;
 }
 
-/**
- * Worker turn runtime precedence: fields chosen at spawn always apply. When the org
- * subagent default governs, it replaces the rest of the inherited root runtime.
- */
 export function workerTurnInput<T extends SwarmMemberRuntime>(
   input: T,
   runtime: SwarmMemberRuntime | undefined,
