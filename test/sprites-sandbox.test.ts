@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { inspect } from "node:util";
 import {
   createSpritesSandbox,
+  EXEC_WAKE_RETRIES,
+  EXEC_WAKE_RETRY_DELAY_MS,
   processKeepaliveScript,
   retrySpritesControl,
   spritesErrorDetail,
@@ -36,6 +38,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
+    execRetryDelayMs: 1,
     ...extra,
   });
 }
@@ -445,11 +448,53 @@ for (const submitted of [false, true]) {
         return true;
       });
 
-      assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
+      assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + (submitted ? 1 : 4));
       assert.equal(await sandbox.readFile(h, "ledger"), submitted ? "entry\n" : null);
     });
   }
 }
+
+test("a refused exec is sent again once the sprite is up, catching an exec that surfaces a cold sprite's boot refusal", async () => {
+  const h = await sandbox.provision(layers);
+  const before = fake.calls.filter((call) => call.method === "WS").length;
+  fake.refuseExecOnce(h.id);
+  const r = await sandbox.run(h, "echo back");
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "back", "the reply is the re-sent script's own output");
+  assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 2);
+});
+
+test("an unconfigured sandbox is still waiting the shipped delay a second in, catching a wake wired to re-send without pausing", async () => {
+  const s = make({ execRetryDelayMs: undefined });
+  const h = await s.provision(layers);
+  const before = fake.calls.filter((call) => call.method === "WS").length;
+  fake.refuseExecOnce(h.id);
+  const run = s.run(h, "echo back");
+  await sleep(1_000);
+  assert.equal(
+    fake.calls.filter((call) => call.method === "WS").length,
+    before + 1,
+    "the re-send is still waiting out the shipped delay",
+  );
+  assert.equal((await run).code, 0);
+});
+
+test("the shipped wake budget outlasts the provider's boot wait, catching a wake that retries too fast to help", () => {
+  const PROVIDER_BOOT_WAIT_MS = 30_000;
+  assert.ok(
+    EXEC_WAKE_RETRIES * EXEC_WAKE_RETRY_DELAY_MS >= PROVIDER_BOOT_WAIT_MS,
+    `a sprite the provider refuses after ${PROVIDER_BOOT_WAIT_MS}ms is still booting, so the retries must span at least that long`,
+  );
+});
+
+test("the guest probe asks once and does not wake the sprite it is reporting on, catching a liveness probe that boots a cold machine", async () => {
+  const h = await sandbox.provision(layers);
+  fake.fail502(h.id);
+  const before = fake.calls.filter((call) => call.method === "WS").length;
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.guestResponsive, false);
+  assert.equal(fake.calls.filter((call) => call.method === "WS").length, before + 1);
+});
 
 test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
   const h = await sandbox.provision(layers);
