@@ -383,7 +383,22 @@ export function registerSlackEvents(
     }
   });
 
-  for (const evt of ["channel_created", "channel_rename", "channel_unarchive"] as const) {
+  // Any change to which channels the bot is in, or what they're called, resyncs the directory.
+  // The sync lists only unarchived channels the bot belongs to, so an archived/deleted/left
+  // channel drops out of the directory (and its members lose access through it); posts there
+  // are then reported undeliverable with Slack's own reason.
+  for (const evt of [
+    "channel_created",
+    "channel_rename",
+    "channel_unarchive",
+    "channel_archive",
+    "channel_deleted",
+    "channel_left",
+    "group_archive",
+    "group_unarchive",
+    "group_rename",
+    "group_left",
+  ] as const) {
     app.event(evt, async ({ event, body, client }: EventArgs) => {
       const e = parseLifecycleEvent(event);
       if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
