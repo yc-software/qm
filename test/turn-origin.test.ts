@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  desktopClientForTurn,
   normalizeTurnOrigin,
   resolveTurnOrigin,
   turnOriginRequestFields,
@@ -107,4 +108,26 @@ test("the owner-keychain flag survives legacy and typed automation normalization
   const origin: TurnOrigin = { kind: "automation", useOwnerKeychain: true };
   assert.deepEqual(normalizeTurnOrigin(turnOriginRequestFields(origin)), origin);
   assert.deepEqual(resolveTurnOrigin({ origin, triggered: true }), origin);
+});
+
+test("desktop execution requires a human web turn with a live desktop binding", () => {
+  const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
+  assert.equal(desktopClientForTurn(human), "desktop-turn");
+  assert.equal(
+    desktopClientForTurn({ liveActor: true, surface: "web", desktopClientId: "desktop-turn" }),
+    "desktop-turn",
+  );
+  for (const kind of ["direct", "ambient", "automation"] as const)
+    assert.equal(desktopClientForTurn({ ...human, origin: { kind } }), undefined);
+  for (const patch of [
+    { desktopClientId: undefined },
+    { surface: "slack" },
+    { proactiveOpener: true },
+    { spawned: true },
+    { botActor: true },
+    { triggered: true },
+    { unprompted: true },
+    { attempt: 2 },
+  ])
+    assert.equal(desktopClientForTurn({ ...human, ...patch }), undefined);
 });

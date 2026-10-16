@@ -4071,7 +4071,7 @@ test("background process guidance reflects the configured sandbox token lifetime
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });
 
-test("every tool schema carries the optional retrySafe flag, which is stripped before the tool runs and recorded on the call", async () => {
+test("core tools carry retrySafe while client tools cannot advertise automatic replay", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {
     current: fakeToolContext(),
@@ -4088,7 +4088,11 @@ test("every tool schema carries the optional retrySafe flag, which is stripped b
   });
   for (const tool of tools) {
     const schema = tool.parameters as { properties?: Record<string, { type?: string }>; required?: string[] };
-    assert.equal(schema.properties?.retrySafe?.type, "boolean", `${tool.name} exposes retrySafe`);
+    assert.equal(
+      schema.properties?.retrySafe?.type,
+      tool.name === "page_state" ? undefined : "boolean",
+      `${tool.name} retry policy`,
+    );
     assert.ok(!schema.required?.includes("retrySafe"), `${tool.name} keeps retrySafe optional`);
   }
   const history = tools.find((t) => t.name === "history")!;
@@ -4426,4 +4430,22 @@ test("skill discovery records the page's source scope for history filtering", as
   const visible = filterHistoryForAudience(history, [{ id: "U2", type: "internal" }], "channel:C1", "org:default-org");
   assert.doesNotMatch(JSON.stringify(visible), /Private description|private-helper/);
   assert.match(JSON.stringify(history), /Private description/);
+});
+
+test("client screenshots reach the model as images and remain subject to output screening", async () => {
+  const { store, ref } = clientToolRef();
+  const image = { data: "aGVsbG8=", mimeType: "image/png" as const };
+  let unscreenable = false;
+  ref.screenToolResult = async (input) => {
+    unscreenable = input.unscreenable;
+    return { outcome: "allow" };
+  };
+  const tool = createAgentTools(ref, { clientTools: [clientTool("desktop")] }).at(-1)!;
+  const pending = call(tool, { note: "screen" }) as Promise<{ content: unknown[] }>;
+  await store.send("run-1", { kind: "client_result", callId: "t", result: { content: "Calculator", images: [image] } });
+  assert.deepEqual((await pending).content, [
+    { type: "text", text: "Calculator" },
+    { type: "image", ...image },
+  ]);
+  assert.equal(unscreenable, true);
 });

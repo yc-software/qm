@@ -9,7 +9,7 @@ import { scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
@@ -420,6 +420,7 @@ export function createTurnMethods(
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
+        desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
@@ -741,6 +742,7 @@ export function createTurnMethods(
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
+        desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
         result: run.result ? await withAdminLink(run.result) : run.result,
         ...(run.request.surface === "web" &&
@@ -873,7 +875,8 @@ export function createTurnMethods(
       }
       if (signal.kind === "client_result") {
         if (viewer && !samePerson(run.request.actor.id, viewer)) return { accepted: false, reason: "not_found" };
-        if (!run.request.clientTools?.length) return { accepted: false, reason: "no_client_tools" };
+        if (!run.request.clientTools?.length && !run.request.desktopClientId)
+          return { accepted: false, reason: "no_client_tools" };
         const sent = await deps.signals.send(runId, {
           kind: "client_result",
           callId: signal.callId,

@@ -10,7 +10,8 @@
     "test": "node --experimental-test-module-mocks --test test/*.test.mjs",
     "package": "node package.mjs",
     "package:release": "node package.mjs --release",
-    "test:electron": "electron test/navigation.electron.mjs"
+    "test:electron": "electron test/navigation.electron.mjs",
+    "test:runtime": "electron test/runtime.electron.mjs"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

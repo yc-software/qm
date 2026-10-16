@@ -2,6 +2,7 @@ import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
+import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { memoryBoundedEntries, memoryContextPayload, nextMemoryContext } from "../memory/context-boundary.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
@@ -35,7 +36,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
@@ -936,6 +937,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeId,
           conversation.channelName,
           input.surface,
+          desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
         );
         screenSession.id = session.id;
         if (!input.sessionParticipantIds?.length && !automatedTurn)
@@ -1265,6 +1267,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         scopeId,
         conversation.channelName,
         input.surface,
+        desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
       );
       screenSession.id = session.id;
       leaseMs += Date.now() - sessionStart;
@@ -2641,6 +2644,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
 
         const baseTools = createToolContext({
+          desktopClientId: desktopClientForTurn(input),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -3460,7 +3464,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(strictReadOnly ? { readOnly: true } : {}),
             surfaceName,
             delegateWork,
-            ...(input.clientTools?.length ? { clientTools: input.clientTools } : {}),
+            ...((session.clientTools ?? input.clientTools)?.length
+              ? { clientTools: session.clientTools ?? input.clientTools }
+              : {}),
             ...(input.surfaceTools && surfaceToolDeps ? { surfaceTools: true } : {}),
             ...(isPollFire ? { pollFire: true } : {}),
             turnWallClockMs:

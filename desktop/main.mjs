@@ -2,6 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell, session as electronSe
 import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { callComputer, registerComputerRuntime, stopComputer } from "./runtime.mjs";
+import { registerComputerPermissions, showComputerPermissions, focusComputerPermissions } from "./permissions.mjs";
 import { createLogin, loginCallback } from "./login.mjs";
 import { startUpdates } from "./updates.mjs";
 import { tabStep } from "./shortcuts.mjs";
@@ -10,6 +12,7 @@ import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUr
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
 let mainWindow;
+let quitting = false;
 const workspaceWindows = new Set();
 let setupWindow;
 let target;
@@ -26,6 +29,7 @@ else {
   app.on("second-instance", (_event, argv) => {
     const callback = argv.find((arg) => arg.startsWith("qm-desktop:"));
     if (callback) void finishBrowserSignIn(callback);
+    if (focusComputerPermissions()) return;
     const window = setupWindow ?? mainWindow;
     if (window?.isMinimized()) window.restore();
     window?.show();
@@ -71,6 +75,18 @@ function showSetup() {
     loginStatus = "";
   });
   setupWindow.loadURL(setupUrl);
+}
+
+function handleComputerReply(reply) {
+  if ([reply, reply.failure, reply.observation_failure].some((failure) => failure?.code === "permission_missing")) {
+    void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
+    return {
+      ...reply,
+      message:
+        "Enable computer access in the desktop setup window. Actions may already have completed; inspect the completion count and observe before retrying.",
+    };
+  }
+  return reply;
 }
 
 function instanceSession(url) {
@@ -185,6 +201,10 @@ async function showInstance(url) {
         openExternal(destination);
       }
     };
+    page.webContents.on("render-process-gone", () => stopComputer());
+    page.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) stopComputer();
+    });
     page.webContents.on("will-navigate", navigate);
     page.webContents.on("will-redirect", navigate);
     page.webContents.on("will-attach-webview", (event) => event.preventDefault());
@@ -228,6 +248,7 @@ async function showInstance(url) {
   };
   configureNavigation(window);
   window.on("closed", () => {
+    stopComputer();
     for (const child of children) if (!child.isDestroyed()) child.destroy();
     if (mainWindow === window) mainWindow = undefined;
   });
@@ -246,6 +267,7 @@ async function showInstance(url) {
 }
 
 async function start() {
+  registerComputerPermissions();
   app.setAsDefaultProtocolClient("qm-desktop");
   const configPath = path.join(app.getPath("userData"), "instance.json");
   try {
@@ -290,18 +312,21 @@ async function start() {
       throw new Error("Untrusted settings request");
     }
   };
-  ipcMain.handle("qm:open-browser", async (event, value) => {
+  const assertWorkspace = (event) => {
     if (
       !mainWindow ||
       mainWindow.isDestroyed() ||
       ![...workspaceWindows].some((page) => !page.isDestroyed() && page.webContents === event.sender) ||
       event.senderFrame !== event.sender.mainFrame ||
       !target ||
-      new URL(event.senderFrame.url).origin !== new URL(target).origin ||
-      typeof value !== "string"
+      new URL(event.senderFrame.url).origin !== new URL(target).origin
     ) {
-      throw new Error("Untrusted browser request");
+      throw new Error("Untrusted workspace request");
     }
+  };
+  ipcMain.handle("qm:open-browser", async (event, value) => {
+    assertWorkspace(event);
+    if (typeof value !== "string") throw new Error("Untrusted browser request");
     const destination = new URL(value, target);
     if (
       destination.origin !== new URL(target).origin ||
@@ -310,6 +335,20 @@ async function start() {
     )
       throw new Error("Untrusted browser destination");
     await shell.openExternal(destination.href);
+  });
+  const deskOwner = (event, clientId) => {
+    if (typeof clientId !== "string" || !/^[0-9a-f-]{36}$/.test(clientId)) throw new Error("Invalid desktop client");
+    return `${event.sender.id}:${clientId}`;
+  };
+  registerComputerRuntime(handleComputerReply);
+  ipcMain.handle("qm:computer-stop", (event, clientId) => {
+    assertWorkspace(event);
+    stopComputer(deskOwner(event, clientId));
+  });
+  ipcMain.handle("qm:computer-call", (event, args, clientId, deadline) => {
+    assertWorkspace(event);
+    if (!Number.isFinite(deadline)) throw new Error("Invalid computer deadline");
+    return callComputer(args, deskOwner(event, clientId), deadline);
   });
   ipcMain.handle("qm:current-instance", (event) => {
     assertSetup(event);
@@ -335,6 +374,13 @@ async function start() {
         submenu: [
           { role: "about" },
           { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
+          {
+            label: "Computer Access…",
+            visible: process.platform === "darwin",
+            click: () => {
+              void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
+            },
+          },
           { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
           {
             label: "Open in Browser",
@@ -385,16 +431,24 @@ async function start() {
     ]),
   );
   app.on("activate", () => {
+    if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
     else if (pendingLogin) showSetup();
     else if (mainWindow) mainWindow.show();
     else if (target) void showInstance(target);
     else showSetup();
   });
+  await showComputerPermissions(true);
+  if (quitting) return;
   if (target) await showInstance(target);
   else showSetup();
 }
 
+app.on("before-quit", () => {
+  quitting = true;
+  stopComputer();
+});
 app.on("window-all-closed", () => {
+  stopComputer();
   if (process.platform !== "darwin") app.quit();
 });

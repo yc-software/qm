@@ -3299,3 +3299,23 @@ test(
     }
   },
 );
+
+test("desktop tool definitions survive a store restart without changing on later turns", { skip }, async () => {
+  const { desktopComputerTool } = await import("../plugins/chassis/src/desktop-computer.ts");
+  const first = createPostgresSessionStore(URL!);
+  const session = await first.getOrCreateByThread(
+    `desktop-${randomUUID()}`,
+    "dm",
+    scopeId("personal", "U1"),
+    undefined,
+    "web",
+    [desktopComputerTool],
+  );
+  const restarted = createPostgresSessionStore(URL!);
+  const loaded = await restarted.getOrCreateByThread(session.threadRef, "dm", session.scopeId, undefined, "web");
+  assert.deepEqual(loaded.clientTools, [desktopComputerTool]);
+  const changed = await restarted.getOrCreateByThread(session.threadRef, "dm", session.scopeId, undefined, "web", [
+    { ...desktopComputerTool, description: "new version" },
+  ]);
+  assert.deepEqual(changed.clientTools, [desktopComputerTool]);
+});

@@ -5,6 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { mock, test } from "node:test";
 
+mock.module("../permissions.mjs", {
+  namedExports: {
+    registerComputerPermissions() {},
+    async showComputerPermissions() {},
+    focusComputerPermissions: () => false,
+  },
+});
+
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test(
@@ -104,6 +112,7 @@ test(
           },
         },
         session: { fromPartition: () => session },
+        screen: {},
         dialog: { showErrorBox: (...args) => errors.push(args), showMessageBox: async (...args) => errors.push(args) },
       },
     });

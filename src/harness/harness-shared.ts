@@ -35,7 +35,10 @@ export type BridgedTool = {
   execute(
     callId: string,
     args: unknown,
-  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
+  ): Promise<{
+    content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>;
+    terminate?: boolean;
+  }>;
 };
 
 export interface SteerIntake {

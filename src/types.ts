@@ -99,6 +99,7 @@ export interface SpawnMeta {
 }
 
 export interface Session {
+  clientTools?: ClientToolDeclaration[];
   id: string;
   type: SessionType;
   scopeId: ScopeId;
@@ -648,12 +649,14 @@ export interface ClientToolDeclaration {
 }
 
 export interface ClientToolResult {
+  images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
   content: string;
   structured?: unknown;
   isError?: boolean;
 }
 
 export interface TurnRequest {
+  desktopClientId?: string;
   slackSource?: { accountId: string; teamId: string; userId: string; externalPolicyNamespace?: string };
   externalSlack?: {
     accountId: string;

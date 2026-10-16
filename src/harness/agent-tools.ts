@@ -4193,6 +4193,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               callId,
               d.timeoutMs ?? CLIENT_TOOL_DEFAULT_TIMEOUT_MS,
               ref.abortSignal,
+              d.name,
             );
             if (outcome === "timeout" || outcome === "cancelled")
               return recordCoreAuthoredResult(
@@ -4206,6 +4207,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               { tool: d.name, client: true },
               {
                 ...text(outcome.content || "[empty result]"),
+                content: [
+                  ...text(outcome.content || "[empty result]").content,
+                  ...(outcome.images ?? []).map((image) => ({ type: "image" as const, ...image })),
+                ],
                 ...(outcome.structured === undefined ? {} : { details: { structured: outcome.structured } }),
               },
               "client page",
@@ -4410,15 +4415,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   };
   const mcpNames = new Set(mcpTools.map((t) => t.name));
   const active = opts?.readOnly ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || mcpNames.has(t.name)) : tools;
-  return active.map((t) =>
-    withRetrySafety(
-      withRuntimeBarrier(
-        withToolBodyTiming(withToolApprovalGate(validateSandboxTool(t), ref, { recordCall, recordResult }), ref),
-        ref,
-      ),
-      retryMarks,
-    ),
-  );
+  const clientNames = new Set(clientTools.map((tool) => tool.name));
+  return active.map((tool) => {
+    const wrapped = withRuntimeBarrier(
+      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
+      ref,
+    );
+    return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
+  });
 }
 
 const RETRY_SAFE_FIELD = "retrySafe";

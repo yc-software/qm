@@ -124,7 +124,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface) {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools) {
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -140,6 +140,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         scopeId,
         threadRef,
         createdAt: now(),
+        ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
       };

@@ -560,6 +560,7 @@ export interface SessionStore {
     scopeId: ScopeId,
     channelName?: string,
     surface?: string,
+    clientTools?: Session["clientTools"],
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;

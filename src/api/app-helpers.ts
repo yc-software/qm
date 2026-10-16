@@ -660,7 +660,11 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         let replayRunId: string | undefined;
         const dedupKey = `session-signal:${runId}:${id}`;
         if (signal.sessionRequest) {
-          const { clientTools: _clientTools, ...sessionRequest } = signal.sessionRequest;
+          const {
+            clientTools: _clientTools,
+            desktopClientId: _desktopClientId,
+            ...sessionRequest
+          } = signal.sessionRequest;
           const { run } = await deps.runs.enqueue({
             sessionId: completed.sessionId,
             request: sessionRequest,
@@ -669,7 +673,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           });
           replayRunId = run.id;
         } else if (signal.request) {
-          const { approval: _ap, redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...base } = signal.request;
+          const {
+            approval: _ap,
+            redeliveryKey: _redeliveryKey,
+            clientTools: _clientTools,
+            desktopClientId: _desktopClientId,
+            ...base
+          } = signal.request;
           const prior = completed.request;
           const inheritedOptions = {
             ...(base.model === undefined && prior.model !== undefined ? { model: prior.model } : {}),
@@ -692,6 +702,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             attachments: _attachments,
             displayText: _display,
             clientTools: _clientTools,
+            desktopClientId: _desktopClientId,
             ...request
           } = completed.request;
           const { run } = await deps.runs.enqueue({
@@ -713,7 +724,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       let replayOutcomeKnown = true;
       if (signal.request) {
         try {
-          const { approval: _ap, redeliveryKey: _redeliveryKey, clientTools: _clientTools, ...base } = signal.request;
+          const {
+            approval: _ap,
+            redeliveryKey: _redeliveryKey,
+            clientTools: _clientTools,
+            desktopClientId: _desktopClientId,
+            ...base
+          } = signal.request;
           const prior = (await deps.runs.get(runId))?.request;
           const inheritedOptions = {
             ...(base.model === undefined && prior?.model !== undefined ? { model: prior.model } : {}),
@@ -740,6 +757,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
               attachments: _a,
               approval: _ap,
               clientTools: _clientTools,
+              desktopClientId: _desktopClientId,
               ...base
             } = orphanRun.request;
             const { run: fresh } = await deps.runs.enqueue({

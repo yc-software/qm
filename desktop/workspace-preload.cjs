@@ -1,7 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("qmDesktop", {
+  platform: process.platform,
   openBrowser: (url) => ipcRenderer.invoke("qm:open-browser", url),
+  computer: {
+    call: (args, clientId, deadline) => ipcRenderer.invoke("qm:computer-call", args, clientId, deadline),
+    stop: (clientId) => ipcRenderer.invoke("qm:computer-stop", clientId),
+  },
 });
 
 window.addEventListener("DOMContentLoaded", () => {

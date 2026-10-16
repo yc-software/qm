@@ -1,4 +1,5 @@
 import { packager } from "@electron/packager";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,11 +8,16 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const mac = process.platform === "darwin";
 const release = process.argv.includes("--release");
 const identity = process.env.QM_MAC_SIGN_IDENTITY;
 if (release && (process.platform !== "darwin" || process.arch !== "arm64" || !identity)) {
   throw new Error("Mac releases require Apple Silicon macOS, QM_MAC_SIGN_IDENTITY and a signed-in Xcode account.");
 }
+if (mac)
+  execFileSync("cargo", ["build", "--release", "--manifest-path", path.join(directory, "desk/Cargo.toml")], {
+    stdio: "inherit",
+  });
 const apps = await packager({
   dir: directory,
   name: "QM",
@@ -21,8 +27,9 @@ const apps = await packager({
   out: path.join(directory, "dist"),
   overwrite: true,
   asar: true,
-  ignore: /^\/(dist|test|README\.md|package\.mjs)/,
-  ...(release ? { osxSign: { identity } } : {}),
+  ignore: /^\/(dist|test|desk(\/|$)|README\.md|package\.mjs)/,
+  ...(mac ? { extraResource: [path.join(directory, "desk/target/release/desk")] } : {}),
+  ...(mac && identity ? { osxSign: { identity } } : {}),
 });
 for (const app of apps) console.log(app);
 

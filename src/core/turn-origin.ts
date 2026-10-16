@@ -117,3 +117,19 @@ export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string):
   if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
   return origin;
 }
+
+export function desktopClientForTurn(
+  input: Partial<LegacyTurnOrigin> &
+    Partial<
+      Pick<TurnRequest, "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor">
+    > & { attempt?: number },
+): string | undefined {
+  return resolveTurnOrigin(input).kind === "human" &&
+    input.surface === "web" &&
+    !input.proactiveOpener &&
+    !input.spawned &&
+    !input.botActor &&
+    (input.attempt ?? 1) <= 1
+    ? input.desktopClientId
+    : undefined;
+}
