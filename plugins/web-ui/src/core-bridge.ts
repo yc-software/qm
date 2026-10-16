@@ -2044,13 +2044,6 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
-const MONITOR_WAKE_RE = /^<wake reason="monitor"/;
-
-function isMonitorWake(payload: unknown): boolean {
-  const text = (payload as { text?: unknown } | null)?.text;
-  return typeof text === "string" && MONITOR_WAKE_RE.test(text);
-}
-
 function deliveredSilence(a: ToolActivity): boolean {
   if (a.type !== "tool_result") return false;
   const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
@@ -2071,7 +2064,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
   let stoppedShown = false;
-  let monitorWake = false;
+  let hiddenPrompt = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -2115,7 +2108,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
-    if (monitorWake && !text && !stopped && pending.some(deliveredSilence)) {
+    if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
       pending = pending.filter((a) => (a.payload as { tool?: unknown } | null)?.tool !== "finish_silently");
       if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
         pending = [];
@@ -2243,7 +2236,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     if (e.type === "user") {
       if (!payload?.steered) {
         stoppedShown = false;
-        monitorWake = isMonitorWake(payload);
+        hiddenPrompt = payload?.hidden === true;
       }
       if (payload?.hidden) continue;
       if (!payload?.steered) {

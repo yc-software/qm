@@ -1198,40 +1198,10 @@ test("a turn that closed empty after narrating surfaces the last narration as th
   );
 });
 
-test("a delivered-silence turn (finish_silently → silent:true) stays collapsed — no promotion", () => {
-  const entries: SessionEntry[] = [
-    {
-      type: "user",
-      payload: {
-        text: '<wake reason="webhook" surface="webhook" at="1970-01-01T00:00:00.000Z"><why>new event</why></wake>',
-        hidden: true,
-      },
-      createdAt: 100,
-      seq: 1,
-    },
-    { type: "text", payload: { text: "Heartbeat check." }, createdAt: 110, seq: 2, parentSeq: 1 },
-    {
-      type: "tool_call",
-      payload: { tool: "finish_silently", reason: "nothing new" },
-      createdAt: 120,
-      seq: 3,
-      parentSeq: 2,
-    },
-    { type: "tool_result", payload: { tool: "finish_silently", silent: true }, createdAt: 130, seq: 4, parentSeq: 3 },
-    { type: "assistant", payload: { text: "" }, createdAt: 140, seq: 5 },
-  ];
-  const msg = entriesToMessages(entries, MODEL)[0] as AssistantWork;
-  assert.equal((msg.content[0] as { text: string }).text, "", "intentional silence is not turned into a message");
-  assert.deepEqual(
-    msg.work?.activity.map((a) => a.type),
-    ["text", "tool_call", "tool_result"],
-  );
-});
-
-const monitorWakeEntry = (seq: number, createdAt: number): SessionEntry => ({
+const wakeEntry = (seq: number, createdAt: number): SessionEntry => ({
   type: "user",
   payload: {
-    text: '<wake reason="monitor" surface="monitor" process-id="p1" at="1970-01-01T00:00:00.000Z"><why>still running</why></wake>',
+    text: '<wake reason="monitor" surface="monitor" at="1970-01-01T00:00:00.000Z"><why>still running</why></wake>',
     hidden: true,
   },
   createdAt,
@@ -1239,7 +1209,13 @@ const monitorWakeEntry = (seq: number, createdAt: number): SessionEntry => ({
 });
 
 const silentFinish = (seq: number, createdAt: number): SessionEntry[] => [
-  { type: "tool_call", payload: { tool: "finish_silently", reason: "nothing new" }, createdAt, seq, parentSeq: seq - 1 },
+  {
+    type: "tool_call",
+    payload: { tool: "finish_silently", reason: "nothing new" },
+    createdAt,
+    seq,
+    parentSeq: seq - 1,
+  },
   {
     type: "tool_result",
     payload: { tool: "finish_silently", silent: true },
@@ -1249,12 +1225,12 @@ const silentFinish = (seq: number, createdAt: number): SessionEntry[] => [
   },
 ];
 
-test("a monitor wake that only finishes silently leaves nothing in the transcript", () => {
+test("a wake that only finishes silently leaves nothing in the transcript", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "watch the deploy" }, createdAt: 10, seq: 1 },
     { type: "assistant", payload: { text: "Watching." }, createdAt: 20, seq: 2 },
-    monitorWakeEntry(3, 100),
-    { type: "text", payload: { text: "Still deploying." }, createdAt: 110, seq: 4, parentSeq: 3 },
+    wakeEntry(3, 100),
+    { type: "text", payload: { text: "Heartbeat check." }, createdAt: 110, seq: 4, parentSeq: 3 },
     ...silentFinish(5, 120),
     { type: "assistant", payload: { text: "" }, createdAt: 140, seq: 7 },
   ];
@@ -1266,9 +1242,9 @@ test("a monitor wake that only finishes silently leaves nothing in the transcrip
   assert.equal(((msgs[1] as AssistantWork).content[0] as { text: string }).text, "Watching.");
 });
 
-test("a silent monitor wake keeps its real tool work but drops the finish_silently call", () => {
+test("a silent wake keeps its real tool work but drops the finish_silently call", () => {
   const entries: SessionEntry[] = [
-    monitorWakeEntry(1, 100),
+    wakeEntry(1, 100),
     { type: "tool_call", payload: { tool: "background", action: "poll" }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_result", payload: { tool: "background", action: "poll" }, createdAt: 115, seq: 3, parentSeq: 2 },
     ...silentFinish(4, 120),
@@ -1277,16 +1253,16 @@ test("a silent monitor wake keeps its real tool work but drops the finish_silent
   const msgs = entriesToMessages(entries, MODEL);
   assert.equal(msgs.length, 1);
   const msg = msgs[0] as AssistantWork;
-  assert.equal((msg.content[0] as { text: string }).text, "");
+  assert.equal((msg.content[0] as { text: string }).text, "", "intentional silence is not turned into a message");
   assert.deepEqual(
     msg.work?.activity.map((a) => (a.payload as { tool?: string }).tool),
     ["background", "background"],
   );
 });
 
-test("a monitor wake that replies is unchanged", () => {
+test("a wake that replies is unchanged", () => {
   const entries: SessionEntry[] = [
-    monitorWakeEntry(1, 100),
+    wakeEntry(1, 100),
     { type: "tool_call", payload: { tool: "background", action: "poll" }, createdAt: 110, seq: 2, parentSeq: 1 },
     { type: "tool_result", payload: { tool: "background", action: "poll" }, createdAt: 115, seq: 3, parentSeq: 2 },
     { type: "assistant", payload: { text: "Deploy finished." }, createdAt: 140, seq: 4 },
@@ -1296,17 +1272,19 @@ test("a monitor wake that replies is unchanged", () => {
   assert.equal(msg.work?.activity.length, 2);
 });
 
-test("a person's turn that finishes silently still shows the finish_silently call", () => {
+test("a visible turn that finishes silently still shows the finish_silently call", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "no reply needed" }, createdAt: 100, seq: 1 },
-    ...silentFinish(2, 120),
-    { type: "assistant", payload: { text: "" }, createdAt: 140, seq: 4 },
+    { type: "text", payload: { text: "Nothing to add." }, createdAt: 110, seq: 2, parentSeq: 1 },
+    ...silentFinish(3, 120),
+    { type: "assistant", payload: { text: "" }, createdAt: 140, seq: 5 },
   ];
   const msgs = entriesToMessages(entries, MODEL);
   const msg = msgs[msgs.length - 1] as AssistantWork;
+  assert.equal((msg.content[0] as { text: string }).text, "", "intentional silence is not turned into a message");
   assert.deepEqual(
-    msg.work?.activity.map((a) => (a.payload as { tool?: string }).tool),
-    ["finish_silently", "finish_silently"],
+    msg.work?.activity.map((a) => a.type),
+    ["text", "tool_call", "tool_result"],
   );
 });
 
