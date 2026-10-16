@@ -57,7 +57,11 @@ test("a reply the model finished before the run continued shows as a reply, not 
     "both answers are visible messages",
   );
   const [first, second] = replies;
-  assert.deepEqual(first.entrySeqs, [3, 2], "the first reply owns its text entry and the thinking before it");
+  assert.deepEqual(
+    (first as AssistantWork & { entrySeqs?: number[] }).entrySeqs,
+    [3, 2],
+    "the first reply owns its text entry and the thinking before it",
+  );
   assert.equal(first.work?.activity.length, 1, "the thinking before the first reply folds under it");
   assert.ok(
     second.work?.activity.some((a) => a.type === "tool_call"),
