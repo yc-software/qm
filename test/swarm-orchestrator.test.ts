@@ -197,7 +197,7 @@ for (const storage of ["memory", "postgres"] as const) {
     async () => {
       let databaseUrl: string | undefined;
       let cleanupDatabase = async () => {};
-      let recordedErrors = async () => 1;
+      let recordedErrors: (() => Promise<number>) | undefined;
       let errorsAfterStop: number | undefined;
       if (storage === "postgres") {
         const { default: pg } = await import("pg");
@@ -440,10 +440,10 @@ for (const storage of ["memory", "postgres"] as const) {
         exerciseTurn = undefined;
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await built.runtime.stop();
-        errorsAfterStop = await recordedErrors();
+        errorsAfterStop = await recordedErrors?.();
         await cleanupDatabase();
       }
-      assert.ok(errorsAfterStop! > 0);
+      if (storage === "postgres") assert.ok(errorsAfterStop! > 0);
     },
   );
 }
