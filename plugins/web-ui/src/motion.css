@@ -1,0 +1,35 @@
+/* Subtle chat motion. Animates `translate` (not `transform`) so existing layout transforms are never clobbered. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes qm-rise {
+    from {
+      opacity: 0;
+      translate: 0 var(--qm-rise, 8px);
+    }
+  }
+
+  .chat-scroll .message-row,
+  .live-work-status,
+  .work-rows > *,
+  .chat-cta,
+  .suggested-activity {
+    animation: qm-rise 320ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+
+  .chat-scroll .user-row {
+    --qm-rise: 16px;
+  }
+
+  .suggested-activity:nth-child(2) {
+    animation-delay: 50ms;
+  }
+
+  .suggested-activity:nth-child(3) {
+    animation-delay: 100ms;
+  }
+
+  .composer-wrap {
+    transition:
+      box-shadow 220ms ease,
+      border-color 220ms ease;
+  }
+}
