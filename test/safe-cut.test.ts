@@ -102,3 +102,27 @@ test("prose without fences keeps the plain cut behavior", () => {
   assert.equal(chunks.join(""), text);
   for (const c of chunks) assert.ok(c.length <= 300);
 });
+
+test("safeChunks never splits an HTML entity such as &amp; or &lt;", () => {
+  const entity = /&(?:#\d+|#x[0-9a-f]+|[a-z]+);/gi;
+  for (const unit of ["a &amp; ", "x &lt; ", "y&gt;", "&#8203;z "]) {
+    const text = unit.repeat(400);
+    for (const max of [97, 100, 101, 103, 250]) {
+      const chunks = safeChunks(text, max);
+      assert.equal(chunks.join(""), text);
+      for (const chunk of chunks) {
+        assert.ok(chunk.length <= max);
+        assert.equal(chunk.replace(entity, "").includes("&"), false, `split entity in ${JSON.stringify(chunk)}`);
+        assert.ok(!/&[#a-z0-9]{0,8}$/i.test(chunk), `chunk ends mid-entity: ${JSON.stringify(chunk.slice(-12))}`);
+      }
+    }
+  }
+});
+
+test("safeChunks keeps entities intact when a fenced block must split mid-line", () => {
+  const text = "```\n" + "&lt;".repeat(300) + "\n```";
+  for (const max of [120, 121, 122, 123]) {
+    for (const chunk of safeChunks(text, max))
+      assert.equal(chunk.replace(/&lt;/g, "").includes("&"), false, JSON.stringify(chunk.slice(-12)));
+  }
+});
