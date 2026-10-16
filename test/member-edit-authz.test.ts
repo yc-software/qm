@@ -142,7 +142,7 @@ test("skills: a private-channel member may edit + delete a shared skill; provena
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
-  assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
+  assert.ok(edited && typeof edited === "object", "a private-channel member edits the scope's skill");
   assert.equal((edited as { createdBy: string }).createdBy, OWNER, "createdBy is never rewritten on a member edit");
   assert.equal(await app.deleteOwnedSkill({ principalId: PRIV_MEMBER, id: planted.id, liveActor: true }), "deleted");
 });
@@ -158,7 +158,7 @@ test("skills: a member editing a normal shared skill auto-republishes it (stays 
   await deps.skills.publish(planted.id);
   const app = createApp(deps as unknown as AppDeps);
   const edited = await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { description: "d2" }, { liveActor: true });
-  assert.ok(edited && edited !== "trigger_blocked", "a private-channel member edits the scope's skill");
+  assert.ok(edited && typeof edited === "object", "a private-channel member edits the scope's skill");
   assert.equal(
     (edited as { status: string }).status,
     "published",
@@ -369,4 +369,31 @@ test("crons: owner and a private-channel member manage; a public-channel member 
     false,
     "a teammate cannot manage my personal cron",
   );
+});
+
+test("skills: an edit based on a stale version is refused instead of overwriting a newer one", async () => {
+  const deps = makeDeps();
+  const planted = await deps.skills.create({
+    scopeId: privScope,
+    manifest: { name: "racy", description: "d", requiredCapabilities: [], body: "# b" },
+    createdBy: OWNER,
+  });
+  await deps.skills.review(planted.id, "system:test", []);
+  await deps.skills.publish(planted.id);
+  const app = createApp(deps as unknown as AppDeps);
+  const opened = (await deps.skills.get(planted.id))!.version;
+  const first = await app.updateOwnedSkill(
+    planted.id,
+    OWNER,
+    { body: "# first" },
+    { liveActor: true, baseVersion: opened },
+  );
+  assert.ok(first && typeof first === "object", "the first editor saves");
+  assert.equal(
+    await app.updateOwnedSkill(planted.id, PRIV_MEMBER, { body: "# second" }, { liveActor: true, baseVersion: opened }),
+    "version_conflict",
+  );
+  assert.equal((await deps.skills.get(planted.id))!.manifest.body, "# first", "the newer edit survives");
+  const unversioned = await app.updateOwnedSkill(planted.id, OWNER, { body: "# third" }, { liveActor: true });
+  assert.ok(unversioned && typeof unversioned === "object", "callers without baseVersion keep last-write-wins");
 });
