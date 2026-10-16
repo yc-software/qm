@@ -54,6 +54,7 @@ interface BrokerDelivery {
   injection?: CredentialInjection;
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  maxRequestsPerDay?: number;
   deployments?: boolean;
   enabled: boolean;
   updatedBy?: string;
@@ -173,6 +174,7 @@ export interface ServiceCredentialInput {
   injection?: CredentialInjection;
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  maxRequestsPerDay?: number;
   deployments?: boolean;
   enabled?: boolean;
   updatedBy?: string;
@@ -187,6 +189,7 @@ export interface PublicServiceCredential {
   injection?: CredentialInjection;
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  maxRequestsPerDay?: number;
   deployments: boolean;
   enabled: boolean;
   hasSecret: boolean;
@@ -204,6 +207,7 @@ export interface DecryptedServiceCredential {
   injection?: CredentialInjection;
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  maxRequestsPerDay?: number;
   deployments: boolean;
   enabled: boolean;
 }
@@ -237,6 +241,10 @@ function allowedMethodsBroaden(prior: readonly string[] | undefined, next: reado
   return effectiveAllowedMethods(next).some((method) => !before.has(method));
 }
 
+function dailyCapRaised(prior: number | undefined, next: number | undefined): boolean {
+  return prior !== undefined && (next === undefined || next > prior);
+}
+
 function allowedPathPrefixesBroaden(
   prior: readonly string[] | undefined,
   next: readonly string[] | undefined,
@@ -258,6 +266,7 @@ export function serviceCredentialRebinds(prior: PublicServiceCredential, input: 
     if (allowedMethodsBroaden(prior.allowedMethods, input.allowedMethods)) rebinds.push("allowedMethods");
     if (allowedPathPrefixesBroaden(prior.allowedPathPrefixes, input.allowedPathPrefixes))
       rebinds.push("allowedPathPrefixes");
+    if (dailyCapRaised(prior.maxRequestsPerDay, input.maxRequestsPerDay)) rebinds.push("maxRequestsPerDay");
   }
   return rebinds;
 }
@@ -694,6 +703,7 @@ export function createKeychain(deps: {
       ...(b.injection ? { injection: b.injection } : {}),
       ...(b.allowedMethods ? { allowedMethods: b.allowedMethods } : {}),
       ...(b.allowedPathPrefixes ? { allowedPathPrefixes: b.allowedPathPrefixes } : {}),
+      ...(b.maxRequestsPerDay !== undefined ? { maxRequestsPerDay: b.maxRequestsPerDay } : {}),
       deployments: b.deployments !== false,
       enabled: b.enabled,
       hasSecret: !!rec.secretEnc,
@@ -725,12 +735,20 @@ export function createKeychain(deps: {
     } else if (input.envKey) {
       throw new Error(`broker-delivery credential ${input.slug} must not carry an envKey`);
     }
+    if (
+      input.maxRequestsPerDay !== undefined &&
+      (delivery === "env" || !Number.isSafeInteger(input.maxRequestsPerDay) || input.maxRequestsPerDay < 1)
+    ) {
+      throw new Error(
+        `credential ${input.slug}: maxRequestsPerDay must be a positive whole number on a broker credential`,
+      );
+    }
     if (prior && !trimmedSecret) {
       const rebinds = serviceCredentialRebinds(brokerToPublic(prior), input);
       if (rebinds.length)
         throw new KeychainError(
           400,
-          `credential "${input.slug}": changing ${rebinds.join(", ")} would redirect or unwrap the stored secret; supply a fresh secret to confirm this change`,
+          `credential "${input.slug}": changing ${rebinds.join(", ")} would redirect, unwrap or widen the stored secret; supply a fresh secret to confirm this change`,
         );
     }
     return {
@@ -746,6 +764,7 @@ export function createKeychain(deps: {
         ...(input.injection ? { injection: input.injection } : {}),
         ...(input.allowedMethods ? { allowedMethods: input.allowedMethods.map((m) => m.toUpperCase()) } : {}),
         ...(input.allowedPathPrefixes ? { allowedPathPrefixes: input.allowedPathPrefixes } : {}),
+        ...(input.maxRequestsPerDay !== undefined ? { maxRequestsPerDay: input.maxRequestsPerDay } : {}),
         ...(input.deployments === false ? { deployments: false } : {}),
         enabled: input.enabled !== false,
         ...(input.updatedBy ? { updatedBy: input.updatedBy } : {}),
@@ -1435,6 +1454,7 @@ export function createKeychain(deps: {
         ...(b.injection ? { injection: b.injection } : {}),
         ...(b.allowedMethods ? { allowedMethods: b.allowedMethods } : {}),
         ...(b.allowedPathPrefixes ? { allowedPathPrefixes: b.allowedPathPrefixes } : {}),
+        ...(b.maxRequestsPerDay !== undefined ? { maxRequestsPerDay: b.maxRequestsPerDay } : {}),
         deployments: b.deployments !== false,
         enabled: b.enabled,
       };

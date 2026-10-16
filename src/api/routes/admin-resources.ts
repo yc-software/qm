@@ -927,6 +927,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         injection?: unknown;
         allowedMethods?: unknown;
         allowedPathPrefixes?: unknown;
+        maxRequestsPerDay?: unknown;
         deployments?: unknown;
         enabled?: unknown;
         grantees?: unknown;
@@ -1136,6 +1137,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         : undefined;
       if (paths?.some((path) => !path.startsWith("/") || /[\r\n]/.test(path)))
         return { error: "each allowed path prefix must be one line starting with /" };
+      if (
+        b.maxRequestsPerDay !== undefined &&
+        b.maxRequestsPerDay !== null &&
+        !(Number.isSafeInteger(b.maxRequestsPerDay) && (b.maxRequestsPerDay as number) >= 1)
+      )
+        return { error: "daily request cap must be a positive whole number, or null for no cap" };
       const desired = Array.isArray(b.grantees) ? [...new Set(b.grantees.map(String))] : undefined;
       const badGrantee = desired?.find((g) => {
         const parsed = parseScopeId(g);
@@ -1157,6 +1164,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       let brokerMethods: { allowedMethods?: string[] } = {};
       if (methods) brokerMethods = { allowedMethods: methods };
       else if (existing?.allowedMethods) brokerMethods = { allowedMethods: existing.allowedMethods };
+      let dailyCap: { maxRequestsPerDay?: number } = {};
+      if (typeof b.maxRequestsPerDay === "number") dailyCap = { maxRequestsPerDay: b.maxRequestsPerDay };
+      else if (b.maxRequestsPerDay === undefined && existing?.maxRequestsPerDay !== undefined)
+        dailyCap = { maxRequestsPerDay: existing.maxRequestsPerDay };
       let brokerPaths: { allowedPathPrefixes?: string[] } = {};
       if (paths) brokerPaths = { allowedPathPrefixes: paths };
       else if (existing?.allowedPathPrefixes) brokerPaths = { allowedPathPrefixes: existing.allowedPathPrefixes };
@@ -1170,6 +1181,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "broker" && meaningfulInjection(effectiveInjection) ? { injection: effectiveInjection } : {}),
         ...(delivery === "broker" ? brokerMethods : {}),
         ...(delivery === "broker" ? brokerPaths : {}),
+        ...(delivery === "broker" ? dailyCap : {}),
         deployments: typeof b.deployments === "boolean" ? b.deployments : (existing?.deployments ?? true),
         enabled: typeof b.enabled === "boolean" ? b.enabled : (existing?.enabled ?? true),
         updatedBy: actor.id,
@@ -1178,7 +1190,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const rebinds = serviceCredentialRebinds(existing, input);
         if (rebinds.length)
           return {
-            error: `Changing ${rebinds.join(", ")} redirects or unwraps the stored secret, so the edit needs the secret re-supplied. Paste the secret again to confirm the change, or keep those fields as loaded (name, enabled, deployments, grantees, and narrowed allowedMethods/allowedPathPrefixes need no secret).`,
+            error: `Changing ${rebinds.join(", ")} redirects, unwraps or widens the stored secret, so the edit needs the secret re-supplied. Paste the secret again to confirm the change, or keep those fields as loaded (name, enabled, deployments, grantees, narrowed allowedMethods/allowedPathPrefixes, and a lowered maxRequestsPerDay need no secret).`,
             code: "credential_rebind_requires_secret",
             status: 400,
           };
