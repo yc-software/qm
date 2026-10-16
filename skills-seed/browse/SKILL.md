@@ -21,13 +21,16 @@ Which provider you use is decided by which API key is available in your env (or 
 through the keychain). Org keys arrive automatically: an admin saves a provider's key as an
 org credential delivered as sandbox env (admin UI → Service credentials → delivery "Sandbox
 env"), and it rides into every all-internal conversation — nothing here is deploy config. A
-person's own keychain key overrides the org one. Keys you may see today:
+person's own keychain key overrides the org one. A provider can also be offered as a shared
+credential you call through QM's broker without ever holding the key; the provider doc
+says so when it supports that (Kernel does, via `service_kernel`). Keys you may see today:
 
 Use the absolute directory reported by the skill read for all `providers/` paths below.
 Keep the same explicit `sandbox_id` for the skill read and every `execute` command
 in this flow, including the runner.
 
-- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `providers/kernel.md`.
+- `KERNEL_API_KEY`, or a `service_kernel` shared credential in your inventory →
+  **Kernel** (onkernel.com). Read `providers/kernel.md`.
 - `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
   `providers/browserbase.md`.
