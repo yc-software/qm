@@ -321,8 +321,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.match(turn.input, /^\[system\] Your previous attempt/);
-  assert.match(turn.input, /interrupted mid-turn/);
+  assert.equal(turn.input, "", "the request is not re-sent");
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
@@ -344,7 +343,7 @@ for (const [label, payload] of [
     assert.equal(received.length, 1);
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
-    assert.match(turn.input, /^\[system\] Your previous attempt/);
+    assert.equal(turn.input, "", "the request is not re-sent");
     const entries = await sessions.getEntries(sessionId);
     assert.deepEqual(
       entries.map((e) => e.type),

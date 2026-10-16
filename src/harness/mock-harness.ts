@@ -97,15 +97,19 @@ export function createMockHarness(): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const userEntry = await turn.emit({
-          type: "user",
-          payload: {
-            text: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-            ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-          },
-          scopeLabel: turn.scopeLabel,
-        });
+        const continued = turn.continueTurn ? turn.history.findLast((e) => e.type === "user") : undefined;
+        if (continued) turn = { ...turn, input: "", environment: undefined };
+        const userEntry =
+          continued ??
+          (await turn.emit({
+            type: "user",
+            payload: {
+              text: turn.input,
+              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+            },
+            scopeLabel: turn.scopeLabel,
+          }));
         const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
         turn.recordModelCall({

@@ -141,7 +141,6 @@ import {
 import { parseRef } from "../acl/resource-ref.ts";
 import {
   findTrailingPartialTurn,
-  resumeNote,
   resumeStrategy,
   runtimeSwitchNote,
   turnAtSeq,
@@ -2999,17 +2998,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] turn.resume attempt=${input.attempt} thread=${conversation.threadRef} userSeq=${partial.userSeq} workEntries=${partial.workEntries} strategy=${resumePlan!.kind}`,
           );
         }
-        let turnInput = resumePlan
-          ? resumeNote({
-              strategy: resumePlan,
-              backgroundJobs: !!backgroundBroker,
-              ...(input.resumeCause ? { cause: input.resumeCause } : {}),
-            })
-          : baseText;
-        const requestInHistory = !!partial && history.some((entry) => entry.seq === partial.userSeq);
-        const continueTurn =
-          (resumePlan?.kind === "continue" || resumePlan?.kind === "retry") && requestInHistory && !releasedToolOutput;
-        if (partial && !requestInHistory) turnInput += `\nCurrent request:\n${baseText}`;
+        let turnInput = baseText;
+        const continueTurn = !!partial && history.some((entry) => entry.seq === partial.userSeq) && !releasedToolOutput;
         if (partial) spine.turnUserEntrySeq = partial.userSeq;
         if (releasedToolOutput) {
           turnInput = `The human released quarantined tool output recorded in the conversation. Continue the original task using that output. The tool action already ran; do not repeat it. Original task: ${baseText}`;
@@ -3216,6 +3206,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .join("\n\n"),
           );
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
+          const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
           const emit: HarnessTurnInput["emit"] = async (entry) => {
             turnProgress++;
@@ -3425,9 +3416,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
-            ...(continueTurn && !continuation && !snapshot.text && !recall.text ? { continueTurn: true } : {}),
+            ...(silentResume ? { continueTurn: true } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
-            input: harnessInput,
+            input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(environment ? { environment } : {}),

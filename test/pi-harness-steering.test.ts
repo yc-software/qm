@@ -614,7 +614,7 @@ for (const abort of ["shutdown", "stop"] as const) {
       const userSeq = entries.find((entry) => entry.type === "user")!.seq;
       assert.equal(
         resumeStrategy(entries, { userSeq, workEntries: entries.filter((e) => e.seq > userSeq).length }).kind,
-        abort === "shutdown" ? "retry" : "note",
+        abort === "shutdown" ? "retry" : "continue",
       );
     } finally {
       globalThis.fetch = realFetch;

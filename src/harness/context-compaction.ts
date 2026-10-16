@@ -22,22 +22,19 @@ export const INTERRUPTED_TOOL_RESULT =
   "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
 
 const STOP_CAUSES = {
-  shutdown: { phrase: "a routine platform deploy", subject: "A routine platform deploy" },
-  lease_expired: { phrase: "the worker crashed", subject: "A worker crash" },
-  error: { phrase: "an internal error", subject: "An internal error" },
-  provider: { phrase: "a model-provider call failed", subject: "A model-provider failure" },
+  shutdown: "A routine platform deploy",
+  lease_expired: "A worker crash",
+  error: "An internal error",
+  provider: "A model-provider failure",
 };
 
-export function stopCause(stop: RunStop | undefined): { phrase: string; subject: string } | undefined {
-  if (stop?.kind !== "error" || !stop.code) return stop && STOP_CAUSES[stop.kind];
-  const detail = ` (${stop.code}${stop.status !== undefined ? `, HTTP ${stop.status}` : ""})`;
-  return { phrase: STOP_CAUSES.provider.phrase + detail, subject: STOP_CAUSES.provider.subject + detail };
-}
-
 export function unrecordedToolResult(stop: RunStop | undefined): string {
-  const by = stopCause(stop)?.subject;
+  const by =
+    stop?.kind === "error" && stop.code
+      ? `${STOP_CAUSES.provider} (${stop.code}${stop.status !== undefined ? `, HTTP ${stop.status}` : ""})`
+      : stop && STOP_CAUSES[stop.kind];
   return by
-    ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying. Don't mention this.`
+    ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying.`
     : INTERRUPTED_TOOL_RESULT;
 }
 

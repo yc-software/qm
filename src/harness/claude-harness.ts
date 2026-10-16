@@ -364,19 +364,22 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       });
     });
     const server = createSdkMcpServer({ name: "qm", version: "1", tools: definitions, alwaysLoad: true });
-    const userEntry = await turn.emit({
-      type: "user",
-      payload: {
-        text: turn.input,
-        ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-        ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-      },
-      scopeLabel: turn.scopeLabel,
-    });
+    const continueTurn = !!turn.continueTurn && turn.history.length > 0;
+    const userEntry = continueTurn
+      ? turn.history.find((e) => e.type === "user" && (e.payload as { runId?: unknown } | null)?.runId === turn.runId)
+      : await turn.emit({
+          type: "user",
+          payload: {
+            text: turn.input,
+            ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+            ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+          },
+          scopeLabel: turn.scopeLabel,
+        });
     const requestedModel = turn.runtime?.modelId;
     const model = modelSupportedByHarness(requestedModel, "claude") ? requestedModel! : resolveModelId(turn.scopeLabel);
     const turnEffort = effort(turn.runtime?.effortLevel);
-    const text = promptText(turn);
+    const text = continueTurn ? claudeReplayTranscript(reconstructMessagesFromHistory(turn.history)) : promptText(turn);
     const initial = userMessage(text, turn.images);
     if (turn.documents?.length && Array.isArray(initial.message.content)) {
       initial.message.content.push(...(preparedDocuments as unknown as typeof initial.message.content));
@@ -555,7 +558,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       const step = recordedSteps++;
       try {
         await turn.recordLlmRequest?.({
-          turnSeq: userEntry.seq,
+          turnSeq: userEntry?.seq ?? null,
           step,
           model,
           promptEnvelope: recordedEnvelope,
@@ -791,7 +794,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         recordedSteps++;
         try {
           await turn.recordLlmRequest?.({
-            turnSeq: userEntry.seq,
+            turnSeq: userEntry?.seq ?? null,
             step: 0,
             model,
             promptEnvelope: recordedEnvelope,

@@ -1447,8 +1447,8 @@ test("retry recovery supplies an excluded request without rerunning its complete
       ...base.turns,
       runTurn: async (input) => {
         mainCalls++;
-        assert.match(input.input, /Current request.*\nfinish the stored request/);
-        assert.match(input.input, /don't repeat completed steps/);
+        assert.equal(input.input, "finish the stored request");
+        assert.equal(input.continueTurn, undefined);
         assert.ok(!input.history.some((e) => e.type === "user"));
         await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
         return { reply: "resumed" };

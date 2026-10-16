@@ -48,8 +48,11 @@ for (const mode of ["retry", "handoff"] as const) {
           },
         };
       }
-      assert.match(turn.input, /previous attempt|Runtime switched/);
-      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      if (mode === "retry") assert.equal(turn.continueTurn, true);
+      else {
+        assert.match(turn.input, /Runtime switched/);
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
       await turn.emit({
         type: "user",
@@ -62,10 +65,12 @@ for (const mode of ["retry", "handoff"] as const) {
       assert.equal(result.status, "ok");
       const session = await built.app.getSession(result.sessionId!);
       const users = session!.entries.filter((entry) => entry.type === "user");
-      assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
-      assert.equal((users[2]!.payload as { text?: string }).text, "Change of plan");
-      assert.notEqual((users[2]!.payload as { hidden?: boolean }).hidden, true);
-      assert.equal((users[3]!.payload as { hidden?: boolean }).hidden, true);
+      const steerAt = mode === "retry" ? 1 : 2;
+      if (mode !== "retry") assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
+      assert.equal(users.length, steerAt + 2);
+      assert.equal((users[steerAt]!.payload as { text?: string }).text, "Change of plan");
+      assert.notEqual((users[steerAt]!.payload as { hidden?: boolean }).hidden, true);
+      assert.equal((users[steerAt + 1]!.payload as { hidden?: boolean }).hidden, true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
       const liveSteer = activity.find(
         (entry) => entry.type === "user" && (entry.payload as { text?: string }).text === "Change of plan",

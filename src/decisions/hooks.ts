@@ -24,7 +24,7 @@ export function turnStartState(turn: {
     `- scope: ${turn.scopeLabel.split(":")[0]}`,
     `- requested runtime: ${requested}`,
     `- model account: ${turn.runtimePinned ? "the user's own provider account, which serves only the requested runtime" : "company"}`,
-    `- continued turn: ${turn.continueTurn ? "yes, resuming after a recorded tool result" : "no"}`,
+    `- continued turn: ${turn.continueTurn ? "yes, resuming an interrupted turn" : "no"}`,
     "",
     "Latest message:",
     turn.input,

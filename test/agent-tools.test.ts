@@ -4156,8 +4156,8 @@ test("a tool result recorded after shutdown fires is marked interrupted; user St
   });
   assert.deepEqual(
     strategy(await record("shutdown", false)),
-    { kind: "note" },
-    "a killed call the model marked unsafe gets the unknown-outcome note, never a continue",
+    { kind: "continue" },
+    "a killed call the model marked unsafe is not re-run; its replayed result says what happened",
   );
 
   for (const abort of ["stop", "none"] as const) {

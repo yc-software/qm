@@ -68,11 +68,12 @@ function buildScenario(interruptAfterToolResult = false) {
         turns.push(turn.input);
         continued.push(turn.continueTurn);
         environments.push(turn.environment);
-        await turn.emit({
-          type: "user",
-          payload: { text: turn.input },
-          scopeLabel: turn.scopeLabel,
-        });
+        if (!turn.continueTurn)
+          await turn.emit({
+            type: "user",
+            payload: { text: turn.input },
+            scopeLabel: turn.scopeLabel,
+          });
         if (interruptAfterToolResult && turns.length === 1) {
           await turn.emit({
             type: "tool_call",
@@ -297,12 +298,12 @@ test("a resume whose recorded work ends at a tool result asks the harness to con
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, true], "unchanged inventories preserve assistant continuation");
   assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
-  assert.match(turns[1]!, /^\[system\] Your previous attempt/, "the note still travels as the fallback input");
+  assert.equal(turns[1], ASK, "only the original request travels, as the harness's fallback");
   assert.equal((await asks()).length, 1);
 });
 
 test("a changed inventory on retry reaches the model instead of continuing past the update", async () => {
-  const { orchestrator, runs, continued, environments, sandbox, input, asks } = buildScenario(true);
+  const { orchestrator, runs, turns, continued, environments, sandbox, input, asks } = buildScenario(true);
   sandbox.profile.spec = { os: "Old Linux" };
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   await assert.rejects(
@@ -315,14 +316,15 @@ test("a changed inventory on retry reaches the model instead of continuing past 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, undefined], "the new user message carries changed inventory");
+  assert.equal(turns[1], "", "the request is not re-sent with the changed inventory");
   assert.match(environments[1]!, /Environment changes/);
   assert.match(environments[1]!, /New Linux/);
   assert.doesNotMatch(environments[1]!, /Old Linux|## Where you are/);
   assert.equal((await asks()).length, 1);
 });
 
-test("a resume whose last tool call has no recorded result is not asked to continue", async () => {
-  const { orchestrator, sessions, runs, continued, input } = buildScenario();
+test("a resume whose last tool call has no recorded result settles it and does not re-send the request", async () => {
+  const { orchestrator, sessions, runs, turns, continued, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
     { type: "user", payload: { text: ASK } },
@@ -332,7 +334,12 @@ test("a resume whose last tool call has no recorded result is not asked to conti
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
-  assert.deepEqual(continued, [undefined]);
+  assert.deepEqual(continued, [undefined], "the seeded turn has no recorded environment, so its context is sent");
+  assert.equal(turns[0], "");
+  const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
+    (e) => e.type === "tool_result",
+  );
+  assert.match(String((settled?.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
 });
 
 test("a first attempt and a no-work retry are never asked to continue", async () => {

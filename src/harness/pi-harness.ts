@@ -106,7 +106,7 @@ import {
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
-import { estimateHistoryTokens, INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { estimateHistoryTokens } from "./context-compaction.ts";
 import { createStepRecorder, recordingTools, type StepRecorder } from "./pi-step-recorder.ts";
 import { ELIDED_IMAGE_TEXT, restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { summarizeHistory } from "./history-summary.ts";
@@ -679,9 +679,11 @@ interface PiAgentWithPayloadHook {
   subscribe?(listener: (event: unknown) => Promise<void> | void): () => void;
 }
 
-export function endsAtRecordedToolResult(messages: readonly unknown[]): boolean {
-  const last = messages.at(-1) as { role?: unknown; content?: unknown } | undefined;
-  return last?.role === "toolResult" && textFromContent(last.content) !== INTERRUPTED_TOOL_RESULT;
+export function continuableContext<M extends { role?: unknown }>(messages: readonly M[]): M[] | null {
+  let end = messages.length;
+  while (messages[end - 1]?.role === "assistant") end--;
+  const role = messages[end - 1]?.role;
+  return role === "user" || role === "toolResult" ? messages.slice(0, end) : null;
 }
 
 function continueAssistantTurn(session: AgentSession): Promise<void> {
@@ -1805,11 +1807,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           };
           turn.onGapWork?.(collectGapWork);
           entry.ref.onGapWork = collectGapWork;
-          const continueTurn = !!turn.continueTurn && endsAtRecordedToolResult(entry.agentSession.agent.state.messages);
-          if (turn.continueTurn && !continueTurn)
+          const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
+          if (continued) entry.agentSession.agent.state.messages = continued;
+          else if (turn.continueTurn)
             console.log(
-              `[pi] resume cannot continue the assistant turn — seeded context does not end at a recorded tool result; prompting the resume note session=${turn.session.id}`,
+              `[pi] resume has no seeded context to continue; prompting the input session=${turn.session.id}`,
             );
+          const continueTurn = !!continued;
           const grindMeter = createGrindMeter();
 
           entry.ref.goal = turn.goal ?? null;

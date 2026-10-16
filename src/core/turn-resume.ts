@@ -1,6 +1,6 @@
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
-import { stopCause, unrecordedToolResult } from "../harness/context-compaction.ts";
+import { unrecordedToolResult } from "../harness/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { entryDeliveryKey, isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";
@@ -21,8 +21,6 @@ function isResumeNote(e: SessionEntry): boolean {
 function isTurnStoppedEntry(e: SessionEntry): boolean {
   return e.type === "system" && (e.payload as { kind?: unknown } | null)?.kind === TURN_STOPPED_KIND;
 }
-
-const MODEL_TURN_ENTRY_TYPES = new Set<SessionEntry["type"]>(["user", "assistant", "tool_call", "tool_result"]);
 
 export function findTrailingPartialTurn(entries: readonly SessionEntry[], inputText: string): PartialTurn | null {
   const text = inputText.trim();
@@ -86,7 +84,6 @@ export interface ResumableToolCall {
 
 export type ResumeStrategy =
   | { kind: "restart" }
-  | { kind: "note" }
   | { kind: "continue" }
   | { kind: "retry"; call: ResumableToolCall }
   | { kind: "settle"; calls: Array<{ callId: string; tool: string }> };
@@ -105,17 +102,14 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
   const dangling = turn.filter(
     (e) => e.type === "tool_call" && !answered.has((e.payload as { callId?: unknown } | null)?.callId),
   );
-  if (dangling.length === 0) {
-    const last = turn.findLast((e) => MODEL_TURN_ENTRY_TYPES.has(e.type) || isTurnStoppedEntry(e));
-    return last?.type === "tool_result" ? { kind: "continue" } : { kind: "note" };
-  }
+  if (dangling.length === 0) return { kind: "continue" };
   const unrecorded = dangling.flatMap((e) => {
     const p = e.payload as { callId?: unknown; tool?: unknown } | null;
     return typeof p?.callId === "string" && !withResult.has(p.callId)
       ? [{ callId: p.callId, tool: typeof p.tool === "string" ? p.tool : "tool" }]
       : [];
   });
-  const settle: ResumeStrategy = unrecorded.length ? { kind: "settle", calls: unrecorded } : { kind: "note" };
+  const settle: ResumeStrategy = unrecorded.length ? { kind: "settle", calls: unrecorded } : { kind: "continue" };
   if (dangling.length !== 1) return settle;
   const payload = dangling[0]!.payload as {
     callId?: unknown;
@@ -136,22 +130,6 @@ export function resumeStrategy(entries: readonly SessionEntry[], partial: Partia
     kind: "retry",
     call: { callId: payload.callId, tool: rerun.tool, input: rerun.input as Record<string, unknown> },
   };
-}
-
-const QUIET = "Don't mention this.";
-
-export function resumeNote(opts?: { strategy?: ResumeStrategy; backgroundJobs?: boolean; cause?: RunStop }): string {
-  const why = stopCause(opts?.cause)?.phrase ?? "cause not recorded";
-  if (opts?.strategy?.kind === "restart")
-    return `[system] Your previous attempt stopped before recording any work — ${why}. Start the request now. ${QUIET}`;
-  return [
-    `[system] Your previous attempt was interrupted mid-turn — ${why}. Continue from the recorded work; don't repeat completed steps. ${QUIET}`,
-    opts?.backgroundJobs
-      ? "Background jobs on your computer kept running — check them with `background` list/poll."
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 export function unrecordedResultEntries(
