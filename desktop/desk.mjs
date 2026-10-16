@@ -18,12 +18,10 @@ let queue = Promise.resolve();
 let next = 1;
 let generation = 0;
 let retiring = Promise.resolve();
-const cancelled = new Set();
 
-function stop(message = "Desktop computer access ended", owner) {
-  if (owner && activeOwner !== owner) return;
+function stop(message = "Desktop computer access ended") {
   activeOwner = undefined;
-  if (!owner) generation++;
+  generation++;
   const proc = child;
   child = undefined;
   pending?.finish({ type: "error", code: "action_failed", message, action: null });
@@ -78,7 +76,7 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
   const run = async () => {
     await retiring;
     return new Promise((resolve) => {
-      if (submitted !== generation || cancelled.has(owner) || Date.now() >= expiresAt)
+      if (submitted !== generation || Date.now() >= expiresAt)
         return resolve({
           type: "error",
           code: "action_failed",
@@ -117,12 +115,4 @@ function request(cmd, owner, deadline = Date.now() + 45_000) {
 export const desk = {
   request: (cmd, owner, deadline) => request(cmd.type === "act" ? { ...cmd, pace: paced } : cmd, owner, deadline),
   stop,
-  cancel: (owner) => {
-    cancelled.add(owner);
-    stop("Computer access ended", owner);
-  },
-  apps: (owner, deadline) => request({ type: "apps" }, owner, deadline),
-  observe: (app, screenshot, owner, deadline) => request({ type: "observe", app, screenshot }, owner, deadline),
-  act: (app, actions, screenshot, owner, deadline) =>
-    request({ type: "act", app, actions, screenshot, pace: paced }, owner, deadline),
 };

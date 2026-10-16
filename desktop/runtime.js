@@ -3,6 +3,7 @@
   const TEXT_LIMIT = 100_000;
   const IMAGE_BUDGET = 800_000;
   const IMAGE_EDGE = 1568;
+  let emitted = new WeakSet();
   let text = [];
   let images = [];
   let size = 0;
@@ -24,9 +25,10 @@
     }
   }
 
-  window.__describe = (value) => describe(value).slice(0, 20_000);
+  window.__describe = (value) => (emitted.has(value) ? undefined : describe(value).slice(0, 20_000));
   window.__drain = () => {
     const out = { text: text.join("\n"), images };
+    emitted = new WeakSet();
     text = [];
     images = [];
     size = 0;
@@ -92,6 +94,7 @@
         } else if (emit) say("[screenshot dropped: too many images in one call]");
         o.screenshot = { width: image.width, height: image.height };
       }
+      if (emit) emitted.add(o);
       return o;
     }
 
@@ -183,6 +186,7 @@
     async listApps({ emit = true } = {}) {
       const { apps } = await desk({ type: "apps" });
       if (emit) say(apps.map((a) => `${a.name} (${a.bundle_id ?? "-"}) ${a.active ? " active" : ""}`).join("\n"));
+      if (emit) emitted.add(apps);
       return apps;
     },
     async getApp(name, { emit = true } = {}) {

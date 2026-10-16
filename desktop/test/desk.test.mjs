@@ -31,25 +31,25 @@ createInterface({input:process.stdin}).on("line", line => {
   mock.module("../cursor.mjs", { namedExports: { flyTo: async () => {} } });
   const { desk } = await import("../desk.mjs");
   try {
-    const active = desk.act("Calculator", [{ type: "wait", ms: 800 }], false, "run-a");
-    const queued = desk.act("Calculator", [{ type: "raise" }], false, "run-a");
+    const active = desk.request({ type: "act", app: "Calculator", actions: [{ type: "wait", ms: 800 }] }, "run-a");
+    const queued = desk.request({ type: "act", app: "Calculator", actions: [{ type: "raise" }] }, "run-a");
     for (let n = 0; n < 100; n++) {
       if (await readFile(started, "utf8").catch(() => "")) break;
       await sleep(10);
     }
     assert.equal(await readFile(started, "utf8"), "started");
-    desk.cancel("run-a");
+    desk.stop();
     assert.equal((await active).type, "error");
     assert.equal((await queued).type, "error");
     await sleep(900);
     await assert.rejects(readFile(acted), { code: "ENOENT" });
-    assert.deepEqual(await desk.apps("run-b"), { type: "apps", apps: [] });
-    assert.equal((await desk.observe("Calculator", false, "run-c")).type, "error");
-    desk.cancel("run-b");
-    assert.equal((await desk.apps("run-c")).type, "apps");
-    desk.cancel("run-c");
-    const blocking = desk.act("Calculator", [], false, "run-d");
-    const expired = desk.act("Calculator", [], false, "run-d", Date.now() + 20);
+    assert.deepEqual(await desk.request({ type: "apps" }, "run-b"), { type: "apps", apps: [] });
+    assert.equal((await desk.request({ type: "observe", app: "Calculator" }, "run-c")).type, "error");
+    desk.stop();
+    assert.equal((await desk.request({ type: "apps" }, "run-c")).type, "apps");
+    desk.stop();
+    const blocking = desk.request({ type: "act", app: "Calculator", actions: [] }, "run-d");
+    const expired = desk.request({ type: "act", app: "Calculator", actions: [] }, "run-d", Date.now() + 20);
     assert.equal((await blocking).type, "acted");
     assert.equal((await expired).type, "error");
   } finally {

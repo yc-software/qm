@@ -43,6 +43,7 @@ createInterface({input: process.stdin}).on('line', line => {
       "var fixture = await computer.getApp('Fixture'); await fixture.click(1); await fixture.getAXState()",
     );
     assert.match(result.content, /Fixture window/);
+    assert.equal(result.content.split("Fixture window").length - 1, 1);
     result = await call("await fixture.getScreenshot()");
     assert.equal(result.images?.[0]?.mimeType, "image/jpeg");
     assert.ok(result.images[0].data.length > 0);
