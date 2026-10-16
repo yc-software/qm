@@ -1178,7 +1178,7 @@ async function delegatedHumanRig(context: Partial<OrchestratorInput> = {}) {
   return { ...r, parent: parent.run, child, run, api };
 }
 
-test("delegated human origin retains one-hop authority boundaries", async () => {
+test("delegated human origin retains live authority boundaries", async () => {
   const r = await delegatedHumanRig();
   assert.equal(r.run.request.origin.kind, "human");
   assert.equal((await delegatedAuthorizationOrigin(r.run.request, r))?.kind, "human");
@@ -1282,36 +1282,38 @@ test("a later participant cannot change a completion's actor, rollout, destinati
   assert.deepEqual(wake.request.origin, { kind: "human" });
 });
 
-test("completion wakes preserve live authorization for subsequent delegated steps", async () => {
-  const r = await delegatedHumanRig();
-  const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
-  await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "step one" });
-  for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
-    const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
-    assert.ok(parentTurn);
-    await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
-  }
-  await deliverSubagentMail(
-    { ...r, maxAttempts: 3, delegationEnabled: async () => true },
-    (await r.runs.get(r.run.id))!,
-  );
-  const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
-  assert.ok(wake);
-  assert.equal(wake.request.origin.kind, "human");
-  assert.equal(wake.request.addressed, true);
-  assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
-  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
-    session: r.room,
-    scopeId: scope,
-    request: { ...wake.request, runId: wake.id },
+for (const surface of ["slack", "web"] as const) {
+  test(`${surface} completion wakes preserve live authorization for subsequent delegated steps`, async () => {
+    const r = await delegatedHumanRig({ surface });
+    const claimed = await r.runs.claimById(r.run.id, "w1", 60000);
+    await r.runs.complete(r.run.id, claimed!.leaseToken!, { status: "ok", reply: "step one" });
+    for (const pending of await r.runs.inFlightForThread(r.room.threadRef)) {
+      const parentTurn = await r.runs.claimById(pending.id, "parent", 60_000);
+      assert.ok(parentTurn);
+      await r.runs.complete(pending.id, parentTurn.leaseToken!, { status: "silent" });
+    }
+    await deliverSubagentMail(
+      { ...r, maxAttempts: 3, delegationEnabled: async () => true },
+      (await r.runs.get(r.run.id))!,
+    );
+    const wake = (await r.runs.getByDedupKey(`subagent-return:${r.run.id}`))!;
+    assert.ok(wake);
+    assert.equal(wake.request.origin.kind, "human");
+    assert.equal(wake.request.addressed, true);
+    assert.equal((await delegatedAuthorizationOrigin(wake.request, r))?.kind, "human");
+    const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+      session: r.room,
+      scopeId: scope,
+      request: { ...wake.request, runId: wake.id },
+    });
+    assert.ok((await api.write({ target: r.child.id, text: "step two", followup: true })).ok);
+    const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
+    assert.equal((await delegatedAuthorizationOrigin(next.request, r))?.kind, "human");
+    await r.sessions.setParentSession(r.child.id, null);
+    assert.equal(await delegatedAuthorizationOrigin(wake.request, r), undefined);
+    assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
   });
-  assert.ok((await api.write({ target: r.child.id, text: "step two", followup: true })).ok);
-  const next = (await r.runs.inFlightForThread(r.child.threadRef))[0]!;
-  assert.equal((await delegatedAuthorizationOrigin(next.request, r))?.kind, "human");
-  await r.sessions.setParentSession(r.child.id, null);
-  assert.equal(await delegatedAuthorizationOrigin(wake.request, r), undefined);
-  assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
-});
+}
 
 test("completed children do not fill a working parent's run slots and consumed returns settle", async () => {
   const r = await rig();

@@ -67,7 +67,6 @@ export async function delegatedAuthorizationOrigin(
       child.parentSessionId === sender.id &&
       source.sessionId === sender.threadRef;
     const continued =
-      requiresDelegation(current, true) &&
       isSubagentThreadRef(sender.threadRef) &&
       sender.parentSessionId === child.id &&
       source.sessionId === child.threadRef;
