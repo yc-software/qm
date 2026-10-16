@@ -130,15 +130,38 @@ async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string
   return { key: record.secret, principal };
 }
 
-async function request(ctx: ApiCtx, key: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+class ComposioHttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function executeFailureCause(error: unknown, timedOut: boolean): string {
+  if (timedOut) return "timeout";
+  return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
+}
+
+// Tool execution can legitimately take longer than catalog/connection calls (e.g. a large Gmail page with bodies).
+const EXECUTE_TIMEOUT_MS = 90_000;
+
+async function request(
+  ctx: ApiCtx,
+  key: string,
+  path: string,
+  body?: unknown,
+  timeoutMs = 20_000,
+): Promise<Record<string, unknown>> {
   const response = await (ctx.deps.composioFetch ?? fetch)(`https://backend.composio.dev/api/v3.1${path}`, {
     method: body ? "POST" : "GET",
     headers: { "x-api-key": key, "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
     redirect: "error",
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!response.ok) throw new Error(`Composio request failed: ${await httpFailure(response)}`);
+  if (!response.ok)
+    throw new ComposioHttpError(response.status, `Composio request failed: ${await httpFailure(response)}`);
   return (await response.json()) as Record<string, unknown>;
 }
 
@@ -401,12 +424,18 @@ async function execute(ctx: ApiCtx): Promise<void> {
       resource,
       scopeLabel: ctx.capability.scopeId,
     });
-    const result = await request(ctx, access.key, `/tools/execute/${body.tool}`, {
-      user_id: account.user_id,
-      connected_account_id: body.accountId,
-      version: body.version,
-      arguments: body.arguments,
-    });
+    const result = await request(
+      ctx,
+      access.key,
+      `/tools/execute/${body.tool}`,
+      {
+        user_id: account.user_id,
+        connected_account_id: body.accountId,
+        version: body.version,
+        arguments: body.arguments,
+      },
+      EXECUTE_TIMEOUT_MS,
+    );
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.execute.completed",
@@ -418,16 +447,24 @@ async function execute(ctx: ApiCtx): Promise<void> {
       successful: result.successful === true,
       error: result.error ?? null,
     });
-  } catch {
+  } catch (error) {
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.execute.failed",
       resource,
       scopeLabel: ctx.capability.scopeId,
     });
+    // Keep the cause for operators (secret-redacted); give the agent the failure class so it can adapt.
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
     return sendJson(ctx.res, 502, {
       error: "composio_execution_failed",
-      message: "Execution failed or its outcome is unknown. Do not automatically retry a write.",
+      cause: executeFailureCause(error, timedOut),
+      ...(error instanceof ComposioHttpError ? { providerStatus: error.status } : {}),
+      message: timedOut
+        ? `The tool did not finish within ${EXECUTE_TIMEOUT_MS / 1000}s. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write.`
+        : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
     });
   }
 }

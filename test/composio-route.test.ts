@@ -498,6 +498,18 @@ test("execution never retries a provider failure", async () => {
   assert.equal(f.calls.length, 3);
 });
 
+test("execution failures tell the agent whether the tool timed out", async () => {
+  const f = fixture();
+  await f.own();
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  f.replies.push(aliceAccount, gmailTool, timeout);
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(result.data.cause, "timeout");
+  assert.match(result.data.message, /smaller pages/);
+});
+
 test("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();
