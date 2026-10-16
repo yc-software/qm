@@ -10,6 +10,7 @@ export const nightlyAt = (key: string, hour: number) =>
 export interface ManagedCronClaim {
   cronId?: string;
   arming?: boolean;
+  managedAction?: string;
 }
 
 type ManagedCronDeps<T> = { store: DurableMap<T>; crons: CronStore; scheduler: Pick<Scheduler, "notifyChanged"> };
@@ -32,6 +33,20 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
   if (stored?.cronId === cron.id) return arm(deps, key, cron.id);
   await deps.crons.delete(cron.id);
   return stored ?? initial;
+}
+
+export async function refreshManagedAction<T extends ManagedCronClaim>(
+  deps: Pick<ManagedCronDeps<T>, "store" | "crons">,
+  key: string,
+  cron: Cron,
+  recorded: string | undefined,
+  desired: string,
+): Promise<void> {
+  if (cron.action !== desired) {
+    if (cron.action !== recorded) return;
+    await deps.crons.update(cron.id, { action: desired });
+  }
+  if (recorded !== desired) await deps.store.merge(key, { managedAction: desired } as Partial<T>);
 }
 
 async function arm<T extends ManagedCronClaim>(deps: ManagedCronDeps<T>, key: string, cronId: string): Promise<T> {
