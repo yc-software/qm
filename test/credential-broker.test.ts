@@ -500,12 +500,8 @@ test("a daily cap admits that many outbound calls per UTC day, then refuses with
   assert.equal(cap.calls.length, 3);
 });
 
-test("a daily cap counts calls already in the usage ledger and refuses closed without one", async () => {
-  const usage = createCredentialUsageSink();
-  for (let i = 0; i < 3; i++)
-    usage.record({ slug: "x-firehose", host: "api.x.com", status: "ok", scopeLabel: "personal:U1", principalId: "U1" });
+test("a capped credential refuses closed when no usage ledger can count its calls", async () => {
   const capped = { reader: reader({ slug: "x-firehose", allowedPathPrefixes: ["/2/"], maxRequestsPerDay: 3 }) };
-  assert.equal((await brokerCredentialCall(base({ ...capped, usage }))).status, 429);
   assert.equal((await brokerCredentialCall(base(capped))).status, 503);
 });
 
