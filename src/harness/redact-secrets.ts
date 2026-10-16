@@ -42,8 +42,18 @@ function redactStructuredDiagnostics(value: string): string {
   }
 }
 
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+const URL_PASSWORD = /(\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/gi;
+const SECRET_ENV_ASSIGNMENT =
+  /(\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|PRIVATE_KEY|SECRET_KEY|CREDENTIALS?)\s*=\s*)(["']?)(?!\d+\b)[^\s"']+\2/g;
+const SLACK_TOKEN = /\bxox[abposr]-[A-Za-z0-9-]{10,}/g;
+
 export function redactSecrets(value: string): string {
   return redactStructuredDiagnostics(value)
+    .replace(PRIVATE_KEY_BLOCK, "[redacted private key]")
+    .replace(URL_PASSWORD, "$1[redacted]@")
+    .replace(SECRET_ENV_ASSIGNMENT, "$1$2[redacted]$2")
+    .replace(SLACK_TOKEN, "[redacted]")
     .replace(
       /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\[[\s\S]*?(?:\]|$)/gi,
       "$1[redacted]",
