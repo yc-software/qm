@@ -140,14 +140,11 @@ function readTrackedContent(path: string): Buffer | null {
   }
 }
 
-const provisionedInfrastructure = ["test/deploy-notice.test.ts"];
-
 test("tracked files use only QM branding", () => {
   const paths = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
     .split("\0")
     .filter(Boolean)
-    .filter((path) => !path.startsWith("deploy/layers/"))
-    .filter((path) => !provisionedInfrastructure.includes(path));
+    .filter((path) => !path.startsWith("deploy/layers/"));
   const legacyPaths = paths.filter((path) => findLegacyNames(path, { path: true }).length > 0);
   const legacyContent = paths.flatMap((path) => {
     const content = readTrackedContent(path);
