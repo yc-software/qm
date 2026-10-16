@@ -2044,6 +2044,19 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
+const MONITOR_WAKE_RE = /^<wake reason="monitor"/;
+
+function isMonitorWake(payload: unknown): boolean {
+  const text = (payload as { text?: unknown } | null)?.text;
+  return typeof text === "string" && MONITOR_WAKE_RE.test(text);
+}
+
+function deliveredSilence(a: ToolActivity): boolean {
+  if (a.type !== "tool_result") return false;
+  const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
+  return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
+}
+
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
   if (entry.type !== "text") return false;
   const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
@@ -2058,6 +2071,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
   let stoppedShown = false;
+  let monitorWake = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -2101,12 +2115,14 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
+    if (monitorWake && !text && !stopped && pending.some(deliveredSilence)) {
+      pending = pending.filter((a) => (a.payload as { tool?: unknown } | null)?.tool !== "finish_silently");
+      if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
+        pending = [];
+        return;
+      }
+    }
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
-    const deliveredSilence = (a: ToolActivity): boolean => {
-      if (a.type !== "tool_result") return false;
-      const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
-      return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
-    };
     const lastText = pending.findLastIndex((a) => a.type === "text");
     if (lastText >= 0) {
       const segment = ((pending[lastText]!.payload as { text?: string } | null)?.text ?? "").trim();
@@ -2225,7 +2241,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
-      if (!payload?.steered) stoppedShown = false;
+      if (!payload?.steered) {
+        stoppedShown = false;
+        monitorWake = isMonitorWake(payload);
+      }
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
