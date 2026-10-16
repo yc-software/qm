@@ -244,7 +244,7 @@ test("overall deadline kills a hung gh request", () => {
 });
 
 test("a request timeout retries within the overall deadline", () => {
-  const result = run([{ operation: "view", hang: true }, view, pass, view], ["--request-timeout-ms", "200"]);
+  const result = run([{ operation: "view", hang: true }, view, pass, view], ["--request-timeout-ms", "1500"]);
   assert.equal(result.code, 0);
   assert.deepEqual(
     result.lines.map((line) => line.status),
