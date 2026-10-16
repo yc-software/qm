@@ -25,8 +25,8 @@ flow.
 
 ## Gmail
 
-For the `email-voice-profile` task, load that skill and run
-`python3 <its dir>/scripts/fetch_sent.py --limit 300` from the directory it reports.
+For writing on the user's behalf, follow the available writing skills. Use this
+skill for Gmail access and draft/send operations.
 
 Use the bundled helper for every Gmail operation — it owns MIME construction, encoding,
 and reply threading so you only ever handle plain text:

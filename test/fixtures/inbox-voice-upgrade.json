@@ -1,0 +1,3 @@
+{
+  "playbook": "Inbox sync v6.\nKeep my custom introduction.\n3. For each new or refreshed item, investigate before drafting: read the whole thread, and check whatever context makes the reply substantive (calendar for scheduling asks, earlier email/Slack history for open questions). Draft the reply in the user's own voice \u2014 for email follow the email-draft-in-voice skill (build the voice profile first if it is missing); for Slack match how the user actually writes in Slack (check their recent messages: register, length, punctuation). Punctuation hard rule: never use em dashes or en dashes in a draft; use a comma, period, or \"...\" instead, and re-read every draft before posting to strip any that slipped in.\nKeep my custom closing preference."
+}

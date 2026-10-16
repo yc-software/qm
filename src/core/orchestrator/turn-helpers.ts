@@ -55,8 +55,6 @@ export function headLooksLikeText(head: Buffer): boolean {
 
 const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
   "google-drive-sheets": "google",
   "google-workspace": "google",
   linear: "linear",
