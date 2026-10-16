@@ -392,3 +392,79 @@ test("multi-key locks retain unawaited nested work until it finishes", async () 
   await outer;
   assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
+
+test("pg mutex: an exclusive waiter is not starved by overlapping shared holders", { skip }, async () => {
+  const pools = [createPgPool(URL!), createPgPool(URL!), createPgPool(URL!), createPgPool(URL!)];
+  try {
+    const [a, b, w, c] = pools.map((pg) => createPostgresAdvisoryLock(pg, { pollMs: 10, timeoutMs: 2_000 }));
+    const key = `starve-${Date.now()}`;
+    const order: string[] = [];
+    const firstShared = a!.withSharedLock!(key, () => sleep(150).then(() => order.push("a")));
+    await sleep(30);
+    const writer = w!.withLock(key, async () => {
+      order.push("writer");
+    });
+    await sleep(30);
+    const secondShared = b!.withSharedLock!(key, () => sleep(150).then(() => order.push("b")));
+    await sleep(100);
+    const thirdShared = c!.withSharedLock!(key, () => sleep(150).then(() => order.push("c")));
+    await Promise.all([firstShared, writer, secondShared, thirdShared]);
+    assert.equal(order.indexOf("writer"), 1);
+  } finally {
+    await Promise.all(pools.map((pg) => pg.close()));
+  }
+});
+
+test("memory mutex: an exclusive waiter is not starved by overlapping shared holders", async () => {
+  const lock = createMemoryAdvisoryLock();
+  const order: string[] = [];
+  const firstShared = lock.withSharedLock!("k", () => sleep(60).then(() => order.push("a")));
+  await sleep(10);
+  const writer = lock.withLock("k", async () => {
+    order.push("writer");
+  });
+  await sleep(10);
+  const secondShared = lock.withSharedLock!("k", () => sleep(60).then(() => order.push("b")));
+  await Promise.all([firstShared, writer, secondShared]);
+  assert.deepEqual(order, ["a", "writer", "b"]);
+});
+
+test("pg mutex: a failed intent release still unlocks the main key", async () => {
+  const held = new Set<string>();
+  let failIntentUnlock = true;
+  const client = {
+    async query(sql: string, params: unknown[] = []) {
+      const key = String(params[0]);
+      if (sql.includes("pg_advisory_unlock")) {
+        if (key.endsWith(":writer-intent") && !sql.includes("_shared") && failIntentUnlock) {
+          failIntentUnlock = false;
+          throw new Error("intent unlock failed");
+        }
+        held.delete(key);
+        return { rows: [{}] };
+      }
+      if (sql.includes("_shared")) return { rows: [{ locked: !held.has(key) || key.endsWith(":writer-intent") }] };
+      if (key.endsWith(":writer-intent")) {
+        held.add(key);
+        return { rows: [{ locked: true }] };
+      }
+      if (held.has(key) || held.has("blocker")) return { rows: [{ locked: false }] };
+      held.add(key);
+      return { rows: [{ locked: true }] };
+    },
+    release() {},
+  };
+  const pg = { sessionPool: async () => ({ connect: async () => client }) } as unknown as Parameters<
+    typeof createPostgresAdvisoryLock
+  >[0];
+  const lock = createPostgresAdvisoryLock(pg, { pollMs: 1, timeoutMs: 1_000 });
+  held.add("blocker");
+  setTimeout(() => held.delete("blocker"), 20);
+  await lock.withSharedLock!("outer", () =>
+    assert.rejects(
+      lock.withLock("k", async () => 1),
+      /intent unlock failed/,
+    ),
+  );
+  assert.equal(held.has("k"), false);
+});
