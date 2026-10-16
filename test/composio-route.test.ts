@@ -510,6 +510,17 @@ test("execution failures tell the agent whether the tool timed out", async () =>
   assert.match(result.data.message, /smaller pages/);
 });
 
+test("oversized provider responses are reported with their status", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, gmailTool, new Response("payload too large", { status: 413 }));
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(result.data.cause, "provider_error");
+  assert.equal(result.data.providerStatus, 413);
+  assert.match(result.data.message, /smaller pages/);
+});
+
 test("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();

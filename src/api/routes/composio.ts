@@ -143,7 +143,6 @@ function executeFailureCause(error: unknown, timedOut: boolean): string {
   return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
 }
 
-// Tool execution can legitimately take longer than catalog/connection calls (e.g. a large Gmail page with bodies).
 const EXECUTE_TIMEOUT_MS = 90_000;
 
 async function request(
@@ -454,7 +453,6 @@ async function execute(ctx: ApiCtx): Promise<void> {
       resource,
       scopeLabel: ctx.capability.scopeId,
     });
-    // Keep the cause for operators (secret-redacted); give the agent the failure class so it can adapt.
     const mask = createExactSecretValueMasker([access.key]);
     reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -462,9 +460,10 @@ async function execute(ctx: ApiCtx): Promise<void> {
       error: "composio_execution_failed",
       cause: executeFailureCause(error, timedOut),
       ...(error instanceof ComposioHttpError ? { providerStatus: error.status } : {}),
-      message: timedOut
-        ? `The tool did not finish within ${EXECUTE_TIMEOUT_MS / 1000}s. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write.`
-        : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
+      message:
+        timedOut || (error instanceof ComposioHttpError && error.status === 413)
+          ? "The request was too large to complete. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write."
+          : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
     });
   }
 }

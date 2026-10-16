@@ -53,9 +53,9 @@ async function apps(path, body) {
 
 ### Bulk reads
 
-Large pulls (a month of email, a full channel history) fail when one call asks for too much: execution has a time limit, and an oversized page returns `502` with `cause: "timeout"`. Page conservatively instead:
+Large pulls (a month of email, a full channel history) fail when one call asks for too much: an oversized page either times out (`cause: "timeout"`) or is rejected by the provider (`providerStatus: 413`). Page conservatively instead:
 
-- List first, fetch second: request IDs or metadata only (for Gmail, `ids_only` or `include_payload: false`, at most 100 per page), then fetch bodies in small batches for just the messages you need.
+- List first, fetch second: request IDs or metadata only (for Gmail, `ids_only` or `include_payload: false`), then fetch bodies in batches of about 25 for just the messages you need.
 - On a `502`, read the JSON body (`cause`, `providerStatus`, `message`); with Python, catch `urllib.error.HTTPError` and read `e.read()`. Back off and shrink the page rather than repeating the same request.
 - For long pulls, write progress (page token, fetched IDs) to a file so the job can resume, and run it in the background.
 
