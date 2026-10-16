@@ -74,6 +74,24 @@ test("Connector editor renders guides and keeps fields and focus stable while ty
     dom.window.close();
   }
 });
+test("Connector dropdown lists the catalog, switches the guide, and says when it is empty (#2063)", () => {
+  const dom = setup();
+  try {
+    const doc = dom.window.document;
+    doc.getElementById("add-oauth-app")!.click();
+    const select = () => doc.getElementById("conn-provider") as HTMLSelectElement;
+    assert.equal(select().textContent!.trim(), "No connectors available");
+    assert.equal((doc.getElementById("conn-save") as HTMLButtonElement).disabled, true);
+    dom.window.eval(
+      'ui.connectors.catalog=[{provider:"google",redirectPath:"google"},{provider:"github",redirectPath:"github",setupGuide:{url:"",console:"GitHub",steps:[]}}];ui.connectors.render()',
+    );
+    select().value = "github";
+    select().dispatchEvent(new dom.window.Event("change"));
+    assert.match(doc.getElementById("conn-guide")!.textContent!, /oauth\/github/);
+  } finally {
+    dom.window.close();
+  }
+});
 test("Connector saves use captured payloads and retain edits made during a request", async () => {
   let resolve!: (value: any) => void;
   const bodies: unknown[] = [];
