@@ -12574,10 +12574,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   min-width: 80px;
 }
 
-.split-canvas:not(.single-pane) .dv-groupview:not(.dv-active-group) .composer-wrap {
-  display: none;
-}
-
 .split-canvas:not(.single-pane)
   .dv-groupview:not(.dv-active-group):not(:hover):not(:focus-within)
   :is(.dv-right-actions-container, .split-tab-actions) {
