@@ -35,9 +35,11 @@ export type Route<C extends BaseCtx = ApiCtx> = {
   handle: (ctx: C) => void | Promise<void>;
   auth: RouteAuth;
   maxBodyBytes?: number;
+  acceptsNullBody?: boolean;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
+  if ("body" in ctx && ctx.body === null && !route.acceptsNullBody) ctx.body = {};
   await route.handle(ctx);
 }
