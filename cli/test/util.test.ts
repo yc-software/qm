@@ -203,3 +203,13 @@ test("async inherited processes reject spawn errors and signal termination", asy
   await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
   await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
 });
+
+test("writeEnvValue replaces an `export KEY=` line instead of appending a duplicate", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, ".env");
+  writeFileSync(file, "# keys\nexport ANTHROPIC_API_KEY=old\nOTHER=1\n");
+  writeEnvValue(file, "ANTHROPIC_API_KEY", "new");
+  assert.equal(readFileSync(file, "utf8"), "# keys\nANTHROPIC_API_KEY=new\nOTHER=1\n");
+  assert.equal(readEnvFile(file).get("ANTHROPIC_API_KEY"), "new");
+});

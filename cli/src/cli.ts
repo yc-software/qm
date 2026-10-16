@@ -234,6 +234,11 @@ async function dispatch(argv: string[]): Promise<void> {
   const cmd = argv[0];
   const { positionals, flags } = parse(argv.slice(1));
 
+  if (cmd !== undefined && (flags.help !== undefined || flags.h !== undefined)) {
+    note(HELP);
+    return;
+  }
+
   switch (cmd) {
     case undefined:
       rejectUnknownFlags(flags, []);

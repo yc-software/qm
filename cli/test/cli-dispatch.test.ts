@@ -729,3 +729,17 @@ test("check --json groups a multi-clause failure under each error's own clause, 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("`<command> --help` and `-h` print help instead of rejecting the flag", async () => {
+  for (const argv of [
+    ["init", "--help"],
+    ["check", "--help"],
+    ["up", "-h"],
+    ["secrets", "push", "--help"],
+  ]) {
+    const { out, exitCode } = await run(argv);
+    assert.ok(exitCode === null || exitCode === 0, `${argv.join(" ")} exited ${exitCode}: ${out}`);
+    assert.match(out, /USAGE/, argv.join(" "));
+    assert.doesNotMatch(out, /unknown option/, argv.join(" "));
+  }
+});
