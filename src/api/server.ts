@@ -1,3 +1,4 @@
+import { UnknownSkillPackError } from "../skills/skill-pack-store.ts";
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
@@ -380,6 +381,11 @@ function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): 
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
       sendJson(res, status, { error: status === 404 ? "not_found" : "forbidden", message: err.message });
+    else res.destroy();
+    return;
+  }
+  if (err instanceof UnknownSkillPackError) {
+    if (!res.headersSent) sendJson(res, 404, { error: "not_found", message: err.message });
     else res.destroy();
     return;
   }
