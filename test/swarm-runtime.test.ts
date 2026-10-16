@@ -65,6 +65,7 @@ test("spawn rejects malformed or unknown runtime choices before reserving worker
     { model: "" },
     { model: 3 },
     { model: "no-such-model-qa" },
+    { model: "gpt-6.1-sol", effort: "adaptive" },
     { effort: "sideways" },
     { fastMode: "no" },
   ]) {
@@ -72,4 +73,16 @@ test("spawn rejects malformed or unknown runtime choices before reserving worker
     await assert.rejects(f.service.spawn(f.caller, { requestId: "initial", text: "work", ...(bad as object) }));
     assert.equal(await f.store.get(f.root.id), null);
   }
+});
+
+test("a child's effort is checked against the model it inherits", async () => {
+  const f = await swarmFixture();
+  const [parent] = await f.service.spawn(f.caller, { requestId: "initial", text: "work", model: "gpt-6.1-sol" });
+  await f.service.sweep();
+  const worker = await f.workerCaller(parent!.id);
+  await assert.rejects(
+    f.service.spawn(worker, { requestId: "child", text: "sub", effort: "adaptive" }),
+    /adaptive reasoning is not supported by gpt-6.1-sol/,
+  );
+  assert.equal((await f.store.get(f.root.id))!.members.length, 2);
 });
