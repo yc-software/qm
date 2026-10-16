@@ -474,3 +474,84 @@ test("generic credential broker cannot bypass Composio identity binding", async 
   assert.equal(result.status, 403);
   assert.equal(cap.calls.length, 0);
 });
+
+test("broker response reflections cannot reveal the injected credential", async () => {
+  const safeUrl = "https://example.test/connect?state=keep-this-handoff-token";
+  for (const injection of [undefined, { header: "X-Api-Key", scheme: "" }]) {
+    for (const status of [200, 401]) {
+      const result = await brokerCredentialCall(
+        base({
+          reader: reader({ slug: "x-firehose", injection }),
+          fetchImpl: async (_url, init) => ({
+            status,
+            contentType: `text/plain; diagnostic=${SECRET}`,
+            text: async () => `diagnostic: ${Object.values(init.headers).join(" ")}\ncontinue: ${safeUrl}`,
+          }),
+        }),
+      );
+      assert.equal(result.status, 200);
+      const response = result.json as { status: number; body: string; contentType: string };
+      assert.equal(response.status, status);
+      assert.ok(!JSON.stringify(response).includes(SECRET), "the broker must not return its server-held key");
+      assert.match(response.body, /<redacted:credential>/);
+      assert.ok(response.body.includes(safeUrl), "unrelated handoff capabilities remain usable");
+    }
+  }
+});
+
+test("broker masks a reflected credential before response truncation", async () => {
+  const prefix = "x".repeat(5_000_000 - Math.floor(SECRET.length / 2));
+  const result = await brokerCredentialCall(
+    base({ fetchImpl: async () => ({ status: 200, text: async () => `${prefix}${SECRET} trailing` }) }),
+  );
+  const response = result.json as { body: string; truncated: boolean };
+  assert.equal(response.truncated, true);
+  assert.equal(response.body.length, 5_000_000);
+  assert.equal(response.body.slice(prefix.length), "<redacted:credential>".slice(0, 5_000_000 - prefix.length));
+});
+
+test("broker masks JSON and URL encodings of its own reflected key without masking other capabilities", async () => {
+  const secret = 'synthetic-"gate\\key"+/==';
+  const unrelated = "https://example.test/callback?code=legitimate-user-code";
+  const result = await brokerCredentialCall(
+    base({
+      reader: reader({ slug: "x-firehose", secret }),
+      fetchImpl: async () => ({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            authorization: `Bearer ${secret}`,
+            url: `https://example.test/diagnostic?key=${encodeURIComponent(secret)}`,
+            continueAt: unrelated,
+          }),
+      }),
+    }),
+  );
+  const response = JSON.parse((result.json as { body: string }).body) as {
+    authorization: string;
+    url: string;
+    continueAt: string;
+  };
+  assert.equal(response.authorization, "Bearer <redacted:credential>");
+  assert.equal(new URL(response.url).searchParams.get("key"), "<redacted:credential>");
+  assert.equal(response.continueAt, unrelated);
+});
+
+test("redacting a large reflective response does not bypass the original response-size bound", async () => {
+  const secret = "synthetic-long-key-".repeat(8);
+  const result = await brokerCredentialCall(
+    base({
+      reader: reader({ slug: "x-firehose", secret }),
+      fetchImpl: async () => ({ status: 200, text: async () => secret.repeat(Math.ceil(6_000_000 / secret.length)) }),
+    }),
+  );
+  const response = result.json as { body: string; truncated?: boolean };
+  assert.equal(response.truncated, true, "the raw upstream response exceeds the existing size limit");
+  assert.ok(response.body.length <= 5_000_000);
+  assert.ok(!response.body.includes(secret));
+  assert.equal(
+    "<redacted:credential>".startsWith(response.body.replaceAll("<redacted:credential>", "")),
+    true,
+    "the bounded scan must not retain a partial key suffix",
+  );
+});
