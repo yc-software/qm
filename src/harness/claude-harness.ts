@@ -235,7 +235,7 @@ export function claudeReplayTranscript(messages: readonly PiReplayMessage[]): st
 }
 
 function promptText(turn: HarnessTurnInput): string {
-  const replay = claudeReplayTranscript(reconstructMessagesFromHistory(turn.history));
+  const replay = claudeReplayTranscript(reconstructMessagesFromHistory(turn.history, { requireUserStart: false }));
   const prior = turn.history.length
     ? ""
     : seedPriorTurns(turn.priorTurns ?? [])
@@ -383,11 +383,17 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const text = continueTurn
       ? [
           claudeReplayTranscript(
-            reconstructMessagesFromHistory(turn.history.filter((e) => e.seq < turn.resumeUserSeq!)),
+            reconstructMessagesFromHistory(
+              turn.history.filter((e) => e.seq < turn.resumeUserSeq!),
+              { requireUserStart: false },
+            ),
           ),
           userPromptText((userEntry?.payload ?? {}) as Parameters<typeof userPromptText>[0]),
           claudeReplayTranscript(
-            reconstructMessagesFromHistory(turn.history.filter((e) => e.seq > turn.resumeUserSeq!)),
+            reconstructMessagesFromHistory(
+              turn.history.filter((e) => e.seq > turn.resumeUserSeq!),
+              { requireUserStart: false },
+            ),
           ),
         ]
           .filter((value) => value.trim())

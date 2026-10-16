@@ -297,7 +297,10 @@ function toolResultMessage(
   };
 }
 
-export function reconstructMessagesFromHistory(history: readonly SessionEntry[]): PiReplayMessage[] {
+export function reconstructMessagesFromHistory(
+  history: readonly SessionEntry[],
+  opts?: { requireUserStart?: boolean },
+): PiReplayMessage[] {
   const resultByCallId = new Map<string, SessionEntry>();
   for (const e of history) {
     if (e.type !== "tool_result") continue;
@@ -430,7 +433,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
       }
     }
   }
-  if (out[0] && out[0].role !== "user")
+  if (opts?.requireUserStart !== false && out[0] && out[0].role !== "user")
     out.unshift({ role: "user", content: [{ type: "text", text: AGENT_OPENED_TEXT }], timestamp: out[0].timestamp });
   return out;
 }
