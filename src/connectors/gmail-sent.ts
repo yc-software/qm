@@ -24,6 +24,20 @@ interface GmailMessage {
   payload?: GmailPart;
 }
 
+function decodePartBody(part: GmailPart, data: string): string {
+  const bytes = Buffer.from(data, "base64url");
+  const contentType = part.headers?.find((h) => h.name.toLowerCase() === "content-type")?.value ?? "";
+  const charset = /charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType)?.[1];
+  if (charset && !/^(utf-?8|us-ascii)$/i.test(charset)) {
+    try {
+      return new TextDecoder(charset).decode(bytes);
+    } catch {
+      return bytes.toString("utf8");
+    }
+  }
+  return bytes.toString("utf8");
+}
+
 export class GmailReadError extends Error {
   readonly status: number;
 
@@ -128,7 +142,7 @@ export async function getSentEmail(
     subject: header("subject"),
     snippet: message.snippet ?? "",
     sentAt: Number(message.internalDate) || 0,
-    body: content?.body?.data ? Buffer.from(content.body.data, "base64url").toString("utf8") : "",
+    body: content?.body?.data ? decodePartBody(content, content.body.data) : "",
     html: content?.mimeType === "text/html",
     attachments: parts.flatMap((part) => (part.filename ? [part.filename] : [])),
   };
