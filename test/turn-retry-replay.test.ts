@@ -339,7 +339,8 @@ test("a resume whose last tool call has no recorded result settles it and does n
   const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
     (e) => e.type === "tool_result",
   );
-  assert.match(String((settled?.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
+  assert.ok(settled);
+  assert.match(String((settled.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
 });
 
 test("a first attempt and a no-work retry are never asked to continue", async () => {
