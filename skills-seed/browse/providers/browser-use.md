@@ -51,17 +51,16 @@ sites the profile holds state for.
 In a DM, with the person's profile. First make sure no browser is still running on the
 person's profile — state is written only when a browser stops, so one left running holds
 it. The v4 list doesn't say which profile a session is on, so every browser this doc
-creates is tagged with its profile id in `metadata`, and the check stops only what it can
-attribute: a browser on the person's own key (you named the key's handle from their
-keychain, so every active browser on it is theirs — set `SCOPE=mine`) is always theirs,
-while on a shared key a browser you can't attribute is someone else's task — leave it
-and say so. Stopping a holder is also what saves it, so nothing is lost:
+creates is tagged with its profile id in `metadata`, and the check stops only tagged
+holders of this profile. An active browser with no tag is not yours to stop sight unseen:
+on a shared key it is someone else's task (leave it and say so), and on the person's own
+key it can only be one of their older browsers — stop it by hand before creating.
+Stopping a holder is also what saves it, so nothing is lost:
 
 ```bash
-SCOPE=profile   # "mine" only when $BROWSER_USE_API_KEY is the person's own key
 ACTIVE=$(curl -fsS "https://api.browser-use.com/api/v4/browsers?filterBy=active" \
   -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" \
-  | SCOPE="$SCOPE" python3 -c "import sys,json,os;p=os.environ['BROWSER_USE_PROFILE'];m=os.environ.get('SCOPE')=='mine';print(' '.join(b['id'] for b in json.load(sys.stdin)['items'] if b.get('status')=='active' and (m or (b.get('metadata') or {}).get('profileId')==p)))")
+  | python3 -c "import sys,json,os;p=os.environ['BROWSER_USE_PROFILE'];print(' '.join(b['id'] for b in json.load(sys.stdin)['items'] if b.get('status')=='active' and (b.get('metadata') or {}).get('profileId')==p))")
 if [ -n "$ACTIVE" ]; then
   for B in $ACTIVE; do
     curl -fsS -X PATCH "https://api.browser-use.com/api/v4/browsers/$B" \
