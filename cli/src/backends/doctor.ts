@@ -274,6 +274,7 @@ async function resendCheck(apiKey: string): Promise<void> {
       `could not reach the Resend API: ${errMessage(e)} — check network access (and any proxy) and retry`,
     );
   }
+  if (res.status === 401 && (await res.text().catch(() => "")).includes("restricted_api_key")) return;
   if (res.status === 401 || res.status === 403)
     throw new CliError("Resend rejected RESEND_API_KEY — mint a key with send access at https://resend.com/api-keys");
   if (!res.ok) throw new CliError(`the Resend API returned HTTP ${res.status}; retry when it recovers`);
