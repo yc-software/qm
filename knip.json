@@ -41,6 +41,7 @@
         "test/**/*.test.mjs",
         "runtime.js",
         "runtime-preload.cjs",
+        "permissions-preload.cjs",
         "test/**/*.electron.mjs"
       ]
     },

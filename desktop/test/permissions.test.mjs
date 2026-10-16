@@ -70,7 +70,10 @@ const { registerComputerPermissions, showComputerPermissions, focusComputerPermi
   await import("../permissions.mjs");
 registerComputerPermissions();
 
-test("permission setup validates sender, checks grants before continuing, and can reopen", async () => {
+test("permission setup validates sender, checks grants before continuing, and can reopen", async (t) => {
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  t.after(() => Object.defineProperty(process, "platform", { value: platform }));
   const pending = showComputerPermissions();
   await new Promise((resolve) => setImmediate(resolve));
   const window = windows.at(-1);

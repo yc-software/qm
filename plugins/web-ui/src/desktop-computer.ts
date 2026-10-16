@@ -28,7 +28,7 @@ export function desktopTurnId(): string | undefined {
   return desktop() ? crypto.randomUUID() : undefined;
 }
 
-export async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
+async function executeComputer(desk: Desk, raw: unknown, deadline?: number): Promise<Result> {
   try {
     return await desk.call(raw, undefined, deadline);
   } catch (error) {
