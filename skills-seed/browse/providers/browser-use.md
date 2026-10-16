@@ -49,15 +49,19 @@ sites the profile holds state for.
 ## Create the browser
 
 In a DM, with the person's profile. First make sure no browser is still running on the
-person's key — state is written only when a browser stops, so one left running holds the
-profile, and the v4 list doesn't say which profile a session is on (with one profile per
-person, any active browser on their key is holding theirs). Stopping it is also what
-saves it, so nothing is lost:
+person's profile — state is written only when a browser stops, so one left running holds
+it. The v4 list doesn't say which profile a session is on, so every browser this doc
+creates is tagged with its profile id in `metadata`, and the check stops only what it can
+attribute: a browser on the person's own key (you named the key's handle from their
+keychain, so every active browser on it is theirs — set `SCOPE=mine`) is always theirs,
+while on a shared key a browser you can't attribute is someone else's task — leave it
+and say so. Stopping a holder is also what saves it, so nothing is lost:
 
 ```bash
+SCOPE=profile   # "mine" only when $BROWSER_USE_API_KEY is the person's own key
 ACTIVE=$(curl -fsS "https://api.browser-use.com/api/v4/browsers?filterBy=active" \
   -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" \
-  | python3 -c "import sys,json;print(' '.join(b['id'] for b in json.load(sys.stdin)['items'] if b.get('status')=='active'))")
+  | SCOPE="$SCOPE" python3 -c "import sys,json,os;p=os.environ['BROWSER_USE_PROFILE'];m=os.environ.get('SCOPE')=='mine';print(' '.join(b['id'] for b in json.load(sys.stdin)['items'] if b.get('status')=='active' and (m or (b.get('metadata') or {}).get('profileId')==p)))")
 if [ -n "$ACTIVE" ]; then
   for B in $ACTIVE; do
     curl -fsS -X PATCH "https://api.browser-use.com/api/v4/browsers/$B" \
@@ -68,12 +72,12 @@ if [ -n "$ACTIVE" ]; then
 fi
 ```
 
-Then create:
+Then create (the `metadata` tag is what the check above matches):
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.browser-use.com/api/v4/browsers \
   -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" -H 'content-type: application/json' \
-  -d "{\"profileId\":\"$BROWSER_USE_PROFILE\",\"timeout\":30}")
+  -d "{\"profileId\":\"$BROWSER_USE_PROFILE\",\"timeout\":30,\"metadata\":{\"profileId\":\"$BROWSER_USE_PROFILE\"}}")
 BU_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
 CDP_BASE=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['cdpUrl'].rstrip('/'))")
 CDP_URL=$(curl -fsS "$CDP_BASE/json/version" \
@@ -114,6 +118,7 @@ const ws = new WebSocket(wsUrl);
 let id = 0; const pending = new Map();
 const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => { const i = ++id; pending.set(i, m => (m.error ? reject(new Error(m.error.message)) : resolve(m))); ws.send(JSON.stringify({ id: i, ...(sessionId ? { sessionId } : {}), method, params })); });
 ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+ws.onclose = () => { for (const r of pending.values()) r({ error: { message: "cdp socket closed" } }); pending.clear(); };
 await new Promise(r => ws.onopen = r);
 const { targetInfos } = (await send("Target.getTargets")).result;
 const page = targetInfos.find(t => t.type === "page");
