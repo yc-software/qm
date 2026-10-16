@@ -8,7 +8,7 @@ import type { Target } from "./providers.ts";
 export type TargetEnvDefaults = (config: QmConfig, service: string, name: string) => string | undefined;
 
 export const FLY_TEMPLATE_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { HARNESS: "pi" },
+  core: { HARNESS: "pi", SANDBOX_BACKEND: "sprites" },
 };
 
 const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
