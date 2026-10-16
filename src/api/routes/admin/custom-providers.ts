@@ -17,26 +17,42 @@ async function actor(ctx: ApiCtx) {
  * A gateway may not implement a models listing, so callers can skip
  * with {"validate": false} — the registration is admin-only either way.
  */
+type KeyCheck = { ok: true } | { ok: false; error: string; message: string };
+
 async function validateKey(
   ctx: ApiCtx,
   protocol: CustomProviderProtocol,
   baseUrl: string,
   apiKey: string,
-): Promise<boolean> {
+): Promise<KeyCheck> {
   const url = protocol === "anthropic" ? `${baseUrl}/v1/models` : `${baseUrl}/models`;
   const headers: Record<string, string> =
     protocol === "anthropic"
       ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
       : { authorization: `Bearer ${apiKey}` };
+  const skipHint = "Turn off key validation to save anyway.";
+  let response: Response;
   try {
-    const response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, {
+    response = await (ctx.deps.modelCredentialFetch ?? fetch)(url, {
       headers,
       signal: AbortSignal.timeout(5_000),
     });
-    return response.ok;
   } catch {
-    return false;
+    return {
+      ok: false,
+      error: "endpoint_unreachable",
+      message: `Couldn't reach ${url}. Check the base URL, or that the endpoint is up. ${skipHint}`,
+    };
   }
+  if (response.ok) return { ok: true };
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, error: "invalid_api_key", message: `${baseUrl} rejected this API key.` };
+  }
+  return {
+    ok: false,
+    error: "validation_failed",
+    message: `${url} answered HTTP ${response.status}, so the key couldn't be checked. If this endpoint has no models listing, ${skipHint.charAt(0).toLowerCase()}${skipHint.slice(1)}`,
+  };
 }
 
 export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
@@ -84,11 +100,9 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
   };
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim() ? body.apiKey.trim() : undefined;
   const shouldValidate = body.validate !== false && apiKey !== undefined;
-  if (shouldValidate && !(await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!))) {
-    return sendJson(ctx.res, 400, {
-      error: "invalid_api_key",
-      message: `${spec.baseUrl} rejected this API key (pass "validate": false to skip for endpoints without a models listing)`,
-    });
+  if (shouldValidate) {
+    const check = await validateKey(ctx, spec.protocol, spec.baseUrl, apiKey!);
+    if (!check.ok) return sendJson(ctx.res, 400, { error: check.error, message: check.message });
   }
   try {
     await ctx.deps.customProviders.upsert(spec, apiKey, authorized.id);

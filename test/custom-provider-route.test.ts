@@ -147,3 +147,33 @@ test("bad specs are refused with a reason", async () => {
     await srv.close();
   }
 });
+
+test("key validation tells an unreachable endpoint and a missing models listing apart from a rejected key", async () => {
+  for (const [fetchImpl, error, message] of [
+    [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      "endpoint_unreachable",
+      /Couldn't reach https:\/\/llm\.acme\.internal\/v1\/models\. Check the base URL/,
+    ],
+    [async () => new Response(null, { status: 404 }), "validation_failed", /answered HTTP 404/],
+    [async () => new Response(null, { status: 403 }), "invalid_api_key", /rejected this API key/],
+  ] as const) {
+    const srv = start(fetchImpl as typeof fetch);
+    try {
+      const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+        method: "PUT",
+        headers: ADMIN,
+        body: JSON.stringify(BODY),
+      });
+      assert.equal(put.status, 400);
+      const body = (await put.json()) as { error: string; message: string };
+      assert.equal(body.error, error);
+      assert.match(body.message, message);
+      assert.doesNotMatch(body.message, /"validate": false/, "admin-facing copy, not API jargon");
+    } finally {
+      await srv.close();
+    }
+  }
+});
