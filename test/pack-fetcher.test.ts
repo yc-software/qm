@@ -74,6 +74,36 @@ test("an empty ref fetches the repo's default branch HEAD", async () => {
   }
 });
 
+test("a non-default branch ref fetches that branch's HEAD", async () => {
+  const { dir, sha } = makeSourceRepo();
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: "t",
+    GIT_AUTHOR_EMAIL: "t@t",
+    GIT_COMMITTER_NAME: "t",
+    GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const g = (...args: string[]): string => execFileSync("git", args, { cwd: dir, env }).toString().trim();
+  try {
+    const main = g("rev-parse", "--abbrev-ref", "HEAD");
+    g("checkout", "-q", "-b", "feature");
+    writeFileSync(join(dir, "skills", "demo", "EXTRA.md"), "x");
+    g("add", "-A");
+    g("commit", "-q", "-m", "feature");
+    const featureSha = g("rev-parse", "HEAD");
+    g("checkout", "-q", main);
+    const f = createGitFetcher({ allowLocalRepos: true });
+    const repo = await f.fetch(src({ url: dir, ref: "feature" }));
+    assert.equal(repo.commit, featureSha);
+    assert.ok(repo.files.some((file) => file.path === "skills/demo/EXTRA.md"));
+    assert.equal((await f.fetch(src({ url: dir, ref: main }))).commit, sha);
+    g("tag", "v1", sha);
+    assert.equal((await f.fetch(src({ url: dir, ref: "v1" }))).commit, sha);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("rejects an option/arg-smuggling ref before invoking git", async () => {
   await assert.rejects(
     () => createGitFetcher().fetch(src({ url: "https://example.com/repo", ref: "--upload-pack=evil" })),
