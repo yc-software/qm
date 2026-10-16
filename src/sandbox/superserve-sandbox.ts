@@ -61,6 +61,9 @@ const TIMEOUT_KILLED_EXIT_CODE = 137;
 const KILL_AFTER_SEC = 10;
 const OUTPUT_CAP_BYTES = 2 * 1024 * 1024;
 const TRUNCATED_NOTICE = "[superserve: output truncated at 2 MiB; redirect large output to a file]";
+const DISK_RELIEF_PERCENT = 90;
+const REGENERABLE_CACHES = [".cache/go-build", ".npm/_cacache", ".bun/install/cache", ".cache/pip", ".cache/yarn"];
+const DISK_RELIEF_MARK = "qm-disk-relief";
 
 export const SUPERSERVE_METADATA = {
   scope: "qm_scope",
@@ -425,25 +428,29 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     }
   }
 
-  function spooledScript(script: string, timeoutSec: number): string {
-    const cap = OUTPUT_CAP_BYTES;
-    const capture = (file: string): string => `{ head -c ${cap} >"${file}"; wc -c >"${file}.rest"; }`;
+  function cappedScript(script: string, timeoutSec: number): string {
+    const cap = (fd: number): string =>
+      `{ head -c ${OUTPUT_CAP_BYTES} >&${fd}; n=$(wc -c); [ "$n" -gt 0 ] && echo t >&5; }`;
     return [
-      `o=$(mktemp) && e=$(mktemp) && r=$(mktemp) || exit 1`,
-      `{ { timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh -c ${shq(script)}; echo $? >"$r"; } 2>&1 1>&3 3>&- | ${capture("$e")}; } 3>&1 | ${capture("$o")}`,
-      `cat "$o"`,
-      `cat "$e" >&2`,
-      `if [ "$(cat "$o.rest")" -gt 0 ] || [ "$(cat "$e.rest")" -gt 0 ]; then echo ${shq(TRUNCATED_NOTICE)} >&2; fi`,
-      `rc=$(cat "$r")`,
-      `rm -f "$o" "$e" "$r" "$o.rest" "$e.rest"`,
+      `exec 6>&1 7>&2`,
+      `s=$({ { { timeout -k ${KILL_AFTER_SEC} ${timeoutSec} sh -c ${shq(script)} 5>&- 6>&- 7>&-; echo "x$?" >&5; } 2>&1 1>&3 3>&- | ${cap(7)}; } 3>&1 | ${cap(6)}; } 5>&1)`,
+      `case "$s" in *t*) echo ${shq(TRUNCATED_NOTICE)} >&2 ;; esac`,
+      `rc=\${s#*x}`,
+      `rc=\${rc%%[!0-9]*}`,
       `exit "\${rc:-1}"`,
     ].join("; ");
+  }
+
+  function diskReliefScript(homeDir: string): string {
+    const used = `df -P ${shq(homeDir)} 2>/dev/null | awk 'NR==2 { sub("%", "", $5); print $5 + 0 }'`;
+    const caches = REGENERABLE_CACHES.map((dir) => shq(posixJoin(homeDir, dir))).join(" ");
+    return `u=$(${used}); if [ "\${u:-0}" -ge ${DISK_RELIEF_PERCENT} ]; then rm -rf ${caches}; echo "${DISK_RELIEF_MARK} $u $(${used})"; fi`;
   }
 
   async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
     return withLive(name, async ({ session }) => {
       const t0 = Date.now();
-      const r = await session.run(spooledScript(`export HOME=${shq(configuredHome)}; ${script}`, timeoutSec), {
+      const r = await session.run(cappedScript(`export HOME=${shq(configuredHome)}; ${script}`, timeoutSec), {
         timeoutMs: timeoutSec * 1000 + 30_000,
         maxOutputBytes: OUTPUT_CAP_BYTES,
       });
@@ -466,7 +473,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     processSessions: true,
     egressEnforcement: "none",
     spec: {
-      os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; publish durable work to git or Files)",
+      os: "Ubuntu — Superserve sandbox (disk persists across pause/resume; /tmp is a small RAM disk that is never cleared, so keep large scratch such as builds and databases under the workspace and delete it when done; publish durable work to git or Files)",
       runtimes: ["Node", "Python 3"],
       get tools() {
         return visibleTools([
@@ -594,7 +601,19 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
             assertCurrent(handle);
             if (!(await ownsGuest(name))) return handle;
             const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
-            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
+            const prep = await execRaw(
+              name,
+              `${diskReliefScript(homeDir)}; mkdir -p ${shq(workspaceDir)}${credLinks}`,
+              PREP_TIMEOUT_SEC,
+            );
+            const relief = new RegExp(`^${DISK_RELIEF_MARK} (\\d+) (\\d+)$`, "m").exec(prep.stdout);
+            if (relief && Number(relief[2]) < Number(relief[1]))
+              reportError(
+                "agent_computer",
+                "disk_relief",
+                `superserve sandbox ${providerSandboxId ?? name} was ${relief[1]}% full; cleared package caches, now ${relief[2]}% full`,
+                scope,
+              );
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
             await materializeRoLayers(
