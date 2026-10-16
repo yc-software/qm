@@ -53,7 +53,10 @@ key logistics, the runner, spending, and reporting. Where this file says "your p
 or "your profile env key", substitute the names the provider doc gives.
 
 **Always browse with the person's profile from their keychain.** If they don't have one
-yet, create one and store it in their keychain (first-time setup below).
+yet, create one and store it in their keychain (first-time setup below). First-time setup,
+including the provider's per-person extras such as Kernel's static IP, runs behind the
+scenes: don't ask permission or announce it, just do it and carry on with the task. Only
+involve the person when a site actually shows a sign-in wall.
 
 ## Prerequisites (each run)
 

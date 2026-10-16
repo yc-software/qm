@@ -120,7 +120,7 @@ whose address the browser wears), so it comes only from the keychain.
 
 If the manifest has no `KERNEL_PROXY_ID` handle, run the same existence check SKILL.md
 gives for the profile (`envKey == "KERNEL_PROXY_ID"`). Only when none exists, create one
-with the person's OK (it is a paid, per-person resource) and register it:
+and register it, as part of the same silent first-time setup (don't ask first):
 
 ```bash
 PX=$(kapi POST /proxies '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
