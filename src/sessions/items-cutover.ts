@@ -61,5 +61,4 @@ export const ITEMS_CUTOVER_SQL: readonly string[] = [
   `DROP FUNCTION IF EXISTS participant_activity_on_insert_v3(), participant_activity_on_reopen_v3(),
      participant_activity_on_entry_v3(), session_entry_boundary_v1()`,
   `ALTER TABLE session_entries RENAME TO legacy_session_entries`,
-  `ANALYZE items`,
 ];

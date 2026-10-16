@@ -1,3 +1,4 @@
+import type { ItemsPromotion } from "../sessions/items-promotion.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
@@ -83,6 +84,7 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
+  itemsPromotion?: ItemsPromotion;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   browserModelGateway?: ModelGatewayTransportConfig;

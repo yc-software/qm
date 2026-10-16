@@ -3120,6 +3120,26 @@ export async function awsBackgroundWorkStatus(
   return { status, deploymentId: cohort.deploymentId, taskArns: cohort.taskArns, manifestId: cohort.manifest.id };
 }
 
+export async function awsItemsPromotion(
+  config: QmConfig,
+  configDir: string,
+  options: { writersStopped?: boolean; candidate?: string } = {},
+): Promise<{ deploymentId: string; ready: boolean }> {
+  assertAwsCallerAccount(requireAws(config));
+  const cohort = await awsBackgroundCohort(config, configDir, options.candidate);
+  const transport = awsBackgroundWorkTransport(config, "/v1/items-promotion", 120_000);
+  const response = await transport(
+    options.writersStopped ? "POST" : "GET",
+    options.writersStopped ? JSON.stringify({ deploymentId: cohort.deploymentId, writersStopped: true }) : "",
+  );
+  if (response.status !== 200) throw new CliError(`items promotion failed with HTTP ${response.status}`);
+  const result = JSON.parse(response.body) as { deploymentId?: string; ready?: boolean };
+  if (result.deploymentId !== cohort.deploymentId || typeof result.ready !== "boolean")
+    throw new CliError("items promotion returned an unexpected deployment");
+  if (options.writersStopped && !result.ready) throw new CliError("items promotion has not completed");
+  return { deploymentId: cohort.deploymentId, ready: result.ready };
+}
+
 export interface AwsBackgroundWorkCapacity {
   manifestId: string;
   deploymentId: string;

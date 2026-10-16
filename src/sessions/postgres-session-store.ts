@@ -227,7 +227,10 @@ const LAST_PREVIEW_LEN = 100;
 
 const storedPreview = (payload: unknown, maxLen: number): string => pgTextSafe(userMessagePreview(payload, maxLen));
 
-export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
+export function createPostgresSessionStore(
+  connectionString: string,
+  opts: StoreOptions & { stageItemsCutover?: boolean } = {},
+): SessionStore {
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
 
@@ -881,11 +884,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         id: "sessions/store/0033-client-tools",
         statements: [`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_tools JSONB`],
       },
-      itemsMigration,
-      {
-        id: "sessions/store/0036-items-cutover",
-        statements: ITEMS_CUTOVER_SQL,
-      },
+      ...(opts.stageItemsCutover
+        ? []
+        : [
+            itemsMigration,
+            {
+              id: "sessions/store/0036-items-cutover",
+              statements: ITEMS_CUTOVER_SQL,
+            },
+          ]),
     ],
     [
       {

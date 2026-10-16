@@ -128,6 +128,7 @@ export interface Config {
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
+  stageItemsCutover?: boolean;
   deploymentControlSecret?: string;
   spendExportToken?: string;
   buildSha?: string;
@@ -1486,6 +1487,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+    stageItemsCutover: env.QM_STAGE_ITEMS_CUTOVER === "1",
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),
     ...(env.DATABASE_POOL_MAX ? { databasePoolMax: numEnvStrict("DATABASE_POOL_MAX", env.DATABASE_POOL_MAX) } : {}),

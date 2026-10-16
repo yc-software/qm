@@ -7,7 +7,7 @@ import { sleep } from "../../src/util/async.ts";
 import { ITEMS_TABLES_SQL, ITEM_INDEXES, itemIndexSql, itemsMigration } from "../../src/sessions/items-schema.ts";
 import { itemsCopySelectedSql, itemsSelectedRowsSql, ITEMS_COPY_REPAIR_SQL } from "../../src/sessions/items-copy.ts";
 
-const fingerprint = createHash("sha256")
+export const fingerprint = createHash("sha256")
   .update(JSON.stringify([ITEMS_TABLES_SQL, ITEM_INDEXES, ITEMS_COPY_REPAIR_SQL, itemsCopySelectedSql()]))
   .digest("hex");
 const state = "items_copy_ops.state";
@@ -312,7 +312,7 @@ export class ItemsCopyOperator {
     }
   }
 
-  async finish(writersStopped: boolean) {
+  async finish(writersStopped: boolean, options: { retireLeases?: boolean } = {}) {
     if (!writersStopped)
       throw new Error("finish requires --writers-stopped; keep old writers stopped through the items cutover");
     await this.transaction(async () => {
@@ -321,6 +321,7 @@ export class ItemsCopyOperator {
         "LOCK TABLE public.session_entries,public.participants,public.directory_members,public.legacy_tape_steps IN SHARE ROW EXCLUSIVE MODE",
       );
       await this.assertState(["verified", "ready"]);
+      if (options.retireLeases) await this.client.query("DELETE FROM public.session_leases");
       const {
         rows: [leases],
       } = await this.client.query(

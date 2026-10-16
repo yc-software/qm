@@ -562,6 +562,30 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const promotion = deps.itemsPromotion;
+    const path = new URL(req.url ?? "/", "http://core").pathname;
+    if (promotion && !promotion.ready()) {
+      if (req.method === "GET" && path === "/healthz") return sendJson(res, 200, { status: "staged" });
+      if (req.method === "GET" && path === "/readyz") return sendJson(res, 503, { ok: false });
+      const controlRequest =
+        path === "/v1/items-promotion" ||
+        (path === "/v1/background-work" && req.method === "GET") ||
+        path === "/v1/deployment-layer";
+      if (!controlRequest) {
+        const disconnected = new AbortController();
+        const abort = () => disconnected.abort();
+        res.once("close", abort);
+        try {
+          await promotion.wait(AbortSignal.any([disconnected.signal, AbortSignal.timeout(30_000)]));
+        } catch {
+          if (res.destroyed) return;
+          res.setHeader("Retry-After", "1");
+          return sendJson(res, 503, { error: "items_promotion_pending" });
+        } finally {
+          res.removeListener("close", abort);
+        }
+      }
+    }
     armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
