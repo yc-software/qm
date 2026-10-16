@@ -26,8 +26,7 @@ const scopePath = "/v1/admin/scopes/org%3Adefault-org";
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.config.flushScope("org:default-org");
+  await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
@@ -148,7 +147,7 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openai: true,
     openrouter: true,
   }));
-  await srv.built.config.setRuntimeSelectionLatest("org:default-org", {
+  await srv.built.config.setRuntimeSelection("org:default-org", {
     harnessId: "pi",
     modelId: "settings/previously-saved-model",
   });

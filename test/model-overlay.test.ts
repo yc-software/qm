@@ -267,7 +267,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
+    await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
       "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
@@ -508,9 +508,9 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
 
-test("runtime normalization preserves native capabilities and reflects overlay capability edits", () => {
+test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setApprovedHarnesses(["pi", "claude"]);
   const org = "org:default-org" as const;
   const scope = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };

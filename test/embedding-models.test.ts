@@ -131,8 +131,8 @@ test("org embedding selection is durable and survives chat runtime replacement a
   const baseModels = createMemoryMap<PersistedBaseModel>();
   const first = createMemoryConfigStore("test", { baseModels });
   await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelectionLatest("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
-  await first.setRuntimeSelectionLatest("org:test", null);
+  await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
+  await first.setRuntimeSelection("org:test", null);
   const restarted = createMemoryConfigStore("test", { baseModels });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);

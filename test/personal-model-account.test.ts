@@ -26,15 +26,13 @@ test("personal account choice persists across instances without changing anyone 
   assert.equal(await second.getIndividualModelAuthDurable(), false);
   await second.setPersonalModelAuth("alice", false);
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
-  first.setIndividualModelAuth(true);
-  await first.flushScope("org:default-org");
+  await first.setIndividualModelAuth(true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
 });
 
 test("account API binds choice to the signed-in person, preserves connections, and fails closed after disconnect", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) }));
-  built.config.setInternalMemberOverrides(["alice@default-org", "bob@default-org"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setInternalMemberOverrides(["alice@default-org", "bob@default-org"]);
   const server = createServer(built.app, {
     signingSecret: SECRET,
     requireSignedPortalIdentity: true,
@@ -81,8 +79,7 @@ test("account API binds choice to the signed-in person, preserves connections, a
     await built.userModelCredentials.delete("alice@default-org", "anthropic");
     assert.equal(await built.config.getIndividualModelAuthDurable("alice@default-org"), true);
     assert.equal((await request("company")).status, 200);
-    built.config.setIndividualModelAuth(true);
-    await built.config.flushScope("org:default-org");
+    await built.config.setIndividualModelAuth(true);
     assert.equal((await request("company")).status, 403);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

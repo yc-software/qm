@@ -153,8 +153,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     assert.equal((await post(enable, { provider: "anthropic" })).status, 400);
     assert.equal(upstream.requests.length, 0);
     const priorDefault = await built.config.getRuntimeSelectionDurable("org:default-org");
-    built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
     upstream.behavior.status = 403;
     assert.equal((await post(enable, { provider: "anthropic", verify: true })).status, 422);
     assert.deepEqual(await built.config.getWebuiModelsDurable("org:default-org"), ["claude-sonnet-4-6"]);
@@ -198,8 +197,7 @@ test("enable rechecks serving credentials and harness policy before mutating the
     assert.equal((await enable()).status, 422);
     assert.equal(await built.config.getWebuiModelsDurable(org), null);
     onProbe = async () => {
-      built.config.setApprovedHarnesses(["claude"]);
-      await built.config.flushScope(org);
+      await built.config.setApprovedHarnesses(["claude"]);
     };
     assert.equal((await enable()).status, 422);
     assert.equal(await built.config.getWebuiModelsDurable(org), null);

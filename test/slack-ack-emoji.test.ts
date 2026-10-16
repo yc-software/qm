@@ -25,10 +25,10 @@ test("config store: ack emoji set/get/clear roundtrip, durable read included", a
   const config = createMemoryConfigStore(ORG);
   assert.equal(config.getAckEmoji(ORG), null);
   assert.equal(await config.getAckEmojiDurable(ORG), null);
-  config.setAckEmoji(ORG, ["custom_thinking", "custom_ok"]);
+  await config.setAckEmoji(ORG, ["custom_thinking", "custom_ok"]);
   assert.deepEqual(config.getAckEmoji(ORG), ["custom_thinking", "custom_ok"]);
   assert.deepEqual(await config.getAckEmojiDurable(ORG), ["custom_thinking", "custom_ok"]);
-  config.setAckEmoji(ORG, null);
+  await config.setAckEmoji(ORG, null);
   assert.equal(config.getAckEmoji(ORG), null);
   assert.equal(await config.getAckEmojiDurable(ORG), null);
 });
