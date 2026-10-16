@@ -829,3 +829,37 @@ test("failed scratch initialization and deletion retain a safe retryable identit
   await box.teardown(pending, { destroy: true });
   assert.ok(!fake.names().includes(pending.id));
 });
+
+test("a transient filesystem write failure is retried instead of failing the caller", async () => {
+  const sb = make();
+  const h = await sb.provision(layers);
+  fake.failNext(503, {
+    headers: { "retry-after": "0" },
+    match: (c) => c.method === "PUT" && c.path.endsWith("/fs/write"),
+  });
+  await sb.writeFileBytes(h, "retry-probe.txt", Buffer.from("ok"));
+  assert.equal((await sb.run(h, "cat retry-probe.txt")).stdout, "ok");
+});
+
+test("a network-level write failure with a transient cause code is retried", async () => {
+  const sb = make();
+  const h = await sb.provision(layers);
+  const realFetch = globalThis.fetch;
+  let failed = false;
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    if (!failed && String(input).includes("/fs/write")) {
+      failed = true;
+      throw new TypeError("fetch failed", {
+        cause: new AggregateError([Object.assign(new Error("connect"), { code: "ETIMEDOUT" })]),
+      });
+    }
+    return realFetch(input, init);
+  }) as typeof fetch;
+  try {
+    await sb.writeFileBytes(h, "net-retry.txt", Buffer.from("ok"));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(failed);
+  assert.equal((await sb.run(h, "cat net-retry.txt")).stdout, "ok");
+});
