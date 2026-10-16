@@ -1301,7 +1301,7 @@ test("human child continuations respect non-fast category defaults", async () =>
   assert.deepEqual(seen, [category]);
 });
 
-test("verified swarm workers use category defaults instead of copied parent choices, retaining unset behavior and handoffs", async () => {
+test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
   const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const handoff = { ...category, modelId: "gpt-6-sol" };
@@ -1350,12 +1350,15 @@ test("verified swarm workers use category defaults instead of copied parent choi
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
     assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [configured ? category : inherited, handoff]);
-    assert.equal(run.request.model, inherited.modelId, "the verified stored dispatch is not mutated");
+    assert.deepEqual(seen, [
+      configured ? category : { harnessId: inherited.harnessId, modelId: inherited.modelId },
+      handoff,
+    ]);
+    assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
   }
 });
 
-test("swarm workers keep the runtime chosen at spawn over inherited choices and the category default", async () => {
+test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
   const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   for (const configured of [false, true]) {
@@ -1417,7 +1420,9 @@ test("swarm workers keep the runtime chosen at spawn over inherited choices and 
     });
     assert.deepEqual(
       seen.get(partial!.id),
-      configured ? { ...category, effortLevel: "medium" } : { ...inherited, effortLevel: "medium" },
+      configured
+        ? { ...category, effortLevel: "medium" }
+        : { harnessId: inherited.harnessId, modelId: inherited.modelId, effortLevel: "medium" },
     );
   }
 });

@@ -59,9 +59,9 @@ level), `fastMode` and `harness`, e.g.
 `{"action":"spawn","requestId":"r1","count":8,"model":"gpt-6.1-sol","effort":"medium","fastMode":false,"text":"..."}`.
 The choice is stored on each new member (visible in inspect), applies to every
 turn that worker takes, and is inherited by workers it spawns unless they choose
-again. Omitted fields fall back to the swarm's inherited runtime. A model chosen at
-spawn is never replaced by the org subagent default; an unavailable model fails
-closed at dispatch.
+again. Workers do not copy the root's runtime: fields nobody chose resolve like any
+subagent turn, from the org subagent default and then the owner's default. An
+unavailable model fails closed at dispatch.
 
 Optional `settings` overrides the defaults below at initial spawn. The backend
 can configure defaults with `SWARM_DEFAULTS`, a JSON object such as

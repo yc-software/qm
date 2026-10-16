@@ -37,13 +37,16 @@ export function inheritRuntime(
   return Object.keys(runtime).length ? runtime : undefined;
 }
 
-export function workerTurnInput<T extends SwarmMemberRuntime>(
-  input: T,
+export function workerRuntimeInput<T extends SwarmMemberRuntime>(
+  template: T,
   runtime: SwarmMemberRuntime | undefined,
-  subagentDefaultGoverns: boolean,
 ): T {
-  const base = subagentDefaultGoverns
-    ? { ...input, harness: undefined, model: undefined, thinkingLevel: undefined, fastMode: undefined }
-    : input;
-  return { ...base, ...runtime };
+  return {
+    ...template,
+    harness: undefined,
+    model: undefined,
+    thinkingLevel: undefined,
+    fastMode: undefined,
+    ...runtime,
+  };
 }

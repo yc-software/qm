@@ -18,7 +18,6 @@ import {
   loadDocumentInputs,
 } from "./document-inputs.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { workerTurnInput } from "../swarms/swarm-runtime.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { openGoal } from "../harness/goal.ts";
@@ -533,12 +532,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       )
         throw new NonRetryableTurnError("swarm service unavailable");
       const swarmBinding = await deps.swarms?.binding(input);
-      if (swarmBinding?.member.parentId)
-        input = workerTurnInput(
-          input,
-          swarmBinding.member.runtime,
-          Boolean(input.swarm && (await deps.config?.getPurposeRuntimeDurable("subagent"))),
-        );
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(input, deps, external);
