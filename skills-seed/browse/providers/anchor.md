@@ -31,7 +31,7 @@ the person asks to reset their state).
 
 ## Create the browser
 
-In a DM, with the person's profile:
+With the person's profile:
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.anchorbrowser.io/v1/sessions \
@@ -41,16 +41,6 @@ CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sy
 ANCHOR_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['data'].get('id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['data'].get('live_view_url',''))")
 ```
-
-In a channel or group, OMIT the profile entirely (per the DM-only rule):
-
-```bash
-CREATE=$(curl -fsS -X POST https://api.anchorbrowser.io/v1/sessions \
-  -H "anchor-api-key: $ANCHOR_API_KEY" -H 'content-type: application/json' \
-  -d '{"session":{"timeout":{"max_duration":30,"idle_timeout":10}}}')
-```
-
-then extract `CDP_URL` / `ANCHOR_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
 
 Timeouts are minutes (`max_duration` caps the session, `idle_timeout` reaps an unused one).
 For a site behind serious bot protection, add a proxy and Anchor's hardened build — both
@@ -115,7 +105,7 @@ Hand over the returned `url` with the consent stated plainly: _filling it stores
 with Anchor (our managed-browser provider) so it can sign in and re-sign-in for you_ — that
 storage is the point, and it needs their explicit OK. Redemption fires a wake back into
 this conversation; name the new credential's handle in `credentials` to get
-`EMAIL`/`PASSWORD` for that command (sign-ins are DM-only, so no grant dance). Then create the identity with Python building the body from env
+`EMAIL`/`PASSWORD` for that command. Then create the identity with Python building the body from env
 (`POST /v1/identities` with `{"source":"https://<domain>","name":...,"credentials":
 [{"type":"username_password","username":...,"password":...}]}`), and register the returned
 identity id in their keychain (service `anchor-identity`, envKey

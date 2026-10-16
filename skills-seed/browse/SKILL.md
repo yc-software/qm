@@ -48,15 +48,12 @@ in this flow, including the runner.
 Read the provider doc BEFORE creating anything — it owns every provider-shaped step:
 creating and deleting the browser, the person's profile, routing a sign-in wall, and giving
 the browser a file. Its create step sets `CDP_URL` and `LIVE_VIEW`, which is all the shared
-runner below needs. This file owns everything else: when to browse at all, the DM-only rule,
+runner below needs. This file owns everything else: when to browse at all,
 key logistics, the runner, spending, and reporting. Where this file says "your provider key"
 or "your profile env key", substitute the names the provider doc gives.
 
-**Sign-ins and profiles are DM-only.** The person's browser profile and any sign-in /
-live-view links are bearer material: a keychain grant minted in a channel becomes usable by
-the whole room, and a login link posted there can be clicked by anyone first. In a channel
-or group, browse only profile-less — skip the profile entirely, launch the browser with no
-profile, and decline tasks that need an account.
+**Always browse with the person's profile from their keychain.** If they don't have one
+yet, create one and store it in their keychain (first-time setup below).
 
 ## Prerequisites (each run)
 
@@ -102,8 +99,8 @@ of them (asks and drops are refused only on trigger-fired turns).
    ```bash
    curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN"
    ```
-2. **Registered to the person themselves** → in their DM, its handle is already usable in
-   `credentials`. Anywhere else, send an ask (step 3); they approve it on the card.
+2. **Registered to the person themselves** → if its handle is in your manifest, use it in
+   `credentials`. Otherwise send an ask (step 3); they approve it on the card.
 3. **Registered to someone else** (the provider key usually lives with whoever set it up) →
    send an ask: `POST /v1/keychain/asks` with the credential id and the person's words as
    the purpose. Core DMs the owner and wakes this conversation when they answer; tell the
@@ -125,7 +122,7 @@ curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGEN
 ```
 
 - **Credential exists** → use that handle in `credentials`. Never bootstrap in this case.
-- **No credential at all** → first-time setup below, with the person's OK.
+- **No credential at all** → first-time setup below.
 
 **First-time profile setup (only when the check above found no credential).** Mint the
 profile value — a random name, unless the provider doc's Profiles section says the
@@ -146,8 +143,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capabilit
 
 ## 1. Create the browser
 
-Follow your provider doc's "Create the browser" section. In a DM, launch it with the
-person's profile; in a channel or group, launch profile-less (per the DM-only rule). The
+Follow your provider doc's "Create the browser" section. Launch it with the
+person's profile. The
 step leaves you with `CDP_URL` (the websocket the runner drives) and `LIVE_VIEW` (the
 human-viewable session URL). Treat `CDP_URL` as a secret — some providers embed the API key
 in it; it rides only as a runner argument, never into chat or logs.
@@ -270,7 +267,7 @@ The last stdout line is the typed outcome:
   browser itself, on delete or stop; Browserbase and Anchor save only from a dedicated
   sign-in session — the provider doc says which its flow uses.) Two rules hold for all
   providers: sign-in and live-view links are single-audience
-  bearer material — hand them to the person in a DM, never open them yourself; and a
+  bearer material — hand them only to the person, never open them yourself; and a
   mid-session verification check (already signed in, then challenged) is cleared on the LIVE
   browser — hand the person `$LIVE_VIEW`, wait for done, re-run.
 

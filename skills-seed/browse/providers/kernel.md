@@ -7,7 +7,7 @@ Provider names for the shared flow in SKILL.md: API key `KERNEL_API_KEY`, keycha
 export PROFILE_ENV=KERNEL_PROFILE PROFILE_SERVICE=kernel-profile
 ```
 
-In a DM, name three handles in `credentials`: the Kernel key (see "Which key" below), the
+Name three handles in `credentials`: the Kernel key (see "Which key" below), the
 person's `KERNEL_PROFILE`, and their `KERNEL_PROXY_ID` (see "The person's static IP").
 
 ## Which key
@@ -114,7 +114,7 @@ the same on every session. Sites that remember devices (LinkedIn especially) see
 person on one connection instead of a new address every run, which is what keeps a
 saved sign-in from tripping verification. Its id lives in their keychain as
 `KERNEL_PROXY_ID` (service `kernel-proxy`); treat it like the profile name (it decides
-whose address the browser wears), so it comes only from the keychain, in a DM.
+whose address the browser wears), so it comes only from the keychain.
 
 If the manifest has no `KERNEL_PROXY_ID` handle, run the same existence check SKILL.md
 gives for the profile (`envKey == "KERNEL_PROXY_ID"`). Only when none exists, create one
@@ -140,7 +140,7 @@ launching without it.
 
 ## Create the browser
 
-In a DM, with the person's profile and proxy. Only ONE browser may write to a profile at a
+With the person's profile and proxy. Only ONE browser may write to a profile at a
 time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
 profile, so a second writer silently clobbers the first. Since browsers can't be listed,
 record your own writer in the person's keychain (`KERNEL_ACTIVE`, service
@@ -170,15 +170,6 @@ when you report: anything this run signs in to won't be kept. The record is not 
 two runs starting in the same moment can both see none — so keep one browse run at a
 time on a person's profile.
 
-In a channel or group, OMIT the profile AND `proxy_id` entirely (per the DM-only rule) —
-never send a personal profile name or proxy there:
-
-```bash
-CREATE=$(kapi POST /browsers '{"stealth":true,"headless":false,"timeout_seconds":1800}')
-```
-
-then extract `CDP_URL` / `KERNEL_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
-
 ## Giving the browser a file
 
 Files land in `/home/kernel`. This needs a real key (own or env); the shared credential
@@ -197,7 +188,7 @@ Then run the task with `BROWSE_FILES="/home/kernel/receipt.jpg"` per SKILL.md.
 The person signs in once on the live browser; the profile keeps it.
 
 1. Navigate the live browser to the wall URL (read from `/tmp/wall-url.txt`, never shell
-   source) so the person lands on the login page, then hand them `$LIVE_VIEW` in the DM —
+   source) so the person lands on the login page, then hand them `$LIVE_VIEW` —
    bearer material, never open it yourself. SKILL.md's shared `browse-nav.py` (written in
    its wall step) does the steering:
 
