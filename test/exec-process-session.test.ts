@@ -307,3 +307,17 @@ test("a session from the current boot keeps running, and one with no boot marker
     "sessions predating this change have no marker and must not be reaped on a guess",
   );
 });
+
+test("paging a process's output never splits a UTF-8 character", async () => {
+  const { proc, handle } = fixture();
+  const { processId } = await proc.startProcess(handle, "printf 'é%.0s' $(seq 1 10); printf '😀x'");
+  let cursor = 0;
+  let text = "";
+  for (let i = 0; i < 40; i++) {
+    const r = await proc.readProcess(handle, processId, { sinceCursor: cursor, maxBytes: 3, waitMs: 2000 });
+    text += r.chunks;
+    if (r.cursor === cursor && r.status.state === "exited") break;
+    cursor = r.cursor;
+  }
+  assert.equal(text, `${"é".repeat(10)}😀x`);
+});

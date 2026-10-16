@@ -124,6 +124,13 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `done`,
         `sz=$(wc -c < "$P/out" 2>/dev/null || echo 0)`,
         `end=$((cur+${maxBytes})); if [ "$end" -gt "$sz" ]; then end=$sz; fi`,
+        // Never end a page inside a UTF-8 character. Back off over continuation bytes (10xxxxxx) so the
+        // next page starts on a character boundary; if the first character alone is longer than the page,
+        // extend forward to finish it instead (at most 3 extra bytes).
+        `_cont(){ b=$(tail -c +$(($1+1)) "$P/out" | head -c 1 | od -An -tu1 | tr -d ' '); [ -n "$b" ] && [ "$b" -ge 128 ] && [ "$b" -lt 192 ]; }`,
+        `if [ "$end" -lt "$sz" ] && _cont "$end"; then e=$end; k=0; ` +
+          `while [ $k -lt 3 ] && [ $((e-1)) -gt "$cur" ] && _cont "$e"; do e=$((e-1)); k=$((k+1)); done; ` +
+          `if _cont "$e"; then k=0; while [ $k -lt 3 ] && [ "$end" -lt "$sz" ] && _cont "$end"; do end=$((end+1)); k=$((k+1)); done; else end=$e; fi; fi`,
         `n=$((end-cur)); if [ "$n" -lt 0 ]; then n=0; fi`,
         `echo "CURSOR=$end"`,
         `if [ -f "$P/code" ]; then echo "STATUS=exited:$(cat "$P/code")"; else echo "STATUS=running"; fi`,
