@@ -209,7 +209,7 @@ test("env-delivery credential: envKey validated, host refused, duplicates refuse
   }
 });
 
-test("env-delivery accepts person/team grantees — grants now gate env injection like broker calls", async () => {
+test("env-delivery accepts person/org grantees — grants now gate env injection like broker calls", async () => {
   const srv = start();
   try {
     const narrowed = await putCred(srv.base, {
@@ -738,7 +738,7 @@ test("a channel grantee is accepted and saved", async () => {
   }
 });
 
-test("a non-org/personal/team/channel grantee is rejected", async () => {
+test("a non-org/personal/channel grantee is rejected", async () => {
   const srv = start();
   try {
     await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
@@ -772,6 +772,26 @@ test("a non-org/personal/team/channel grantee is rejected", async () => {
     });
     assert.equal(emptyRef.status, 400);
     assert.match(await emptyRef.text(), /grantee must be/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a team grantee is rejected with a clear, actionable error instead of being silently accepted and never matching", async () => {
+  const srv = start();
+  try {
+    await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example" });
+    const version = (await getCfg(srv.base)).serviceCredentials[0]!.updatedAt;
+    const r = await putCred(srv.base, {
+      slug: "k",
+      name: "K",
+      host: "h.example",
+      grantees: ["team:eng"],
+      expectedUpdatedAt: version,
+    });
+    assert.equal(r.status, 400);
+    assert.match(await r.text(), /team: grantees aren't supported for service credentials yet/);
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.grantees, ["org:default-org"]);
   } finally {
     await srv.close();
   }
