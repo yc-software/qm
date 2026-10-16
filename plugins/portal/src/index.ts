@@ -10,7 +10,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
-import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { METHODS, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -61,6 +61,7 @@ import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import {
+  createHttpServer,
   json,
   escapeHtml,
   sendBuffered,
@@ -951,7 +952,7 @@ function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionC
   return renewed;
 }
 
-const server = createServer((req, res) => {
+const server = createHttpServer((req, res) => {
   const startedAt = performance.now();
   let errorLogged = false;
   res.once("finish", () => {

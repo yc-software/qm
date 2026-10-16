@@ -1,13 +1,13 @@
 import { buildGovernanceUI } from "./governance-bundle.ts";
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
 import { createGzip, gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
-import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
+import { createHttpServer, json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
@@ -354,7 +354,7 @@ export async function handler(req: IncomingMessage, res: ServerResponse): Promis
     });
 }
 
-const server = createServer((req, res) => {
+const server = createHttpServer((req, res) => {
   void handler(req, res);
 });
 

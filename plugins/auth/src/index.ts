@@ -1,9 +1,8 @@
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
-import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
-import { json } from "../../chassis/src/http.ts";
+import { createHttpServer, json } from "../../chassis/src/http.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
@@ -54,7 +53,7 @@ export async function startServer(
       return branding.current().selfLabel || CFG.brandName;
     },
   });
-  const server = createServer((req, res) => {
+  const server = createHttpServer((req, res) => {
     void handle(req, res).catch((err: unknown) => {
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));

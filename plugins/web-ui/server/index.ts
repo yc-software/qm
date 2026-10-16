@@ -5,7 +5,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
-import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
+import type { IncomingMessage, ServerResponse, Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
@@ -22,6 +22,7 @@ import {
 } from "../../chassis/src/core-client.ts";
 import { findRoute } from "../../chassis/src/router.ts";
 import {
+  createHttpServer,
   json,
   gzipAccepted,
   readBody as readBodyCapped,
@@ -3421,7 +3422,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   }
 };
 
-const server = createServer((req, res) => {
+const server = createHttpServer((req, res) => {
   void handler(req, res).catch((err: unknown) => {
     reportBackendError(err);
     console.error("%s", `[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));

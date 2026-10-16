@@ -1,10 +1,10 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import bolt from "@slack/bolt";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { createDeferredEnvelopeAck, describeEnvelope, envelopeStageFor, isGatedEnvelope } from "./deferred-ack.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { errMessage } from "../util/errors.ts";
-import { PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
+import { createHttpServer, PayloadTooLargeError, readBody } from "../../plugins/chassis/src/http.ts";
 
 const { isValidSlackRequest } = bolt;
 
@@ -33,7 +33,7 @@ export function createHttpEventsReceiver(opts: HttpEventsReceiverOptions): Recei
   const path = opts.path ?? SLACK_EVENTS_PATH;
   let app: BoltApp | undefined;
 
-  const server = createServer((req, res) => {
+  const server = createHttpServer((req, res) => {
     void handle(req, res);
   });
 

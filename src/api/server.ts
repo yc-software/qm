@@ -3,13 +3,8 @@ import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
 import { traceStatus } from "../../plugins/chassis/src/timing.ts";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type RequestListener,
-  type ServerResponse,
-  type Server,
-} from "node:http";
+import type { IncomingMessage, RequestListener, ServerResponse, Server } from "node:http";
+import { createHttpServer } from "../../plugins/chassis/src/http.ts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type HTTPMethods } from "fastify";
 import type { App } from "./app.ts";
 import type { ServerDeps } from "./deps.ts";
@@ -558,7 +553,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));
   server.requestTimeout = 0;
   server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
