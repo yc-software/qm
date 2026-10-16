@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/node";
 import { initializeErrorReporting } from "../../chassis/src/error-reporting.ts";
 
-initializeErrorReporting(Sentry, "admin");
+await initializeErrorReporting(() => import("@sentry/node"), "admin");

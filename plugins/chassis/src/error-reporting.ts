@@ -6,12 +6,13 @@ const FLUSH_MS = 2_000;
 let client: typeof Sentry | undefined;
 let tracing = false;
 
-export function initializeErrorReporting(
-  sdk: typeof Sentry,
+export async function initializeErrorReporting(
+  loadSdk: () => Promise<typeof Sentry>,
   service: string,
   env: NodeJS.ProcessEnv = process.env,
-): void {
+): Promise<void> {
   if (!env.SENTRY_DSN || client) return;
+  const sdk = await loadSdk();
   const tracesSampleRate = parseSampleRate(env.SENTRY_TRACES_SAMPLE_RATE);
   sdk.init({
     dsn: env.SENTRY_DSN,
