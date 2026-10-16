@@ -382,8 +382,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const turnEffort = effort(turn.runtime?.effortLevel);
     const text = continueTurn
       ? [
-          claudeReplayTranscript(reconstructMessagesFromHistory(turn.history.filter((e) => e !== userEntry))),
+          claudeReplayTranscript(
+            reconstructMessagesFromHistory(turn.history.filter((e) => e.seq < turn.resumeUserSeq!)),
+          ),
           userPromptText((userEntry?.payload ?? {}) as Parameters<typeof userPromptText>[0]),
+          claudeReplayTranscript(
+            reconstructMessagesFromHistory(turn.history.filter((e) => e.seq > turn.resumeUserSeq!)),
+          ),
         ]
           .filter((value) => value.trim())
           .join("\n\n")

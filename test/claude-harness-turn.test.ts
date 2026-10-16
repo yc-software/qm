@@ -799,7 +799,8 @@ test("Claude continues a resumed turn with its recorded request live and no new 
   const prompt = JSON.parse(prompted[0]!) as Array<{ text: string }>;
   const text = prompt[0]!.text;
   assert.equal(text.match(/list the files/g)?.length, 1, "the request appears once");
-  assert.ok(text.endsWith("END TRANSCRIPT>>>\n\nlist the files"), "the request is live, after the replayed work");
+  assert.ok(text.indexOf(ask) < text.indexOf("Tool result"), "the request precedes the work already done");
+  assert.ok(!text.slice(0, text.indexOf(ask)).includes("BEGIN TRANSCRIPT"), "the request is not quoted history");
   assert.match(text, /Tool result \(execute, call c1\): a\.txt/);
   assert.doesNotMatch(text, /fallback input|ENV-NOTE/);
   assert.equal(llmRequests[0]?.turnSeq, 1);
