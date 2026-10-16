@@ -872,14 +872,6 @@ export async function loadChatPrefs(): Promise<void> {
 
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
-  if (path === "/api/turn" && r.ok && typeof init?.body === "string") {
-    const request = JSON.parse(init.body) as { desktopClientId?: string };
-    const response = (await r.clone().json()) as { runId?: string };
-    if (request.desktopClientId && response.runId)
-      void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
-        reportHandledError("desktop-computer", error),
-      );
-  }
   const text = await r.text();
   let body: unknown = {};
   try {
@@ -891,6 +883,14 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     const details = body as { message?: string; reason?: string; error?: string } | null;
     const msg = details?.message ?? details?.reason ?? details?.error ?? `HTTP ${r.status}`;
     throw new ApiError(msg, r.status, body);
+  }
+  if (path === "/api/turn" && typeof init?.body === "string") {
+    const request = JSON.parse(init.body) as { desktopClientId?: string };
+    const response = body as { runId?: string } | null;
+    if (request.desktopClientId && response?.runId)
+      void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
+        reportHandledError("desktop-computer", error),
+      );
   }
   return body as T;
 }
