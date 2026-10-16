@@ -1,10 +1,12 @@
+import { selectOverheardToImport } from "../src/harness/replay.ts";
+import { parseMessageEvent } from "../src/slack/payloads.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorySurfaceCache, createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { buildContextWindow } from "../src/slack/conversation.ts";
+import { buildContextWindow, renderConversationView } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
@@ -304,3 +306,48 @@ test("HTTP ingestion rejects invalid file sizes", () => {
   }
   assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size: 0 }] })!.files![0]!.size, 0);
 });
+
+for (const postgres of [false, true]) {
+  test(
+    `delivery identity survives Slack event, cache, history and replay (${postgres ? "postgres" : "memory"})`,
+    { skip: postgres && !process.env.DATABASE_URL },
+    async () => {
+      const cache = postgres ? createPostgresSurfaceCache(process.env.DATABASE_URL!) : createMemorySurfaceCache();
+      const container = `delivery-identity-${Date.now()}`;
+      try {
+        const raw = parseMessageEvent({
+          channel: container,
+          ts: "1",
+          user: "UBOT",
+          bot_id: "BBOT",
+          text: "Sent",
+          metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: "delivery-1" } },
+        });
+        const event = toEvent(slackMessageToIngestEvent(raw, ids))!;
+        await cache.ingest([event]);
+        await cache.ingest([{ container, ts: "1", text: "Sent", editedAt: 2 }]);
+        const core = { readSurfaceMessages: cache.readMessages } as unknown as SlackCoreClient;
+        const readHistory = createSlackHistoryReader({ core, ids, source: "mirror" });
+        const serializer = createConversationSerializer({
+          ids,
+          directory,
+          externalParticipantsEnabled: async () => true,
+          readHistory,
+        });
+        const page = await readHistory({ conversations: { history: async () => ({ messages: [] }) } }, container);
+        const messages = await serializer.shapeRecentMessages({}, page.raw, "", new Map());
+        const rendered = renderConversationView({
+          channel: { kind: "channel" },
+          members: [],
+          files: [],
+          omittedFiles: [],
+          messages,
+          here: { kind: "top-level" },
+        });
+        assert.equal(selectOverheardToImport(rendered.overheard, new Set())[0]?.deliveryKey, "delivery-1");
+      } finally {
+        await cache.close();
+      }
+    },
+  );
+}

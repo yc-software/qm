@@ -1,3 +1,4 @@
+import { transcriptEntries } from "./transcript-source.ts";
 import { randomUUID } from "node:crypto";
 import type { Session, SessionEntry, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../harness/goal.ts";
@@ -295,8 +296,19 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       });
     },
 
+    async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
+      return (entries.get(sessionId) ?? []).some((entry) => {
+        const payload = entry.payload as { deliveryKey?: string; ts?: string } | null;
+        return (
+          payload?.deliveryKey === deliveryKey ||
+          (slackTs !== undefined && entry.type === "user" && payload?.ts === slackTs)
+        );
+      });
+    },
+
     async getEntries(sessionId, opts?: GetEntriesOptions) {
-      const log = entries.get(sessionId) ?? [];
+      const all = entries.get(sessionId) ?? [];
+      const log = opts?.transcript ? transcriptEntries(all) : all;
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
@@ -305,8 +317,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async countEntriesBefore(sessionId, beforeSeq, principalId) {
       const win = principalId === undefined ? undefined : windows.get(sessionId)?.get(principalId);
       if (principalId !== undefined && !win) return 0;
-      return (entries.get(sessionId) ?? []).filter(
-        (e) => e.seq < beforeSeq && e.type !== "soul" && (!win || entryWithinTenure(e, win)),
+      return transcriptEntries((entries.get(sessionId) ?? []).filter((e) => !win || entryWithinTenure(e, win))).filter(
+        (e) => e.seq < beforeSeq,
       ).length;
     },
 
@@ -514,11 +526,9 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions) {
       const win = windows.get(sessionId)?.get(principalId);
       if (!win) return [];
-      const visible = (entries.get(sessionId) ?? []).filter(
-        (e) =>
-          entryWithinTenure(e, win) &&
-          e.seq >= (opts?.sinceSeq ?? 0) &&
-          (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+      const all = (entries.get(sessionId) ?? []).filter((e) => entryWithinTenure(e, win));
+      const visible = (opts?.transcript ? transcriptEntries(all) : all).filter(
+        (e) => e.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
       );
       return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
     },

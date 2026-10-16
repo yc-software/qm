@@ -1,42 +1,44 @@
-import type { CronFireLogEntry } from "../types.ts";
+import type { AutomationRun } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 
-export interface CronFireRecord extends CronFireLogEntry {
+export interface AutomationRunRecord extends AutomationRun {
   cronId: string;
 }
 
-export type BeginFireResult = { begun: true } | { begun: false; running?: CronFireLogEntry };
+export type BeginFireResult = { begun: true } | { begun: false; running?: AutomationRun };
 
-export interface CronFireStore {
-  record(cronId: string, entry: CronFireLogEntry): Promise<void>;
+export interface AutomationRunStore {
+  accept(id: string, entry: AutomationRun): Promise<AutomationRun>;
+  record(cronId: string, entry: AutomationRun): Promise<void>;
 
-  beginExclusive(cronId: string, entry: CronFireLogEntry, staleRunningMs: number): Promise<BeginFireResult>;
+  beginExclusive(cronId: string, entry: AutomationRun, staleRunningMs: number): Promise<BeginFireResult>;
 
   sweepStranded(now: number, staleRunningMs: number, note: string): Promise<number>;
 
   pruneEnded(opts: { endedBefore: number; keepPerCron: number }): Promise<number>;
-  backfill(cronId: string, entries: readonly CronFireLogEntry[]): Promise<void>;
-  listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
-  listByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
-  latestForThread(cronId: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
+  backfill(cronId: string, entries: readonly AutomationRun[]): Promise<void>;
+  listByCron(cronId: string, opts?: { limit?: number }): Promise<{ runs: AutomationRun[]; total: number }>;
+  listByThreadRefs(threadRefs: readonly string[]): Promise<AutomationRunRecord[]>;
+  latest(cronId: string): Promise<AutomationRun | undefined>;
+  latestForThread(cronId: string, threadRef: string): Promise<AutomationRun | undefined>;
 }
 
-function fireOrder(a: CronFireLogEntry, b: CronFireLogEntry): number {
+function fireOrder(a: AutomationRun, b: AutomationRun): number {
   if (a.firedAt !== b.firedAt) return a.firedAt - b.firedAt;
   if (a.fireKey < b.fireKey) return -1;
   if (a.fireKey > b.fireKey) return 1;
   return 0;
 }
 
-function backfillMayReplace(existing: CronFireLogEntry, incoming: CronFireLogEntry): boolean {
+function backfillMayReplace(existing: AutomationRun, incoming: AutomationRun): boolean {
   if (incoming.firedAt < existing.firedAt) return false;
   return existing.endedAt === undefined || incoming.endedAt !== undefined;
 }
 
-export function createMemoryCronFireStore(): CronFireStore {
-  const byCron = new Map<string, Map<string, CronFireLogEntry>>();
-  const firesOf = (cronId: string): Map<string, CronFireLogEntry> => {
+export function createMemoryAutomationRunStore(): AutomationRunStore {
+  const byCron = new Map<string, Map<string, AutomationRun>>();
+  const firesOf = (cronId: string): Map<string, AutomationRun> => {
     let fires = byCron.get(cronId);
     if (!fires) {
       fires = new Map();
@@ -45,6 +47,11 @@ export function createMemoryCronFireStore(): CronFireStore {
     return fires;
   };
   return {
+    async accept(cronId, entry) {
+      const entries = firesOf(cronId);
+      if (!entries.has(entry.fireKey)) entries.set(entry.fireKey, { ...entry });
+      return { ...entries.get(entry.fireKey)! };
+    },
     async record(cronId, entry) {
       firesOf(cronId).set(entry.fireKey, { ...entry });
     },
@@ -98,13 +105,20 @@ export function createMemoryCronFireStore(): CronFireStore {
     },
     async listByThreadRefs(threadRefs) {
       const wanted = new Set(threadRefs);
-      const records: CronFireRecord[] = [];
+      const records: AutomationRunRecord[] = [];
       for (const [cronId, fires] of byCron) {
         for (const entry of fires.values()) {
           if (wanted.has(entry.threadRef)) records.push({ ...entry, cronId });
         }
       }
       return records.sort(fireOrder);
+    },
+    async latest(cronId) {
+      let latest: AutomationRun | undefined;
+      for (const entry of byCron.get(cronId)?.values() ?? []) {
+        if (!latest || fireOrder(entry, latest) > 0) latest = entry;
+      }
+      return latest ? { ...latest } : undefined;
     },
     async latestForThread(cronId, threadRef) {
       const matches = [...(byCron.get(cronId)?.values() ?? [])].filter((e) => e.threadRef === threadRef);
@@ -117,7 +131,7 @@ export function createMemoryCronFireStore(): CronFireStore {
 interface FireColumn {
   name: string;
   cast: "text" | "bigint";
-  value(cronId: string, entry: CronFireLogEntry): string | number | null;
+  value(cronId: string, entry: AutomationRun): string | number | null;
 }
 
 const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
@@ -130,6 +144,8 @@ const FIRE_COLUMN_DEFS: readonly FireColumn[] = [
   { name: "ended_at", cast: "bigint", value: (_cronId, e) => e.endedAt ?? null },
   { name: "status", cast: "text", value: (_cronId, e) => e.status ?? null },
   { name: "note", cast: "text", value: (_cronId, e) => (e.note !== undefined ? pgTextSafe(e.note) : null) },
+  { name: "payload", cast: "text", value: (_id, e) => (e.payload !== undefined ? pgTextSafe(e.payload) : null) },
+  { name: "delivery_id", cast: "text", value: (_id, e) => e.deliveryId ?? null },
   { name: "reply", cast: "text", value: (_cronId, e) => (e.reply !== undefined ? pgTextSafe(e.reply) : null) },
 ];
 
@@ -145,11 +161,11 @@ const UPSERT_FIRE = `INSERT INTO cron_fires (${FIRE_COLUMNS})
 
 const BACKFILL_CHUNK = 500;
 
-function fireParams(cronId: string, entry: CronFireLogEntry): unknown[] {
+function fireParams(cronId: string, entry: AutomationRun): unknown[] {
   return FIRE_COLUMN_DEFS.map((c) => c.value(cronId, entry));
 }
 
-function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
+function rowToEntry(r: Record<string, unknown>): AutomationRun {
   return {
     fireKey: r.fire_key as string,
     threadRef: r.thread_ref as string,
@@ -157,8 +173,10 @@ function rowToEntry(r: Record<string, unknown>): CronFireLogEntry {
     ...(r.session_id != null ? { sessionId: r.session_id as string } : {}),
     ...(r.scheduled_at != null ? { scheduledAt: Number(r.scheduled_at) } : {}),
     ...(r.ended_at != null ? { endedAt: Number(r.ended_at) } : {}),
-    ...(r.status != null ? { status: r.status as CronFireLogEntry["status"] } : {}),
+    ...(r.status != null ? { status: r.status as AutomationRun["status"] } : {}),
     ...(r.note != null ? { note: r.note as string } : {}),
+    ...(r.payload != null ? { payload: r.payload as string } : {}),
+    ...(r.delivery_id != null ? { deliveryId: r.delivery_id as string } : {}),
     ...(r.reply != null ? { reply: r.reply as string } : {}),
   };
 }
@@ -173,6 +191,8 @@ const LEGACY_FIRE_FIELDS = [
   "COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END)",
   "source.json->>'status'",
   "source.json->>'note'",
+  "source.json->>'payload'",
+  "source.json->>'deliveryId'",
   "source.json->>'reply'",
 ].join(", ");
 
@@ -210,7 +230,7 @@ const LEGACY_FIRE_MAINTENANCE = {
   ],
 };
 
-export function createPostgresCronFireStore(connectionString: string): CronFireStore {
+export function createPostgresAutomationRunStore(connectionString: string): AutomationRunStore {
   const { q, query, pool } = createPgPool(
     connectionString,
     [
@@ -234,11 +254,47 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
           `CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)`,
         ],
       },
+      {
+        id: "cron/fires/0002-input",
+        statements: [
+          "ALTER TABLE cron_fires ADD COLUMN IF NOT EXISTS payload TEXT, ADD COLUMN IF NOT EXISTS delivery_id TEXT",
+        ],
+      },
+      {
+        id: "cron/fires/0003-webhook-history",
+        statements: [
+          `DO $body$ BEGIN
+            IF to_regclass('webhook_history') IS NOT NULL THEN
+              LOCK TABLE webhook_history IN ACCESS EXCLUSIVE MODE;
+              INSERT INTO cron_fires (cron_id, fire_key, thread_ref, fired_at, payload, delivery_id)
+              SELECT 'webhook:' || source.id,
+                     'webhook:' || source.id || ':' || (event->>'deliveryId'),
+                     'webhook:' || source.id || ':' || (event->>'deliveryId'),
+                     (event->>'receivedAt')::bigint,
+                     event->>'payload', event->>'deliveryId'
+              FROM webhook_history source
+              CROSS JOIN LATERAL jsonb_array_elements(source.json->'events') event
+              ON CONFLICT (cron_id, fire_key) DO NOTHING;
+              DROP TABLE webhook_history;
+            END IF;
+          END $body$`,
+        ],
+      },
     ],
     [LEGACY_FIRE_MAINTENANCE],
   );
 
   return {
+    async accept(cronId, entry) {
+      const rows = await q(
+        `INSERT INTO cron_fires (${FIRE_COLUMNS})
+        VALUES (${FIRE_COLUMN_DEFS.map((_c, i) => `$${i + 1}`).join(", ")})
+        ON CONFLICT (cron_id, fire_key) DO UPDATE SET fire_key = EXCLUDED.fire_key
+        RETURNING ${FIRE_COLUMNS}`,
+        fireParams(cronId, entry),
+      );
+      return rowToEntry(rows[0]!);
+    },
     async record(cronId, entry) {
       await query(UPSERT_FIRE, fireParams(cronId, entry));
     },
@@ -341,6 +397,13 @@ export function createPostgresCronFireStore(connectionString: string): CronFireS
         [[...threadRefs]],
       );
       return rows.map((r) => ({ ...rowToEntry(r), cronId: r.cron_id as string }));
+    },
+    async latest(cronId) {
+      const rows = await q(
+        `SELECT ${FIRE_COLUMNS} FROM cron_fires WHERE cron_id = $1 ORDER BY fired_at DESC, fire_key DESC LIMIT 1`,
+        [cronId],
+      );
+      return rows.length ? rowToEntry(rows[0]!) : undefined;
     },
     async latestForThread(cronId, threadRef) {
       const rows = await q(

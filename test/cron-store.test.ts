@@ -8,7 +8,7 @@ import {
   STRANDED_FIRE_NOTE,
 } from "../src/cron/cron-store.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryCronFireStore } from "../src/cron/fire-store.ts";
+import { createMemoryAutomationRunStore } from "../src/triggers/run-store.ts";
 import { scopeId, type Cron } from "../src/types.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
@@ -730,7 +730,7 @@ test("the stranded sweep works the fire table: an unbackfilled legacy json row i
 });
 
 test("backfill cannot clobber a newer retry of the same fireKey with a stale snapshot", async () => {
-  const fires = createMemoryCronFireStore();
+  const fires = createMemoryAutomationRunStore();
   await fires.record("legacy", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
   await fires.backfill("legacy", [
     { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
@@ -744,6 +744,9 @@ test("backfill cannot clobber a newer retry of the same fireKey with a stale sna
 test("the fire table is the journal of record — a write failure surfaces instead of being swallowed", async () => {
   const store = createCronStore(undefined, {
     fires: {
+      accept: async () => {
+        throw new Error("unexpected accept");
+      },
       record: async () => {
         throw new Error("table down");
       },
@@ -759,6 +762,7 @@ test("the fire table is the journal of record — a write failure surfaces inste
       backfill: async () => {
         throw new Error("table down");
       },
+      latest: async () => undefined,
       listByCron: async () => ({ runs: [], total: 0 }),
       listByThreadRefs: async () => [],
       latestForThread: async () => undefined,
@@ -800,7 +804,7 @@ test("a deferred cron is not due until its deferral passes, and firing clears th
 });
 
 test("pruneEnded deletes old ended rows beyond the keep window; running and recent rows survive", async () => {
-  const fires = createMemoryCronFireStore();
+  const fires = createMemoryAutomationRunStore();
   await fires.record("c1", { fireKey: "k1", threadRef: "t1", firedAt: 1, endedAt: 10, status: "ok" });
   await fires.record("c1", { fireKey: "k2", threadRef: "t2", firedAt: 2, endedAt: 20, status: "failed" });
   await fires.record("c1", { fireKey: "k3", threadRef: "t3", firedAt: 3, endedAt: 30, status: "ok" });

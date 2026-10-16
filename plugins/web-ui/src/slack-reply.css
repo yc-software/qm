@@ -1,0 +1,14 @@
+qm-slack-reply {
+  display: block;
+  flex: none;
+}
+.slack-reply-box {
+  width: min(var(--content-w), 100%);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 12px var(--composer-inset) 20px;
+}
+.slack-reply-box .welcome-slack {
+  max-width: none;
+  margin-bottom: 0;
+}

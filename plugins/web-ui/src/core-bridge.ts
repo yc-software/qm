@@ -1,4 +1,5 @@
 import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
+import { webhookEventOf, type WebhookEvent } from "./webhook-event.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -491,6 +492,9 @@ export interface ApprovalDecision {
   scope?: "once" | "session" | "always";
 }
 export type AssistantWork = AssistantMessage & {
+  entrySeqs?: number[];
+  edited?: boolean;
+  deleted?: boolean;
   persisted?: boolean;
   streamingBaseline?: string;
   work?: WorkBlock;
@@ -1843,6 +1847,7 @@ interface HistoryUserMessage {
   edited?: boolean;
   deleted?: boolean;
   subagentMail?: SubagentMailRef;
+  webhookEvent?: WebhookEvent;
 }
 
 export interface SubagentMailRef {
@@ -1876,6 +1881,7 @@ interface MessageRevisionNote {
   ts: string;
   content: string;
   speaker?: string;
+  sourceRole?: "agent";
   timestamp?: number;
 }
 
@@ -1966,7 +1972,14 @@ function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
 }
 
 function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
-  const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
+  const p = payload as {
+    kind?: unknown;
+    action?: unknown;
+    ts?: unknown;
+    text?: unknown;
+    name?: unknown;
+    sourceRole?: unknown;
+  } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
   if (typeof p.ts !== "string" || !p.ts) return null;
@@ -1976,6 +1989,7 @@ function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
     action: p.action,
     ts: p.ts,
     content: typeof p.text === "string" ? p.text : "",
+    ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
     ...(typeof p.name === "string" && p.name.trim() ? { speaker: p.name.trim() } : {}),
   };
 }
@@ -2002,10 +2016,13 @@ export function userEntryMessage(
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
-  if (payload?.hidden) return null;
-  const text = userEntryText(payload) ?? "";
+  const webhookEvent = payload?.hidden ? webhookEventOf(payload) : undefined;
+  if (payload?.hidden && !webhookEvent) return null;
+  const text = webhookEvent
+    ? [webhookEvent.action, webhookEvent.payload].filter(Boolean).join("\n\n")
+    : (userEntryText(payload) ?? "");
   const attachments = payload?.attachments ?? [];
-  if (!text && !attachments.length) return null;
+  if (!text && !attachments.length && !webhookEvent) return null;
   const mail = subagentMailOf(payload);
   return {
     role: "user",
@@ -2014,6 +2031,7 @@ export function userEntryMessage(
     content: text,
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),
+    ...(webhookEvent ? { webhookEvent } : {}),
     ...(payload?.steered ? { steered: true } : {}),
     ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
@@ -2053,7 +2071,8 @@ function isFinishedReplyEntry(entry: SessionEntry): boolean {
 
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
-  const userByTs = new Map<string, HistoryUserMessage>();
+  const messagesByTs = new Map<string, HistoryUserMessage | AssistantWork>();
+  const repliesByDelivery = new Map<string, AssistantWork>();
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
@@ -2098,7 +2117,8 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     timing?: { startedAt?: number; finishedAt?: number },
     stopped = false,
     entrySeqs: number[] = [],
-  ): void => {
+    deliveryKey?: string,
+  ): AssistantWork | undefined => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
@@ -2146,8 +2166,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     }
     if (deliveryFiles.length) msg.deliveredFiles = deliveryFiles;
     out.push(msg as AgentMessage);
+    if (deliveryKey) repliesByDelivery.set(deliveryKey, msg);
     pending = [];
     deliveryFiles = [];
+    return msg;
   };
   for (const e of entries) {
     const payload = e.payload as {
@@ -2160,6 +2182,9 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       steered?: boolean;
       name?: string;
       ts?: string;
+      overheard?: boolean;
+      sourceRole?: string;
+      deliveryKey?: string;
       workStartedAt?: number;
       workFinishedAt?: number;
       stopped?: boolean;
@@ -2202,10 +2227,15 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         heldPosts.delete(payload.callId);
         if (postResultOk(e.payload)) {
           appendPostFiles(e.payload);
-          flushWork(held.text, e.createdAt, false, undefined, false, [
-            held.activity.seq,
-            ...(e.seq === undefined ? [] : [e.seq]),
-          ]);
+          flushWork(
+            held.text,
+            e.createdAt,
+            false,
+            undefined,
+            false,
+            [held.activity.seq, ...(e.seq === undefined ? [] : [e.seq])],
+            payload?.deliveryKey,
+          );
           posted = true;
         } else {
           pending.push(held.activity, activity);
@@ -2226,15 +2256,36 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     }
     if (e.type === "user") {
       if (!payload?.steered) stoppedShown = false;
-      if (payload?.hidden) continue;
+      if (payload?.overheard && payload.sourceRole === "agent") {
+        if (payload.hidden) continue;
+        let original = payload.deliveryKey ? repliesByDelivery.get(payload.deliveryKey) : undefined;
+        if (original) {
+          if (e.seq !== undefined) original.entrySeqs = [...(original.entrySeqs ?? []), e.seq];
+        } else {
+          spillHeldPosts();
+          flushWork("", e.createdAt);
+          original = flushWork(
+            text,
+            e.createdAt,
+            false,
+            undefined,
+            false,
+            e.seq === undefined ? [] : [e.seq],
+            payload.deliveryKey,
+          );
+        }
+        if (original && payload.ts) messagesByTs.set(payload.ts, original);
+        continue;
+      }
+      const msg = userEntryMessage(e);
+      if (payload?.hidden && !msg) continue;
       if (!payload?.steered) {
         posted = false;
         spillHeldPosts();
         flushWork("", e.createdAt);
       }
-      const msg = userEntryMessage(e);
       if (msg) {
-        if (msg.ts) userByTs.set(msg.ts, msg);
+        if (msg.ts) messagesByTs.set(msg.ts, msg);
         if (msg.steered) {
           pending.push({
             seq: e.seq ?? out.length,
@@ -2289,7 +2340,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       if (revision) {
         spillHeldPosts();
         flushWork("", e.createdAt);
-        const original = userByTs.get(revision.ts);
+        const original = messagesByTs.get(revision.ts);
         if (original) {
           if (revision.action === "deleted") original.deleted = true;
           else original.edited = true;

@@ -1,3 +1,6 @@
+import "./slack-reply";
+import type { SlackReply } from "./slack-reply";
+import { type WebhookEvent } from "./webhook-event.ts";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { formatMessageTime } from "./message-time.ts";
 import { messageEntrySeqs, highlightMessage } from "./message-link.ts";
@@ -1159,6 +1162,14 @@ export function createChatSurface(
     resetBackgroundPanel();
     const host = document.createElement("div");
     host.className = "custom-chat readonly-chat";
+    const priorReply = sameSession ? container.querySelector<SlackReply>("qm-slack-reply") : null;
+    const slackReply =
+      surfaceOf(s) === "slack" ? (priorReply ?? (document.createElement("qm-slack-reply") as SlackReply)) : null;
+    if (slackReply) {
+      slackReply.sessionId = s.id;
+      slackReply.user = appState.me?.user ?? "";
+      if (!priorReply) slackReply.addEventListener("slack-sent", () => onDelivery(s.threadRef));
+    }
     let approvals: PendingApproval[] = [];
     const draw = () => {
       approvals = unresolvedApprovals(approvals);
@@ -1167,12 +1178,12 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), true)}
+            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack")}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
-                  ? html`This conversation lives in Slack. Replies happen
-                    there.${
+                  ? html`Replies are sent to this Slack conversation as
+                    you.${
                       sessionSlackUrl(s)
                         ? html` <a
                             class="readonly-banner-link"
@@ -1249,6 +1260,7 @@ export function createChatSurface(
                 ${ctx.composer.state.error ? html`<div class="composer-error inline">${ctx.composer.state.error}</div>` : nothing}
               </div>
             </section>
+            ${slackReply ?? nothing}
           </div>
         `,
         host,
@@ -1829,6 +1841,15 @@ export function createChatSurface(
     const role = (message as { role?: string }).role;
     if (!inline && (message as { steered?: boolean }).steered) return nothing;
     if (role === "user" || role === "user-with-attachments") {
+      const webhook = (message as { webhookEvent?: WebhookEvent }).webhookEvent;
+      if (webhook)
+        return html`<article
+          class="message-row webhook-event-row"
+          data-index=${index}
+          data-entry-seqs=${messageEntrySeqs(message).join(" ")}
+        >
+          ${webhookEventCard(webhook)}${messageMeta(message, index)}
+        </article>`;
       const mail = (message as { subagentMail?: SubagentMailRef }).subagentMail;
       if (mail) {
         return html`
@@ -1934,7 +1955,7 @@ export function createChatSurface(
       `;
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
-      const who = note.speaker ?? "The user";
+      const who = note.speaker ?? (note.sourceRole === "agent" ? chatState.assistantSpeakerLabel : "The user");
       return row(
         note.action === "deleted"
           ? html`${who} deleted their message`
@@ -1967,6 +1988,8 @@ export function createChatSurface(
         workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
       }
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
+      const revision = ((msg as AssistantWork).deleted && "deleted") || ((msg as AssistantWork).edited && "edited");
+      const revisionBadge = revision ? html`<span class="revision-badge">(${revision})</span>` : nothing;
       const hasVisibleContent =
         showWork ||
         steeringOnly.length > 0 ||
@@ -1983,6 +2006,7 @@ export function createChatSurface(
             .join(" "),
           streaming: isStreaming,
           content: html`${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+          ${revisionBadge}
           ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}`,
           meta: isStreaming ? nothing : messageMeta(msg, index),
         });
@@ -2001,6 +2025,7 @@ export function createChatSurface(
           }
           <div class="assistant-body">
             ${workView} ${assistantContent(msg, isStreaming, showWork)} ${assistantFileList(deliveredFiles)}
+            ${revisionBadge}
             ${msg.stopReason === "error" && msg.errorMessage ? html`<div class="composer-error inline">${msg.errorMessage}</div>` : nothing}
             ${isStreaming ? nothing : messageMeta(msg, index)}
           </div>
@@ -2168,16 +2193,15 @@ export function createChatSurface(
     const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
     const chip = (handle: string): TemplateResult =>
       html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-    return html`<div class="slack-wire-text" dir="auto">
-      ${splitSlackWire(text).map((seg) => {
-        if (seg.kind === "mention") return chip(seg.handle);
-        if (seg.kind === "link")
-          return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-            >${seg.label}</a
-          >`;
-        return seg.text;
-      })}
-    </div>`;
+    const parts = splitSlackWire(text).map((seg) => {
+      if (seg.kind === "mention") return chip(seg.handle);
+      if (seg.kind === "link")
+        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
+          >${seg.label}</a
+        >`;
+      return seg.text;
+    });
+    return html`<div class="slack-wire-text" dir="auto">${parts}</div>`;
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
@@ -3564,4 +3588,30 @@ export function createChatSurface(
     redraw: () => drawActiveChat(),
     dispose,
   };
+}
+
+function webhookEventCard(event: WebhookEvent) {
+  return html`<div class="webhook-event">
+    <div class="webhook-event-heading">
+      Webhook received${event.scheme ? html`<span>${event.scheme}</span>` : nothing}
+    </div>
+    ${event.action ? html`<div class="webhook-event-action">${event.action}</div>` : nothing}
+    <details open>
+      <summary>Event payload</summary>
+      <pre>${event.payload}</pre>
+    </details>
+    <details>
+      <summary>Delivery details</summary>
+      <dl>
+        <dt>Webhook</dt>
+        <dd>${event.id || "Unknown"}</dd>
+        ${
+          event.deliveryId
+            ? html`<dt>Delivery</dt>
+                <dd>${event.deliveryId}</dd>`
+            : nothing
+        }
+      </dl>
+    </details>
+  </div>`;
 }

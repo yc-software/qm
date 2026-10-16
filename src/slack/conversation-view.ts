@@ -147,6 +147,9 @@ export function createConversationSerializer(deps: {
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
         ...(m.bot_id ? { isBot: true } : {}),
         ...(isSelfMessage(m) ? { isSelf: true } : {}),
+        ...(isSelfMessage(m) && m.metadata?.event_type === "qm_delivery" && m.metadata.event_payload?.idempotency_key
+          ? { deliveryKey: m.metadata.event_payload.idempotency_key }
+          : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
         ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),

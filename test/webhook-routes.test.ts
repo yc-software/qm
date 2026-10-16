@@ -255,12 +255,12 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
       ["?viewer=U2", 404],
       ["", 404],
     ] as const) {
-      const path = `/v1/webhooks/${webhook.id}/events${suffix}`;
+      const path = `/v1/webhooks/${webhook.id}/runs${suffix}`;
       const res = await fetch(`${srv.base}${path}`, { headers: sign("GET", path, "") });
       assert.equal(res.status, status);
-      if (status === 200) assert.deepEqual(await res.json(), { events: [] });
+      if (status === 200) assert.deepEqual(await res.json(), { runs: [], total: 0 });
     }
-    assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/events?viewer=U1`)).status, 401);
+    assert.equal((await fetch(`${srv.base}/v1/webhooks/${webhook.id}/runs?viewer=U1`)).status, 401);
     const eventBody = JSON.stringify({ message: "agent message for worklog" });
     const accepted = await fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
       method: "POST",
@@ -268,11 +268,11 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
       body: eventBody,
     });
     assert.equal(accepted.status, 202);
-    const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
+    const historyPath = `/v1/webhooks/${webhook.id}/runs?viewer=U1`;
     let events: Array<{ sessionId?: string; payload: string }> = [];
     for (let i = 0; i < 100; i++) {
       const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
-      ({ events } = (await history.json()) as { events: typeof events });
+      ({ runs: events } = (await history.json()) as { runs: typeof events });
       if (events[0]?.sessionId) break;
       await new Promise((r) => setTimeout(r, 10));
     }

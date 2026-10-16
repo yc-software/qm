@@ -370,6 +370,7 @@ export interface PostedFileMeta {
 }
 
 export interface SurfacePostResult {
+  deliveryKey?: string;
   ok: boolean;
   deliveryId?: string;
   message?: string;

@@ -1,6 +1,7 @@
+import { canManageAutomation } from "../triggers/automation-service.ts";
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
-import type { Cron, CronFireLogEntry, CronSchedule, Destination, Webhook } from "../types.ts";
+import type { Cron, AutomationRun, CronSchedule, Destination, Webhook } from "../types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -103,7 +104,7 @@ export interface CronRunsRequest {
 
 export interface CronRunsResult {
   cron: Cron;
-  runs: CronFireLogEntry[];
+  runs: AutomationRun[];
   total: number;
 }
 
@@ -207,7 +208,7 @@ export async function canAdministerCron(
   return (await app.artifactGrantPermission(cron.ownerScopeId, encodeRef(cronRef(cron.id)), actorId)) === "write";
 }
 
-export async function editWebhookTask(
+async function editWebhookTask(
   app: App,
   id: string,
   action: string,
@@ -218,7 +219,7 @@ export async function editWebhookTask(
   if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
   if (!(await canAdministerWebhook(app, webhook, principalId)))
     return { ok: false, code: "forbidden", message: "not your webhook" };
-  const updated = await app.updateWebhook(id, { action });
+  const updated = await app.updateWebhook(id, { action }, principalId);
   return updated ? { ok: true, webhook: updated } : { ok: false, code: "not_found", message: `no webhook ${id}` };
 }
 
@@ -228,10 +229,7 @@ export async function canAdministerWebhook(
   actorId: string,
   isActor?: (id: string) => Promise<boolean>,
 ): Promise<boolean> {
-  if (await app.membershipControlsScope(webhook.ownerScopeId)) {
-    return app.managesScope(actorId, webhook.ownerScopeId);
-  }
-  return isActor ? isActor(webhook.owner) : app.samePerson(webhook.owner, actorId);
+  return canManageAutomation(app, webhook, actorId, isActor);
 }
 
 function withDefaultTimezone(schedule: CronSchedule, cap: CapabilityClaims): CronSchedule {
@@ -564,7 +562,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         }
       }
       try {
-        const cron = await app.updateCron(id, patch);
+        const cron = await app.updateCron(id, patch, capability.actorId);
         if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
         const changeSummary: string[] = [];
         if (req.runtime !== undefined) changeSummary.push("runtime");
@@ -643,7 +641,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      await app.deleteCron(id);
+      await app.deleteCron(id, capability.actorId);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
     },
@@ -658,7 +656,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         if (refusal) return { ok: false, code: "forbidden", message: refusal };
       }
       if (cron.enabled === enabled) return { ok: true, cron };
-      await app.setCronEnabled(id, enabled);
+      await app.setCronEnabled(id, enabled, capability.actorId);
       await notifyEdit(cron, capability, [`enabled=${enabled}`]);
       const after = await app.getCron(id);
       return { ok: true, cron: after ?? cron };
@@ -793,7 +791,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your webhook" };
-      await app.setWebhookEnabled(id, false);
+      await app.setWebhookEnabled(id, false, capability.actorId);
       return { ok: true };
     },
 

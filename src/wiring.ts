@@ -156,7 +156,7 @@ import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { LEGACY_HARNESS_MIGRATION } from "./model/legacy-harness-migration.ts";
-import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
+import { createMemoryAutomationRunStore, createPostgresAutomationRunStore } from "./triggers/run-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import {
@@ -184,8 +184,9 @@ import {
 } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
+import { createPgBossWebhookQueue } from "./webhooks/job-queue.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
-import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
+import { createWebhookStore } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
@@ -1903,7 +1904,9 @@ export function buildApp(
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
   const cronChanged: { notify?: (id: string) => void } = {};
-  const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
+  const cronFires = config.databaseUrl
+    ? createPostgresAutomationRunStore(config.databaseUrl)
+    : createMemoryAutomationRunStore();
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
     staleRunningMs: config.runMaxAgeMs,
     fires: cronFires,
@@ -1943,7 +1946,7 @@ export function buildApp(
       `UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean`,
     ],
   });
-  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), artifactMap<WebhookHistory>("webhook_history"));
+  const webhooks = createWebhookStore(artifactMap<Webhook>("webhooks"), cronFires);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
     legacyId: "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
@@ -2596,7 +2599,7 @@ export function buildApp(
     sessions,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
-      ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
+      ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency, config.runWaitMs) }
       : {}),
     sweepAsks: async (now) => {
       if (!ingressMaintenance)
@@ -2679,6 +2682,17 @@ export function buildApp(
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
+    admittedWork,
+    ...(config.databaseUrl
+      ? {
+          jobQueue: createPgBossWebhookQueue(
+            config.databaseUrl,
+            undefined,
+            config.cronFireConcurrency,
+            config.runWaitMs,
+          ),
+        }
+      : {}),
     deliveries,
     idempotency,
     identity,
@@ -2894,7 +2908,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
-      await stopBackground();
+      await Promise.all([stopBackground(), scheduler.stopClaims(), webhookReceiver.stopClaims()]);
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
           swallowAs("wiring: admitted work drain failed", undefined),
@@ -2902,6 +2916,7 @@ export function buildApp(
         ...workers.map((w) => w.stop(config.shutdownDrainMs)),
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
+      await Promise.all([scheduler.stop(), webhookReceiver.stop()]);
       await drain.stop();
       stopStreamSync();
       await Promise.all(

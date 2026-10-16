@@ -304,7 +304,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       };
     },
     async post() {
-      return { ok: true, deliveryId: "d1" };
+      return { ok: true, deliveryId: "d1", deliveryKey: "post-key" };
     },
     async reach() {
       return { ok: true, deliveryId: "rc1", matched: "#somewhere" };
@@ -1086,6 +1086,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const posted = emitted.find((e) => e.type === "tool_result" && e.payload.action === "post")!.payload;
   assert.equal(posted.ok, true);
   assert.equal(posted.deliveryId, "d1");
+  assert.equal(posted.deliveryKey, "post-key");
   assert.equal(posted.tool, "slack");
 
   await call(slack, { action: "read_thread" });
@@ -1260,7 +1261,7 @@ test("post replies HERE only (placement via ts/broadcast, cross-targets rejected
     ...fakeToolContext(),
     async post(_text: string, opts?: unknown) {
       posts.push(opts);
-      return { ok: true, deliveryId: "d1" };
+      return { ok: true, deliveryId: "d1", deliveryKey: "post-key" };
     },
     async reach(_text: string, target?: unknown) {
       reaches.push(target);

@@ -29,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   SquareTerminal,
+  Webhook,
   Users,
   X,
   type IconNode,
@@ -801,7 +802,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = !s.canContinue;
+  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -958,6 +959,8 @@ function armMidnightRefresh(): void {
 
 function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   const surface = surfaceOf(s);
+  if (s.surface === "webhook")
+    return html`<span class="surface-glyph" aria-label="Webhook run" ${tip("Webhook run")}>${icon(Webhook, 12)}</span>`;
   if (surface === "slack") return html`<span class="surface-glyph">${slackLogo(12)}</span>`;
   if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
   return nothing;
@@ -977,8 +980,8 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const refreshingTitle = saved && refreshingTitleIds.has(s.id);
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
-  if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = !s.canContinue;
+  if (untitledProjectChild && !automationRunLabel(s)) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
+  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);

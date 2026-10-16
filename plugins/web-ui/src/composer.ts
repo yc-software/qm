@@ -1,4 +1,5 @@
 import { emojiCompletion } from "./emoji-completion";
+import { composerInput, resizeComposerInput } from "./composer-input";
 import { reportHandledError } from "./browser-errors.ts";
 import { appEditSlug } from "./app-edit";
 import { runtimeConfigKey, loadRuntimeConfig, saveRuntimeConfig, subscribeRuntimeConfig } from "./runtime-config-store";
@@ -671,20 +672,14 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         ${
           blockingPauses.length
             ? nothing
-            : html`
-                <textarea
-                  class="composer-input"
-                  dir="auto"
-                  ${emojiCompletion(composerState.draft)}
-                  rows="1"
-                  placeholder=${placeholder}
-                  ?disabled=${inputBlocked}
-                  .value=${live(composerState.draft)}
-                  @input=${(e: InputEvent) => onDraftInput(e, agent)}
-                  @keydown=${(e: KeyboardEvent) => onComposerKeydown(e, agent)}
-                  @paste=${(e: ClipboardEvent) => void onComposerPaste(e, agent)}
-                ></textarea>
-              `
+            : composerInput({
+                value: composerState.draft,
+                placeholder,
+                disabled: inputBlocked,
+                onInput: (e) => onDraftInput(e, agent),
+                onKeydown: (e) => onComposerKeydown(e, agent),
+                onPaste: (e) => void onComposerPaste(e, agent),
+              })
         }
         <div class="composer-toolbar">
           <div class="composer-left">
@@ -2024,20 +2019,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       }
       if (ta.value === autosizedValue) return;
       autosizedValue = ta.value;
-      const wrap = ta.closest<HTMLElement>(".composer-wrap");
-      const wrapHeight = wrap?.style.height ?? "";
-      if (wrap) wrap.style.height = `${wrap.getBoundingClientRect().height}px`;
-      ta.style.height = "auto";
-      const cap = parseFloat(getComputedStyle(ta).maxHeight) || 180;
-      const content = ta.scrollHeight;
-      ta.style.height = `${Math.min(cap, Math.max(ctx.pane ? 0 : 48, content))}px`;
-      if (wrap) wrap.style.height = wrapHeight;
-      if (content > cap) {
-        ta.style.overflowY = "auto";
-      } else {
-        ta.style.overflowY = "hidden";
-        ta.scrollTop = 0;
-      }
+      resizeComposerInput(ta, ctx.pane ? 0 : 48);
     });
   }
 

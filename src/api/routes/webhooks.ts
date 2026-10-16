@@ -1,8 +1,9 @@
+import { automationFields, isAutomationFields } from "./automation-fields.ts";
 import type { Webhook } from "../../types.ts";
 import { WEBHOOK_SCHEMES } from "../../webhooks/verifiers.ts";
 import type { CreateWebhookInput } from "../../webhooks/webhook-store.ts";
 import { errMessage } from "../../util/errors.ts";
-import { canAdministerWebhook, editWebhookTask } from "../control-service.ts";
+import { canAdministerWebhook } from "../control-service.ts";
 import { PayloadTooLargeError, readRawBody, sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
@@ -146,16 +147,6 @@ async function listWebhooks(ctx: ApiCtx): Promise<void> {
   });
 }
 
-async function listWebhookEvents(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, capability, actor, url } = ctx;
-  const webhook = await app.getWebhook(params.id!);
-  const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
-  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer))) {
-    return sendJson(res, 404, { error: "not_found" });
-  }
-  return sendJson(res, 200, { events: await app.listWebhookEvents(webhook.id, viewer) });
-}
-
 async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
   const { res, app, params, capability, actor, url } = ctx;
   const id = params.id!;
@@ -169,24 +160,55 @@ async function setWebhookEnabled(ctx: ApiCtx, enabled: boolean): Promise<void> {
       ...(portalCaller ? { message: "not your webhook" } : {}),
     });
   }
-  await app.setWebhookEnabled(id, enabled);
+  await app.setWebhookEnabled(id, enabled, principalId ?? undefined);
   return sendJson(res, 200, { ok: true });
 }
 
 async function updateWebhook(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps, params, capability, actor, url, body } = ctx;
-  const action = isObj(body) && typeof body.action === "string" ? body.action : "";
-  const principalId = actor?.p ?? url.searchParams.get("principalId");
-  if (!capability && !principalId) return sendJson(res, 404, { error: "not_found" });
-  const r = capability
-    ? await deps.control.updateWebhook(params.id!, { action }, capability)
-    : await editWebhookTask(app, params.id!, action, principalId!);
-  if (!r.ok) return sendJson(res, WEBHOOK_ERROR_STATUS[r.code] ?? 400, { error: r.code, message: r.message });
-  return sendJson(res, 200, { webhook: redactWebhook(r.webhook), url: inboundUrl(deps.publicUrl, r.webhook.id) });
+  const { res, app, params, capability, actor, url, body } = ctx;
+  const webhook = await app.getWebhook(params.id!);
+  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
+  if (!principalId || !webhook || !(await canAdministerWebhook(app, webhook, principalId)))
+    return sendJson(res, 404, { error: "not_found" });
+  if (
+    !isObj(body) ||
+    !isAutomationFields(body) ||
+    Object.keys(body).some((key) => !["action", "task", "title", "archived"].includes(key)) ||
+    (body.action !== undefined && !body.action.trim()) ||
+    (body.task !== undefined && !body.task.trim()) ||
+    (body.action !== undefined && body.task !== undefined) ||
+    (body.title !== undefined && !body.title.trim()) ||
+    !Object.keys(body).length
+  )
+    return sendJson(res, 400, { error: "bad_request", message: "provide title, task, action, or archived" });
+  const updated = await app.updateWebhook(webhook.id, automationFields(body), principalId);
+  if (!updated) return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, {
+    webhook: { ...redactWebhook(updated), url: inboundUrl(ctx.deps.publicUrl, updated.id) },
+  });
 }
 
 const disableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, false);
 const enableWebhook = (ctx: ApiCtx): Promise<void> => setWebhookEnabled(ctx, true);
+
+async function deleteWebhook(ctx: ApiCtx): Promise<void> {
+  const { app, params, capability, actor, url, res } = ctx;
+  const principalId = capability?.actorId ?? actor?.p ?? url.searchParams.get("principalId");
+  const webhook = await app.getWebhook(params.id!);
+  if (!principalId || !webhook || !(await canAdministerWebhook(app, webhook, principalId)))
+    return sendJson(res, 404, { error: "not_found" });
+  await app.deleteWebhook(webhook.id, principalId);
+  return sendJson(res, 200, { ok: true });
+}
+
+async function listWebhookRuns(ctx: ApiCtx): Promise<void> {
+  const { app, params, capability, actor, url, res } = ctx;
+  const viewer = capability?.actorId ?? actor?.p ?? url.searchParams.get("viewer");
+  const webhook = await app.getWebhook(params.id!);
+  if (!viewer || !webhook || !(await canAdministerWebhook(app, webhook, viewer)))
+    return sendJson(res, 404, { error: "not_found" });
+  return sendJson(res, 200, await app.listWebhookFires(webhook.id, viewer));
+}
 
 export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   { method: "POST", path: "/v1/webhooks/incoming/:id", auth: "public", handle: incomingWebhook },
@@ -194,9 +216,10 @@ export const webhookRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 
 export const webhookRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/webhooks", auth: "either", handle: createWebhook },
+  { method: "DELETE", path: "/v1/webhooks/:id", auth: "either", handle: deleteWebhook },
+  { method: "GET", path: "/v1/webhooks/:id/runs", auth: "either", handle: listWebhookRuns },
+  { method: "PATCH", path: "/v1/webhooks/:id", auth: "either", handle: updateWebhook },
   { method: "GET", path: "/v1/webhooks", auth: "either", handle: listWebhooks },
-  { method: "GET", path: "/v1/webhooks/:id/events", auth: "either", handle: listWebhookEvents },
-  { method: "POST", path: "/v1/webhooks/:id/update", auth: "either", handle: updateWebhook },
   { method: "POST", path: "/v1/webhooks/:id/disable", auth: "either", handle: disableWebhook },
   { method: "POST", path: "/v1/webhooks/:id/enable", auth: "either", handle: enableWebhook },
 ];

@@ -1,7 +1,31 @@
+import { reportFailure } from "../../util/errors.ts";
+import { slackWebClient } from "../../slack/web-client.ts";
+import type { EmojiListResponse } from "@slack/web-api";
 import { runEmojiUpload, type EmojiUploadDeps } from "../../connectors/emoji-upload-service.ts";
 import { sendJson } from "../http.ts";
-import { isObj } from "./shared.ts";
+import { activePrincipal, orgScope, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+
+export async function listWorkspaceEmoji(ctx: ApiCtx): Promise<void> {
+  if (!ctx.actor || ctx.actor.imp || ctx.capability || !(await activePrincipal(ctx.deps, ctx.actor.p)))
+    return sendJson(ctx.res, 403, { error: "forbidden" });
+  ctx.res.setHeader("Cache-Control", "private, max-age=300");
+  const cached = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  if (cached && Object.keys(cached.emoji).length) return sendJson(ctx.res, 200, { emoji: cached.emoji });
+  const installation = await ctx.deps.slackInstallation?.get();
+  const token = installation?.botToken ?? ctx.deps.slackEnvBotToken;
+  if (!token) return sendJson(ctx.res, 200, { emoji: {} });
+  try {
+    const data = (await slackWebClient(token, ctx.deps.slackWebClient, 10_000).apiCall(
+      "emoji.list",
+    )) as EmojiListResponse;
+    if (!data.ok) return sendJson(ctx.res, 502, { error: "emoji_unavailable" });
+    return sendJson(ctx.res, 200, { emoji: data.emoji ?? {} });
+  } catch (error) {
+    reportFailure("Slack workspace emoji", error);
+    return sendJson(ctx.res, 502, { error: "emoji_unavailable" });
+  }
+}
 
 async function addEmoji(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability } = ctx;
@@ -38,5 +62,6 @@ async function addEmoji(ctx: ApiCtx): Promise<void> {
 }
 
 export const emojiRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/slack/emoji", auth: "source", handle: listWorkspaceEmoji },
   { method: "POST", path: "/v1/emoji", auth: "either", handle: addEmoji },
 ];

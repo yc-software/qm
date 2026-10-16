@@ -52,6 +52,7 @@ export function buildContextWindow(
 }
 
 export interface RecentMessage {
+  deliveryKey?: string;
   ts: string;
   name: string;
   text: string;
@@ -144,6 +145,7 @@ export interface ConversationTurn {
 }
 
 export interface OverheardMessage {
+  deliveryKey?: string;
   ts: string;
   role: "user" | "self";
   name?: string;
@@ -206,6 +208,7 @@ export function renderConversationView(view: ConversationView): RenderedConversa
         ts: m.ts,
         role: (m.isSelf ? "self" : "user") as "user" | "self",
         ...(m.isSelf ? {} : { name: m.name || "someone" }),
+        ...(m.isSelf && m.deliveryKey ? { deliveryKey: m.deliveryKey } : {}),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
       };

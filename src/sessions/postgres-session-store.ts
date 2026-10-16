@@ -236,6 +236,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     participantWindowBounds(entry, participant)
       .map((bounds) => `(${bounds.join(" OR ")})`)
       .join(" AND ");
+  function transcriptEntryPredicate(alias: string, participant?: string): string {
+    return `${alias}.type <> 'soul' AND (
+      ${alias}.payload::jsonb -> 'slackReplyReceipt' IS DISTINCT FROM 'true'::jsonb
+      OR NOT EXISTS (
+        SELECT 1 FROM session_entries received
+        WHERE received.session_id = ${alias}.session_id AND received.type = 'user'
+          AND received.payload::jsonb ->> 'ts' = ${alias}.payload::jsonb ->> 'ts'
+          AND received.payload::jsonb -> 'slackReplyReceipt' IS DISTINCT FROM 'true'::jsonb
+          ${participant ? `AND ${withinParticipantWindow("received", participant)}` : ""}
+      )
+    )`;
+  }
   const [fromBounds, toBounds] = participantWindowBounds("x", "p");
   const participantPresenceSql = fromBounds
     .flatMap((from) =>
@@ -1175,13 +1187,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const rows =
         principalId === undefined
           ? await q(
-              "SELECT count(*)::int AS n FROM session_entries WHERE session_id = $1 AND seq < $2 AND type <> 'soul'",
+              `SELECT count(*)::int AS n FROM session_entries e WHERE session_id = $1 AND seq < $2 AND ${transcriptEntryPredicate("e")}`,
               [sessionId, beforeSeq],
             )
           : await q(
               `SELECT count(*)::int AS n FROM session_entries e
                  JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $3
-                WHERE e.session_id = $1 AND e.seq < $2 AND e.type <> 'soul' AND ${withinParticipantWindow("e", "p")}`,
+                WHERE e.session_id = $1 AND e.seq < $2 AND ${transcriptEntryPredicate("e", "p")} AND ${withinParticipantWindow("e", "p")}`,
               [sessionId, beforeSeq, principalId],
             );
       return Number(rows[0]?.n ?? 0);
@@ -1236,9 +1248,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
     },
 
+    async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
+      const rows = await q(
+        `SELECT 1 FROM session_entries WHERE session_id = $1
+         AND (payload::jsonb ->> 'deliveryKey' = $2
+           OR (type = 'user' AND payload::jsonb ->> 'ts' = $3)) LIMIT 1`,
+        [sessionId, deliveryKey, slackTs ?? null],
+      );
+      return rows.length > 0;
+    },
+
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
-      let sql = "SELECT * FROM session_entries WHERE session_id = $1 AND seq >= $2";
+      let sql = "SELECT e.* FROM session_entries e WHERE session_id = $1 AND seq >= $2";
+      if (opts?.transcript) sql += ` AND ${transcriptEntryPredicate("e")}`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);
         sql += ` AND seq < $${params.length}`;
@@ -1566,6 +1589,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = e.session_id AND p.principal_id = $2
           WHERE e.session_id = $1 AND e.seq >= $3
             AND ${withinParticipantWindow("e", "p")}`;
+      if (opts?.transcript) sql += ` AND ${transcriptEntryPredicate("e", "p")}`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);
         sql += ` AND e.seq < $${params.length}`;

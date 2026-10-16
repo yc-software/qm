@@ -1,12 +1,13 @@
+import { runRecordedTrigger } from "../triggers/run-record.ts";
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
+import { type Cron, type AutomationRun, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
+import { type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -33,7 +34,7 @@ type FireResult = { authzFailed: boolean; deferred?: boolean };
 type RunNowResult =
   | { started: true; fireKey: string; settled: Promise<void> }
   | { started: false; reason: "unavailable" }
-  | { started: false; reason: "already_running"; running: CronFireLogEntry };
+  | { started: false; reason: "already_running"; running: AutomationRun };
 
 export function describeRunNowRefusal(
   id: string,
@@ -232,7 +233,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function fireEnabled(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
     const threadRef = cronFireThreadRef(cron.id, fireKey);
-    const runningEntry: CronFireLogEntry = {
+    const runningEntry: AutomationRun = {
       fireKey,
       threadRef,
       firedAt: t,
@@ -262,48 +263,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
-    let outcome: Awaited<ReturnType<typeof runTrigger>>;
-    try {
-      outcome = await runTrigger(
-        {
-          deliveries: deps.deliveries,
-          idempotency: deps.idempotency,
-          identity: deps.identity,
-          run: deps.run,
-          ...(deps.directory ? { directory: deps.directory } : {}),
-          ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
-          ...(deps.sessions ? { sessions: deps.sessions } : {}),
-        },
-        {
-          ...cronTriggerAuthority(cron),
-          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster)),
-          fireKey,
-          threadRef,
-          surface: "cron",
-          ...(cron.runtime ? { runtime: cron.runtime } : {}),
-          ...(cron.title ? { title: cron.title } : {}),
-          onClaimed: async () => {
-            await deps.crons.beginFire(cron.id, runningEntry);
-          },
-          ...(cron.message !== undefined ? { message: cron.message } : {}),
-          ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
-          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
-          deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
-        },
-      );
-    } catch (e) {
-      await deps.crons.recordFire(cron.id, {
+    const outcome = await runRecordedTrigger(
+      {
+        deliveries: deps.deliveries,
+        idempotency: deps.idempotency,
+        identity: deps.identity,
+        run: deps.run,
+        ...(deps.directory ? { directory: deps.directory } : {}),
+        ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+        ...(deps.sessions ? { sessions: deps.sessions } : {}),
+      },
+      {
+        ...cronTriggerAuthority(cron),
+        input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster)),
         fireKey,
         threadRef,
-        firedAt: t,
-        endedAt: now(),
-        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: "failed",
-        note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
-      });
-      throw e;
-    }
+        surface: "cron",
+        ...(cron.runtime ? { runtime: cron.runtime } : {}),
+        ...(cron.title ? { title: cron.title } : {}),
+        ...(cron.message !== undefined ? { message: cron.message } : {}),
+        ...(cron.destination ? { destination: cron.destination } : {}),
+        ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
+        recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
+        deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
+      },
+      {
+        entry: runningEntry,
+        begin: (entry) => deps.crons.beginFire(cron.id, entry),
+        record: (entry) => deps.crons.recordFire(cron.id, entry),
+        now,
+        reply: cronFireLogReply,
+      },
+    );
     if (outcome.deferred) {
       const deferUntil = now() + BUSY_DEFER_MS;
       await deps.crons.recordFire(cron.id, {
@@ -318,22 +309,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await deps.crons.defer(cron.id, deferUntil);
       return { authzFailed: false, deferred: true };
     }
-    if (outcome.ran || outcome.authzFailed) {
-      await deps.crons.recordFire(cron.id, {
-        fireKey,
-        threadRef,
-        firedAt: t,
-        endedAt: now(),
-        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
-        ...(outcome.note ? { note: truncate(outcome.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
-        ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),
-        ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
-      });
-    }
     if (outcome.ownerLeft) await (deps.deleteCron ? deps.deleteCron(cron.id) : deps.crons.delete(cron.id));
-    else if (outcome.authzFailed) await deps.crons.setEnabled(cron.id, false);
-    if (outcome.authzFailed) return { authzFailed: true };
+    if (outcome.authzFailed) {
+      if (!outcome.ownerLeft) await deps.crons.setEnabled(cron.id, false);
+      return { authzFailed: true };
+    }
     if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
     return { authzFailed: false };
   }

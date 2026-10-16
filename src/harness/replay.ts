@@ -67,6 +67,7 @@ export interface SeededMessage {
 }
 
 export interface OverheardEntryPayload {
+  deliveryKey?: string;
   overheard: true;
   sourceRole?: "agent";
   ts: string;
@@ -115,6 +116,7 @@ export function selectOverheardToImport(
     out.push({
       overheard: true,
       ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
+      ...(m.role === "self" && m.deliveryKey ? { deliveryKey: m.deliveryKey } : {}),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
       text,

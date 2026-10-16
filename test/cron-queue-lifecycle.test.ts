@@ -7,6 +7,8 @@ let adapter: Adapter;
 let failStart = false;
 let failWork = false;
 let emitError: (e: Error) => void = () => {};
+let wip: { name: string; count: number }[] = [];
+let onFetch: (jobs: { data: { cronId: string; scheduledAt: number }; signal: AbortSignal }[]) => Promise<void>;
 
 mock.module("../src/persistence/pg-pool.ts", {
   namedExports: {
@@ -40,8 +42,12 @@ mock.module("pg-boss", {
         if (failStart) throw new Error("startup failed");
       }
       async createQueue() {}
-      async work() {
+      async work(_name: string, _options: unknown, callback: typeof onFetch) {
         if (failWork) throw new Error("polling failed");
+        onFetch = callback;
+      }
+      getWipData() {
+        return wip;
       }
       async offWork() {}
       async stop() {}
@@ -51,6 +57,63 @@ mock.module("pg-boss", {
 
 const { createPgBossCronQueue } = await import("../src/cron/job-queue.ts");
 const handlers = { onFire: async () => {} };
+
+test("pausing waits for in-flight fetches but does not drain admitted work", async () => {
+  const queue = createPgBossCronQueue("postgres://unused");
+  const done = Promise.withResolvers<void>();
+  let calls = 0;
+  let finished = false;
+  await queue.start({
+    onFire: async () => {
+      calls++;
+      await done.promise;
+      finished = true;
+    },
+  });
+  wip = [{ name: "cron-fire", count: 0 }];
+  let paused = false;
+  const stopping = queue.stopClaims!().then(() => {
+    paused = true;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(paused, false);
+    wip[0]!.count = 1;
+    const running = onFetch([{ data: { cronId: "late", scheduledAt: 1 }, signal: new AbortController().signal }]);
+    await stopping;
+    assert.equal(calls, 1);
+    assert.equal(finished, false);
+    done.resolve();
+    await running;
+    assert.equal(finished, true);
+  } finally {
+    wip = [];
+    done.resolve();
+    await stopping;
+    await queue.stop();
+  }
+});
+
+test("pausing waits for an empty fetch to retire before admitting new deliveries", async () => {
+  const queue = createPgBossCronQueue("postgres://unused");
+  await queue.start(handlers);
+  wip = [{ name: "cron-fire", count: 0 }];
+  let paused = false;
+  const stopping = queue.stopClaims!().then(() => {
+    paused = true;
+  });
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(paused, false);
+    wip = [];
+    await stopping;
+    assert.equal(paused, true);
+  } finally {
+    wip = [];
+    await stopping;
+    await queue.stop();
+  }
+});
 
 test("late worker SQL after stop cannot reopen the queue database", async () => {
   const queue = createPgBossCronQueue("postgres://unused");

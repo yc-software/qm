@@ -1,3 +1,4 @@
+import { findRoute } from "./routes/route.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 
@@ -14,7 +15,7 @@ interface AgentApiView {
 }
 
 interface AgentApiFamily {
-  match: (method: string, pathname: string) => boolean;
+  match?: (method: string, pathname: string) => boolean;
   when?: (view: AgentApiView) => boolean;
   guidance?: string;
   routes: AgentApiRoute[];
@@ -536,10 +537,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/webhooks" && (m === "POST" || m === "GET")) ||
-      (m === "GET" && /^\/v1\/webhooks\/[^/]+\/events$/.test(p)) ||
-      (m === "POST" && /^\/v1\/webhooks\/[^/]+\/(disable|enable|update)$/.test(p)),
     when: () => false,
     routes: [
       {
@@ -548,13 +545,10 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "register an inbound webhook that runs a prompt when an external system calls it (secret shown once)",
       },
       { method: "GET", path: "/v1/webhooks", summary: "list your webhooks" },
-      { method: "GET", path: "/v1/webhooks/:id/events", summary: "recent webhook payloads and sessions" },
+      { method: "PATCH", path: "/v1/webhooks/:id", summary: "edit webhook title, instructions, or archived state" },
+      { method: "DELETE", path: "/v1/webhooks/:id", summary: "delete a webhook" },
+      { method: "GET", path: "/v1/webhooks/:id/runs", summary: "webhook run history" },
       { method: "POST", path: "/v1/webhooks/:id/disable", summary: "disable a webhook" },
-      {
-        method: "POST",
-        path: "/v1/webhooks/:id/update",
-        summary: "update a webhook task in place (URL and secret unchanged)",
-      },
       { method: "POST", path: "/v1/webhooks/:id/enable", summary: "re-enable a webhook" },
     ],
   },
@@ -921,7 +915,7 @@ const WHOAMI_FOR_ALL: AgentApiFamily = {
 };
 
 export function agentApiMatches(method: string, pathname: string): boolean {
-  return FAMILIES.some((f) => f.match(method, pathname));
+  return FAMILIES.some((f) => (f.match ? f.match(method, pathname) : findRoute(f.routes, method, pathname) !== null));
 }
 
 export interface AgentApiListing {

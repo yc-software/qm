@@ -20,6 +20,8 @@ import {
   type SessionEntry,
 } from "../src/core-bridge.ts";
 
+Object.defineProperty(globalThis, "DOMParser", { configurable: true, value: new JSDOM().window.DOMParser });
+
 test("approval decisions remain visible history events instead of unresolved tool rows", () => {
   const messages = entriesToMessages([
     { type: "user", seq: 1, createdAt: 1, payload: { text: "show help" } },

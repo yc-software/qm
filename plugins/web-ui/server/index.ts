@@ -1297,6 +1297,16 @@ const apiRoutes: readonly WebRoute[] = [
       c.res.end();
     },
   },
+  ...["reply-status", "reply"].map((action) => ({
+    method: "POST",
+    path: `/api/composio/slack/${action}`,
+    handle: async (c: WebCtx) => {
+      const body = await readJson(c.req, c.res, false);
+      if (!body) return;
+      return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
+    },
+  })),
+  { method: "GET", path: "/api/slack/emoji", handle: (c) => relayCore(c.res, "GET", "/v1/slack/emoji") },
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -2172,7 +2182,17 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, user } = c;
       const provider = c.params.provider!;
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
-      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
+      const body = await readJson<{ returnTo?: unknown }>(c.req, res);
+      if (!body) return;
+      const returnTo =
+        typeof body?.returnTo === "string" &&
+        body.returnTo.startsWith("/") &&
+        !body.returnTo.startsWith("//") &&
+        !body.returnTo.includes("\\") &&
+        new URL(body.returnTo, PUBLIC_URL).origin === new URL(PUBLIC_URL).origin
+          ? body.returnTo
+          : "/keychain";
+      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });
       const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
       return relayCore(res, "GET", corePath);
     },
@@ -2813,18 +2833,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
     },
   },
-  {
-    method: "GET",
-    path: "/api/webhooks/:id/events",
-    handle: async ({ res, user, params }) =>
-      relay(
-        res,
-        await coreFetch(
-          "GET",
-          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
-        ),
-      ),
-  },
+
   {
     method: "POST",
     path: "/api/loops",
@@ -3051,6 +3060,33 @@ const apiRoutes: readonly WebRoute[] = [
       });
       return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
     },
+  },
+  {
+    method: "GET",
+    path: "/api/webhooks/:id/runs",
+    handle: ({ res, user, params }) =>
+      relayCore(res, "GET", `/v1/webhooks/${encodeURIComponent(params.id!)}/runs?viewer=${encodeURIComponent(user)}`),
+  },
+  {
+    method: "DELETE",
+    path: "/api/webhooks/:id",
+    handle: ({ res, user, params }) =>
+      relayCore(
+        res,
+        "DELETE",
+        `/v1/webhooks/${encodeURIComponent(params.id!)}?principalId=${encodeURIComponent(user)}`,
+      ),
+  },
+  {
+    method: "PATCH",
+    path: "/api/webhooks/:id",
+    handle: async ({ req, res, user, params }) =>
+      relayCore(
+        res,
+        "PATCH",
+        `/v1/webhooks/${encodeURIComponent(params.id!)}?principalId=${encodeURIComponent(user)}`,
+        await readBody(req),
+      ),
   },
   {
     method: "POST",

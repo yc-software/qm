@@ -1279,6 +1279,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
       let fallbackTitleWrite: Promise<void> | undefined;
+      if (!session.title && input.triggerTitle?.trim()) {
+        session.title = input.triggerTitle.trim();
+        fallbackTitleWrite = deps.sessions.updateTitle(session.id, session.title);
+      }
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
           fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText);

@@ -13,7 +13,18 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
 }
 
-const transcriptEntries = (entries: SessionEntry[]): SessionEntry[] => entries.filter((e) => e.type !== "soul");
+export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntry[] {
+  const received = new Set(
+    entries.flatMap((entry) => {
+      const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
+      return entry.type === "user" && payload?.ts && !payload.slackReplyReceipt ? [payload.ts] : [];
+    }),
+  );
+  return entries.filter((entry) => {
+    const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
+    return entry.type !== "soul" && !(payload?.slackReplyReceipt && payload.ts && received.has(payload.ts));
+  });
+}
 
 const emptyWindowStart = (opts?: GetEntriesOptions): number =>
   Math.min(opts?.sinceSeq ?? Infinity, opts?.beforeSeq ?? Infinity, Number.MAX_SAFE_INTEGER);
@@ -26,8 +37,8 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
   ): Promise<TranscriptRead> => {
     const entries = transcriptEntries(
       principalId === undefined
-        ? await sessions.getEntries(sessionId, opts)
-        : await sessions.visibleEntries(sessionId, principalId, opts),
+        ? await sessions.getEntries(sessionId, { ...opts, transcript: true })
+        : await sessions.visibleEntries(sessionId, principalId, { ...opts, transcript: true }),
     );
     const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && entries.length >= opts.limit);
     const earlier = windowed

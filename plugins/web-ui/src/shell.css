@@ -5437,11 +5437,11 @@ a.connector-widget:focus-visible {
   gap: 6px;
 }
 
-.cron-edit-dialog {
+.automation-edit-dialog {
   width: min(560px, calc(100vw - 32px));
 }
 
-.cron-edit-dialog label {
+.automation-edit-dialog label {
   display: grid;
   gap: 7px;
   margin-top: 16px;
@@ -5449,8 +5449,8 @@ a.connector-widget:focus-visible {
   font-weight: 600;
 }
 
-.cron-edit-dialog input,
-.cron-edit-dialog textarea {
+.automation-edit-dialog input,
+.automation-edit-dialog textarea {
   width: 100%;
 }
 
@@ -12572,6 +12572,62 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   padding: 6px 10px;
   white-space: pre-wrap;
   min-width: 80px;
+}
+
+.webhook-event-row {
+  align-items: stretch;
+}
+.webhook-event {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 0;
+}
+.webhook-event-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+.webhook-event-heading span {
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.webhook-event-action {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.webhook-event details {
+  margin-top: 12px;
+}
+.webhook-event summary {
+  cursor: pointer;
+  color: var(--muted-foreground);
+}
+.webhook-event pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--muted);
+  border-radius: 6px;
+  padding: 12px;
+}
+.webhook-event dd {
+  margin: 4px 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.automation-run-input {
+  min-width: 0;
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.automation-run-input pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .split-canvas:not(.single-pane) .dv-groupview:not(.dv-active-group) .composer-wrap {

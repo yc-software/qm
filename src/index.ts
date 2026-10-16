@@ -83,6 +83,7 @@ if (config.deployProvider === "docker") {
 
 if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   built.scheduler.start(1000);
+  await built.webhookReceiver.start();
 } else if (!config.backgroundDeploymentId) {
   console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 }
@@ -132,7 +133,7 @@ if (built.backgroundOwnership) {
   let activationEpoch = 0;
   const stopPeriodic = () => {
     activationEpoch++;
-    periodicStop = built.scheduler.stopClaims();
+    periodicStop = Promise.all([built.scheduler.stopClaims(), built.webhookReceiver.stopClaims()]).then(() => {});
     void periodicStop.catch((error) => console.error("[qm] periodic background stop failed:", errMessage(error)));
     void built.runtime
       .stopBackgroundClaims()
@@ -150,7 +151,7 @@ if (built.backgroundOwnership) {
       await periodicStop;
       if (signal.aborted || epoch !== activationEpoch) return;
       built.scheduler.start(1000);
-      await built.scheduler.ready();
+      await Promise.all([built.scheduler.ready(), built.webhookReceiver.start()]);
       if (signal.aborted || epoch !== activationEpoch) return;
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
@@ -163,11 +164,17 @@ if (built.backgroundOwnership) {
       await Promise.all([
         built.runtime.stopBackgroundClaims(),
         built.scheduler.stopClaims(),
+        built.webhookReceiver.stopClaims(),
         ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
       ]);
     },
     async drained() {
-      await Promise.all([built.runtime.backgroundDrained(), built.scheduler.drained(), periodicStop]);
+      await Promise.all([
+        built.runtime.backgroundDrained(),
+        built.scheduler.drained(),
+        built.webhookReceiver.drained(),
+        periodicStop,
+      ]);
     },
     onError: reportFailureAs("background ownership", undefined),
   });
@@ -191,7 +198,9 @@ function shutdown(signal: string): void {
     {
       async stop() {
         await backgroundController?.stop();
+        await built.webhookReceiver.stopClaims();
         await built.runtime.stop();
+        await built.webhookReceiver.stop();
       },
       releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     },

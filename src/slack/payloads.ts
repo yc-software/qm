@@ -19,6 +19,7 @@ export function parseEventId(body: unknown): string | undefined {
 }
 
 export interface SlackMessageEvent {
+  metadata?: { event_type?: string; event_payload?: { idempotency_key?: string } };
   blocks?: unknown[];
   channel: string;
   channel_type?: string;
@@ -64,6 +65,10 @@ export function parseMessageEvent(event: unknown): SlackMessageEvent {
     bot_id: str(e.bot_id),
     bot_profile: botProfile ? { name: str(botProfile.name) } : undefined,
     client_msg_id: str(e.client_msg_id),
+    metadata: {
+      event_type: str(rec(e.metadata)?.event_type),
+      event_payload: { idempotency_key: str(rec(rec(e.metadata)?.event_payload)?.idempotency_key) },
+    },
     text: str(e.text),
     ts: coerced(e.ts) ?? "",
     thread_ts: coerced(e.thread_ts),
@@ -146,6 +151,7 @@ export function parseBlockAction<T extends string>(
 }
 
 export interface SlackHistoryMessage {
+  metadata?: SlackMessageEvent["metadata"];
   blocks?: unknown[];
   edited?: { ts?: string };
   mentionsSelf?: boolean;

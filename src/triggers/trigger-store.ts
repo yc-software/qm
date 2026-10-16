@@ -82,11 +82,3 @@ export async function setTriggerEnabled<T extends TriggerBase>(
 ): Promise<void> {
   await backing.merge(id, { enabled } as Partial<T>);
 }
-
-export async function setTriggerRecipientConsent<T extends TriggerBase>(
-  backing: DurableMap<T>,
-  id: string,
-  recipientConsent: RecipientConsent,
-): Promise<void> {
-  await backing.merge(id, { recipientConsent } as Partial<T>);
-}

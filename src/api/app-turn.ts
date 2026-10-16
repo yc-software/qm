@@ -407,6 +407,7 @@ export function createTurnMethods(
         ...((!individualAuth || req.surface === "web") && requestedHarness ? { harness: requestedHarness } : {}),
         ...((!individualAuth || req.surface === "web") && requestedModel ? { model: requestedModel } : {}),
         ...turnModelOptions(req),
+        ...(req.triggered && req.triggerTitle?.trim() ? { triggerTitle: req.triggerTitle.trim().slice(0, 120) } : {}),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
           ? {

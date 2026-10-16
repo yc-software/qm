@@ -50,6 +50,7 @@ function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
     (e) =>
       ((e.type !== "thinking" && e.type !== "text") || isObj((e.payload as { step?: unknown } | null)?.step)) &&
       e.type !== "soul" &&
+      (e.payload as { slackReplyReceipt?: unknown } | null)?.slackReplyReceipt !== true &&
       (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
   );
 }

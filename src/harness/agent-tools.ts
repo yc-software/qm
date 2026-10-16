@@ -9,7 +9,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, AutomationRun, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -281,7 +281,7 @@ function fmtCronCreated(r: {
   return `Created cron ${fmtCronLine(r.cron)}${to}`;
 }
 
-function fmtCronRunLine(entry: CronFireLogEntry): string {
+function fmtCronRunLine(entry: AutomationRun): string {
   let lifecycle: string | null = null;
   if (entry.status === "running") {
     lifecycle = `in flight for ${Math.max(0, Math.round((Date.now() - entry.firedAt) / 60_000))}m`;
@@ -3482,6 +3482,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               action: "post",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.deliveryKey ? { deliveryKey: r.deliveryKey } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
@@ -3525,6 +3526,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               action: "reach",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
+              ...(r.deliveryKey ? { deliveryKey: r.deliveryKey } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(

@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { createPostgresAutomationRunStore } from "../src/triggers/run-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { scopeId, type Cron } from "../src/types.ts";
@@ -20,7 +20,7 @@ before(async () => {
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
 
 test("pg cron_fires: an upsert keyed (cron_id, fire_key) carries a fire from running to ended", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c1", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, scheduledAt: 900, status: "running" });
   let { runs, total } = await fires.listByCron("c1");
   assert.equal(total, 1);
@@ -48,7 +48,7 @@ test("pg cron_fires: an upsert keyed (cron_id, fire_key) carries a fire from run
 });
 
 test("pg cron_fires: a retried fireKey replaces its terminal row wholesale, shedding endedAt", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-retry", { fireKey: "k1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" });
   await fires.record("c-retry", { fireKey: "k1", threadRef: "t1", firedAt: 3_000, status: "running" });
   const { runs } = await fires.listByCron("c-retry");
@@ -59,7 +59,7 @@ test("pg cron_fires: a retried fireKey replaces its terminal row wholesale, shed
 });
 
 test("pg cron_fires: listByCron pages the latest N with the full total", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   for (const [key, at] of [
     ["k1", 1_000],
     ["k3", 3_000],
@@ -76,7 +76,7 @@ test("pg cron_fires: listByCron pages the latest N with the full total", { skip 
 });
 
 test("pg cron_fires: thread-ref lookups hit the indexed columns across crons", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-a", {
     fireKey: "ka",
     threadRef: "thread-a",
@@ -112,7 +112,7 @@ test(
   "pg cron_fires: backfill is an idempotent guarded upsert that never regresses an ended row",
   { skip },
   async () => {
-    const fires = createPostgresCronFireStore(URL!);
+    const fires = createPostgresAutomationRunStore(URL!);
     const entries = [
       { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" as const },
       { fireKey: "k2", threadRef: "t2", firedAt: 2_000, endedAt: 3_000, status: "ok" as const, reply: "two" },
@@ -129,7 +129,7 @@ test(
 );
 
 test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NULs stripped)", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-nul", {
     fireKey: "k1",
     threadRef: "t1",
@@ -142,7 +142,7 @@ test("pg cron_fires: fire rows accept text a legacy jsonb blob would reject (NUL
 });
 
 test("pg cron_fires: the cron store writes the table only and reads back through it", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   const backing = createPostgresMapFactory(URL!).map<Cron>("fire_test_crons");
   const store = createCronStore(backing, { fires });
   const cron = await store.create({ ...base, schedule: { everyMs: 60_000 } });
@@ -157,7 +157,7 @@ test("pg cron_fires: the cron store writes the table only and reads back through
 });
 
 test("pg cron_fires: backfill never clobbers a newer retry of the same fireKey", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-retry-slot", { fireKey: "slot-1", threadRef: "t1", firedAt: 3_000, status: "running" });
   await fires.backfill("c-retry-slot", [
     { fireKey: "slot-1", threadRef: "t1", firedAt: 1_000, endedAt: 2_000, status: "failed" },
@@ -172,7 +172,7 @@ test(
   "pg cron_fires: beginExclusive is a real CAS — refused while live, allowed after end or staleness",
   { skip },
   async () => {
-    const fires = createPostgresCronFireStore(URL!);
+    const fires = createPostgresAutomationRunStore(URL!);
     const first = await fires.beginExclusive(
       "c-excl",
       { fireKey: "k1", threadRef: "t1", firedAt: 1_000, status: "running" },
@@ -204,7 +204,7 @@ test(
 );
 
 test("pg cron_fires: concurrent beginExclusive calls admit exactly one fire", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   const results = await Promise.all(
     Array.from({ length: 5 }, (_v, i) =>
       fires.beginExclusive(
@@ -219,7 +219,7 @@ test("pg cron_fires: concurrent beginExclusive calls admit exactly one fire", { 
 });
 
 test("pg cron_fires: sweepStranded closes only over-age running rows and reports the count", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-sweep", { fireKey: "old", threadRef: "t1", firedAt: 1_000, status: "running" });
   await fires.record("c-sweep", { fireKey: "live", threadRef: "t2", firedAt: 8_000, status: "running" });
   await fires.record("c-sweep", { fireKey: "done", threadRef: "t3", firedAt: 2_000, endedAt: 2_500, status: "ok" });
@@ -236,7 +236,7 @@ test("pg cron_fires: sweepStranded closes only over-age running rows and reports
 });
 
 test("pg cron_fires: pruneEnded respects the keep window, the age cutoff, and running rows", { skip }, async () => {
-  const fires = createPostgresCronFireStore(URL!);
+  const fires = createPostgresAutomationRunStore(URL!);
   await fires.record("c-gc", { fireKey: "k1", threadRef: "t1", firedAt: 1, endedAt: 10, status: "ok" });
   await fires.record("c-gc", { fireKey: "k2", threadRef: "t2", firedAt: 2, endedAt: 20, status: "failed" });
   await fires.record("c-gc", { fireKey: "k3", threadRef: "t3", firedAt: 3, endedAt: 30, status: "ok" });
@@ -269,7 +269,7 @@ test("pg cron_fires: existing legacy history and later legacy completions remain
       initial.firedAt,
       initial,
     ]);
-    const fires = createPostgresCronFireStore(URL!);
+    const fires = createPostgresAutomationRunStore(URL!);
     assert.deepEqual((await fires.listByCron("legacy-c")).runs, [initial]);
     const ended = { ...initial, endedAt: 2000, status: "ok", reply: "done" };
     await client.query(`UPDATE cron_fire_log SET json = $1 WHERE cron_id = $2`, [ended, "legacy-c"]);
@@ -284,7 +284,7 @@ test("pg cron_fires: existing legacy history and later legacy completions remain
     assert.equal((await fires.listByCron("legacy-c")).runs[0]?.endedAt, 100);
     assert.ok((await fires.pruneEnded({ endedBefore: 500, keepPerCron: 1 })) >= 1);
     assert.equal((await client.query("SELECT 1 FROM cron_fire_log WHERE fire_key = 'legacy-old'")).rowCount, 0);
-    const rebooted = createPostgresCronFireStore(URL!);
+    const rebooted = createPostgresAutomationRunStore(URL!);
     assert.deepEqual((await rebooted.listByCron("legacy-c")).runs, [ended]);
     const later = { fireKey: "legacy-k2", threadRef: "legacy-thread", firedAt: 3000, status: "running" };
     await client.query(`INSERT INTO cron_fire_log VALUES ($1, $2, $3, $4)`, [
@@ -298,4 +298,49 @@ test("pg cron_fires: existing legacy history and later legacy completions remain
     await client.query("DROP TABLE IF EXISTS cron_fire_log");
     await client.end();
   }
+});
+
+test(
+  "pg shared runs: webhook receipts survive restart and duplicate receipts preserve completed runs",
+  { skip },
+  async () => {
+    const fires = createPostgresAutomationRunStore(URL!);
+    const entry = {
+      fireKey: "webhook:shared:delivery",
+      threadRef: "webhook:shared:delivery",
+      firedAt: 100,
+      status: "queued" as const,
+      payload: '{"action":"opened"}',
+      deliveryId: "delivery",
+    };
+    await Promise.all(Array.from({ length: 8 }, () => fires.accept("webhook:shared", entry)));
+    await fires.record("shared", { fireKey: "cron:shared", threadRef: "cron:shared", firedAt: 100, status: "ok" });
+    const restored = createPostgresAutomationRunStore(URL!);
+    assert.deepEqual((await restored.listByCron("webhook:shared")).runs, [entry]);
+    const completed = { ...entry, status: "ok" as const, endedAt: 200, sessionId: "webhook-session", reply: "done" };
+    await restored.record("webhook:shared", completed);
+    assert.deepEqual(
+      await restored.accept("webhook:shared", { ...entry, firedAt: 999, payload: "changed" }),
+      completed,
+    );
+    assert.equal((await restored.listByCron("shared")).runs[0]?.fireKey, "cron:shared");
+  },
+);
+
+test("pg shared runs: cron recovery preserves waiting webhook jobs and their inputs", { skip }, async () => {
+  const fires = createPostgresAutomationRunStore(URL!);
+  await fires.accept("webhook:stranded", {
+    fireKey: "queued",
+    threadRef: "queued",
+    firedAt: 1,
+    status: "queued",
+    payload: "original event",
+    deliveryId: "queued",
+  });
+  const crons = createCronStore(undefined, { fires, staleRunningMs: 100 });
+  await crons.sweepStrandedFires(500);
+  const run = (await fires.listByCron("webhook:stranded")).runs[0]!;
+  assert.equal(run.status, "queued");
+  assert.equal(run.endedAt, undefined);
+  assert.equal(run.payload, "original event");
 });
