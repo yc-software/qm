@@ -307,3 +307,15 @@ test("a session from the current boot keeps running, and one with no boot marker
     "sessions predating this change have no marker and must not be reaped on a guess",
   );
 });
+
+test("a job that ignores TERM keeps reporting running until it is KILLed", async () => {
+  const { proc, handle } = fixture();
+  const { processId } = await proc.startProcess(handle, "trap '' TERM; echo ready; while :; do sleep 0.1; done");
+  await proc.readProcess(handle, processId, { waitMs: 3000 });
+  await proc.signalProcess(handle, processId, "TERM");
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual((await proc.readProcess(handle, processId)).status, { state: "running" });
+  await proc.signalProcess(handle, processId, "KILL");
+  const after = await proc.readProcess(handle, processId, { waitMs: 3000 });
+  assert.equal(after.status.state, "exited");
+});

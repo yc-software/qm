@@ -92,7 +92,7 @@ export function createExecProcessSessions(io: ExecProcessIo): ExecProcessSession
         `date +%s > "$P/started"`,
         `{ ${BOOT_ID_SH}; } > "$P/boot" 2>/dev/null || true`,
         `[ -p "$P/in" ] || mkfifo "$P/in"`,
-        `LAUNCH='d="$1"; cd "$(cat "$d/cwd")" 2>/dev/null; if [ -f "$d/env" ]; then . "$d/env"; rm -f "$d/env"; fi; exec 3<>"$d/in"; cpid=""; _fin(){ [ -f "$d/code" ] || echo 143 > "$d/code"; trap - TERM INT HUP QUIT; [ -n "$cpid" ] && kill -TERM "$cpid" 2>/dev/null; kill -TERM -$$ 2>/dev/null; exit 143; }; trap _fin TERM INT HUP QUIT; sh "$d/cmd" <&3 >"$d/out" 2>&1 & cpid=$!; wait "$cpid"; rc=$?; [ -f "$d/code" ] || echo $rc > "$d/code"'`,
+        `LAUNCH='d="$1"; cd "$(cat "$d/cwd")" 2>/dev/null; if [ -f "$d/env" ]; then . "$d/env"; rm -f "$d/env"; fi; exec 3<>"$d/in"; cpid=""; _fin(){ trap "" TERM INT HUP QUIT; [ -n "$cpid" ] && kill -TERM "$cpid" 2>/dev/null; kill -TERM -$$ 2>/dev/null; [ -n "$cpid" ] && wait "$cpid"; [ -f "$d/code" ] || echo 143 > "$d/code"; exit 143; }; trap _fin TERM INT HUP QUIT; sh "$d/cmd" <&3 >"$d/out" 2>&1 & cpid=$!; wait "$cpid"; rc=$?; [ -f "$d/code" ] || echo $rc > "$d/code"'`,
         `if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LAUNCH" _ "$P" >/dev/null 2>&1 & else sh -c "$LAUNCH" _ "$P" >/dev/null 2>&1 & fi`,
         `echo $! > "$P/pid"`,
         `echo OK`,
