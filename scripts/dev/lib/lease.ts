@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { leasesDir, listSlots, poolStore, portSlotCount, slotPorts } from "./pool.ts";
 import { pidAlive, portAvailable } from "./proc.ts";
 import { fileMtimeEpoch, formatAge, nowEpoch, todayYmd } from "./util.ts";
@@ -148,7 +148,8 @@ export function listLeases(store = poolStore()): LeaseInfo[] {
 }
 
 export function myLease(worktree: string, store = poolStore()): LeaseInfo | null {
-  return listLeases(store).find((l) => l.meta.worktree === worktree) ?? null;
+  const target = resolve(worktree);
+  return listLeases(store).find((l) => l.meta.worktree && resolve(l.meta.worktree) === target) ?? null;
 }
 
 function anyChildAlive(lock: string): boolean {

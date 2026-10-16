@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { liveEnvPath } from "./pool.ts";
 import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
@@ -37,7 +37,7 @@ export function completeDevSecuritySecrets(env: Record<string, string>, seed: st
 export function repoRoot(cwd = process.cwd()): string {
   const res = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
   if (res.status !== 0) throw new Error("not inside a git worktree");
-  return res.stdout.trim();
+  return resolve(res.stdout.trim());
 }
 
 export function currentBranch(cwd: string): string {
