@@ -97,6 +97,13 @@ test("project speaker photos follow authenticated identity, not duplicate or rea
     assert.equal(assistantLabel()?.textContent?.trim(), "QM");
     assert.ok(assistantLabel()?.querySelector(".brand-mark"));
     const conversation = h.visibleConversation();
+    const brand = document.createElement("meta");
+    brand.name = "brand-self-label";
+    brand.content = "Harbor";
+    document.head.append(brand);
+    conversation.drawActiveChat();
+    assert.equal(assistantLabel()?.textContent?.trim(), "Harbor");
+    brand.remove();
     for (const message of conversation.state.agent!.state.messages) {
       (message as { speaker?: string }).speaker = undefined;
     }

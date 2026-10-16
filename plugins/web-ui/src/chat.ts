@@ -315,6 +315,7 @@ export function createChatSurface(
     pins: [] as SessionPin[],
     pinsExpanded: false,
     labelSpeakers: false,
+    assistantSpeakerLabel: "",
   };
 
   const inlineSteers = new Map<number, { message: AgentMessage; index: number }>();
@@ -358,6 +359,7 @@ export function createChatSurface(
     }
     const viewer = appState.me?.displayName?.trim().toLowerCase();
     chatState.labelSpeakers = names.size > 1 || (Boolean(viewer) && [...names].some((n) => n.toLowerCase() !== viewer));
+    chatState.assistantSpeakerLabel = chatState.labelSpeakers ? brandName() : "";
   }
 
   function speakerLabelFor(message: AgentMessage): string | undefined {
@@ -1768,7 +1770,7 @@ export function createChatSurface(
     const speaker = speakerLabelFor(message);
     const speakerLabel =
       message.role === "assistant" && chatState.labelSpeakers
-        ? brandName()
+        ? chatState.assistantSpeakerLabel
         : speaker && `${speaker}\n${speakerMember(message)?.avatarUrl ?? ""}`;
     const edited = Boolean((message as { edited?: boolean }).edited);
     const deleted = Boolean((message as { deleted?: boolean }).deleted);
@@ -1994,7 +1996,7 @@ export function createChatSurface(
         >
           ${
             chatState.labelSpeakers
-              ? html`<div class="speaker-label">${brandMark()}<span>${brandName()}</span></div>`
+              ? html`<div class="speaker-label">${brandMark()}<span>${chatState.assistantSpeakerLabel}</span></div>`
               : nothing
           }
           <div class="assistant-body">
