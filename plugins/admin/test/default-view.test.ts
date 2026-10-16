@@ -367,6 +367,7 @@ test("governance credential editor previews effective capability and uses an in-
     "sc-cap-auth",
     "sc-cap-methods",
     "sc-cap-paths",
+    "sc-cap-daily",
     "sc-cap-principals",
     "sc-cap-secret",
   ]) {
@@ -379,6 +380,9 @@ test("governance credential editor previews effective capability and uses an in-
   const state = new CredentialState();
   state.begin({ slug: "test", name: "Test", host: "example.com", updatedAt: 42 });
   assert.equal(state.collect().expectedUpdatedAt, 42);
+  assert.equal(state.collect().maxRequestsPerDay, null);
+  state.begin({ slug: "test", name: "Test", host: "example.com", updatedAt: 43, maxRequestsPerDay: 500 });
+  assert.equal(state.collect().maxRequestsPerDay, 500);
   assert.match(html, /it remains an edit and cannot recreate the credential/);
   assert.match(html, /latest state could not be loaded\. Refresh the page before deleting/);
   assert.match(html, /latest revision could not be loaded\. Your draft is preserved/);

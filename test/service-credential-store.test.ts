@@ -293,7 +293,7 @@ test("the store refuses a rebind without a fresh secret but keeps it for narrowi
 
   await assert.rejects(
     cfg.setServiceCredential(ORG, { ...base, host: "evil.example" }),
-    /changing host would redirect or unwrap/,
+    /changing host would redirect, unwrap or widen/,
   );
 
   await cfg.setServiceCredential(ORG, { ...base, name: "SERP narrowed", allowedMethods: ["GET"] });

@@ -96,6 +96,7 @@ const getCfg = async (base: string) =>
       slug: string;
       name: string;
       envKey?: string;
+      maxRequestsPerDay?: number;
       host: string;
       deployments?: boolean;
       hasSecret: boolean;
@@ -407,6 +408,31 @@ test("credential edits that redirect or unwrap the stored secret require re-supp
     assert.equal(rebound.status, 200);
     loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(loaded.host, "api2.example.com");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a daily request cap can be set or lowered freely; raising or removing it needs the secret", async () => {
+  const srv = start();
+  try {
+    const base = { slug: "serp", name: "SERP", host: "api.example.com", allowedMethods: ["POST"] };
+    assert.equal((await putCred(srv.base, { ...base, secret: "k1", maxRequestsPerDay: 100 })).status, 200);
+    const edit = async (patch: object) => {
+      const loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
+      return putCred(srv.base, { ...base, ...patch, expectedUpdatedAt: loaded.updatedAt });
+    };
+    assert.equal((await edit({ maxRequestsPerDay: 0 })).status, 400);
+    assert.equal((await edit({ maxRequestsPerDay: 40 })).status, 200);
+    assert.equal((await edit({})).status, 200);
+    for (const patch of [{ maxRequestsPerDay: 41 }, { maxRequestsPerDay: null }]) {
+      const res = await edit(patch);
+      assert.equal(res.status, 400);
+      assert.equal(((await res.json()) as { error: string }).error, "credential_rebind_requires_secret");
+    }
+    assert.equal((await getCfg(srv.base)).serviceCredentials[0]!.maxRequestsPerDay, 40);
+    assert.equal((await edit({ maxRequestsPerDay: null, secret: "k1" })).status, 200);
+    assert.equal((await getCfg(srv.base)).serviceCredentials[0]!.maxRequestsPerDay, undefined);
   } finally {
     await srv.close();
   }

@@ -169,3 +169,19 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
   ]);
   assert.equal(result[0]!.usageCount, 0);
 });
+
+test(
+  "pg credential-usage sink: a restarted process admits only the day's remaining capped calls",
+  { skip },
+  async () => {
+    const first = createPostgresCredentialUsageSink(URL!);
+    const scopeLabel = scopeId("personal", "U1");
+    for (const status of ["ok", "error", "denied"])
+      first.record({ slug: "capped", host: "api.example.com", status, scopeLabel, principalId: "U1" });
+    await first.list({ slug: "capped" });
+    const restarted = createPostgresCredentialUsageSink(URL!);
+    assert.equal(await restarted.sentSince("capped", Date.now() - 60_000), 2);
+    assert.equal(await restarted.admitDailyCall("capped", 3), true);
+    assert.equal(await restarted.admitDailyCall("capped", 3), false);
+  },
+);
