@@ -409,6 +409,7 @@ struct Walk {
     elements: Vec<(u32, El)>,
     lines: Vec<(u32, String)>,
     truncated: bool,
+    visited: usize,
 }
 
 impl Walk {
@@ -427,10 +428,11 @@ impl Walk {
     }
 
     fn visit(&mut self, e: &El, depth: usize, indent: usize) {
-        if self.elements.len() >= MAX_NODES || depth > MAX_DEPTH {
+        if self.visited >= MAX_NODES || depth > MAX_DEPTH {
             self.truncated = true;
             return;
         }
+        self.visited += 1;
         let (s, keep) = line(e, self.origin);
         let next = if keep {
             let id = self.id(e);
@@ -441,6 +443,10 @@ impl Walk {
             indent
         };
         for c in attr(e, "AXChildren").map(list).unwrap_or_default() {
+            if self.visited >= MAX_NODES {
+                self.truncated = true;
+                break;
+            }
             self.visit(&c, depth + 1, next);
         }
     }
@@ -555,11 +561,16 @@ impl Desk {
             elements: vec![],
             lines: vec![],
             truncated: false,
+            visited: 0,
         };
         for (id, e) in prev.iter().flat_map(|p| p.elements.iter()) {
             walk.known.entry(unsafe { CFHash(e.as_CFTypeRef()) }).or_default().push((*id, e.clone()));
         }
         for c in attr(&w, "AXChildren").map(list).unwrap_or_default() {
+            if walk.visited >= MAX_NODES {
+                walk.truncated = true;
+                break;
+            }
             walk.visit(&c, 0, 0);
         }
         let screenshot = if shot { Some(capture(&w, f)?) } else { None };
