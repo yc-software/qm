@@ -124,3 +124,13 @@ test("the Resend transport reports the provider's message id and surfaces refusa
   const badKey = resendMailer(cfg, (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch);
   await assert.rejects(() => badKey.verify(), /rejected RESEND_API_KEY/);
 });
+
+test("a non-ASCII sender name is encoded without hiding the address", () => {
+  const raw = renderMessage(
+    { ...cfg, emailFrom: "Équipe qm <no-reply@example.com>" },
+    { to: "a@b.test", subject: "x", text: "x", html: "<p>x</p>" },
+  );
+  const from = /^From: (.*)\r\n/.exec(raw)![1]!;
+  assert.match(from, /^=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?= <no-reply@example\.com>$/);
+  assert.equal(Buffer.from(/\?B\?([^?]+)\?=/.exec(from)![1]!, "base64").toString("utf8"), "Équipe qm");
+});
