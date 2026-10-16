@@ -2946,6 +2946,7 @@ export function buildApp(
       await harness.turns.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
+      await errors.flush();
     },
   };
 
