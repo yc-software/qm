@@ -33,34 +33,10 @@ export interface CredentialUsageSink {
   record(s: Omit<CredentialUsageSample, "ts">): void;
   list(opts?: CredentialUsageQuery): Promise<CredentialUsageSample[]>;
   summary(slugs: readonly string[]): Promise<CredentialUsageSummary[]>;
-  sentSince(slug: string, since: number): Promise<number>;
   admitDailyCall(slug: string, cap: number): Promise<boolean>;
 }
 
-const DAY_MS = 86_400_000;
-
-export function dailyCallAdmission(
-  sentSince: (slug: string, since: number) => Promise<number>,
-  now: () => number = Date.now,
-): (slug: string, cap: number) => Promise<boolean> {
-  const days = new Map<string, { day: number; tally: Promise<{ sent: number }> }>();
-  return async (slug, cap) => {
-    const day = Math.floor(now() / DAY_MS) * DAY_MS;
-    let entry = days.get(slug);
-    if (entry?.day !== day) {
-      const fresh = { day, tally: sentSince(slug, day).then((sent) => ({ sent })) };
-      fresh.tally.catch(() => {
-        if (days.get(slug) === fresh) days.delete(slug);
-      });
-      days.set(slug, fresh);
-      entry = fresh;
-    }
-    const tally = await entry.tally;
-    if (tally.sent >= cap) return false;
-    tally.sent += 1;
-    return true;
-  };
-}
+export const utcDayStart = (ms: number): number => ms - (ms % 86_400_000);
 
 export function createCredentialUsageSink(now: () => number = Date.now): CredentialUsageSink {
   const sink = createTimestampedEventSink<CredentialUsageSample>({
@@ -68,13 +44,17 @@ export function createCredentialUsageSink(now: () => number = Date.now): Credent
     defaultLimit: CREDENTIAL_USAGE_WINDOW,
     equalityFields: ["slug"],
   });
-  const sentSince = async (slug: string, since: number) =>
-    (await sink.list({ slug, since, limit: Number.MAX_SAFE_INTEGER })).filter((event) => event.status !== "denied")
-      .length;
+  const daily = new Map<string, { day: number; sent: number }>();
   return {
     ...sink,
-    sentSince,
-    admitDailyCall: dailyCallAdmission(sentSince, now),
+    async admitDailyCall(slug, cap) {
+      const day = utcDayStart(now());
+      const tally = daily.get(slug)?.day === day ? daily.get(slug)! : { day, sent: 0 };
+      daily.set(slug, tally);
+      if (tally.sent >= cap) return false;
+      tally.sent += 1;
+      return true;
+    },
     async summary(slugs) {
       return Promise.all(
         [...new Set(slugs)].map(async (slug) => {

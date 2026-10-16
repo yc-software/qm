@@ -1,7 +1,7 @@
 import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
 import {
   CREDENTIAL_USAGE_WINDOW,
-  dailyCallAdmission,
+  utcDayStart,
   type CredentialUsageSample,
   type CredentialUsageSink,
 } from "./credential-usage-sink.ts";
@@ -31,24 +31,30 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS credential_usage_by_slug_ts_id ON credential_usage(slug, ts DESC, id DESC)",
           ],
         },
+        {
+          id: "admin/scoped-events/credential_usage/0003",
+          statements: [
+            "CREATE TABLE IF NOT EXISTS credential_daily_calls(slug TEXT NOT NULL, day BIGINT NOT NULL, sent INT NOT NULL, PRIMARY KEY (slug, day))",
+          ],
+        },
       ],
     },
     defaultLimit: CREDENTIAL_USAGE_WINDOW,
     equalityFilters: { scopeId: "scope_label", slug: "slug" },
     persistErrorMessage: "[credential-usage] failed to persist broker call:",
   });
-  const sentSince = async (slug: string, since: number) => {
-    await sink.flush();
-    const rows = await sink.q(
-      "SELECT COUNT(*)::bigint AS sent FROM credential_usage WHERE slug = $1 AND ts >= $2 AND status <> 'denied'",
-      [slug, since],
-    );
-    return Number(rows[0]?.sent ?? 0);
-  };
   return {
     ...sink,
-    sentSince,
-    admitDailyCall: dailyCallAdmission(sentSince),
+    async admitDailyCall(slug, cap) {
+      const rows = await sink.q(
+        `INSERT INTO credential_daily_calls(slug, day, sent) VALUES ($1, $2, 1)
+         ON CONFLICT (slug, day) DO UPDATE SET sent = credential_daily_calls.sent + 1
+         WHERE credential_daily_calls.sent < $3
+         RETURNING sent`,
+        [slug, utcDayStart(Date.now()), cap],
+      );
+      return rows.length > 0;
+    },
     async summary(slugs) {
       if (!slugs.length) return [];
       const rows = await sink.q(

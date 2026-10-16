@@ -1,4 +1,5 @@
 import { effectiveAllowedMethods, isComposioHost } from "../credentials/keychain.ts";
+import { errMessage } from "../util/errors.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -201,7 +202,8 @@ export async function brokerCredentialCall(opts: {
     try {
       if (!opts.usage) throw new Error("no usage ledger");
       admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
-    } catch {
+    } catch (err) {
+      console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
       return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
     }
     if (!admitted)
