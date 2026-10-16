@@ -33,16 +33,48 @@ export interface CredentialUsageSink {
   record(s: Omit<CredentialUsageSample, "ts">): void;
   list(opts?: CredentialUsageQuery): Promise<CredentialUsageSample[]>;
   summary(slugs: readonly string[]): Promise<CredentialUsageSummary[]>;
+  sentSince(slug: string, since: number): Promise<number>;
+  admitDailyCall(slug: string, cap: number): Promise<boolean>;
 }
 
-export function createCredentialUsageSink(): CredentialUsageSink {
+const DAY_MS = 86_400_000;
+
+export function dailyCallAdmission(
+  sentSince: (slug: string, since: number) => Promise<number>,
+  now: () => number = Date.now,
+): (slug: string, cap: number) => Promise<boolean> {
+  const days = new Map<string, { day: number; tally: Promise<{ sent: number }> }>();
+  return async (slug, cap) => {
+    const day = Math.floor(now() / DAY_MS) * DAY_MS;
+    let entry = days.get(slug);
+    if (entry?.day !== day) {
+      const fresh = { day, tally: sentSince(slug, day).then((sent) => ({ sent })) };
+      fresh.tally.catch(() => {
+        if (days.get(slug) === fresh) days.delete(slug);
+      });
+      days.set(slug, fresh);
+      entry = fresh;
+    }
+    const tally = await entry.tally;
+    if (tally.sent >= cap) return false;
+    tally.sent += 1;
+    return true;
+  };
+}
+
+export function createCredentialUsageSink(now: () => number = Date.now): CredentialUsageSink {
   const sink = createTimestampedEventSink<CredentialUsageSample>({
     max: 10000,
     defaultLimit: CREDENTIAL_USAGE_WINDOW,
     equalityFields: ["slug"],
   });
+  const sentSince = async (slug: string, since: number) =>
+    (await sink.list({ slug, since, limit: Number.MAX_SAFE_INTEGER })).filter((event) => event.status !== "denied")
+      .length;
   return {
     ...sink,
+    sentSince,
+    admitDailyCall: dailyCallAdmission(sentSince, now),
     async summary(slugs) {
       return Promise.all(
         [...new Set(slugs)].map(async (slug) => {

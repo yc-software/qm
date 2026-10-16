@@ -196,6 +196,23 @@ export async function brokerCredentialCall(opts: {
     return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
   }
 
+  if (rec.maxRequestsPerDay !== undefined) {
+    let admitted: boolean;
+    try {
+      if (!opts.usage) throw new Error("no usage ledger");
+      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
+    } catch {
+      return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
+    }
+    if (!admitted)
+      return deny(
+        429,
+        "daily_cap_reached",
+        `this credential has used its ${rec.maxRequestsPerDay} requests for today (UTC); it resets at 00:00 UTC`,
+        rec.host,
+      );
+  }
+
   const headers: Record<string, string> = {};
   if (body.headers && typeof body.headers === "object") {
     for (const [k, v] of Object.entries(body.headers as Record<string, unknown>)) {

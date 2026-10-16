@@ -1,6 +1,7 @@
 import { createPostgresEventSink, type EventColumn } from "./scoped-event-sink.ts";
 import {
   CREDENTIAL_USAGE_WINDOW,
+  dailyCallAdmission,
   type CredentialUsageSample,
   type CredentialUsageSink,
 } from "./credential-usage-sink.ts";
@@ -36,8 +37,18 @@ export function createPostgresCredentialUsageSink(connectionString: string): Cre
     equalityFilters: { scopeId: "scope_label", slug: "slug" },
     persistErrorMessage: "[credential-usage] failed to persist broker call:",
   });
+  const sentSince = async (slug: string, since: number) => {
+    await sink.flush();
+    const rows = await sink.q(
+      "SELECT COUNT(*)::bigint AS sent FROM credential_usage WHERE slug = $1 AND ts >= $2 AND status <> 'denied'",
+      [slug, since],
+    );
+    return Number(rows[0]?.sent ?? 0);
+  };
   return {
     ...sink,
+    sentSince,
+    admitDailyCall: dailyCallAdmission(sentSince),
     async summary(slugs) {
       if (!slugs.length) return [];
       const rows = await sink.q(
