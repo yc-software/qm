@@ -61,7 +61,7 @@ test("workers spawned by a worker inherit its runtime and replace only the field
 });
 
 test("spawn rejects malformed runtime fields before reserving workers", async () => {
-  for (const bad of [{ model: "" }, { model: 3 }, { effort: "sideways" }, { fastMode: "no" }, { harness: "nope" }]) {
+  for (const bad of [{ model: "" }, { model: 3 }, { effort: "sideways" }, { fastMode: "no" }]) {
     const f = await swarmFixture();
     await assert.rejects(f.service.spawn(f.caller, { requestId: "initial", text: "work", ...(bad as object) }));
     assert.equal(await f.store.get(f.root.id), null);

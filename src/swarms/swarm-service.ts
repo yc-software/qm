@@ -13,7 +13,7 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { canonicalJson } from "../util/objects.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
-import { inheritRuntime, spawnRuntime, workerRuntimeInput, type SpawnRuntimeFields } from "./swarm-runtime.ts";
+import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields } from "./swarm-runtime.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import {
   assertSwarmOpen,
@@ -354,7 +354,8 @@ export function createSwarmService(deps: {
 
   function dispatchRequest(swarm: Swarm, message: SwarmMessage, recipient: SwarmMember): OrchestratorInput {
     return {
-      ...workerRuntimeInput(swarm.template, recipient.runtime),
+      ...swarm.template,
+      ...recipient.runtime,
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
       origin: { kind: "automation", screenData: message.text },
       text: `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`,

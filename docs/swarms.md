@@ -55,7 +55,7 @@ human author. Request bodies cannot set identity, authorization, or provenance.
 
 Any spawn — initial or later, by the root or by a worker — may choose the
 model for the workers it creates with optional `model`, `effort` (a thinking
-level), `fastMode` and `harness`, e.g.
+level) and `fastMode`, e.g.
 `{"action":"spawn","requestId":"r1","count":8,"model":"gpt-6.1-sol","effort":"medium","fastMode":false,"text":"..."}`.
 The choice is stored on each new member (visible in inspect), applies to every
 turn that worker takes, and is inherited by workers it spawns unless they choose

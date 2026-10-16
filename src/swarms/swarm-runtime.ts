@@ -1,9 +1,9 @@
 import type { OrchestratorInput } from "../core/orchestrator.ts";
-import { isHarnessId, THINKING_LEVELS } from "../model/pi-models.ts";
+import { THINKING_LEVELS } from "../model/pi-models.ts";
 
-export type SwarmMemberRuntime = Pick<OrchestratorInput, "harness" | "model" | "thinkingLevel" | "fastMode">;
+export type SwarmMemberRuntime = Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;
 
-export const SPAWN_RUNTIME_FIELDS = ["model", "effort", "fastMode", "harness"] as const;
+export const SPAWN_RUNTIME_FIELDS = ["model", "effort", "fastMode"] as const;
 export type SpawnRuntimeFields = Partial<Record<(typeof SPAWN_RUNTIME_FIELDS)[number], unknown>>;
 
 export function spawnRuntime(input: SpawnRuntimeFields): SwarmMemberRuntime {
@@ -22,10 +22,6 @@ export function spawnRuntime(input: SpawnRuntimeFields): SwarmMemberRuntime {
     if (typeof input.fastMode !== "boolean") throw new Error("invalid fastMode");
     runtime.fastMode = input.fastMode;
   }
-  if (input.harness !== undefined) {
-    if (!isHarnessId(input.harness)) throw new Error("invalid harness");
-    runtime.harness = input.harness;
-  }
   return runtime;
 }
 
@@ -35,18 +31,4 @@ export function inheritRuntime(
 ): SwarmMemberRuntime | undefined {
   const runtime = { ...parent, ...chosen };
   return Object.keys(runtime).length ? runtime : undefined;
-}
-
-export function workerRuntimeInput<T extends SwarmMemberRuntime>(
-  template: T,
-  runtime: SwarmMemberRuntime | undefined,
-): T {
-  return {
-    ...template,
-    harness: undefined,
-    model: undefined,
-    thinkingLevel: undefined,
-    fastMode: undefined,
-    ...runtime,
-  };
 }

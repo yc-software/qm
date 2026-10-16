@@ -63,7 +63,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort, fastMode and harness to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
     routes: [
       {
         method: "GET",
