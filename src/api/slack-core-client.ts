@@ -1,3 +1,4 @@
+import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
   createSlackSessionStatus,
@@ -285,7 +286,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async privateContinuationSource(runId) {
       const run = await deps.runs.get(runId);
-      if (!run?.request.externalSlack || run.request.origin.kind !== "human" || run.request.actor.type !== "internal")
+      if (
+        !run?.request.externalSlack ||
+        run.request.origin.kind !== "human" ||
+        isSessionTurn(run.request) ||
+        run.request.actor.type !== "internal"
+      )
         return null;
       return replayableRequest(run.request);
     },

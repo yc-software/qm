@@ -1,4 +1,4 @@
-import { sessionTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -44,59 +44,67 @@ export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
 ): Promise<OrchestratorInput["origin"] | undefined> {
-  if (
-    request.origin.kind === "automation" ||
-    request.readOnly ||
-    request.privateSessionMessage ||
-    request.swarm ||
-    !request.delegatingRunId ||
-    !request.sessionSenderId
-  )
-    return;
-  const source = await deps.runs.get(request.delegatingRunId);
-  const sender = await deps.sessions.getForParticipant(request.sessionSenderId, request.actor.id);
-  const child = await deps.sessions.getByThread(request.conversation.threadRef);
-  if (!source || !sender || !child) return;
-  const delegated =
-    isSubagentThreadRef(child.threadRef) &&
-    child.parentSessionId === sender.id &&
-    source.sessionId === sender.threadRef;
-  const continued =
-    requiresDelegation(request, true) &&
-    isSubagentThreadRef(sender.threadRef) &&
-    sender.parentSessionId === child.id &&
-    source.sessionId === child.threadRef;
-  const started =
-    request.surface === "web" &&
-    !child.parentSessionId &&
-    !isSubagentThreadRef(child.threadRef) &&
-    source.sessionId === sender.threadRef;
-  if (!delegated && !continued && !started) return;
-  const parent = source.request;
-  const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
-  if (
-    parent.actor.id !== request.actor.id ||
-    parent.actor.type !== "internal" ||
-    parent.readOnly ||
-    parent.privateSessionMessage ||
-    parent.swarm ||
-    sender.scopeId !== child.scopeId ||
-    child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
-    child.scopeId !== conversationScope(request.conversation, request.actor.id) ||
-    request.conversation.audience.some((person) => !audience.has(person.id))
-  )
-    return;
-  const internal =
-    parent.conversation.audience.every((person) => person.type === "internal") &&
-    (parent.conversation.kind === "dm" ||
-      (!!parent.conversation.publishMembers?.length &&
-        parent.conversation.publishMembers.every((person) => person.type === "internal")));
-  if (
-    internal &&
-    (parent.origin.kind === "human" ||
-      (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
-  )
-    return parent.origin;
+  const seen = new Set<string>();
+  let current = request;
+  for (let depth = 0; depth < 32; depth++) {
+    if (
+      current.origin.kind === "automation" ||
+      current.readOnly ||
+      current.privateSessionMessage ||
+      current.swarm ||
+      !current.delegatingRunId ||
+      !current.sessionSenderId ||
+      seen.has(current.delegatingRunId)
+    )
+      return;
+    seen.add(current.delegatingRunId);
+    const source = await deps.runs.get(current.delegatingRunId);
+    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
+    const child = await deps.sessions.getByThread(current.conversation.threadRef);
+    if (!source || !sender || !child) return;
+    const delegated =
+      isSubagentThreadRef(child.threadRef) &&
+      child.parentSessionId === sender.id &&
+      source.sessionId === sender.threadRef;
+    const continued =
+      requiresDelegation(current, true) &&
+      isSubagentThreadRef(sender.threadRef) &&
+      sender.parentSessionId === child.id &&
+      source.sessionId === child.threadRef;
+    const started =
+      current.surface === "web" &&
+      !child.parentSessionId &&
+      !isSubagentThreadRef(child.threadRef) &&
+      source.sessionId === sender.threadRef;
+    if (!delegated && !continued && !started) return;
+    const parent = source.request;
+    const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
+    if (
+      parent.actor.id !== request.actor.id ||
+      parent.actor.type !== "internal" ||
+      parent.readOnly ||
+      parent.privateSessionMessage ||
+      parent.swarm ||
+      sender.scopeId !== child.scopeId ||
+      child.scopeId !== conversationScope(parent.conversation, parent.actor.id) ||
+      child.scopeId !== conversationScope(current.conversation, current.actor.id) ||
+      current.conversation.audience.some((person) => !audience.has(person.id))
+    )
+      return;
+    const internal =
+      parent.conversation.audience.every((person) => person.type === "internal") &&
+      (parent.conversation.kind === "dm" ||
+        (!!parent.conversation.publishMembers?.length &&
+          parent.conversation.publishMembers.every((person) => person.type === "internal")));
+    if (
+      !isSessionTurn(parent) &&
+      internal &&
+      (parent.origin.kind === "human" ||
+        (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
+    )
+      return parent.origin;
+    current = parent;
+  }
 }
 
 export const SUBAGENT_TREE_RUN_CAP = 50;

@@ -119,3 +119,44 @@ test("human-origin delegated input is screened before model execution", async (t
   assert.equal((await built.runs.get(run.id))!.result?.status, "pending_approval");
   assert.ok(screened.some((payload) => payload.includes("session-delegation") && payload.includes("UNTRUSTED_TASK")));
 });
+
+for (const fork of [false, true]) {
+  test(`a human-initiated ${fork ? "fork" : "new session"} shows its seed without claiming human authorship`, async (t) => {
+    const { startSession } = await import("../src/api/start-session.ts");
+    const built = buildApp(testConfig({ memoryCapture: "off" }));
+    t.after(async () => {
+      built.scheduler.stop();
+      built.deploymentLayerRefresh.stop();
+      await built.runtime.stop();
+    });
+    const threadRef = `web:U1:seed-${fork}`;
+    await built.app.turn({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef },
+      origin: { kind: "human" },
+      text: "start another task",
+    });
+    const parent = (await built.runs.latestForThread(threadRef))!;
+    const session = (await built.sessions.getByThread(threadRef))!;
+    const out = await startSession(built.app, built.sessions, "U1", {
+      scopeId: session.scopeId,
+      ...(fork ? { forkOf: session.id } : {}),
+      text: "work on the seed",
+      origin: parent.request.origin,
+      sessionSenderId: session.id,
+      delegatingRunId: parent.id,
+    });
+    assert.ok("session" in out);
+    const queued = (await built.runs.latestForThread(out.session.threadRef))!;
+    built.runtime.startBackground();
+    await settle(async () => (await built.runs.get(queued.id))!.status === "done");
+    const run = (await built.runs.get(queued.id))!;
+    assert.equal(run.result?.status, "ok");
+    const entry = (await built.sessions.getEntries(out.session.id)).find((entry) => entry.seq === run.turnUserSeq)!;
+    const payload = entry.payload as { hidden?: boolean; speakerId?: string; text?: string };
+    assert.equal(payload.hidden === true, false);
+    assert.equal(payload.speakerId, undefined);
+    assert.equal(payload.text, "work on the seed");
+  });
+}

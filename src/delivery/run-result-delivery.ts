@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { resolveTurnOrigin } from "../core/turn-origin.ts";
+import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -72,7 +72,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   }
   if (run.request.surfaceTools && run.result?.status !== "failed" && !run.result?.attachments?.length) return null;
   if (failed) {
-    if (origin.kind === "ambient") return null;
+    if (origin.kind === "ambient" && !isSessionTurn(run.request)) return null;
     const clause = userFacingFailureClause(run.result ?? { status: "failed" });
     const adminUrl = run.result?.sessionId ? adminUrlFor?.(run.result.sessionId) : undefined;
     const detail = adminUrl ? ` — full error: ${adminUrl}` : "";

@@ -1,3 +1,5 @@
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -387,5 +389,27 @@ test("external account poller neither claims default identity nor releases pre-p
     });
     await poller.pollDeliveries(client);
     assert.deepEqual(acks, hasDefault ? ["legacy"] : []);
+  }
+});
+
+test("delegated human-origin runs cannot restart themselves as a person's private continuation", async () => {
+  const { runs } = createMemoryRunStore();
+  const client = createSlackCoreClient({ runs } as SlackCoreClientDeps);
+  const request = {
+    surface: "slack",
+    actor: { id: "employee", type: "internal" as const },
+    conversation: { kind: "dm" as const, threadRef: "external:dm", audience: [] },
+    origin: { kind: "human" as const },
+    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
+    text: "continue privately",
+  };
+  const direct = await runs.enqueue({ sessionId: request.conversation.threadRef, request });
+  assert.ok(await client.privateContinuationSource!(direct.run.id));
+  for (const provenance of [{ sessionSenderId: "child" }, { delegatingRunId: direct.run.id }]) {
+    const delegated = await runs.enqueue({
+      sessionId: request.conversation.threadRef,
+      request: { ...request, ...provenance },
+    });
+    assert.equal(await client.privateContinuationSource!(delegated.run.id), null);
   }
 });

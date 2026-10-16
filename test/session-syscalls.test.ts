@@ -1964,3 +1964,19 @@ for (const origin of [
     assert.equal(followup.request.delegatingRunId, r.run.id);
   });
 }
+
+test("detaching an ancestor revokes a descendant's delegated live authority", async () => {
+  const r = await delegatedHumanRig();
+  const api = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.child,
+    scopeId: scope,
+    request: { ...r.run.request, runId: r.run.id },
+  });
+  const opened = await api.open({ task: "inspect nested" });
+  assert.ok(opened.ok);
+  const nested = (await r.sessions.get(opened.sessionId))!;
+  const run = (await r.runs.latestForThread(nested.threadRef))!;
+  assert.equal((await delegatedAuthorizationOrigin(run.request, r))?.kind, "human");
+  await r.sessions.setParentSession(r.child.id, null);
+  assert.equal(await delegatedAuthorizationOrigin(run.request, r), undefined);
+});

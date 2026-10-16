@@ -1272,7 +1272,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
-        (input.proactiveOpener && !input.text.trim()) || ((automatedTurn || sessionTurn) && !delegatedTask);
+        (input.proactiveOpener && !input.text.trim()) ||
+        ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
       let fallbackTitleWrite: Promise<void> | undefined;
       const assignSessionTitle = () => {
