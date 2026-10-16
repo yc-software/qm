@@ -16,6 +16,14 @@ export const SWARM_LIMITS = {
   provisionMs: 10_000,
 } as const;
 
+/** Per-worker model choice, fixed when the worker is spawned. */
+export interface SwarmMemberRuntime {
+  harness?: string;
+  model?: string;
+  thinkingLevel?: string;
+  fastMode?: boolean;
+}
+
 export interface SwarmMember {
   id: string;
   sessionId?: string;
@@ -24,6 +32,7 @@ export interface SwarmMember {
   parentId?: string;
   depth: number;
   context: unknown;
+  runtime?: SwarmMemberRuntime;
   sandboxId?: string;
   forumSandboxId?: string;
   state: "reserved" | "ready" | "failed";

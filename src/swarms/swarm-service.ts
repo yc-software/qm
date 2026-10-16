@@ -13,12 +13,14 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { canonicalJson } from "../util/objects.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
+import { isHarnessId, THINKING_LEVELS } from "../model/pi-models.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import {
   assertSwarmOpen,
   SWARM_LIMITS,
   type Swarm,
   type SwarmMember,
+  type SwarmMemberRuntime,
   type SwarmMessage,
   type SwarmStore,
 } from "./swarm-store.ts";
@@ -32,11 +34,43 @@ export interface SwarmTurn {
   recipientId: string;
 }
 
+export function spawnRuntime(input: {
+  model?: unknown;
+  effort?: unknown;
+  fastMode?: unknown;
+  harness?: unknown;
+}): SwarmMemberRuntime | undefined {
+  const runtime: SwarmMemberRuntime = {};
+  if (input.model !== undefined) {
+    if (typeof input.model !== "string" || !input.model.trim() || input.model.length > 128)
+      throw new Error("invalid model");
+    runtime.model = input.model.trim();
+  }
+  if (input.effort !== undefined) {
+    if (typeof input.effort !== "string" || !THINKING_LEVELS.includes(input.effort as never))
+      throw new Error("invalid effort");
+    runtime.thinkingLevel = input.effort;
+  }
+  if (input.fastMode !== undefined) {
+    if (typeof input.fastMode !== "boolean") throw new Error("invalid fastMode");
+    runtime.fastMode = input.fastMode;
+  }
+  if (input.harness !== undefined) {
+    if (!isHarnessId(input.harness)) throw new Error("invalid harness");
+    runtime.harness = input.harness;
+  }
+  return Object.keys(runtime).length ? runtime : undefined;
+}
+
 interface SpawnInput {
   requestId: string;
   count?: number;
   context?: unknown;
   contexts?: unknown[];
+  model?: string;
+  effort?: string;
+  fastMode?: boolean;
+  harness?: string;
   text: string;
   forumSandboxId?: string;
   settings?: Partial<SwarmSettings>;
@@ -358,6 +392,7 @@ export function createSwarmService(deps: {
   function dispatchRequest(swarm: Swarm, message: SwarmMessage, recipient: SwarmMember): OrchestratorInput {
     return {
       ...swarm.template,
+      ...(recipient.runtime ?? {}),
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
       origin: { kind: "automation", screenData: message.text },
       text: `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`,
@@ -607,6 +642,7 @@ export function createSwarmService(deps: {
         throw new Error("settings are only allowed on initial swarm creation");
       const settings = existing?.settings ?? resolveSwarmSettings(input.settings, defaults);
       boundedText(input.text, settings.textBytes, "text");
+      const requestedRuntime = spawnRuntime(input);
       const count = input.count ?? input.contexts?.length ?? 1;
       if (!Number.isSafeInteger(count) || count < 1 || count >= settings.agents) throw new Error("invalid pool size");
       if (input.contexts && input.contexts.length !== count) throw new Error("contexts must match count");
@@ -642,6 +678,7 @@ export function createSwarmService(deps: {
           swarm.notificationCount + count > swarm.settings.notifications
         )
           throw new Error("swarm work budget exhausted");
+        const runtime = requestedRuntime ?? parent.runtime;
         const members: SwarmMember[] = contexts.map((context) => {
           const id = randomUUID();
           return {
@@ -650,6 +687,7 @@ export function createSwarmService(deps: {
             threadRef: `swarm:${encodeURIComponent(swarm.id)}:${id}`,
             depth: parent.depth + 1,
             context,
+            ...(runtime ? { runtime: { ...runtime } } : {}),
             sandboxId: id,
             ...((input.forumSandboxId ?? swarm.board?.sandboxId)
               ? { forumSandboxId: input.forumSandboxId ?? swarm.board!.sandboxId }

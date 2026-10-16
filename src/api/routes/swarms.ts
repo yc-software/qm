@@ -38,7 +38,9 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       "action",
       ...(caller.kind === "human" ? ["runId"] : []),
       ...(ACTION_FIELDS[String(body.action)] ?? ["requestId", "text"]),
-      ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId"] : []),
+      ...(body.action === "spawn"
+        ? ["count", "context", "contexts", "forumSandboxId", "model", "effort", "fastMode", "harness"]
+        : []),
       ...(body.action === "send" ? ["audience", "replyTo", "notify"] : []),
       ...(body.action === "spawn" ? ["settings", "backend"] : []),
     ]);
@@ -71,6 +73,10 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
         ...(typeof body.forumSandboxId === "string" ? { forumSandboxId: body.forumSandboxId } : {}),
         ...(isObj(body.settings) ? { settings: body.settings } : {}),
         ...(typeof body.backend === "string" ? { backend: body.backend } : {}),
+        ...("model" in body ? { model: body.model as string } : {}),
+        ...("effort" in body ? { effort: body.effort as string } : {}),
+        ...("fastMode" in body ? { fastMode: body.fastMode as boolean } : {}),
+        ...("harness" in body ? { harness: body.harness as string } : {}),
       });
       return sendJson(res, 202, { members });
     }

@@ -532,8 +532,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       )
         throw new NonRetryableTurnError("swarm service unavailable");
       const swarmBinding = await deps.swarms?.binding(input);
-      if (input.swarm && swarmBinding?.member.parentId && (await deps.config?.getPurposeRuntimeDurable("subagent")))
-        input = { ...input, model: undefined, harness: undefined, thinkingLevel: undefined, fastMode: undefined };
+      if (input.swarm && swarmBinding?.member.parentId && (await deps.config?.getPurposeRuntimeDurable("subagent"))) {
+        // The org subagent default replaces an inherited root model, but never a model chosen at spawn.
+        const chosen = swarmBinding.member.runtime ?? {};
+        input = {
+          ...input,
+          model: chosen.model,
+          harness: chosen.harness,
+          thinkingLevel: chosen.thinkingLevel,
+          fastMode: chosen.fastMode,
+        };
+      }
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(input, deps, external);
