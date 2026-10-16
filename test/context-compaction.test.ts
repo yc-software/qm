@@ -1355,6 +1355,73 @@ test("verified swarm workers use category defaults instead of copied parent choi
   }
 });
 
+test("swarm workers keep the runtime chosen at spawn over inherited choices and the category default", async () => {
+  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  for (const configured of [false, true]) {
+    const f = await swarmFixture({
+      runtime: {
+        harness: inherited.harnessId,
+        model: inherited.modelId,
+        thinkingLevel: inherited.effortLevel,
+        fastMode: inherited.fastMode,
+      },
+    });
+    const [full] = await f.service.spawn(f.caller, {
+      requestId: "full",
+      text: "work",
+      model: "gpt-6-sol",
+      effort: "medium",
+      fastMode: false,
+    });
+    const [partial] = await f.service.spawn(f.caller, { requestId: "partial", text: "work", effort: "medium" });
+    await f.service.sweep();
+    const seen = new Map<string, unknown>();
+    for (const peer of [full!, partial!]) {
+      const worker = await f.workerCaller(peer.id);
+      if (worker.kind !== "agent") throw new Error("expected worker");
+      const run = (await f.runs.get(worker.claims.runId!))!;
+      const base = createMockHarness();
+      const adapter: Harness = {
+        ...base,
+        turns: {
+          ...base.turns,
+          runTurn: async (input) => {
+            seen.set(peer.id, input.runtime);
+            return { reply: "done" };
+          },
+        },
+      };
+      const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+        resolveRuntimeChoiceDurable(
+          built.config,
+          "org:default-org",
+          input.scopeLabel,
+          inherited,
+          input.runtime,
+          undefined,
+          input.runtimePurpose,
+        ),
+      );
+      const built = buildOrchestrator(router, undefined, undefined, f);
+      built.config.setApprovedHarnesses(["pi"]);
+      await built.config.flushScope("org:default-org");
+      if (configured) await built.config.setPurposeRuntime("subagent", category);
+      assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
+    }
+    assert.deepEqual(seen.get(full!.id), {
+      harnessId: "pi",
+      modelId: "gpt-6-sol",
+      effortLevel: "medium",
+      fastMode: false,
+    });
+    assert.deepEqual(
+      seen.get(partial!.id),
+      configured ? { ...category, effortLevel: "medium" } : { ...inherited, effortLevel: "medium" },
+    );
+  }
+});
+
 for (const explicit of [false, true]) {
   test(`${explicit ? "explicit" : "automatic"} recent recovery continues the request once and stays reduced next turn`, async () => {
     const base = createMockHarness();

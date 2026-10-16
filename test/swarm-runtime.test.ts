@@ -43,7 +43,7 @@ test("later spawns in the same swarm can pick different models", async () => {
   assert.equal((await runFor(f, opus!.id)).request.model, "claude-opus-5-5");
 });
 
-test("workers spawned by a worker inherit its model unless they choose again", async () => {
+test("workers spawned by a worker inherit its runtime and replace only the fields they name", async () => {
   const f = await swarmFixture();
   const [parent] = await f.service.spawn(f.caller, {
     requestId: "initial",
@@ -57,7 +57,7 @@ test("workers spawned by a worker inherit its model unless they choose again", a
   const [inherited] = await f.service.spawn(worker, { requestId: "child", text: "sub" });
   const [chosen] = await f.service.spawn(worker, { requestId: "child2", text: "sub", effort: "high" });
   assert.deepEqual(inherited!.runtime, { model: "gpt-6.1-sol", thinkingLevel: "medium" });
-  assert.deepEqual(chosen!.runtime, { thinkingLevel: "high" });
+  assert.deepEqual(chosen!.runtime, { model: "gpt-6.1-sol", thinkingLevel: "high" });
 });
 
 test("spawn rejects malformed runtime fields before reserving workers", async () => {

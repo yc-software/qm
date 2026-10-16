@@ -3,6 +3,7 @@ import { errMessage } from "../../util/errors.ts";
 import type { SwarmCaller } from "../../swarms/swarm-service.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import { SPAWN_RUNTIME_FIELDS } from "../../swarms/swarm-runtime.ts";
 
 const ACTION_FIELDS: Record<string, string[]> = { context: ["context"], control: ["memberId", "state"] };
 
@@ -38,9 +39,7 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
       "action",
       ...(caller.kind === "human" ? ["runId"] : []),
       ...(ACTION_FIELDS[String(body.action)] ?? ["requestId", "text"]),
-      ...(body.action === "spawn"
-        ? ["count", "context", "contexts", "forumSandboxId", "model", "effort", "fastMode", "harness"]
-        : []),
+      ...(body.action === "spawn" ? ["count", "context", "contexts", "forumSandboxId", ...SPAWN_RUNTIME_FIELDS] : []),
       ...(body.action === "send" ? ["audience", "replyTo", "notify"] : []),
       ...(body.action === "spawn" ? ["settings", "backend"] : []),
     ]);
@@ -73,10 +72,9 @@ async function swarmRequest(ctx: ApiCtx): Promise<void> {
         ...(typeof body.forumSandboxId === "string" ? { forumSandboxId: body.forumSandboxId } : {}),
         ...(isObj(body.settings) ? { settings: body.settings } : {}),
         ...(typeof body.backend === "string" ? { backend: body.backend } : {}),
-        ...("model" in body ? { model: body.model as string } : {}),
-        ...("effort" in body ? { effort: body.effort as string } : {}),
-        ...("fastMode" in body ? { fastMode: body.fastMode as boolean } : {}),
-        ...("harness" in body ? { harness: body.harness as string } : {}),
+        ...Object.fromEntries(
+          SPAWN_RUNTIME_FIELDS.filter((field) => field in body).map((field) => [field, body[field]]),
+        ),
       });
       return sendJson(res, 202, { members });
     }

@@ -8,6 +8,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
+import type { SwarmMemberRuntime } from "./swarm-runtime.ts";
 
 export const SWARM_LIMITS = {
   sweepBatch: 16,
@@ -15,14 +16,6 @@ export const SWARM_LIMITS = {
   reconcileMs: 30_000,
   provisionMs: 10_000,
 } as const;
-
-/** Per-worker model choice, fixed when the worker is spawned. */
-export interface SwarmMemberRuntime {
-  harness?: string;
-  model?: string;
-  thinkingLevel?: string;
-  fastMode?: boolean;
-}
 
 export interface SwarmMember {
   id: string;
