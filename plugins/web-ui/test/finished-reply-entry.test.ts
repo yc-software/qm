@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { entriesToMessages, isFinishedReplyEntry, type AssistantWork, type SessionEntry } from "../src/core-bridge.ts";
+import { entriesToMessages, type AssistantWork, type SessionEntry } from "../src/core-bridge.ts";
 
 const step = (id: string, stopReason: string, index: number) => ({
   id,
@@ -16,8 +16,6 @@ function textOf(message: AssistantWork): string {
   return block?.type === "text" ? block.text : "";
 }
 
-// Shape taken from a real session: the model finished its answer (stopReason "stop", no tool
-// call), a resume note then continued the run, and the model answered again.
 const interruptedAfterReply: SessionEntry[] = [
   { type: "user", seq: 1, createdAt: 100, payload: { text: "Did you shrink it?" } },
   { type: "thinking", seq: 2, createdAt: 110, payload: { thinking: "Time to answer.", step: step("s1", "stop", 0) } },
@@ -94,19 +92,13 @@ test("text from a step that also called a tool stays narration inside the fold",
   );
 });
 
-test("a finished text-only step whose tool call is recorded later is still narration", () => {
-  const toolCallSteps = new Set(["s1"]);
-  const entry: SessionEntry = {
-    type: "text",
-    seq: 2,
-    createdAt: 1,
-    payload: { text: "On it.", step: step("s1", "stop", 0) },
-  };
-  assert.equal(isFinishedReplyEntry(entry, toolCallSteps), false);
-  assert.equal(isFinishedReplyEntry(entry, new Set()), true);
-  assert.equal(
-    isFinishedReplyEntry({ type: "text", seq: 3, createdAt: 1, payload: { text: "legacy, no step" } }, new Set()),
-    false,
-    "entries without step metadata keep their old rendering",
-  );
+test("text without step metadata keeps its old rendering inside the fold", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", seq: 1, createdAt: 100, payload: { text: "Check it" } },
+    { type: "text", seq: 2, createdAt: 110, payload: { text: "Looking now." } },
+    { type: "assistant", seq: 3, createdAt: 140, payload: { text: "All good." } },
+  ];
+  const replies = (entriesToMessages(entries) as AssistantWork[]).filter((m) => m.role === "assistant");
+  assert.deepEqual(replies.map(textOf), ["All good."]);
+  assert.ok(replies[0].work?.activity.some((a) => a.type === "text"));
 });

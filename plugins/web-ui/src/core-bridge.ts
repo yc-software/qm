@@ -2034,43 +2034,15 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
-interface RecordedStep {
-  id?: string;
-  stopReason?: string;
-}
-
-function entryStep(entry: SessionEntry): RecordedStep | null {
-  const step = (entry.payload as { step?: unknown } | null)?.step;
-  return step && typeof step === "object" ? (step as RecordedStep) : null;
-}
-
-/**
- * A `text` entry from a model step that ended on its own (`stop`) without calling a tool is a
- * finished reply, not narration — the run merely went on afterwards (a steer, a resume note, a
- * runtime handoff). Only the run's last step is stored as `assistant`, so this is how a reply
- * given mid-run reaches the transcript.
- */
-export function isFinishedReplyEntry(entry: SessionEntry, toolCallSteps: ReadonlySet<string>): boolean {
+function isFinishedReplyEntry(entry: SessionEntry): boolean {
   if (entry.type !== "text") return false;
-  const step = entryStep(entry);
-  if (!step || typeof step.id !== "string" || step.stopReason !== "stop") return false;
-  if (toolCallSteps.has(step.id)) return false;
+  const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
+  if (step?.stopReason !== "stop") return false;
   return Boolean((entry.payload as { text?: string } | null)?.text?.trim());
-}
-
-function toolCallStepIds(entries: readonly SessionEntry[]): Set<string> {
-  const ids = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type !== "tool_call") continue;
-    const id = entryStep(entry)?.id;
-    if (typeof id === "string") ids.add(id);
-  }
-  return ids;
 }
 
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
-  const toolCallSteps = toolCallStepIds(entries);
   const userByTs = new Map<string, HistoryUserMessage>();
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
@@ -2193,7 +2165,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       }
       continue;
     }
-    if (isFinishedReplyEntry(e, toolCallSteps)) {
+    if (isFinishedReplyEntry(e)) {
       spillHeldPosts();
       flushWork(text, e.createdAt, true, undefined, false, e.seq === undefined ? [] : [e.seq]);
       posted = false;
