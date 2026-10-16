@@ -141,7 +141,6 @@ async function scenario() {
     senderId: sender.id,
     recipientId: parent.id,
     actor,
-    audience: [actor],
     text: "QUARANTINED_FINDING",
     createdAt: Date.now(),
   });
