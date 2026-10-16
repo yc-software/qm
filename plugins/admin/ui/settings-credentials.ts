@@ -49,6 +49,7 @@ export class CredentialState {
       scheme: "",
       methods: "",
       paths: "",
+      cap: "",
       enabled: true,
       deployments: true,
       org: true,
@@ -76,6 +77,7 @@ export class CredentialState {
         scheme: c.injection?.scheme || "",
         methods: (c.allowedMethods || []).join(", "),
         paths: (c.allowedPathPrefixes || []).join("\n"),
+        cap: c.maxRequestsPerDay ? String(c.maxRequestsPerDay) : "",
         enabled: c.enabled !== false,
         deployments: c.deployments !== false,
         org,
@@ -161,6 +163,7 @@ export class CredentialState {
         .split("\n")
         .map((x: string) => x.trim())
         .filter(Boolean),
+      ...(env ? {} : { maxRequestsPerDay: d.cap.trim() ? Number(d.cap.trim()) : null }),
       enabled: d.enabled,
       deployments: env ? true : d.deployments,
       grantees: env ? [this.scope] : this.grantees(),
@@ -175,6 +178,11 @@ export class CredentialState {
       if (!/^[A-Z][A-Z0-9_]*$/.test(body.envKey)) return "Env var must be UPPER_SNAKE_CASE.";
       if (body.envKey.startsWith("AGENT_")) return "AGENT_* env vars are reserved for the platform.";
     } else if (!body.host) return "Host is required.";
+    else if (
+      body.maxRequestsPerDay !== null &&
+      !(Number.isSafeInteger(body.maxRequestsPerDay) && body.maxRequestsPerDay >= 1)
+    )
+      return "Daily request cap must be a positive whole number, or blank for no cap.";
     if (body.delivery !== "env" && !this.draft.org && !body.grantees.length)
       return "Add at least one person or choose org-wide access.";
     if (body.delivery !== "env" && this.resolutionError) return this.resolutionError;
@@ -195,6 +203,7 @@ export class CredentialState {
     const envHost = d.envkey.trim() ? "Sandbox env $" + d.envkey.trim() : "Env var not set";
     const brokerHost = d.host.trim() ? d.host.trim() + " and its subdomains" : "Not set";
     const brokerPaths = b.allowedPathPrefixes.length ? b.allowedPathPrefixes.join(", ") : "Any path on this host";
+    const dailyCap = b.maxRequestsPerDay ? b.maxRequestsPerDay + " requests per UTC day" : "No daily cap";
     const storedSecret = this.original?.hasSecret ? "Stored secret retained" : "Required before first save";
     return {
       state: d.enabled ? "Enabled" : disabled,
@@ -206,6 +215,7 @@ export class CredentialState {
         ? "None"
         : (b.allowedMethods.length ? b.allowedMethods.map((m: string) => m.toUpperCase()) : ["GET"]).join(", "),
       paths: env ? "Never served by the credential broker" : brokerPaths,
+      cap: env ? "None" : dailyCap,
       principals: env
         ? "Every all-internal conversation; grants don't gate env delivery"
         : (b.grantees.map(config.label).join(", ") || "No principal selected") +
@@ -488,6 +498,17 @@ function template() {
               placeholder="/allowed/path/"
             ></textarea>
           </label>
+          <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-broker-only": true, hidden: env })}
+            >Daily request cap <span class="hint">brokered calls per UTC day; blank = no cap</span
+            ><input
+              type="text"
+              inputmode="numeric"
+              id="sc-cap"
+              .value=${credentialState.draft.cap || ""}
+              @input=${(e: Event) => credentialState.change("cap", (e.target as HTMLInputElement).value)}
+              placeholder="No cap"
+              style="width: 100%"
+          /></label>
           <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
             ><input
               type="checkbox"
@@ -610,6 +631,10 @@ function template() {
             <div>
               <dt>Paths</dt>
               <dd id="sc-cap-paths">${cap.paths}</dd>
+            </div>
+            <div>
+              <dt>Daily cap</dt>
+              <dd id="sc-cap-daily">${cap.cap}</dd>
             </div>
             <div>
               <dt>Access</dt>
