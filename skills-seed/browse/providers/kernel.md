@@ -10,6 +10,24 @@ export PROFILE_ENV=KERNEL_PROFILE PROFILE_SERVICE=kernel-profile
 In a DM, name three handles in `credentials`: the Kernel key (if it isn't org env), the
 person's `KERNEL_PROFILE`, and their `KERNEL_PROXY_ID` (see "The person's static IP").
 
+## Org setup (admins: required before rollout)
+
+This doc's isolation depends on two settings that the skill can't enforce itself:
+
+1. **Shared credential: create and delete only.** Configure the org's shared Kernel
+   credential (the broker entry for `api.onkernel.com`) with methods `POST` and `DELETE`
+   only, on paths `/browsers` and `/profiles`. Do NOT allow `GET`: the paths match by
+   prefix, so any `GET` lets callers list every person's profiles and running browsers,
+   and their names are all anyone needs to open someone else's signed-in browser.
+   Nothing in this flow needs `GET`; the live view and CDP URL come back from the create.
+2. **Personal keys scoped to the person.** A person's own `KERNEL_API_KEY` must not be an
+   account-wide key on the shared Kernel account; it would bypass rule 1. Give them their
+   own Kernel project (or a key restricted to their project), so the only profiles it can
+   see are theirs.
+
+If you're an agent and the shared credential's listing shows `GET`, tell the person
+(and an org admin) that profiles aren't isolated yet. Don't work around it.
+
 ## Profiles
 
 The person's profile is a Kernel browser profile whose name lives in their keychain
@@ -20,8 +38,8 @@ once on the live view and the profile keeps it.
 
 Profile names are secrets, not labels. One Kernel account holds every person's profiles
 and records no owner, so whoever knows a name can launch a browser signed in as that
-person. The org's shared Kernel credential therefore allows only creating and deleting
-browsers and profiles, never listing them; don't list profiles or browsers with any key,
+person. The org's shared Kernel credential must therefore allow only creating and
+deleting (see "Org setup" below); don't list profiles or browsers with any key,
 and don't try to find a person's profile by name or recency. Their profile is the one in
 their keychain, full stop. If it is missing, run first-time setup; don't go looking.
 
