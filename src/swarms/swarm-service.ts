@@ -13,7 +13,7 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { canonicalJson } from "../util/objects.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
-import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields } from "./swarm-runtime.ts";
+import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import {
   assertSwarmOpen,
@@ -304,7 +304,7 @@ export function createSwarmService(deps: {
     const provider = inventory.providers.find((item) => item.name === requested);
     if (!provider || !provider.actions.includes("create") || !provider.actions.includes("retire"))
       throw new Error("sandbox backend must support creating and retiring workers");
-    const template: OrchestratorInput = {
+    const template: SwarmTemplate = {
       actor: source.actor,
       conversation: {
         ...source.conversation,

@@ -60,8 +60,14 @@ test("workers spawned by a worker inherit its runtime and replace only the field
   assert.deepEqual(chosen!.runtime, { model: "gpt-6.1-sol", thinkingLevel: "high" });
 });
 
-test("spawn rejects malformed runtime fields before reserving workers", async () => {
-  for (const bad of [{ model: "" }, { model: 3 }, { effort: "sideways" }, { fastMode: "no" }]) {
+test("spawn rejects malformed or unknown runtime choices before reserving workers", async () => {
+  for (const bad of [
+    { model: "" },
+    { model: 3 },
+    { model: "no-such-model-qa" },
+    { effort: "sideways" },
+    { fastMode: "no" },
+  ]) {
     const f = await swarmFixture();
     await assert.rejects(f.service.spawn(f.caller, { requestId: "initial", text: "work", ...(bad as object) }));
     assert.equal(await f.store.get(f.root.id), null);
