@@ -18,6 +18,13 @@ and a browser launched with `save_changes: true` writes its cookies back when it
 DELETED or times out (closing CDP does not save). No Managed Auth: the person signs in
 once on the live view and the profile keeps it.
 
+Profile names are secrets, not labels. One Kernel account holds every person's profiles
+and records no owner, so whoever knows a name can launch a browser signed in as that
+person. The org's shared Kernel credential therefore allows only creating and deleting
+browsers and profiles, never listing them; don't list profiles or browsers with any key,
+and don't try to find a person's profile by name or recency. Their profile is the one in
+their keychain, full stop. If it is missing, run first-time setup; don't go looking.
+
 Kernel profiles must be pre-created at the API — a browser create naming a profile that
 doesn't exist 400s (that's the usual cause of a 400 here, not a Kernel outage). During
 first-time setup, and whenever the create below 400s, create the profile under the EXISTING
@@ -65,12 +72,15 @@ without it.
 
 In a DM, with the person's profile and proxy. Only ONE browser may write to a profile at a
 time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
-profile, so a second writer silently clobbers the first. Check for a running browser on
-the profile first, and launch read-only when one exists:
+profile, so a second writer silently clobbers the first. Since browsers can't be listed,
+record your own writer in the person's keychain (`KERNEL_ACTIVE`, service
+`kernel-active`, value `<session_id>:<epoch>`) and launch read-only while a record younger
+than the browser timeout exists. Name its handle in `credentials` when it exists (absent =
+no writer):
 
 ```bash
-SAVE=$(curl -fsS https://api.onkernel.com/browsers -H "Authorization: Bearer $KERNEL_API_KEY" \
-  | python3 -c "import sys,json,os;p=os.environ['KERNEL_PROFILE'];print('false' if any((b.get('profile') or {}).get('name')==p for b in json.load(sys.stdin)) else 'true')")
+SAVE=true
+case "${KERNEL_ACTIVE:-}" in *:*) [ $(( $(date +%s) - ${KERNEL_ACTIVE#*:} )) -lt 1800 ] && SAVE=false;; esac
 CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
   -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
   -d "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
@@ -79,9 +89,17 @@ KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
 ```
 
+When `SAVE=true`, claim the profile right away:
+
+```bash
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d "{\"service\":\"kernel-active\",\"envKey\":\"KERNEL_ACTIVE\",\"secret\":\"$KERNEL_SID:$(date +%s)\"}" > /dev/null
+```
+
 `CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
-when you report: anything this run signs in to won't be kept. The check is not a lock —
-two creates in the same moment can both see an empty list — so keep one browse run at a
+when you report: anything this run signs in to won't be kept. The record is not a lock —
+two runs starting in the same moment can both see none — so keep one browse run at a
 time on a person's profile.
 
 In a channel or group, OMIT the profile AND `proxy_id` entirely (per the DM-only rule) —
@@ -136,6 +154,10 @@ password never leaves them.
 
 ```bash
 curl -fsS -X DELETE "https://api.onkernel.com/browsers/$KERNEL_SID" -H "Authorization: Bearer $KERNEL_API_KEY"
+# release the profile if this run held it
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d '{"service":"kernel-active","envKey":"KERNEL_ACTIVE","secret":"none:0"}' > /dev/null
 ```
 
 ## API reference
