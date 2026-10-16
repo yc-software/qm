@@ -22,11 +22,12 @@ Use the first of these that exists:
    You never see this key. QM adds it to each request you send through its credential
    broker (see the use-shared-credential skill), so `KERNEL_API_KEY` stays unset.
 
-Make every Kernel API call in this doc through `kapi`, which picks the right route.
-Define it once per shell:
+Make every Kernel API call in this doc through `kapi METHOD PATH [JSON-BODY]`, which
+picks the right route, prints the response body, and on any error exits non-zero with
+the status and body on stderr. Define it once per shell:
 
 ```bash
-kapi() { # kapi METHOD PATH [JSON-BODY] -> response body on stdout; non-zero exit on error
+kapi() {
   if [ -n "${KERNEL_API_KEY:-}" ]; then
     if [ -n "${3:-}" ]; then
       curl -fsS -X "$1" "https://api.onkernel.com$2" -H "Authorization: Bearer $KERNEL_API_KEY" \
@@ -47,10 +48,11 @@ r = urllib.request.Request(os.environ["AGENT_API_URL"] + "/v1/credentials/broker
     headers={"x-agent-capability": os.environ["AGENT_CREDENTIAL_TOKEN"], "content-type": "application/json"})
 try:
     env = json.load(urllib.request.urlopen(r))
-except urllib.error.HTTPError as e:  # broker refusal, e.g. method_not_allowed
-    sys.stderr.write(e.read().decode()[:300] + "\n"); sys.exit(1)
+except urllib.error.HTTPError as e:
+    sys.stderr.write(f"broker {e.code}: {e.read().decode()[:500]}\n"); sys.exit(1)
+if not 200 <= env.get("status", 0) < 300:
+    sys.stderr.write(f"kernel {env.get('status')}: {(env.get('body') or '')[:500]}\n"); sys.exit(1)
 sys.stdout.write(env.get("body") or "")
-sys.exit(0 if 200 <= env.get("status", 0) < 300 else 1)
 PY
   fi
 }
