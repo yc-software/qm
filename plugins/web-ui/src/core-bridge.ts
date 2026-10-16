@@ -2044,6 +2044,8 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
+const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+
 function deliveredSilence(a: ToolActivity): boolean {
   if (a.type !== "tool_result") return false;
   const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
@@ -2109,7 +2111,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
     if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
-      pending = pending.filter((a) => (a.payload as { tool?: unknown } | null)?.tool !== "finish_silently");
+      pending = pending.filter((a) => !SILENCE_TOOLS.has((a.payload as { tool?: string } | null)?.tool ?? ""));
       if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
         pending = [];
         return;
