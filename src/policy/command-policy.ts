@@ -9,10 +9,11 @@ const ORG_FLOOR_RULES: CommandRule[] = [
     reason: "recursive delete",
   },
   {
-    pattern: "\\bgit\\s+push\\b.*(?:--force\\b|(?:^|\\s)-[a-zA-Z]*f\\b)",
+    pattern: "\\bgit\\b[^\\n;&|]*\\spush\\b.*(?:--force\\b|(?:^|\\s)-[a-zA-Z]*f[a-zA-Z]*\\b|\\s\\+\\S)",
     decision: "require_approval",
     reason: "force push",
   },
+  { pattern: "\\bfind\\b[^\\n]*\\s-delete\\b", decision: "require_approval", reason: "find -delete" },
   { pattern: "\\b(drop|truncate)\\s+table\\b", decision: "require_approval", reason: "destructive SQL" },
   { pattern: "\\bmkfs\\b|:\\(\\)\\s*\\{", decision: "deny", reason: "destructive / fork bomb" },
   { pattern: "\\bcurl\\b.*\\|\\s*(sh|bash)\\b", decision: "require_approval", reason: "pipe-to-shell" },
