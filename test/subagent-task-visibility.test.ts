@@ -27,6 +27,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   });
   const parentRun = (await built.runs.latestForThread(threadRef))!;
   const parentSession = (await built.sessions.getByThread(threadRef))!;
+  await built.config.setPersonalModelAuth("U1", true, "openai");
   await built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1");
   const syscalls = createSessionSyscalls({
     sessions: built.sessions,
@@ -139,6 +140,7 @@ for (const fork of [false, true]) {
     });
     const parent = (await built.runs.latestForThread(threadRef))!;
     const session = (await built.sessions.getByThread(threadRef))!;
+    await built.config.setPersonalModelAuth("U1", true, "openai");
     const out = await startSession(built.app, built.sessions, "U1", {
       scopeId: session.scopeId,
       ...(fork ? { forkOf: session.id } : {}),
@@ -149,6 +151,7 @@ for (const fork of [false, true]) {
     });
     assert.ok("session" in out);
     const queued = (await built.runs.latestForThread(out.session.threadRef))!;
+    assert.equal(queued.request.modelAccount, "company");
     built.runtime.startBackground();
     await settle(async () => (await built.runs.get(queued.id))!.status === "done");
     const run = (await built.runs.get(queued.id))!;

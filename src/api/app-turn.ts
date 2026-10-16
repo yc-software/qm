@@ -201,9 +201,12 @@ export function createTurnMethods(
       let privateRequest = req.privateSessionMessage ? req : undefined;
       if (approvedRequest?.privateSessionMessage) privateRequest = approvedRequest;
       const origin = resolveTurnOrigin(privateRequest ?? req);
+      const sessionTurn =
+        (req.spawned && isSessionTurn(req)) ||
+        (sameApprovedMessage && approvedRequest && isSessionTurn(approvedRequest));
 
       const modelAccount =
-        !req.externalSlack && deps.userModelCredentials && origin.kind === "human"
+        !req.externalSlack && deps.userModelCredentials && origin.kind === "human" && !sessionTurn
           ? await deps.config.getModelAccountDurable(actor.id)
           : "company";
       const individualAuth = modelAccount !== "company";

@@ -1,4 +1,5 @@
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { RuntimeControl } from "../src/harness/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -39,6 +40,7 @@ type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
   ref: Parameters<typeof createAgentTools>[0];
   runtime?: RuntimeControl;
+  requestedRuntime?: Partial<RuntimeChoice>;
   options: AgentToolsOptions;
   tools: string[];
   results: Array<{ isError?: unknown }>;
@@ -107,6 +109,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         const record: Turn = {
           ref,
           runtime: turn.runtimeControl,
+          requestedRuntime: turn.runtime,
           options,
           tools: tools.map((t) => t.name).sort(),
           results,
@@ -133,6 +136,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const config = createMemoryConfigStore("org");
   config.setApprovedHarnesses(["pi", "claude"]);
+  config.setInteractiveFastMode(true);
   await config.flushScope("org:org");
   const orchestrator = createOrchestrator({
     config,
@@ -219,6 +223,8 @@ for (const [surface, flags] of [
     assert.deepEqual(omit(child.options), omit(parent.options));
     assert.equal(parent.ref.current?.humanTurn, true);
     assert.equal(child.ref.current?.humanTurn, undefined);
+    assert.equal(parent.requestedRuntime?.fastMode, true);
+    assert.equal(child.requestedRuntime?.fastMode, undefined);
     const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
     assert.deepEqual(
       createAgentTools(child.ref, asParent)
