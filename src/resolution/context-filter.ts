@@ -1,4 +1,4 @@
-import type { Principal, ScopeId, SessionEntry } from "../types.ts";
+import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 
 export function principalEntitledToScope(
@@ -14,16 +14,4 @@ export function principalEntitledToScope(
   if (kind === "personal") return p.id === ref;
   if (kind === "team") return (p.teamIds ?? []).includes(ref);
   return false;
-}
-
-export function filterHistoryForAudience(
-  entries: SessionEntry[],
-  audience: Principal[],
-  sessionScopeId: ScopeId,
-  orgScopeId: ScopeId,
-): SessionEntry[] {
-  if (audience.length === 0) return [];
-  return entries.filter((e) =>
-    audience.every((p) => principalEntitledToScope(p, e.scopeLabel, sessionScopeId, orgScopeId)),
-  );
 }

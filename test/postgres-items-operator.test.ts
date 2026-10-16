@@ -24,7 +24,9 @@ test(
       createPostgresDirectoryStore(url!);
       await applyPgMigrations(
         pool,
-        registeredPgMigrations(url!).filter((m) => m.id !== "sessions/store/0035-items"),
+        registeredPgMigrations(url!).filter(
+          (m) => m.id !== "sessions/store/0035-items" && m.id !== "sessions/store/0036-items-cutover",
+        ),
       );
       await client.query(
         "ALTER TABLE session_entries ADD CONSTRAINT operator_source_fk FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE",
@@ -167,7 +169,7 @@ test(
       await resumed.finish(true);
       await applyPgMigrations(pool, registeredPgMigrations(url!));
       await client.query(
-        "INSERT INTO qm_schema_migrations(id,checksum) VALUES('sessions/store/0036-items-cutover','test')",
+        "INSERT INTO qm_schema_migrations(id,checksum) VALUES('sessions/store/0036-items-cutover','test') ON CONFLICT DO NOTHING",
       );
       await assert.rejects(resumed.catchupBatch(), /cutover is already applied/);
       await resumed.cleanup();

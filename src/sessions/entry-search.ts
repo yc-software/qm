@@ -2,7 +2,11 @@ import type { EntryType, SessionEntry } from "../types.ts";
 import type { NewSearchEntry } from "./session-store.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
-export const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
+const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
+
+export function searchEntryType(entry: Pick<SessionEntry, "type" | "payload">): EntryType | null {
+  return SEARCHABLE_ENTRY_TYPES.has(entry.type) ? entry.type : null;
+}
 const MAX_TERMS = 8;
 
 /** Lowercased alphanumeric terms, in query order — the shared tokenizer for both stores. */
@@ -76,14 +80,15 @@ export function searchSnippet(text: string, terms: readonly string[], max = 240)
 
 export function searchRowsFromEntries(entries: readonly SessionEntry[], sinceSeq: number): NewSearchEntry[] {
   return entries.flatMap((entry) => {
-    if (entry.seq <= sinceSeq || !SEARCHABLE_ENTRY_TYPES.has(entry.type)) return [];
+    const type = searchEntryType(entry);
+    if (entry.seq <= sinceSeq || !type) return [];
     const text = entrySearchText(entry.payload);
     if (!text || !text.trim()) return [];
     const author = entrySearchAuthor(entry);
     return [
       {
         seq: entry.seq,
-        type: entry.type,
+        type,
         ...(author ? { author } : {}),
         text,
         createdAt: entry.createdAt,

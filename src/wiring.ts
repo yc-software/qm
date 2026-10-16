@@ -322,6 +322,7 @@ import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
+import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import type { SessionStore } from "./sessions/session-store.ts";
 import { createMockHarness } from "./harness/mock-harness.ts";
 import {
@@ -1361,6 +1362,20 @@ export function buildApp(
       ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"))
       : createMemorySessionStore();
   memorySessions.store = sessions;
+  const toolOutput =
+    config.sessionStore === "postgres" && pgArtifactMap
+      ? createPostgresToolOutputStore({
+          pool: pgArtifactMap.pool,
+          bytesFor: (prefix) =>
+            config.snapshotStore === "s3" && config.s3Bucket
+              ? createS3DurableByteStore({
+                  bucket: config.s3Bucket,
+                  ...(config.s3Region ? { region: config.s3Region } : {}),
+                  prefix: `${config.s3Prefix ?? ""}${prefix}`,
+                })
+              : createLocalDurableByteStore(join(config.dataDir, prefix)),
+        })
+      : createMemoryToolOutputStore({ sessions });
   const runStoreKind = config.runStore;
   const runSignals: RunSignalStore =
     runStoreKind === "postgres"
@@ -2073,6 +2088,7 @@ export function buildApp(
     sessions,
     workspace,
     files,
+    toolOutput,
     sandbox,
     sandboxResources,
     swarms,

@@ -30,7 +30,9 @@ async function withSchema(
   try {
     createPostgresSessionStore(url.toString());
     createPostgresDirectoryStore(url.toString());
-    const migrations = registeredPgMigrations(url.toString());
+    const migrations = registeredPgMigrations(url.toString()).filter(
+      (migration) => migration.id !== "sessions/store/0036-items-cutover",
+    );
     if (opts.beforeItems) {
       await applyPgMigrations(
         raw,

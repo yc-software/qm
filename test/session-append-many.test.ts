@@ -44,20 +44,20 @@ for (const backend of ["memory", "postgres"] as const) {
           assert.equal(Number(rows[0].turns), 2);
           const constraint = `batch_failure_${randomUUID().replaceAll("-", "")}`;
           await pool.query(
-            `ALTER TABLE session_entries ADD CONSTRAINT ${constraint} CHECK (session_id <> '${session.id}' OR seq <> 5)`,
+            `ALTER TABLE items ADD CONSTRAINT ${constraint} CHECK (session_id <> '${session.id}' OR seq <> 5)`,
           );
           try {
             await assert.rejects(
               store.appendMany(lease, [
                 { type: "user", payload: { text: "Rolled back" }, scopeLabel: scope },
-                { type: "assistant", payload: { text: "Fails insert" }, scopeLabel: scope },
+                { type: "assistant", payload: { text: "Fails item insert" }, scopeLabel: scope },
               ]),
             );
             assert.equal((await store.getEntries(session.id)).length, 4);
             const after = await pool.query("SELECT messages, turns FROM sessions WHERE id = $1", [session.id]);
             assert.deepEqual(after.rows, rows);
           } finally {
-            await pool.query(`ALTER TABLE session_entries DROP CONSTRAINT ${constraint}`);
+            await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
         }
         await store.releaseLease(lease);

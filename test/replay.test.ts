@@ -179,24 +179,28 @@ test("a user turn that lands right after a tool result stays adjacent — no wor
   assert.deepEqual(assistantText, []);
 });
 
-test("reconstructMessagesFromHistory replays a delivery in user voice, never the assistant's", () => {
+test("reconstructMessagesFromHistory replays a delivery as the agent's deliver call and keeps legacy file notes", () => {
   const history: SessionEntry[] = [
     ent("user", { text: "make a flag" }, 1),
     ent("assistant", { text: "here you go" }, 2),
     ent("delivery", { text: "flag.png (image/png, 100 bytes)" }, 3),
-    ent("user", { text: "thanks" }, 4),
+    ent("tool_call", { tool: "deliver", callId: "cron:1", text: "flag.png is ready", via: "cron" }, 4),
+    ent("tool_result", { tool: "deliver", callId: "cron:1", result: "delivered" }, 5),
+    ent("user", { text: "thanks" }, 6),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
   assert.deepEqual(
     msgs.map((m) => m.role),
-    ["user", "assistant", "user", "user"],
+    ["user", "assistant", "user", "assistant", "toolResult", "user"],
   );
-  assert.deepEqual(msgs[1]!.content, [{ type: "text", text: "here you go" }]);
   assert.deepEqual(msgs[2]!.content, [
     { type: "text", text: "[files delivered to the conversation: flag.png (image/png, 100 bytes)]" },
   ]);
-  assert.deepEqual(msgs[3]!.content, [{ type: "text", text: "thanks" }]);
+  assert.deepEqual(msgs[3]!.content, [
+    { type: "toolCall", id: "cron:1", name: "deliver", arguments: { text: "flag.png is ready", via: "cron" } },
+  ]);
+  assert.deepEqual(msgs[4]!.content, [{ type: "text", text: "delivered" }]);
 });
 
 test("reconstructMessagesFromHistory opens with a fixed user frame when the agent spoke first", () => {

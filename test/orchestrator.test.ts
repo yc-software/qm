@@ -176,33 +176,41 @@ test("the deployment turn wall-clock reaches the harness and a per-turn cap repl
   assert.equal((await freshApp().app.turn(dm("!wallclock"))).reply, "wallclock:0");
 });
 
-test("inbound file problems ride a durable file_event entry — off the reply and the model context", async () => {
+test("inbound file problems reach the model in the environment footer, not a log entry", async () => {
   const { app, sessions } = freshApp();
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
   const res = await app.turn(dm("what's your favorite color", { inboundNotes: [note] }));
   assert.equal(res.status, "ok", res.reason);
 
-  assert.doesNotMatch(res.reply ?? "", /too many files|skipped|screenshot\.png/);
-
-  const found = await app.getSession(res.sessionId!);
-  const fileEvent = found!.entries.find(
-    (e) => e.type === "system" && (e.payload as { kind?: string } | null)?.kind === "file_event",
+  const entries = await sessions.getEntries(res.sessionId!);
+  assert.equal(
+    entries.some((e) => e.type === "system" && /screenshot\.png/.test(JSON.stringify(e.payload))),
+    false,
   );
-  assert.ok(fileEvent, "expected a durable file_event system entry");
-  const payload = fileEvent!.payload as { direction: string; issues: string[]; text: string };
-  assert.equal(payload.direction, "in");
-  assert.ok(
-    payload.issues.some((i) => i.includes("screenshot.png")),
-    "the dropped file is named in the durable record",
+  const user = entries.find((e) => e.type === "user");
+  assert.match(
+    String((user!.payload as { environment?: unknown }).environment),
+    /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
-  assert.match(payload.text, /screenshot\.png/);
 
   const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;
-  for (const r of reqs.filter((request) => request.model !== "mock-security")) {
-    assert.doesNotMatch(JSON.stringify(r.promptEnvelope), /too many files|screenshot\.png/);
-  }
+  assert.ok(
+    reqs
+      .filter((request) => request.model !== "mock-security")
+      .some((r) => /screenshot\.png/.test(JSON.stringify(r.promptEnvelope))),
+    "the model sees the dropped file",
+  );
 
   assert.equal((res as { fileNotes?: unknown }).fileNotes, undefined);
+});
+
+test("a failed turn still records which inbound files did not arrive", async () => {
+  const { app, sessions, errors } = freshApp();
+  const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
+  await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
+  const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
+  const user = (await sessions.getEntries(sessionId!)).find((e) => e.type === "user");
+  assert.match(String((user?.payload as { environment?: unknown } | undefined)?.environment), /screenshot\.png/);
 });
 
 test("a proactive-opener turn greets with no user text and records the seeding entry hidden", async () => {
@@ -3491,9 +3499,15 @@ test("accepted approval decisions are durably recorded in the conversation", asy
       (entry) => entry.type === "approval_resolved",
     );
     assert.equal(decisions.length, 1);
-    assert.deepEqual(decisions[0]!.payload, { requestId, command, approved, ...(approved ? { scope: "once" } : {}) });
     const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
     assert.ok(replay);
+    assert.deepEqual(decisions[0]!.payload, {
+      requestId,
+      command,
+      approved,
+      runId: replay.id,
+      ...(approved ? { scope: "once" } : {}),
+    });
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
     assert.equal(liveDecisions?.length, 1);
@@ -4278,8 +4292,32 @@ test("narration reaches the live activity feed before its tool call", async () =
     view?.activity?.map((entry) => entry.type),
     ["text", "tool_call", "tool_result", "text_start"],
   );
-  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
+  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item.", runId: run.id });
   assert.deepEqual(view?.activity?.at(-1)?.payload, { streamOffset: "I'll check the first item.\n\n".length });
+});
+
+test("public text phases reach run activity with exact stream offsets but are not stored in session history", async () => {
+  const { app, runs } = freshApp();
+  const result = await app.turn(dm("!phased-reply"));
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "All clear.");
+  const run = (await runs.list()).find((entry) => entry.request.text === "!phased-reply");
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  const history = await app.getSession(result.sessionId!);
+  const expected = [
+    { phase: "commentary", streamOffset: 0 },
+    { phase: "final_answer", streamOffset: "Checking.\n\n".length },
+  ];
+  assert.deepEqual(
+    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.deepEqual(
+    history?.entries.filter((entry) => entry.type === "text_start"),
+    [],
+  );
+  assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });
 
 function fixtureScreen(): SecurityScreener {

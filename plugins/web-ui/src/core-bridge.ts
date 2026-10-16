@@ -409,7 +409,6 @@ export interface SessionEntry {
     | "text"
     | "tool_call"
     | "tool_result"
-    | "soul"
     | "system"
     | "approval_request"
     | "approval_resolved"
@@ -2153,6 +2152,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     const payload = e.payload as {
       text?: string;
       display?: string;
+      tool?: string;
       callId?: string;
       attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
       files?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;

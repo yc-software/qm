@@ -205,7 +205,7 @@ test("shortlist uses visible history, resets with compaction, and leaves the sys
   assert.ok(lease);
   await built.sessions.append(lease, {
     type: "tool_call",
-    payload: { tool: "skills", action: "read", name: "helper-19" },
+    payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
     scopeLabel: "personal:U1",
   });
   await built.sessions.releaseLease(lease);

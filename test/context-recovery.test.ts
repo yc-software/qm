@@ -6,7 +6,6 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { estimateHistoryTokens, forModelContext } from "../src/harness/context-compaction.ts";
 
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
 
@@ -200,28 +199,6 @@ test("oversized entries and orphaned parallel tool results cannot bypass the rec
   }
 });
 
-test("recent recovery cannot recover an unauthorized summary", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.append(f.input.lease, {
-      type: "system",
-      payload: createContextSummaryPayload(11, "private sentinel"),
-      scopeLabel: "personal:other",
-    });
-    await refresh(f);
-    f.input.visibleHistory = filterHistoryForAudience(
-      f.input.visibleHistory,
-      [{ id: "test", type: "internal" }],
-      "personal:test",
-      "org:test",
-    );
-    const history = await f.compaction.compactRecent(f.input);
-    assert.doesNotMatch(JSON.stringify(history), /private sentinel/);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
-
 test("recent recovery drops an oversized request inside a completed turn", async () => {
   const f = await fixture();
   try {
@@ -240,42 +217,6 @@ test("recent recovery drops an oversized request inside a completed turn", async
     assert.ok(countTokens(JSON.stringify(reconstructMessagesFromHistory(history))) < 500);
     assert.doesNotMatch(JSON.stringify(history), /discarded oversized request/);
     assert.equal(history.at(-1)!.seq, last.seq);
-  } finally {
-    await f.sessions.releaseLease(f.input.lease);
-  }
-});
-
-test("a foreign summary still supplies the durable exclusion floor", async () => {
-  const f = await fixture();
-  try {
-    await f.sessions.append(f.input.lease, {
-      type: "system",
-      payload: createContextSummaryPayload(11, "hidden summary sentinel"),
-      scopeLabel: "personal:other",
-    });
-    await f.sessions.append(f.input.lease, {
-      type: "user",
-      payload: { text: "Latest request." },
-      scopeLabel: "personal:test",
-    });
-    await refresh(f);
-    f.input.visibleHistory = filterHistoryForAudience(
-      f.input.visibleHistory,
-      [{ id: "test", type: "internal" }],
-      "personal:test",
-      "org:test",
-    );
-    const history = await f.compaction.compactRecent(f.input);
-    assert.equal(contextSummaryPayload(history[0]!)!.throughSeq, 11);
-    const reloaded = filterHistoryForAudience(
-      forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries),
-      [{ id: "test", type: "internal" }],
-      "personal:test",
-      "org:test",
-    );
-    assert.deepEqual(reloaded, history);
-    assert.ok(estimateHistoryTokens(reloaded) <= 300);
-    assert.doesNotMatch(JSON.stringify(reloaded), /old message|hidden summary sentinel/);
   } finally {
     await f.sessions.releaseLease(f.input.lease);
   }

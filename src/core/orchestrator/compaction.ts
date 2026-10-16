@@ -1,4 +1,3 @@
-import { memoryContextPayload } from "../../memory/context-boundary.ts";
 import type { ScopeId, Session, SessionEntry } from "../../types.ts";
 import { parseScopeId } from "../../types.ts";
 import type { Lease } from "../../sessions/session-store.ts";
@@ -296,7 +295,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         lease = (await acquireLeaseWithin(deps.sessions, input.sessionId, "compaction", WRITE_LEASE_WAIT_MS)).lease;
         if (!lease) return;
         const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
-        if (!since.some((entry) => !!contextSummaryPayload(entry) || !!memoryContextPayload(entry))) {
+        if (!since.some((entry) => !!contextSummaryPayload(entry))) {
           await writeCompaction({ session, lease, summarized });
         }
       } catch (e) {

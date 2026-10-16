@@ -13,8 +13,6 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
 }
 
-const transcriptEntries = (entries: SessionEntry[]): SessionEntry[] => entries.filter((e) => e.type !== "soul");
-
 const emptyWindowStart = (opts?: GetEntriesOptions): number =>
   Math.min(opts?.sinceSeq ?? Infinity, opts?.beforeSeq ?? Infinity, Number.MAX_SAFE_INTEGER);
 
@@ -24,11 +22,10 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
     opts: GetEntriesOptions | undefined,
     principalId?: string,
   ): Promise<TranscriptRead> => {
-    const entries = transcriptEntries(
+    const entries =
       principalId === undefined
         ? await sessions.getEntries(sessionId, opts)
-        : await sessions.visibleEntries(sessionId, principalId, opts),
-    );
+        : await sessions.visibleEntries(sessionId, principalId, opts);
     const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && entries.length >= opts.limit);
     const earlier = windowed
       ? await sessions.countEntriesBefore(sessionId, entries[0]?.seq ?? emptyWindowStart(opts), principalId)

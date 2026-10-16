@@ -3,7 +3,11 @@ import type { RuntimeChoice } from "../harness/harness.ts";
 import { unrecordedToolResult } from "../harness/context-compaction.ts";
 import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
-import { entryDeliveryKey, isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";
+import { isOverheardEntry, type NewEntry } from "../sessions/session-store.ts";
+
+const entryTurnId = (entry: SessionEntry): unknown => (entry.payload as { runId?: unknown } | null)?.runId;
+const differentTurn = (entry: SessionEntry, turn: SessionEntry): boolean =>
+  entryTurnId(entry) != null && entryTurnId(turn) != null && entryTurnId(entry) !== entryTurnId(turn);
 
 export interface PartialTurn {
   userSeq: number;
@@ -28,7 +32,16 @@ export function findTrailingPartialTurn(entries: readonly SessionEntry[], inputT
   let workEntries = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
-    if (e.type === "assistant" || isTurnStoppedEntry(e)) return null;
+    if (isTurnStoppedEntry(e)) return null;
+    if (e.type === "assistant") {
+      const start = entries
+        .slice(0, i)
+        .findLast(
+          (item) => item.type === "user" && !isOverheardEntry(item) && !isSteerEntry(item) && !isResumeNote(item),
+        );
+      if (!start || !differentTurn(e, start)) return null;
+      continue;
+    }
     if (e.type === "tool_call" || e.type === "tool_result") {
       workEntries += 1;
       continue;
@@ -57,8 +70,9 @@ export function turnAtSeq(entries: readonly SessionEntry[], userSeq: number): Re
   let answer: RecordedTurn["answer"];
   for (let i = start + 1; i < entries.length; i++) {
     const e = entries[i]!;
+    if (e.type !== "user" && differentTurn(e, entries[start]!)) continue;
     if (e.type === "assistant") {
-      if (!entryDeliveryKey(e)) answer = { seq: e.seq, text: entryText(e) };
+      answer = { seq: e.seq, text: entryText(e) };
       continue;
     }
     if (e.type === "tool_call" || e.type === "tool_result") {
@@ -90,7 +104,8 @@ export type ResumeStrategy =
 
 export function resumeStrategy(entries: readonly SessionEntry[], partial: PartialTurn): ResumeStrategy {
   if (partial.workEntries === 0) return { kind: "restart" };
-  const turn = entries.filter((e) => e.seq > partial.userSeq);
+  const anchor = entries.find((e) => e.seq === partial.userSeq);
+  const turn = entries.filter((e) => e.seq > partial.userSeq && (!anchor || !differentTurn(e, anchor)));
   const answered = new Set<unknown>();
   const withResult = new Set<unknown>();
   for (const e of turn) {
@@ -139,7 +154,13 @@ export function unrecordedResultEntries(
 ): NewEntry[] {
   return strategy.calls.map((call) => ({
     type: "tool_result",
-    payload: { tool: call.tool, callId: call.callId, isError: true, result: unrecordedToolResult(stop) },
+    payload: {
+      tool: call.tool,
+      callId: call.callId,
+      interrupted: true,
+      isError: true,
+      result: unrecordedToolResult(stop),
+    },
     scopeLabel,
   }));
 }

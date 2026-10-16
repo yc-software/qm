@@ -1056,6 +1056,7 @@ test("runtime handoff continues once with saved results under the original run a
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1127,6 +1128,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1167,7 +1169,13 @@ test("only a cron automation receives task-runtime authority and each fire start
           await input.emit({
             type: "tool_result",
             scopeLabel: input.scopeLabel,
-            payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: result.handoff,
+            },
           });
           return { reply: "", runtimeHandoff: result.handoff };
         }

@@ -1,8 +1,6 @@
 import { memoryRecallLabels } from "../memory/recall-labels.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 import type { ProjectStore } from "../projects/project-store.ts";
-import { isProjectGroupRef } from "../projects/project-store.ts";
-import { buildMemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { disclosedMemory, type MemoryDisclosure } from "../memory/disclosure.ts";
 import { readNotebook, recallAcrossScopes, searchNotebooks } from "../memory/cross-scope.ts";
 import { shownFacts } from "../memory/recall-delta.ts";
@@ -17,7 +15,7 @@ import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
-import { parseScopeId, type Resolution, type ScopeId, type Principal } from "../types.ts";
+import { type Resolution, type ScopeId, type Principal } from "../types.ts";
 import { carriedFileHandles, sharingSourcesForTurn } from "./sharing-access.ts";
 
 import type { CurrentScopeMembers } from "./scope-membership.ts";
@@ -91,13 +89,6 @@ export async function resolveTurnContext(input: ContextInput) {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         facts: notebooks.flatMap(({ facts }) => facts ?? []),
         complete: notebooks.every(({ facts }) => !!facts),
-        snapshot: buildMemoryContextSnapshot({
-          targetScope: input.targetScope,
-          audience: isProjectGroupRef(parseScopeId(input.targetScope).ref ?? "")
-            ? []
-            : ((await input.currentScopeMembers?.(input.targetScope)) ??
-              (parseScopeId(input.targetScope).kind === "channel" ? [] : input.audience)),
-        }),
       };
     },
     recallMemory: (query: string) =>

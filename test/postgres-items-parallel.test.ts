@@ -26,7 +26,9 @@ test(
       createPostgresDirectoryStore(url!);
       await applyPgMigrations(
         pool,
-        registeredPgMigrations(url!).filter((m) => m.id !== "sessions/store/0035-items"),
+        registeredPgMigrations(url!).filter(
+          (m) => m.id !== "sessions/store/0035-items" && m.id !== "sessions/store/0036-items-cutover",
+        ),
       );
       await main.query(`INSERT INTO sessions(id,type,scope_id,thread_ref,created_at)
       SELECT 's'||lpad(i::text,3,'0'),'dm','personal:test','s'||i,1 FROM generate_series(0,199) i`);

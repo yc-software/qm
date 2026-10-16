@@ -102,7 +102,13 @@ export interface HarnessTurnInput {
   prepareSteer?(
     text: string,
     request?: TurnRequest,
-  ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
+  ): Promise<{
+    text: string;
+    attachments?: AttachmentMeta[];
+    images?: HarnessImage[];
+    documents?: DocumentInput[];
+    author?: string;
+  }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
   runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;

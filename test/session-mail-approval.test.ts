@@ -54,6 +54,8 @@ const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audience: [actor] };
 
+let callSeq = 0;
+
 async function scenario() {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
@@ -87,7 +89,7 @@ async function scenario() {
         };
         const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;
         const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
-        const result = await execute("wait-call", { action: "wait", timeoutMs: 0 });
+        const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
         const reply = JSON.stringify(result.content);
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         return { reply, modelCalls: 1 };

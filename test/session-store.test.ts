@@ -806,7 +806,7 @@ for (const [name, make] of backends) {
     await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
     const lastUser = await store.append(lease, { type: "user", payload: { text: "still here" }, scopeLabel: scope });
     await store.append(lease, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-    await store.append(lease, { type: "tool_call", payload: {}, scopeLabel: scope });
+    await store.append(lease, { type: "tool_call", payload: { tool: "execute", callId: "c1" }, scopeLabel: scope });
     await store.releaseLease(lease);
 
     const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
@@ -838,7 +838,7 @@ for (const [name, make] of backends) {
 
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
-    await store.append(lease, { type: "system", payload: { text: "note" }, scopeLabel: scope });
+    await store.append(lease, { type: "system", payload: { kind: "wake", text: "note" }, scopeLabel: scope });
     await store.releaseLease(lease);
 
     assert.equal(

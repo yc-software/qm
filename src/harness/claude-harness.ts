@@ -20,8 +20,8 @@ import {
 import { fromJSONSchema, type ZodObject } from "zod";
 import { contentText, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { isDeliveryNote } from "../core/attachments.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
+import { isDeliveryNote } from "../core/attachments.ts";
 import {
   contextTokenBudgetForModel,
   getRequiredModel,
@@ -376,6 +376,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
             ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
           },
           scopeLabel: turn.scopeLabel,
+          ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
         });
     const requestedModel = turn.runtime?.modelId;
     const model = modelSupportedByHarness(requestedModel, "claude") ? requestedModel! : resolveModelId(turn.scopeLabel);
@@ -536,7 +537,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
                 if (settled || interrupted) return false;
                 steerPrompts.push({
                   message: baseMessage,
-                  intake: { text: steer, ts, attachments: prepared?.attachments, acknowledge },
+                  intake: {
+                    text: steer,
+                    ts,
+                    attachments: prepared?.attachments,
+                    author: prepared?.author,
+                    acknowledge,
+                  },
                 });
                 pendingPrompts++;
                 queue.push(message);

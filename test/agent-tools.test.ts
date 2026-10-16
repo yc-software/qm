@@ -7,8 +7,8 @@ import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
-import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
+import { createMemoryToolOutputStore } from "../src/sessions/tool-output.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
@@ -725,6 +725,42 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   assert.equal(payload.resultTruncated, true, "the entry is flagged so renderers can surface the loss");
   assert.equal(payload.stdout, undefined, "raw stdout is not stored beside the result");
   assert.equal(payload.stderr, undefined, "raw stderr is not stored beside the result");
+});
+
+test("a result over the inline cap keeps its head and tail and parks the full text as tool-output/<call_id>", async () => {
+  const emitted: Emitted[] = [];
+  const outputs = createMemoryToolOutputStore({ inlineTokens: 100 });
+  const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
+  const tc = {
+    ...fakeToolContext(),
+    toolOutput: outputs,
+    execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
+  };
+  const ref: ToolContextRef = { current: tc, emit: (e) => void emitted.push(e as Emitted), scopeLabel: "personal:U1" };
+  const [execute] = createAgentTools(ref);
+  const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
+    content: Array<{ type: string; text: string }>;
+  };
+  const seen = ret.content.map((c) => c.text).join("\n");
+  const payload = emitted.find((e) => e.type === "tool_result")!.payload as {
+    callId: string;
+    result: string;
+    output: { blob: string; chars: number; shownChars: number };
+  };
+  assert.equal(payload.result, seen, "the item stores exactly what the model saw");
+  assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
+  assert.ok(seen.includes("[exit 0]"), "tail survives");
+  assert.ok(seen.includes(`tool-output/${payload.callId}`), "the marker names the parked file");
+  assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
+  assert.equal(outputs.parked.get(payload.output.blob)!.length, payload.output.chars);
+  assert.ok(outputs.parked.get(payload.output.blob)!.includes("line 1999"));
+
+  outputs.setInlineTokens(0);
+  emitted.length = 0;
+  await call(execute, { command: "seq", purpose: "Run test command" });
+  const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
+  assert.equal(uncapped.output, undefined, "0 turns the cap off");
+  assert.ok(uncapped.result.includes("line 1000"));
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
@@ -1578,69 +1614,6 @@ test("pauseStampAfterToolCall stamps terminate onto sibling results once silence
   assert.equal(stamped?.terminate, true);
   ref.silentRequested = false;
   assert.equal(await pauseStampAfterToolCall(ref)({}), undefined);
-});
-
-test("a cross-scope read's tool_result keeps the SOURCE scope label so the audience filter can redact it", async () => {
-  const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
-    current: fakeToolContext(),
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-    scopeLabel: "channel:C1",
-    orgScopeId: "org:default-org",
-  };
-  const [execute, , read] = createAgentTools(ref);
-
-  await call(read, { action: "read", path: "a.txt" });
-  await call(read, { action: "read", path: "missing.txt" });
-  await call(execute, { command: "echo hi", purpose: "Run test command" });
-
-  const labelOf = (type: EntryType, match: (p: any) => boolean) =>
-    emitted.find((e) => e.type === type && match(e.payload))?.scopeLabel;
-  assert.equal(
-    labelOf("tool_result", (p) => p.path === "a.txt"),
-    "personal:U1",
-    "private file content is labeled with its source scope",
-  );
-  assert.equal(
-    labelOf("tool_call", (p) => p.path === "a.txt"),
-    "channel:C1",
-    "the call itself (path only) stays session-scoped",
-  );
-  assert.equal(
-    labelOf("tool_result", (p) => p.path === "missing.txt"),
-    "channel:C1",
-    "a not-found read has no source scope",
-  );
-  assert.equal(
-    labelOf("tool_result", (p) => p.tool === "execute"),
-    "channel:C1",
-    "non-read results stay session-scoped",
-  );
-
-  const history: SessionEntry[] = emitted.map((e, i) => ({
-    sessionId: "s",
-    seq: i + 1,
-    parentSeq: null,
-    type: e.type,
-    payload: e.payload,
-    scopeLabel: e.scopeLabel,
-    createdAt: i + 1,
-  }));
-  const u1 = { id: "U1", type: "internal" } as const;
-  const u2 = { id: "U2", type: "internal" } as const;
-  const forOwner = filterHistoryForAudience(history, [u1], "channel:C1", "org:default-org");
-  assert.equal(forOwner.length, history.length, "the file's owner still sees everything");
-  const forJoined = filterHistoryForAudience(history, [u1, u2], "channel:C1", "org:default-org");
-  assert.ok(
-    !forJoined.some((e) => e.type === "tool_result" && (e.payload as { result?: string }).result === "data"),
-    "the private file content is redacted once a non-entitled member is in the audience",
-  );
-  assert.ok(
-    forJoined.some((e) => e.type === "tool_call" && (e.payload as { path?: string }).path === "a.txt"),
-    "session-scoped entries are still visible",
-  );
 });
 
 const callWith = (tool: ReturnType<typeof createAgentTools>[number] | undefined, id: string, params: unknown) => {
@@ -4125,7 +4098,7 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
   );
 });
 
-test("a tool result recorded after shutdown fires is marked interrupted; user Stop and plain completion are not", async () => {
+test("a tool result produced after shutdown is marked interrupted; user Stop and plain completion record it", async () => {
   const record = async (abort: "shutdown" | "stop" | "none", retrySafe = true) => {
     const emitted: Emitted[] = [];
     const shutdown = new AbortController();
@@ -4151,9 +4124,8 @@ test("a tool result recorded after shutdown fires is marked interrupted; user St
   };
 
   const interrupted = await record("shutdown");
-  const result = interrupted.find((e) => e.type === "tool_result")!.payload;
-  assert.equal(result.interrupted, true);
-  assert.equal(typeof result.result, "string", "the recorded text is kept alongside the mark");
+  assert.equal(interrupted.find((e) => e.type === "tool_result")?.payload.interrupted, true);
+  assert.deepEqual(interrupted.find((e) => e.type === "tool_result")?.payload.stop, { kind: "shutdown" });
   assert.deepEqual(strategy(interrupted), {
     kind: "retry",
     call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
@@ -4405,31 +4377,6 @@ test("native skills discovery exposes list and search with validated pagination"
   for (const input of [{ action: "search" }, { action: "list", limit: 101 }, { action: "list", offset: -1 }]) {
     assert.match(textOut(await call(tool, input)), /Invalid arguments/);
   }
-});
-
-test("skill discovery records the page's source scope for history filtering", async () => {
-  const emitted: Emitted[] = [];
-  const ctx = fakeToolContext();
-  ctx.listSkills = async () => ({
-    sourceScopeId: "personal:U1",
-    skills: [{ name: "private-helper", description: "Private description" }],
-    nextOffset: 1,
-  });
-  const ref: ToolContextRef = {
-    current: ctx,
-    scopeLabel: "channel:C1",
-    orgScopeId: "org:default-org",
-    emit: (e) => {
-      emitted.push(e as Emitted);
-    },
-  };
-  const tool = createAgentTools(ref).find((t) => t.name === "skills")!;
-  await callWith(tool, "discovery", { action: "list" });
-  assert.equal(emitted.find((e) => e.type === "tool_result")?.scopeLabel, "personal:U1");
-  const history = emitted.map((e, seq) => ({ ...e, seq, createdAt: seq, sessionId: "s" })) as SessionEntry[];
-  const visible = filterHistoryForAudience(history, [{ id: "U2", type: "internal" }], "channel:C1", "org:default-org");
-  assert.doesNotMatch(JSON.stringify(visible), /Private description|private-helper/);
-  assert.match(JSON.stringify(history), /Private description/);
 });
 
 test("client screenshots reach the model as images and remain subject to output screening", async () => {

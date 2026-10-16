@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   defineHarness,
   type Harness,
@@ -6,7 +7,6 @@ import {
   type HarnessTurnInput,
   type HarnessTurnResult,
 } from "./harness.ts";
-import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
@@ -81,6 +81,21 @@ function mockProviderMessages(
   });
 }
 
+function withCallIds(emit: HarnessTurnInput["emit"]): HarnessTurnInput["emit"] {
+  const open: string[] = [];
+  return (entry) => {
+    if (entry.type !== "tool_call" && entry.type !== "tool_result") return emit(entry);
+    const payload = { ...(entry.payload as Record<string, unknown>) };
+    if (typeof payload.callId !== "string") {
+      payload.callId =
+        entry.type === "tool_call" ? `mock-call-${randomUUID()}` : (open.shift() ?? `mock-call-${randomUUID()}`);
+      if (entry.type === "tool_call") open.push(payload.callId as string);
+    } else if (entry.type === "tool_call") open.push(payload.callId);
+    else open.splice(open.indexOf(payload.callId), open.includes(payload.callId) ? 1 : 0);
+    return emit({ ...entry, payload });
+  };
+}
+
 export function createMockHarness(): Harness {
   const shedSessions = new Set<string>();
   const boomAlwaysSessions = new Set<string>();
@@ -96,7 +111,8 @@ export function createMockHarness(): Harness {
       capabilities: new Set(),
     },
     {
-      async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
+      async runTurn(input: HarnessTurnInput): Promise<HarnessTurnResult> {
+        let turn: HarnessTurnInput = { ...input, emit: withCallIds(input.emit) };
         const continued = turn.continueTurn ? turn.history.find((e) => e.seq === turn.resumeUserSeq) : undefined;
         if (continued) turn = { ...turn, input: "", environment: undefined };
         const userEntry =
@@ -109,6 +125,7 @@ export function createMockHarness(): Harness {
               ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
             },
             scopeLabel: turn.scopeLabel,
+            ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
           }));
         const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
@@ -558,16 +575,11 @@ export function createMockHarness(): Harness {
           reply = "";
         } else if (command0.startsWith("!read ")) {
           const path = command0.slice(6).trim();
-          const { content, sourceScopeId } = await turn.tools.read(path);
+          const { content } = await turn.tools.read(path);
           await turn.emit({
             type: "tool_result",
             payload: { tool: "read", path, found: content != null },
-            scopeLabel: classifyScopeLabel({
-              type: "tool_result",
-              sessionScopeId: turn.scopeLabel,
-              orgScopeId: turn.orgScopeId,
-              sourceScopeId,
-            }),
+            scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
           reply = content ?? `(no file: ${path})`;
@@ -606,12 +618,7 @@ export function createMockHarness(): Harness {
           await turn.emit({
             type: "tool_result",
             payload: { tool: "skill", name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
-            scopeLabel: classifyScopeLabel({
-              type: "tool_result",
-              sessionScopeId: turn.scopeLabel,
-              orgScopeId: turn.orgScopeId,
-              sourceScopeId: r.sourceScopeId,
-            }),
+            scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
           reply =

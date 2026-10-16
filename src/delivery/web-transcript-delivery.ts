@@ -1,6 +1,6 @@
 import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
-import { entryDeliveryKey, type SessionStore } from "../sessions/session-store.ts";
+import { type SessionStore } from "../sessions/session-store.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
@@ -9,7 +9,7 @@ const WRITE_GIVEUP_MS = 10 * 60_000;
 
 type WebTranscriptSessions = Pick<
   SessionStore,
-  "append" | "getByThread" | "acquireLease" | "releaseLease" | "getEntries"
+  "appendMany" | "getByThread" | "acquireLease" | "releaseLease" | "getEntries"
 >;
 
 export function turnRecordedFailure(
@@ -21,7 +21,7 @@ export function turnRecordedFailure(
     const payload = entry.payload as { kind?: unknown; runId?: unknown } | null;
     if (payload?.kind !== "turn_failure") return false;
     if (typeof payload.runId === "string") return payload.runId === note.runId;
-    return entryDeliveryKey(entry) === undefined && entry.createdAt >= note.notBefore;
+    return entry.createdAt >= note.notBefore;
   });
 }
 
@@ -48,29 +48,38 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
     const { lease } = await sessions.acquireLease(session.id, "backfill");
     if (!lease) return false;
     try {
-      const tail = await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT });
-      if (tail.some((entry) => entryDeliveryKey(entry) === d.idempotencyKey)) return true;
       const note = d.destination.webTranscript;
       const failure = note?.kind === "turn_failure" ? note : undefined;
-      if (failure && turnRecordedFailure(tail, failure)) return true;
+      if (failure && turnRecordedFailure(await sessions.getEntries(session.id, { limit: DEDUPE_SCAN_LIMIT }), failure))
+        return true;
+      const turnId = failure?.runId ?? d.id;
+      if (!failure && (await sessions.getEntries(session.id, { turnId })).some((entry) => entry.type === "assistant"))
+        return true;
       const scopeLabel = session.scopeId;
       const ownReply = d.provenance?.sourceThreadRef === d.destination.target;
       const via = d.provenance?.trigger && !ownReply ? d.provenance.trigger : undefined;
-      const entry = failure
-        ? {
-            type: "system" as const,
-            payload: {
-              kind: "turn_failure",
-              message: d.text,
-              deliveryKey: d.idempotencyKey,
-              ...(failure.runId ? { runId: failure.runId } : {}),
-            },
-          }
-        : {
-            type: "assistant" as const,
-            payload: { text: d.text, deliveryKey: d.idempotencyKey, ...(via ? { via } : {}) },
-          };
-      await sessions.append(lease, { ...entry, scopeLabel });
+      await sessions.appendMany(
+        { ...lease, turnId },
+        failure
+          ? [
+              {
+                type: "system",
+                payload: {
+                  kind: "turn_failure",
+                  message: d.text,
+                  ...(failure.runId ? { runId: failure.runId } : {}),
+                },
+                scopeLabel,
+              },
+            ]
+          : [
+              {
+                type: "assistant",
+                payload: { text: d.text, ...(via ? { via } : {}) },
+                scopeLabel,
+              },
+            ],
+      );
       return true;
     } finally {
       await sessions.releaseLease(lease);

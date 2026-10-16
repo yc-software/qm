@@ -115,8 +115,9 @@ test("completedSurfaceEnqueues counts only completed surface enqueue calls after
     entry(5, "tool_call", { tool: "slack", action: "reach", callId: "c" }),
     entry(6, "tool_result", { tool: "slack", action: "reach", callId: "c", ok: true }),
     entry(7, "tool_call", { tool: "slack", action: "post", callId: "d" }),
+    entry(8, "tool_result", { tool: "slack", callId: "d", interrupted: true, isError: true }),
   ];
-  assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the dangling post at seq 7 is not counted");
+  assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the interrupted post at seq 7 is not counted");
   assert.equal(completedSurfaceEnqueues(entries, 5, "slack"), 0, "entries at or before sinceSeq are excluded");
 
   const noCallIds = [
