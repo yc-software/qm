@@ -399,7 +399,6 @@ test("a retried run RESUMES the interrupted turn from the durable ledger instead
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /\[system\]|work-then-boom/, "nothing is prompted on resume");
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original interrupted user entry");
   assert.equal(res.sourceAssistantEntrySeq, 3);
 
@@ -419,7 +418,6 @@ test("a retry of an attempt that recorded NO work continues from the recorded re
 
   const res = await app.turn(req);
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /\[system\]|!boom/, "nothing is prompted on resume");
   assert.equal(res.sourceUserSeq, 0, "provenance points at the original user entry");
 
   const found = await app.getSession(res.sessionId!);

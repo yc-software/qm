@@ -3416,7 +3416,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               : {}),
             ...(input.runId ? { runId: input.runId } : {}),
             cancel: turnAbort.signal,
-            ...(silentResume ? { continueTurn: true } : {}),
+            ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
             input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),

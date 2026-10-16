@@ -97,7 +97,7 @@ export function createMockHarness(): Harness {
     },
     {
       async runTurn(turn: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const continued = turn.continueTurn ? turn.history.findLast((e) => e.type === "user") : undefined;
+        const continued = turn.continueTurn ? turn.history.find((e) => e.seq === turn.resumeUserSeq) : undefined;
         if (continued) turn = { ...turn, input: "", environment: undefined };
         const userEntry =
           continued ??

@@ -114,7 +114,10 @@ function userTexts(requests: RequestBody[]): string[] {
 }
 
 test("a genuine resume whose context ends at a recorded tool result continues the assistant turn silently", async () => {
-  const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], { continueTurn: true });
+  const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
   assert.equal(result.reply, "done: two files");
   assert.deepEqual(llmTurnSeqs, [ASK.seq], "model requests are attributed to the run's original user entry");
   assert.equal(requests.length, 1);
@@ -140,6 +143,7 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
   const queries: string[] = [];
   const { result, sink, requests } = await runResume([ASK, SAFE_CALL], {
     continueTurn: true,
+    resumeUserSeq: ASK.seq,
     resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
     tools: {
       async history(q: string) {
@@ -162,7 +166,7 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
 });
 
 test("a resume whose last tool call never recorded a result continues silently after the interrupted result", async () => {
-  const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true });
+  const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true, resumeUserSeq: ASK.seq });
   assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
   assert.deepEqual(userTexts(requests), ["list the files"]);
   assert.deepEqual(
@@ -172,7 +176,7 @@ test("a resume whose last tool call never recorded a result continues silently a
 });
 
 test("a resume that died before any work continues from the recorded request without re-sending it", async () => {
-  const { sink, requests } = await runResume([ASK], { continueTurn: true });
+  const { sink, requests } = await runResume([ASK], { continueTurn: true, resumeUserSeq: ASK.seq });
   assert.equal(requests[0]!.messages.length, 1);
   assert.deepEqual(userTexts(requests), ["list the files"]);
   assert.deepEqual(
@@ -197,7 +201,10 @@ test("a resume that died before delivering its reply drops that reply and contin
     },
     4,
   );
-  const { sink, requests } = await runResume([ASK, CALL, RESULT, partialReply], { continueTurn: true });
+  const { sink, requests } = await runResume([ASK, CALL, RESULT, partialReply], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
   assert.equal(requests[0]!.messages.at(-1)!.role, "user");
   assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
   assert.deepEqual(userTexts(requests), ["list the files"]);

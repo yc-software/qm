@@ -1827,9 +1827,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             return "";
           })();
           const userEntry = continueTurn
-            ? turn.history.find(
-                (e) => e.type === "user" && (e.payload as { runId?: unknown } | null)?.runId === turn.runId,
-              )
+            ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
             : await turn.emit({
                 type: "user",
                 payload: {

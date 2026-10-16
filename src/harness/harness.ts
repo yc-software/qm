@@ -88,6 +88,7 @@ export interface HarnessTurnInput {
   runId?: string;
   cancel?: AbortSignal;
   continueTurn?: boolean;
+  resumeUserSeq?: number;
   shutdown?: AbortSignal;
   input: string;
   triggerTs?: string;

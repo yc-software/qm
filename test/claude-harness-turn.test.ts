@@ -741,7 +741,7 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
 });
 
-test("Claude continues a resumed turn from the replayed transcript without a new prompt or user entry", async () => {
+test("Claude continues a resumed turn with its recorded request live and no new prompt or user entry", async () => {
   const prompted: string[] = [];
   currentScript = async function* (prompts) {
     for await (const prompt of prompts) {
@@ -782,9 +782,10 @@ test("Claude continues a resumed turn from the replayed transcript without a new
     },
   ] as SessionEntry[];
   const { turn, entries, llmRequests } = harnessTurn({
-    input: ask,
+    input: "fallback input",
     history,
     continueTurn: true,
+    resumeUserSeq: 1,
     runId: "run-resume",
     environment: "ENV-NOTE",
   });
@@ -796,8 +797,11 @@ test("Claude continues a resumed turn from the replayed transcript without a new
   );
   assert.equal(prompted.length, 1);
   const prompt = JSON.parse(prompted[0]!) as Array<{ text: string }>;
-  assert.equal(prompt[0]!.text.match(/list the files/g)?.length, 1, "the request appears once, inside the replay");
-  assert.ok(prompt[0]!.text.trimEnd().endsWith("END TRANSCRIPT>>>"), "nothing is appended after the replay");
+  const text = prompt[0]!.text;
+  assert.equal(text.match(/list the files/g)?.length, 1, "the request appears once");
+  assert.ok(text.endsWith("END TRANSCRIPT>>>\n\nlist the files"), "the request is live, after the replayed work");
+  assert.match(text, /Tool result \(execute, call c1\): a\.txt/);
+  assert.doesNotMatch(text, /fallback input|ENV-NOTE/);
   assert.equal(llmRequests[0]?.turnSeq, 1);
 });
 

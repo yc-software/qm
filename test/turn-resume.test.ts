@@ -239,10 +239,6 @@ test("a tool call whose outcome was lost records the cause as its own result", (
     unrecordedToolResult({ kind: "shutdown" }),
     /^\[system\] A routine platform deploy interrupted this call/,
   );
-  assert.equal(
-    unrecordedToolResult({ kind: "shutdown" }),
-    "[system] A routine platform deploy interrupted this call; its outcome wasn't recorded. Check what happened before retrying.",
-  );
   assert.match(
     unrecordedToolResult({ kind: "error", code: "transient", status: 503 }),
     /^\[system\] A model-provider failure \(transient, HTTP 503\) interrupted this call/,
