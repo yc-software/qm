@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { QmConfig } from "./config.ts";
 import { CliError, errMessage, step, warn } from "./log.ts";
 import { deploymentSecretValue } from "./util.ts";
-import { emailSecretNames, serviceSecretValue } from "./secrets.ts";
+import { emailSecretNames, everyEmailSecretName, serviceSecretValue, SMTP_SECRET_NAMES } from "./secrets.ts";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -277,12 +277,18 @@ export async function emailTransportPreflight(
 ): Promise<void> {
   if (!config.services.includes("auth")) return;
   const configured = emailTransportConfigured(config, secrets);
-  if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
-  const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   const value = (name: string): string | undefined =>
     (serviceSecretValue(config, "auth", name, secrets) ?? deploymentSecretValue(name, secrets.get(name)))?.trim();
+  // A name present with a blank value still means this CLI saw the operator's email config, so ask has() as well.
+  const loadedLocally = (name: string): boolean => secrets.has(name) || Boolean(value(name));
+  if (!everyEmailSecretName(config).some(loadedLocally)) {
+    step("sign-in email: not checked here (no local email secrets; the deployment's secrets decide)");
+    return;
+  }
+  if (!configured) step("sign-in email: disabled; use qm admin-login for administrator access");
+  const transport = config.env.auth?.AUTH_EMAIL_TRANSPORT?.trim() === "smtp" ? "smtp" : "resend";
   if (transport === "resend") {
-    const stray = ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"].filter((name) => value(name));
+    const stray = SMTP_SECRET_NAMES.filter((name) => value(name));
     if (stray.length) {
       warn(
         `${stray.join(", ")} ${stray.length === 1 ? "is" : "are"} set but env.auth.AUTH_EMAIL_TRANSPORT is "resend" — ` +

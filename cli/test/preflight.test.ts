@@ -199,6 +199,56 @@ test("email preflight warns when SMTP values are set but the transport is resend
   assert.ok(lines.some((line) => line.includes('set but env.auth.AUTH_EMAIL_TRANSPORT is "resend"')));
 });
 
+test("email preflight says the check was skipped when no email secret was loaded locally — catches rewording the sentence the operator reads", async () => {
+  const lines = await quietAsync(() => emailTransportPreflight(CONFIG, new Map()));
+  assert.ok(
+    lines.some((line) =>
+      line.includes("sign-in email: not checked here (no local email secrets; the deployment's secrets decide)"),
+    ),
+  );
+  assert.ok(!lines.some((line) => line.includes("sign-in email: disabled")));
+});
+
+test("email preflight skips the check when a .env holds only unrelated keys — catches keying the guard on an empty map so a .env with a database url still reads as disabled", async () => {
+  const lines = await quietAsync(() =>
+    emailTransportPreflight(CONFIG, new Map([["DATABASE_URL", "postgres://localhost/qm"]])),
+  );
+  assert.ok(lines.some((line) => line.includes("not checked here")));
+  assert.ok(!lines.some((line) => line.includes("sign-in email: disabled")));
+});
+
+test("email preflight keeps the disabled line when the email secrets are present but blank — catches widening the guard from absent names to unset values", async () => {
+  const lines = await quietAsync(() =>
+    emailTransportPreflight(
+      { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } } },
+      new Map([["RESEND_API_KEY", ""]]),
+    ),
+  );
+  assert.ok(lines.some((line) => line.includes("sign-in email: disabled")));
+  assert.ok(!lines.some((line) => line.includes("not checked here")));
+});
+
+test("email preflight keeps the stray-transport warning when the email settings live in the config rather than a .env — catches keying the guard on raw map keys so config-supplied settings read as absent", async () => {
+  const lines = await quietAsync(() =>
+    emailTransportPreflight(
+      {
+        ...CONFIG,
+        env: {
+          auth: {
+            AUTH_EMAIL_TRANSPORT: "resend",
+            SMTP_HOST: "smtp.example.com",
+            SMTP_USERNAME: "user",
+            SMTP_PASSWORD: "hunter2",
+          },
+        },
+      },
+      new Map(),
+    ),
+  );
+  assert.ok(lines.some((line) => line.includes('set but env.auth.AUTH_EMAIL_TRANSPORT is "resend"')));
+  assert.ok(!lines.some((line) => line.includes("not checked here")));
+});
+
 test("email preflight does nothing without the auth service", async () => {
   const lines = await quietAsync(() =>
     emailTransportPreflight({ ...CONFIG, services: ["core"] }, new Map([["RESEND_API_KEY", "re_x"]])),
