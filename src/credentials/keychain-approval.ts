@@ -3,11 +3,19 @@ import type { App } from "../api/app.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import type { ActorAssertion, Destination } from "../types.ts";
+import { parseScopeId, type ActorAssertion, type Destination, type ScopeId } from "../types.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallow } from "../util/errors.ts";
+
+export function standingCredentialAccess(scope: ScopeId): string {
+  const { kind } = parseScopeId(scope);
+  let audience = "this group";
+  if (kind === "personal") audience = "your personal conversations";
+  if (kind === "channel") audience = "this channel";
+  return `ongoing access across ${audience}`;
+}
 
 export interface KeychainApprovalView {
   ask: KeychainAsk;

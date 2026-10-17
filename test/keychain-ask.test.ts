@@ -654,6 +654,40 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  it("inline credential cards disclose the full standing grant audience", async () => {
+    const owner = GH.ownerId;
+    const credential = await built.keychain!.save({ ownerId: owner, service: "fixture", secret: "fixture" });
+    for (const [scope, audience] of [
+      [`personal:${owner}`, "your personal conversations"],
+      ["channel:C_FIXTURE", "this channel"],
+      ["group:G_FIXTURE", "this group"],
+    ] as const) {
+      const threadRef = `web:${owner}:${scope}`;
+      const session = await built.sessions.getOrCreateByThread(threadRef, "dm", scope);
+      await built.sessions.addParticipant(session.id, owner);
+      await built.sessions.updateTitle(session.id, "Isolated task");
+      const { ask } = await built.keychain!.createAsk({
+        credentialId: credential.id,
+        requesterId: owner,
+        requesterScopeId: scope,
+        requesterThreadRef: threadRef,
+        purpose: "Read a test report",
+        requestedMode: "once",
+      });
+      const path = `/v1/sessions/${session.id}/approvals?viewer=${owner}`;
+      const response = await fetch(`${base}${path}`, { headers: signedRequestHeaders(SECRET, "GET", path, "") });
+      assert.equal(response.status, 200);
+      const { approvals: cards } = (await response.json()) as {
+        approvals: Array<{ requestId: string; summary: string; grantModes: { always: boolean } }>;
+      };
+      const card = cards.find((candidate) => candidate.requestId === `keychain:${ask.id}`);
+      assert.ok(card);
+      assert.equal(card.grantModes.always, true);
+      assert.ok(card.summary.includes(`ongoing access across ${audience}`), card.summary);
+      assert.ok(card.summary.includes("Isolated task"));
+    }
+  });
+
   it("the web approval route decides through the same card path, owner only, never by capability", async () => {
     const { credential } = (await (
       await post("/v1/keychain/credentials", { service: "web-card", secret: "w" }, await capFor("U_ALICE"))
