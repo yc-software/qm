@@ -1201,3 +1201,55 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
   assert.equal(result.status, 200);
   assert.deepEqual(await w.loops.items.get(item!.id), before);
 });
+
+test("Gmail sync rejects mismatched new and existing source keys without retargeting", async (t) => {
+  const w = world();
+  const mail = (threadId: string, address: string) => ({
+    source: "gmail",
+    sourceKey: threadId,
+    title: "Project update",
+    from: "Alex",
+    snippet: "Please review the project update",
+    receivedAt: 1234,
+    gmail: { threadId, to: [address] },
+    draft: { body: "Reviewed." },
+  });
+  const first = mail("thread-a", "alex.a@example.com");
+  const second = mail("thread-b", "alex.b@example.com");
+  const { loop, item } = await seed(w, first);
+  const path = `/v1/loops/${loop.id}/items`;
+  assert.equal((await call(w, { method: "POST", path, body: { items: [second] } })).status, 200);
+  const original = await w.loops.items.get(item.id);
+  const originalItems = await w.loops.items.byLoop(loop.id);
+  const newItem = await call(w, {
+    method: "POST",
+    path,
+    body: { items: [{ ...second, sourceKey: "unseen-source-key" }] },
+  });
+  assert.equal(newItem.status, 400);
+  assert.deepEqual(await w.loops.items.byLoop(loop.id), originalItems);
+  const result = await call(w, {
+    method: "POST",
+    path,
+    body: { items: [{ ...second, sourceKey: first.sourceKey }] },
+  });
+  assert.equal(result.status, 400);
+  assert.deepEqual(await w.loops.items.get(item.id), original);
+  assert.equal((await w.loops.items.byLoop(loop.id)).length, 2);
+  const sends: Array<{ threadId: string; raw: string }> = [];
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+    sends.push(JSON.parse(String(init.body)));
+    return new Response("{}", { status: 200 });
+  });
+  const sent = await call(w, {
+    method: "POST",
+    path: `${path}/${item.id}/action`,
+    body: { kind: "send", args: { expectedProposalAt: original!.proposal!.at } },
+  });
+  assert.equal(sent.status, 200);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0]!.threadId, "thread-a");
+  const mime = Buffer.from(sends[0]!.raw, "base64url").toString("utf8");
+  assert.match(mime, /^To: alex\.a@example\.com\r\n/);
+  assert.doesNotMatch(mime, /alex\.b@example\.com/);
+});

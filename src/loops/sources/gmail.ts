@@ -150,6 +150,7 @@ export const gmailAdapter: LoopSourceAdapter = {
     if (!dedupeKey) return { error: "sourceKey required" };
     const gmail = parseGmailMeta(raw.gmail);
     if (!gmail) return { error: "gmail items need gmail.threadId" };
+    if (dedupeKey !== gmail.threadId) return { error: "sourceKey must match gmail.threadId" };
     const draft = raw.draft === undefined ? undefined : parseReplyDraft(raw.draft);
     if (draft === null) return { error: "draft needs a string body" };
     const entry: ParsedEntry = {
