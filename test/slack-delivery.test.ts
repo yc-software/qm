@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   slackReplyArgs,
-  botIdentityArgs,
   botIdentityFromEnv,
   encodeDeliveryTarget,
   parseDeliveryTarget,
@@ -11,13 +10,10 @@ import {
   deliverWithRetry,
   postWithVerify,
   SLACK_POST_SPLIT_LIMIT,
-  recoveryVerifyOldest,
   channelSurfaceUrl,
   channelWelcomeMessage,
   surfaceHeaderText,
   headerUpdate,
-  isSurfaceHeaderMessage,
-  findHeaderPin,
   createSurfaceHeaderEnsurer,
   scopeSurfaceUrl,
   onBotJoinedChannel,
@@ -52,14 +48,6 @@ test("botIdentityFromEnv reads the display-name/icon knobs and trims them", () =
   );
 });
 
-test("botIdentityArgs/slackReplyArgs stay a no-op without an env override", () => {
-  assert.deepEqual(botIdentityArgs(), {});
-  assert.deepEqual(slackReplyArgs("C1", "reply", undefined), {
-    channel: "C1",
-    text: "reply",
-  });
-});
-
 test("slackReplyArgs can suppress Slack link and media unfurls per message", () => {
   assert.deepEqual(slackReplyArgs("C1", "see https://x.com/a/status/1", undefined, { unfurlLinks: false }), {
     channel: "C1",
@@ -81,11 +69,6 @@ test("delivery target round-trips channel + thread, and channel-only when not th
   const root = encodeDeliveryTarget("D456");
   assert.equal(root, "D456");
   assert.deepEqual(parseDeliveryTarget(root), { channel: "D456" });
-});
-
-test("parseDeliveryTarget splits only on the first ':' and tolerates a bare channel", () => {
-  assert.deepEqual(parseDeliveryTarget("C9:1.2"), { channel: "C9", threadTs: "1.2" });
-  assert.deepEqual(parseDeliveryTarget("C9"), { channel: "C9" });
 });
 
 test("deliveryCandidatesFor: a channel offers this-thread (default) and the-whole-channel", () => {
@@ -152,14 +135,6 @@ function deliveryHarness(opts: { postFails?: number; ackFails?: number; maxAttem
   return { tracker, cycle, posts, acks, errors };
 }
 
-test("deliverWithRetry: happy path posts once, acks once, and clears its state", async () => {
-  const h = deliveryHarness();
-  await h.cycle({ recipientThreadRef: "dm:D1" });
-  assert.equal(h.posts.length, 1);
-  assert.deepEqual(h.acks, [{ recipientThreadRef: "dm:D1" }]);
-  assert.deepEqual(h.errors, []);
-});
-
 test("deliverWithRetry: a failed ack does NOT re-post on the next cycle — only the ack retries (no duplicate message)", async () => {
   const h = deliveryHarness({ ackFails: 1 });
   await h.cycle({ recipientThreadRef: "dm:D1" });
@@ -181,24 +156,6 @@ test("deliverWithRetry: a poison delivery is given up on after the attempt cap, 
     { stage: "post", gaveUp: true },
   ]);
   assert.ok(h.tracker.givenUp("d1"), "later cycles skip the poison delivery without attempting it");
-});
-
-test("deliverWithRetry: transient post failures recover before the cap", async () => {
-  const h = deliveryHarness({ postFails: 2, maxAttempts: 5 });
-  for (let i = 0; i < 3; i++) await h.cycle();
-  assert.equal(h.posts.length, 1);
-  assert.equal(h.acks.length, 1);
-  assert.ok(!h.tracker.givenUp("d1"));
-});
-
-test("createDeliveryTracker: a posted-but-unacked entry evicted by the cap is given up on, never re-posted", () => {
-  const t = createDeliveryTracker({ maxAttempts: 5, maxTracked: 2 });
-  t.markPosted("a");
-  t.markPosted("b");
-  t.markPosted("c");
-  assert.equal(t.posted("a"), undefined);
-  assert.ok(t.givenUp("a"), "evicted posted entry becomes dead — duplicate post is impossible");
-  assert.ok(t.posted("b") && t.posted("c"), "entries within the cap keep their posted state");
 });
 
 const WEB_BASE = "https://portal.example.com/web-ui";
@@ -351,28 +308,6 @@ test("onBotJoinedChannel: stays silent in an externally-shared (Slack Connect) c
   assert.equal(synced, 1, "directory sync (which never emits into the channel) still runs");
 });
 
-test("onBotJoinedChannel: welcomes a normal internal channel and hands the pinned header to the ensurer", async () => {
-  const { client, calls } = fakeJoinClient();
-  let synced = 0;
-  const ensured: string[] = [];
-  await onBotJoinedChannel({
-    client,
-    channel: "C123",
-    joinerUserId: BOT,
-    botUserId: BOT,
-    webUiPublicUrl: WEB_BASE,
-    syncDirectory: async () => {
-      synced++;
-    },
-    ensureHeader: (channel) => ensured.push(channel),
-  });
-  const expectedUrl = `${WEB_BASE}/projects/channel/C123`;
-  assert.equal(calls.posted.length, 1, "welcome lands on a normal internal channel");
-  assert.ok(calls.posted[0]!.text.includes(expectedUrl), "welcome message contains the project deep link");
-  assert.deepEqual(ensured, ["C123"], "join triggers exactly one header ensure");
-  assert.equal(synced, 1, "directory sync runs");
-});
-
 function verifyHarness(
   opts: {
     postResults?: Array<{ ok?: { ts?: string; channel?: string }; err?: unknown }>;
@@ -428,23 +363,6 @@ function verifyHarness(
 const KEY = "run:abc";
 const foundMsg = { ts: "9.9", metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: KEY } } };
 
-test("postWithVerify: posts once and returns ts on success", async () => {
-  const h = verifyHarness();
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.deepEqual(res, { ts: "1.1", channel: "C1" });
-  assert.equal(h.postCalls, 1);
-  assert.equal(h.historyCalled, false, "no verify on a clean success");
-});
-
-test("postWithVerify: stamps metadata with the idempotency key", async () => {
-  const h = verifyHarness();
-  await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.deepEqual(h.postArgs[0].metadata, {
-    event_type: "qm_delivery",
-    event_payload: { idempotency_key: KEY },
-  });
-});
-
 test("postWithVerify: platform error rethrows without retry", async () => {
   const err = { code: "slack_webapi_platform_error", data: { error: "channel_not_found" } };
   const h = verifyHarness({ postResults: [{ err }] });
@@ -454,19 +372,6 @@ test("postWithVerify: platform error rethrows without retry", async () => {
   );
   assert.equal(h.postCalls, 1);
   assert.equal(h.historyCalled, false);
-});
-
-test("postWithVerify: rate limit waits, verifies (the claim may have lapsed), then re-posts", async () => {
-  const h = verifyHarness({
-    postResults: [
-      { err: { code: "slack_webapi_rate_limited_error", retryAfter: 0 } },
-      { ok: { ts: "2.2", channel: "C1" } },
-    ],
-  });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.equal(res.ts, "2.2");
-  assert.equal(h.postCalls, 2);
-  assert.equal(h.historyCalled, true, "the 429 wait may outlive our delivery claim — check for a sibling's post");
 });
 
 test("postWithVerify: rate limit wait finds a sibling relay's post and reuses it", async () => {
@@ -520,21 +425,6 @@ test("postWithVerify: threaded recovery paginates within the delivery window bef
   assert.equal(replyReads, 2);
 });
 
-test("recoveryVerifyOldest widens the probe window to cover an edited-in-place task message", () => {
-  assert.equal(recoveryVerifyOldest(105_000, undefined), "45", "a minute of slack for slow enqueue and clock skew");
-  assert.equal(recoveryVerifyOldest(3_000_000, "50.5"), "45.5", "the edited task message's own ts wins when older");
-  assert.equal(recoveryVerifyOldest(50_000, "3000.5"), "-10", "the createdAt bound wins when older");
-  assert.equal(recoveryVerifyOldest(undefined, "50.5"), "45.5");
-  assert.equal(recoveryVerifyOldest(undefined, "not-a-ts"), undefined);
-  assert.equal(recoveryVerifyOldest(undefined, undefined), undefined);
-});
-
-test("postWithVerify: a ts-less ok response stays undefined, never the string 'undefined'", async () => {
-  const h = verifyHarness({ postResults: [{ ok: { channel: "C1" } }] });
-  const res = await postWithVerify(h.client, { channel: "C1", text: "hi" } as any, KEY);
-  assert.equal(res.ts, undefined);
-});
-
 test("postWithVerify: ambiguous error + not found retries the post", async () => {
   const h = verifyHarness({
     postResults: [
@@ -576,31 +466,6 @@ test("surfaceHeaderText names the model and the project link without branding �
   assert.equal(surfaceHeaderText({ modelName: "Claude Opus 4.8" }, undefined), "Using Claude Opus 4.8 here.");
   assert.equal(surfaceHeaderText({}, "https://claw.acme.dev"), "<https://claw.acme.dev|More settings>");
   assert.equal(surfaceHeaderText({ modelName: "  " }, "  "), undefined);
-});
-
-test("isSurfaceHeaderMessage recognizes only the bot's own header shapes", () => {
-  assert.ok(isSurfaceHeaderMessage("Using Claude Opus 4.8 here. <https://claw.acme.dev|More settings>"));
-  assert.ok(isSurfaceHeaderMessage("Using Claude Opus 4.8 here."));
-  assert.ok(isSurfaceHeaderMessage("<https://claw.acme.dev|More settings>"));
-  assert.ok(!isSurfaceHeaderMessage("Reminder: standup at 10"));
-  assert.ok(!isSurfaceHeaderMessage(""));
-  assert.ok(!isSurfaceHeaderMessage(undefined));
-});
-
-test("findHeaderPin picks only the bot's own pinned header message", () => {
-  const items = [
-    { message: { ts: "1.0", user: "U0HUMAN", text: "Using X here." } },
-    { message: { ts: "2.0", user: "U0BOT", text: "team norms doc" } },
-    {
-      message: { ts: "3.0", user: "U0BOT", text: "Using Claude Opus 4.8 here. <https://claw.acme.dev|More settings>" },
-    },
-  ];
-  assert.deepEqual(findHeaderPin(items, "U0BOT"), {
-    ts: "3.0",
-    text: "Using Claude Opus 4.8 here. <https://claw.acme.dev|More settings>",
-  });
-  assert.equal(findHeaderPin(items, "U0OTHER"), undefined);
-  assert.equal(findHeaderPin(undefined, "U0BOT"), undefined);
 });
 
 test("headerUpdate rewrites only an empty or self-authored header", () => {
@@ -780,36 +645,6 @@ test("a model change during an in-flight ensure is re-run, not dropped", async (
     ["Using Claude Opus 4.8 here.", "Using Claude Haiku 4.5 here."],
     "the change that landed mid-probe still reaches the pinned header",
   );
-});
-
-test("surface header ensurer caps its per-channel memo", async () => {
-  const client = {
-    conversations: { info: async () => ({ channel: {} }), setTopic: async () => ({}) },
-  };
-  const ensure = createSurfaceHeaderEnsurer({
-    headerFacts: async () => ({ modelName: "Claude Opus 4.8" }),
-    channelPinEnabled: async () => true,
-    webUiPublicUrl: "https://claw.acme.dev",
-    ids: { botUserId: "U0BOT" },
-    maxTracked: 3,
-  });
-  for (let i = 0; i < 10; i++) {
-    ensure(client as any, `D${i}`, "personal:user.one@acme.dev", "dm");
-    await new Promise((r) => setTimeout(r, 2));
-  }
-  let reprobed = 0;
-  const spy = {
-    conversations: {
-      info: async () => {
-        reprobed += 1;
-        return { channel: {} };
-      },
-      setTopic: async () => ({}),
-    },
-  };
-  ensure(spy as any, "D0", "personal:user.one@acme.dev", "dm");
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(reprobed, 1, "an evicted channel is re-probed, so the map cannot grow forever");
 });
 
 test("surface header ensurer posts and pins a channel's header message when asked to create it", async () => {

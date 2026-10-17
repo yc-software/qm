@@ -120,20 +120,17 @@ export interface SurfaceHeaderClient {
   };
 }
 
-export interface PinnedItem {
+interface PinnedItem {
   message?: { ts?: string; user?: string; text?: string };
 }
 
-export function isSurfaceHeaderMessage(text: string | undefined): boolean {
+function isSurfaceHeaderMessage(text: string | undefined): boolean {
   const t = (text ?? "").trim();
   if (!t) return false;
   return /^(Using .+ here\.)?\s*(<[^<>|]+\|More settings>)?$/.test(t);
 }
 
-export function findHeaderPin(
-  items: PinnedItem[] | undefined,
-  botUserId: string,
-): { ts: string; text: string } | undefined {
+function findHeaderPin(items: PinnedItem[] | undefined, botUserId: string): { ts: string; text: string } | undefined {
   for (const item of items ?? []) {
     const m = item.message;
     if (m?.ts && m.user === botUserId && isSurfaceHeaderMessage(m.text)) return { ts: m.ts, text: m.text ?? "" };

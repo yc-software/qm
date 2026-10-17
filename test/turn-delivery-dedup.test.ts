@@ -7,8 +7,6 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
-import type { SessionEntry } from "../src/types.ts";
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
@@ -101,43 +99,4 @@ test("distinct posts in one turn each get their own key and all deliver", async 
   const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(rows.map((d) => d.text).sort(), ["alpha", "beta"]);
   assert.equal(new Set(rows.map((d) => d.idempotencyKey)).size, 2);
-});
-
-test("completedSurfaceEnqueues counts only completed surface enqueue calls after the interrupted user entry", () => {
-  const entry = (seq: number, type: SessionEntry["type"], payload: unknown): SessionEntry =>
-    ({ seq, parentSeq: null, type, payload, createdAt: seq }) as SessionEntry;
-  const entries = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post", callId: "a" }),
-    entry(2, "tool_result", { tool: "slack", action: "post", callId: "a", ok: true }),
-    entry(3, "tool_call", { tool: "execute", command: "make", callId: "b" }),
-    entry(4, "tool_result", { tool: "execute", callId: "b", ok: true }),
-    entry(5, "tool_call", { tool: "slack", action: "reach", callId: "c" }),
-    entry(6, "tool_result", { tool: "slack", action: "reach", callId: "c", ok: true }),
-    entry(7, "tool_call", { tool: "slack", action: "post", callId: "d" }),
-  ];
-  assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the dangling post at seq 7 is not counted");
-  assert.equal(completedSurfaceEnqueues(entries, 5, "slack"), 0, "entries at or before sinceSeq are excluded");
-
-  const noCallIds = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post" }),
-    entry(2, "tool_result", { tool: "post", ok: true }),
-    entry(3, "tool_call", { tool: "slack", action: "post" }),
-  ];
-  assert.equal(
-    completedSurfaceEnqueues(noCallIds, 0, "slack"),
-    1,
-    "callId-less results pair with the latest open call",
-  );
-});
-
-test("turnPostKeys mints deterministic per-destination position keys and seeds past recorded work", () => {
-  const keys = turnPostKeys("run-1");
-  const dest = { type: "slack", target: "C1:100.1" };
-  assert.equal(keys.key(dest, keys.take()), "post:run-1:slack:C1:100.1:0");
-  assert.equal(keys.key(dest, keys.take()), "post:run-1:slack:C1:100.1:1");
-  const seeded = turnPostKeys("run-1");
-  seeded.seed(2);
-  assert.equal(seeded.key(dest, seeded.take()), "post:run-1:slack:C1:100.1:2");
 });

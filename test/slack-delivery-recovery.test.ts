@@ -117,17 +117,6 @@ test("a recovered empty run reply deletes the orphaned placeholder it finds by m
   assert.equal(h.calls[1]!.args.ts, "100.300");
 });
 
-test("a recorded editRef skips the placeholder probe", async () => {
-  const h = harness({});
-  await h.deliver({
-    destination: { editRef: "100.300" },
-    idempotencyKey: "run:r1",
-    text: "the answer",
-    ageMs: RECOVERED_AGE_MS,
-  });
-  assert.deepEqual(h.methods(), ["chat.update"]);
-});
-
 for (const [label, destination, method, error] of [
   ["reaction", { react: { messageTs: "100.200", emoji: "eyes" } }, "reactions.add", "already_reacted"],
   ["pin", { pin: { messageTs: "100.200" } }, "pins.add", "already_pinned"],

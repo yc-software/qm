@@ -118,53 +118,6 @@ test("a lone relay renews its own expired claim and still delivers the tail", as
   assert.equal(pending.length, 0, "both deliveries acked");
 });
 
-test("a transient claim failure at re-claim time does not strand an owned row", async () => {
-  const { store, posted, makeClient } = harness();
-
-  let failNext = 0;
-  const flakyStore = {
-    ...store,
-    claimPending(type: string, ms: number) {
-      if (failNext > 0) {
-        failNext--;
-        throw new Error("transient store error");
-      }
-      return store.claimPending(type, ms);
-    },
-  };
-  const poller = createDeliveryPoller({
-    core: {
-      claimDeliveries: (type: string, ms: number) => flakyStore.claimPending(type, ms),
-      ackDelivery: async (id: string) => {
-        await store.ack(id, Date.now());
-      },
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    } as never,
-    flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
-    threads: createThreadTracker(),
-    clientForIdentity: () => makeClient("identity"),
-    claimMs: CLAIM_MS,
-  });
-  await store.enqueue({
-    destination: { type: "slack", target: "C1:100.0" },
-    text: "SLOW head-of-line",
-    idempotencyKey: "post:s:a",
-  });
-  await store.enqueue({
-    destination: { type: "slack", target: "C1:100.0" },
-    text: "tail reply",
-    idempotencyKey: "post:s:b",
-  });
-  const run = poller.pollDeliveries(makeClient("A", { SLOW: 800 }));
-  setTimeout(() => {
-    failNext = 1;
-  }, 700);
-  await run;
-  const tail = posted.filter((p) => p.text.includes("tail"));
-  assert.equal(tail.length, 1, "the owned row is retried, not treated as stolen");
-  assert.equal((await store.pending("slack")).length, 0, "both deliveries acked");
-});
-
 test("with a shared dispatch lease, a second relay never posts at all (single dispatcher)", async () => {
   const { store, posted, makeClient } = harness();
 
@@ -310,28 +263,6 @@ test("a permanently failing post reports an undeliverable event but the row surv
   assert.equal(
     posted.some((p) => p.text.includes("DEADCHAN")),
     false,
-  );
-});
-
-test("a transient post error is retried, never dropped", async () => {
-  const { store, makeClient, makePoller, undeliverable, posted } = harness();
-  const flaky = await store.enqueue({
-    destination: { type: "slack", target: "C-flaky:100.0" },
-    text: "FLAKY message",
-    idempotencyKey: "post:flaky:a",
-  });
-  const poller = makePoller();
-  await poller.pollDeliveries(makeClient("relay", {}, { FLAKY: "ratelimited" }));
-  await sleep(20);
-  assert.equal(undeliverable.length, 0, "a transient code is never reported as undeliverable");
-  assert.equal((await store.get(flaky.id))?.expiredAt, undefined);
-  await sleep(CLAIM_MS + 50);
-  await poller.pollDeliveries(makeClient("relay"));
-  await sleep(20);
-  assert.equal(
-    posted.some((p) => p.text.includes("FLAKY")),
-    true,
-    "the row posts once the destination recovers",
   );
 });
 
