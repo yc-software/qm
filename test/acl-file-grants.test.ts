@@ -36,7 +36,7 @@ async function fixture() {
 test("file grants require a real, enabled Files ID owned by the granting scope", async () => {
   const { files, acl } = await fixture();
   for (const ref of ["reports/report.md", "report.md", "artifacts/F1/report.md", "missing"]) {
-    await assert.rejects(acl.grant({ ...grant, ref }), /put the file in Files first using POST \/v1\/files\/uploads/);
+    await assert.rejects(acl.grant({ ...grant, ref }), /publish the file with files action write first/);
   }
   await assert.rejects(
     acl.grant({ ...grant, ownerScopeId: recipient, grantedBy: "bob" }),

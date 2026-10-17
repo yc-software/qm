@@ -4,6 +4,8 @@ import { createToolContext, type ToolContextDeps } from "../src/tools/primitives
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { SandboxAccessPlan } from "../src/sandbox/sandbox-resources.ts";
+import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 
 const conversation = scopeId("channel", "C1");
 const other = scopeId("channel", "C2");
@@ -29,6 +31,7 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
     ],
   ]);
   const stored: Array<{ scope: string; path: string }> = [];
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const deployed: Array<Record<string, unknown>> = [];
   let defaultProvisions = 0;
   const layers: WorkspaceLayer[] = [{ scopeId: conversation, mountPath: "", mode: "rw" }];
@@ -68,7 +71,7 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
         stored.push({ scope, path });
       },
     } as never,
-    files: {} as never,
+    files,
     acl: {} as never,
     deploy: {
       getDeployment: async () => ({ entrypoint: "node server.js" }),
@@ -81,7 +84,7 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
     createdBy: "U1",
     ...opts.extra,
   });
-  return { ctx, disks, stored, deployed, provisions: () => defaultProvisions };
+  return { ctx, disks, stored, files, deployed, provisions: () => defaultProvisions };
 }
 
 test("a selected sandbox read never falls back to the default computer", async () => {
@@ -145,4 +148,31 @@ test("naming the default sandbox explicitly persists exactly like omitting it", 
   await h.ctx.write("notes.md", "implicit");
   await h.ctx.write("notes.md", "explicit", "sb1");
   assert.deepEqual(new Set(h.stored.map((e) => `${e.scope} ${e.path}`)), new Set([`${conversation} notes.md`]));
+});
+
+test("files write publishes the written contents to durable Files and returns the ID", async () => {
+  const h = harness();
+  const first = await h.ctx.write("state.json", '{"n":1}');
+  assert.ok(first.fileId);
+  const opened = await h.files.open(first.fileId!);
+  assert.ok(opened);
+  let body = "";
+  for await (const chunk of opened.stream) body += chunk.toString();
+  assert.equal(body, '{"n":1}');
+  assert.equal(opened.artifact.ownerScopeId, conversation);
+  assert.equal(opened.artifact.name, "state.json");
+
+  const again = await h.ctx.write("state.json", '{"n":1}');
+  assert.equal(again.fileId, first.fileId, "unchanged rewrite reuses the record");
+  const changed = await h.ctx.write("state.json", '{"n":2}');
+  assert.notEqual(changed.fileId, first.fileId, "changed contents get a new record");
+});
+
+test("files write without data publishes the existing sandbox file", async () => {
+  const h = harness();
+  const out = await h.ctx.write("notes.md", undefined);
+  assert.ok(out.fileId);
+  assert.equal(out.bytes, "default copy".length);
+  assert.equal(h.disks.get("default")!.get("notes.md"), "default copy", "publishing does not rewrite the file");
+  await assert.rejects(h.ctx.write("missing.md", undefined), /no such file in the sandbox: missing.md/);
 });

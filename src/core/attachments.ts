@@ -16,7 +16,12 @@ import {
   collectBlob,
   type BlobTransferStore,
 } from "../persistence/blob-transfer.ts";
-import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
+import {
+  artifactPath,
+  fileArtifactId,
+  type FileArtifactStore,
+  type FileDirection,
+} from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
@@ -140,6 +145,29 @@ export interface ArtifactRegistration {
   onError?: (e: unknown) => void;
 }
 
+export function putArtifact(
+  store: FileArtifactStore,
+  input: {
+    id: string;
+    ownerScopeId: ScopeId;
+    createdBy: string;
+    createdInScope?: ScopeId;
+    name: string;
+    mimetype?: string;
+    data: Uint8Array;
+    direction: FileDirection;
+    maxBytes: number;
+  },
+) {
+  const name = safeAttachmentName(input.name);
+  return store.put({
+    ...input,
+    name,
+    path: artifactPath(input.id, name),
+    mimetype: input.mimetype ?? mimeFromName(name),
+  });
+}
+
 async function registerArtifact(
   reg: ArtifactRegistration,
   direction: FileDirection,
@@ -152,20 +180,18 @@ async function registerArtifact(
 > {
   try {
     const id = fileArtifactId(reg.seed, direction, batchIndex);
-    const path = `artifacts/${id}/${name}`;
-    const { created } = await reg.store.put({
+    const { artifact, created } = await putArtifact(reg.store, {
       id,
       ownerScopeId: reg.ownerScopeId,
       createdBy: reg.createdBy,
       name,
-      path,
       mimetype,
       data: bytes,
       direction,
       ...(reg.createdInScope ? { createdInScope: reg.createdInScope } : {}),
       maxBytes: MAX_ATTACHMENT_BYTES,
     });
-    const registered = { id, path, ownerScopeId: reg.ownerScopeId, direction, created };
+    const registered = { id, path: artifact.path, ownerScopeId: reg.ownerScopeId, direction, created };
     await reg.onRegistered?.(registered);
     return registered;
   } catch (e) {
