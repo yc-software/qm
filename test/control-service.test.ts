@@ -6,7 +6,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
-import { createControlService, type ControlService } from "../src/api/control-service.ts";
+import {
+  createControlService,
+  CRON_UNATTENDED_GRANT_WARNING,
+  type ControlService,
+} from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -1050,4 +1054,57 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     }),
     /runtime is no longer available/,
   );
+});
+
+test("cron create warns when the creator holds live-only permissions that unattended fires lose", async () => {
+  const { control } = setup();
+  const schedule = { everyMs: 3_600_000 };
+
+  // Live org-admin creator, cron not armed for unattended fires → warning.
+  const adminUnarmed = await control.createCron(
+    { schedule, action: "summarize usage nightly" },
+    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+  );
+  assert.ok(adminUnarmed.ok);
+  assert.equal(adminUnarmed.warning, CRON_UNATTENDED_GRANT_WARNING);
+
+  // Live org-admin creator on a shared (non-personal) scope → warning.
+  const adminShared = await control.createCron(
+    { schedule, action: "nightly report" },
+    claims("admin-alice", scopeId("channel", "C9"), {
+      liveActor: true,
+      members: [{ id: "admin-alice", type: "internal" }],
+    }),
+  );
+  assert.ok(adminShared.ok);
+  assert.equal(adminShared.warning, CRON_UNATTENDED_GRANT_WARNING);
+
+  // Non-admin creator whose conversation carries live-granted claims → warning.
+  const granted = await control.createCron(
+    { schedule, action: "poll the vendor feed" },
+    claims("U1", scopeId("personal", "U1"), { liveActor: true, grants: ["grant-1"] }),
+  );
+  assert.ok(granted.ok);
+  assert.equal(granted.warning, CRON_UNATTENDED_GRANT_WARNING);
+
+  // Non-admin creator with no live grants → no warning.
+  const plain = await control.createCron(
+    { schedule, action: "remind the team to submit standup notes" },
+    claims("U1", scopeId("personal", "U1"), { liveActor: true }),
+  );
+  assert.ok(plain.ok);
+  assert.equal(plain.warning, undefined);
+
+  // Admin creator whose cron is already armed (personal scope + unattendedGrants) → no warning.
+  const armed = await control.createCron(
+    { schedule, action: "scan failures", unattendedGrants: ["admin.audit.read"] },
+    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+  );
+  assert.ok(armed.ok);
+  assert.equal(armed.warning, undefined);
+
+  // Not a live turn → no warning.
+  const notLive = await control.createCron({ schedule, action: "nightly report" }, claims("admin-alice"));
+  assert.ok(notLive.ok);
+  assert.equal(notLive.warning, undefined);
 });
