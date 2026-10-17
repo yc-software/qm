@@ -2389,6 +2389,7 @@ export function buildApp(
     errors,
     metrics,
     runs,
+    runActivity,
     turnStream,
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
