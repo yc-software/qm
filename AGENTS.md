@@ -71,11 +71,17 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   results or substitute the author's self-review. After edits, have independent
   reviewers reassess affected lenses and explicitly carry forward unaffected results.
   These reviews run alongside PR work; before merging, every relevant lens must have accepted
-  and all requested changes must be resolved. They supplement the correctness,
+  and all requested changes must be resolved. These reviews supplement the correctness,
   security, and regression review above. The `Wall of shame review` CI check fails
   until the description's report covers every lens for the PR head: relevant lenses with
   an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
   its one-line reason as the assessment.
+- **Review Loss of control inside the session that owns the PR, before merge.** Start a
+  fresh subagent from that session and give it the person's own messages, every brief
+  handed to a worker, the reports the person was shown, and the person's saved preferences
+  and standing instructions, plus the diff. Report its verdict and findings to the person in
+  the session. Never put conversation content, quotes, or session IDs in the PR, its
+  description, commits, or CI.
 - **Disclose config-matrix and database-schema changes in the PR description.** Name
   added, removed, or changed settings, flags, modes, and providers, including changes to
   defaults, precedence, and supported combinations. Name changed tables, columns,
