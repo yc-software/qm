@@ -981,16 +981,17 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
 });
 
 test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
-  const s = service((req) => {
+  const s = service(async (req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
-      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      const open = await s.items.byLoop(loop.id);
+      const representative = open.find((item) => item.sourceKey === "SENTRY-1")!;
       return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: index === 0 ? "urgent" : "low",
+        items: open.map((item) => ({
+          id: item.id,
+          priority: item.id === representative.id ? "urgent" : "low",
           reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
+          ...(item.id !== representative.id ? { groupWith: representative.id } : {}),
         })),
       })}\n\`\`\``;
     }

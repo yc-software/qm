@@ -1,3 +1,4 @@
+import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import {
   createPgPool,
@@ -40,6 +41,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
+import { itemsMigration } from "./items-schema.ts";
 import {
   DROP_SESSION_TAPE_SQL,
   LEGACY_TAPE_STEPS_SIZE_GUARD_SQL,
@@ -333,6 +335,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const { pool, q } = createPgPool(
     connectionString,
     [
+      ...DIRECTORY_MIGRATIONS,
       {
         id: "sessions/store/0001",
         expectedChecksum: "cf56c9f6488806677a229698193ef6dd7cb74300c343bdb1930c17702c5ccf2f",
@@ -868,6 +871,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         id: "sessions/store/0033-client-tools",
         statements: [`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_tools JSONB`],
       },
+      itemsMigration,
     ],
     [
       {
