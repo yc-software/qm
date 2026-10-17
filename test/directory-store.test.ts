@@ -103,6 +103,10 @@ describe("channel resolution (agent → channel addressing, §10)", () => {
   it("returns none for an unknown channel", async () => {
     assert.equal((await (await dir()).resolveChannel("nonexistent")).kind, "none");
   });
+
+  it("does not fall back to channel-id prefixes when no name matches", async () => {
+    assert.equal((await (await dir()).resolveChannel("c-e")).kind, "none");
+  });
 });
 
 describe("member slackId (the real <@…> mention id for an email principal)", () => {
