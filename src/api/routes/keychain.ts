@@ -1,18 +1,23 @@
 import {
   KeychainError,
+  isBackendCredential,
+  isValidCredentialSlug,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
 } from "../../credentials/keychain.ts";
-import { parseScopeId } from "../../types.ts";
+import { parseScopeId, scopeId } from "../../types.ts";
+import { orgId } from "../../config.ts";
+import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
+import { livePersonCapability } from "../artifact-share.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 
 async function resolveScopeNames(
@@ -295,6 +300,98 @@ async function handleKeychain(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 404, { error: "not_found" });
 }
 
+async function handleElevate(ctx: ApiCtx): Promise<void> {
+  const { res, deps, body, capability, params } = ctx;
+  if (!deps.keychain || !deps.serviceCreds || !deps.acl)
+    return sendJson(res, 503, { error: "keychain_unavailable", message: "The keychain isn't set up on this server." });
+  if (!capability)
+    return sendJson(res, 401, { error: "unauthorized", message: "keychain routes require an agent capability token" });
+  const actorId = capability.actorId;
+  if (
+    capability.scopeId !== scopeId("personal", actorId) ||
+    !livePersonCapability(capability) ||
+    capability.triggered ||
+    capability.botActor ||
+    capability.deployment
+  )
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "Elevate a credential from a live turn in your own conversation.",
+    });
+  const b = (body ?? {}) as { toScope?: unknown; removePersonalCopy?: unknown };
+  const org = scopeId("org", orgId());
+  const target = typeof b.toScope === "string" ? parseScopeId(b.toScope) : null;
+  const team = target?.kind === "team" && target.ref && !target.ref.includes(":") ? target.ref : null;
+  const toOrg = b.toScope === "org" || b.toScope === org;
+  if ((!team && !toOrg) || (b.removePersonalCopy !== undefined && typeof b.removePersonalCopy !== "boolean"))
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: 'expected { toScope: "team:<id>" | "org", removePersonalCopy?: boolean }',
+    });
+  const grantee = team ? scopeId("team", team) : org;
+  const allowed = team
+    ? await deps.teams?.isMember(actorId, team)
+    : (await deps.admin?.adminStatusOf({ id: actorId, type: "internal" }))?.isAdmin;
+  if (!allowed)
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: team ? `You must be a member of ${grantee}.` : "Only an org admin can elevate to the org.",
+    });
+  const cred = await deps.keychain.getCredential(params.id!);
+  if (!cred || !samePerson(cred.ownerId, actorId)) return sendJson(res, 404, { error: "not_found" });
+  const secret = isBackendCredential(cred) ? await deps.keychain.composioKey(actorId, cred.id) : null;
+  if (!secret)
+    return sendJson(res, 409, {
+      error: "not_elevatable",
+      message: "Only an unexpired Composio project key can be elevated; it stays in the backend.",
+    });
+  const slug = `composio-${team ? `team-${team}` : "org"}`;
+  if (!isValidCredentialSlug(slug))
+    return sendJson(res, 400, { error: "bad_request", message: `cannot derive a credential name for ${grantee}` });
+  for (const existing of (await deps.serviceCreds.listServiceCredentials(org)).filter(isBackendCredential)) {
+    const reach = (await deps.acl.grantsFor(org, encodeRef(serviceCredRef(existing.slug)))).map(
+      (g) => g.granteeScopeId,
+    );
+    if (existing.slug === slug || reach.includes(org) || (toOrg ? reach.length > 0 : reach.includes(grantee)))
+      return sendJson(res, 409, {
+        error: "already_shared",
+        message: `Shared credential "${existing.slug}" already provides Composio to ${grantee}. Ask an org admin to remove it first.`,
+      });
+  }
+  const version = await deps.serviceCreds.setServiceCredentialIfAbsent(org, {
+    slug,
+    name: `${cred.service} for ${grantee}`,
+    secret,
+    delivery: "env",
+    envKey: "COMPOSIO_API_KEY",
+    host: "",
+    deployments: false,
+    enabled: true,
+    updatedBy: actorId,
+  });
+  if (version === null) return sendJson(res, 409, { error: "already_shared", message: `${slug} already exists.` });
+  const ref = encodeRef(serviceCredRef(slug));
+  const grant = { ownerScopeId: org, ref, granteeScopeId: grantee, permission: "read" as const, grantedBy: actorId };
+  const granted = await deps.acl
+    .replaceGrantsIfCurrent(org, ref, [], [grant], actorId)
+    .catch(reportFailureAs("keychain: elevate grant", false));
+  if (!granted) {
+    await deps.serviceCreds.deleteServiceCredentialIfCurrent(org, slug, version);
+    return sendJson(res, 409, { error: "already_shared", message: `${slug} already has access grants.` });
+  }
+  audit(deps, {
+    principalId: actorId,
+    action: "keychain.elevate",
+    resource: `${cred.service}:${cred.id}→${ref}`,
+    scopeLabel: grantee,
+  });
+  audit(deps, { principalId: actorId, action: "service_credential.share", resource: ref, scopeLabel: grantee });
+  const removedPersonalCopy = b.removePersonalCopy === true && (await deps.keychain.remove(actorId, cred.id));
+  if (removedPersonalCopy)
+    audit(deps, { principalId: actorId, action: "keychain.delete", resource: cred.id, scopeLabel: capability.scopeId });
+  return sendJson(res, 200, { serviceCredential: { slug, grantee }, removedPersonalCopy });
+}
+
 async function handleApproval(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params } = ctx;
   const b = (body ?? {}) as { principalId?: unknown; decision?: unknown };
@@ -319,6 +416,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: handleKeychain },
   { method: "GET", path: "/v1/keychain/overview", auth: "either", handle: handleKeychain },
   { method: "DELETE", path: "/v1/keychain/credentials/:id", auth: "either", handle: handleKeychain },
+  { method: "POST", path: "/v1/keychain/credentials/:id/elevate", auth: "either", handle: handleElevate },
   { method: "GET", path: "/v1/keychain/grants", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/grants/:id/revoke", auth: "either", handle: handleKeychain },
   { method: "POST", path: "/v1/keychain/asks", auth: "either", handle: handleKeychain },

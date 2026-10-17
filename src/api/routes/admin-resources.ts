@@ -28,6 +28,7 @@ import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   credentialInjectionError,
+  isBackendCredential,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
   isValidBrokerHost,
@@ -1113,7 +1114,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             error: "env delivery requires an UPPER_SNAKE_CASE env var name outside the reserved AGENT_* namespace",
           };
         }
-        const clash = allCreds.find((c) => c.slug !== slug && c.delivery === "env" && c.envKey === envKey);
+        const clash = isBackendCredential({ envKey })
+          ? undefined
+          : allCreds.find((c) => c.slug !== slug && c.delivery === "env" && c.envKey === envKey);
         if (clash) return { error: `env var ${envKey} is already delivered by credential "${clash.slug}"` };
       } else if (envKey) {
         return { error: "an env var name only applies to env delivery" };

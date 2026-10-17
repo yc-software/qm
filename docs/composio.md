@@ -6,6 +6,8 @@ QM discovers apps, creates consent links, and executes Composio tools through it
 
 Store a personal keychain credential with env key `COMPOSIO_API_KEY`, or an org service credential with `delivery: "env"` and that env key. Existing records and service-credential grants remain compatible. The env key identifies a reserved backend credential: despite the legacy delivery label, QM never materializes it into a computer, command handle, or keychain-use script. Multi-field records containing that key are also backend-only.
 
+A person can also share their own key, without revealing it, with a team they belong to (or, as an org admin, the org) through `POST /v1/keychain/credentials/:id/elevate` from a live turn in their own conversation. That creates an org service credential granted only to the team, so every member resolves it here; org admins manage or remove it like any other service credential. Each person still connects their own app accounts.
+
 An org administrator configures the project once. Users connect their own apps through QM's picker or agent-provided consent links. Composio handles provider authentication and refresh. Some apps still require provider setup. Never paste a project key into chat, scripts, or Git.
 
 ## Authorization and execution

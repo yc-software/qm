@@ -628,6 +628,7 @@ const FAMILIES: AgentApiFamily[] = [
       (p === "/v1/keychain/credentials" && (m === "POST" || m === "GET")) ||
       (p === "/v1/keychain/overview" && m === "GET") ||
       (m === "DELETE" && p.startsWith("/v1/keychain/credentials/")) ||
+      (m === "POST" && p.startsWith("/v1/keychain/credentials/") && p.endsWith("/elevate")) ||
       (p === "/v1/keychain/grants" && m === "GET") ||
       (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
       (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
@@ -647,6 +648,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "list this user's credential metadata, grants, and pending asks (never secret values)",
       },
       { method: "DELETE", path: "/v1/keychain/credentials/:id", summary: "remove a registered login" },
+      {
+        method: "POST",
+        path: "/v1/keychain/credentials/:id/elevate",
+        summary:
+          'share your Composio project key with a team you belong to (or the org, admins only) as a backend-only shared credential: { toScope: "team:<id>" | "org", removePersonalCopy?: boolean }; only from a live turn in your own conversation',
+      },
       { method: "GET", path: "/v1/keychain/grants", summary: "list grants for this conversation" },
       { method: "POST", path: "/v1/keychain/grants/:id/revoke", summary: "revoke a grant" },
       {
