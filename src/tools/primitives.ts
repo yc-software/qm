@@ -1,3 +1,4 @@
+import { capPayloadStrings } from "../util/text.ts";
 import type { AdminToolAccess } from "./admin.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -655,7 +656,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     if (runId === undefined) return produce();
     const prior = await timed("tool_ledger", () => ledger.begin(runId, attempt, index));
     if (prior.cached) return JSON.parse(prior.output ?? "null") as T;
-    const result = await produce();
+    // Cap before recording so the ledger holds what the model sees, not unbounded raw output (#2124).
+    const result = capPayloadStrings(await produce()) as T;
     if (shouldCache(result))
       await timed("tool_ledger", () => ledger.record(runId, attempt, index, JSON.stringify(result ?? null)));
     return result;

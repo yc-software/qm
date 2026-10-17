@@ -213,3 +213,15 @@ test("off-Fly degradation: with NO broker the four mutating methods throw the 'u
   const list = await ctx.backgroundList();
   assert.deepEqual(list, []);
 });
+
+test("ledger stores an execute result capped to what the model sees, not the raw output (#2124)", async () => {
+  const { ledger, store } = memoryLedger();
+  const huge = "x".repeat(5_000_000);
+  const sandbox = { run: async () => ({ stdout: huge, stderr: "", code: 0, timedOut: false }) } as unknown as Sandbox;
+  const live = await ctxFor({ sandbox, ledger, runId: "run-big" }).execute("ls -laR /");
+  const [stored] = [...store.values()];
+  assert.ok(stored!.length < 200_000, `stored ${stored!.length} chars`);
+  const replay = await ctxFor({ sandbox, ledger, runId: "run-big" }).execute("ls -laR /");
+  assert.deepEqual(replay, live, "replay returns exactly what the live call returned");
+  assert.match(live.stdout, /truncated — full result was 5000000 chars/);
+});
