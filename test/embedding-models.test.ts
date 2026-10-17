@@ -8,6 +8,7 @@ import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
@@ -109,19 +110,29 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   assert.equal(resolveModel("gateway/embed"), undefined);
   assert.equal(catalog.transport.models["gpt-5.5"], undefined);
   assert.deepEqual(gatewayModelsJson(), {});
-  const embedder = createMemoryEmbedder(
-    resolveEmbeddingModel("gateway/embed")!,
-    "must-not-leak",
-    catalog.transport,
-    async (url, init) => {
-      calls.push({ url: String(url), init });
-      return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
-    },
+  const embedder = withModelRequestContext({ actorId: "U1" }, () =>
+    createMemoryEmbedder(
+      resolveEmbeddingModel("gateway/embed")!,
+      "must-not-leak",
+      catalog.transport,
+      async (url, init) => {
+        calls.push({ url: String(url), init });
+        return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
+      },
+    ),
   );
-  assert.deepEqual(await embedder.embed(["query"], AbortSignal.timeout(1000)), [[0.6, 0.8]]);
+  assert.deepEqual(
+    await withModelRequestContext({ actorId: "U2" }, () => embedder.embed(["query"], AbortSignal.timeout(1000))),
+    [[0.6, 0.8]],
+  );
   const request = calls.at(-1)!;
   assert.equal(request.url, "https://gateway.example/v1/embeddings");
-  assert.deepEqual(request.init?.headers, { "content-type": "application/json", "x-gateway-key": "gateway-key" });
+  assert.deepEqual(request.init?.headers, {
+    "content-type": "application/json",
+    "x-gateway-key": "gateway-key",
+    "x-qm-actor": "U2",
+    "x-qm-purpose": "embedding",
+  });
   assert.equal(JSON.parse(String(request.init?.body)).model, "embed");
   setGatewayModels([]);
   assert.equal(resolveEmbeddingModel("gateway/embed"), undefined);

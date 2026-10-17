@@ -1,4 +1,6 @@
 import { isGatewayModelId } from "./gateway-models.ts";
+import { currentModelRequestContext } from "./request-context.ts";
+import { attestable } from "../util/text.ts";
 /**
  * Provider endpoint overrides.
  *
@@ -86,9 +88,44 @@ export class GatewayModelUnavailableError extends Error {
   }
 }
 
+export type ModelRequestPurpose =
+  | "turn"
+  | "detect"
+  | "compaction"
+  | "title"
+  | "judge"
+  | "ambient_judge"
+  | "approval_summary"
+  | "security_screen"
+  | "ack_emoji"
+  | "memory_capture"
+  | "memory_classification"
+  | "embedding"
+  | "decision"
+  | "browser"
+  | "probe";
+
+export function modelGatewayHeaders(
+  config: Pick<ModelGatewayTransportConfig, "apiKey" | "apiKeyHeader">,
+  purpose?: ModelRequestPurpose,
+): Record<string, string> {
+  const { sessionId, actorId, scopeId, origin } = currentModelRequestContext();
+  const headers: Record<string, string> = { [config.apiKeyHeader]: config.apiKey };
+  for (const [name, value] of Object.entries({
+    "x-qm-session-id": sessionId,
+    "x-qm-actor": actorId,
+    "x-qm-scope": scopeId,
+    "x-qm-purpose": purpose,
+    "x-qm-origin": origin,
+  }))
+    if (attestable(value)) headers[name] = value;
+  return headers;
+}
+
 export function modelGatewayRequest<T extends { id: string; baseUrl: string; api?: string; compat?: object }>(
   config: ModelGatewayTransportConfig | undefined,
   model: T,
+  purpose?: ModelRequestPurpose,
 ): { model: T; target: string; apiKey: string; headers: Record<string, string> } | undefined {
   const target = config?.models[model.id];
   if (!target || !config) {
@@ -106,6 +143,6 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
     },
     target,
     apiKey: config.apiKey,
-    headers: { [config.apiKeyHeader]: config.apiKey },
+    headers: modelGatewayHeaders(config, purpose),
   };
 }

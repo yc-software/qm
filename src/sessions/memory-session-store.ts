@@ -36,6 +36,7 @@ import {
   cronIdOf,
   entryWithinTenure,
   isOverheardEntry,
+  originThroughParents,
   promptEnvelopeBody,
   sessionBucket,
   sessionCategory,
@@ -832,16 +833,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       for (const [sessionId, records] of llmRequests) {
         const session = sessions.get(sessionId);
         if (!session) continue;
-        let origin = sessionOrigin(session.threadRef);
-        let ancestor = session;
-        const visited = new Set([sessionId]);
-        while (origin === "conversation" && ancestor.parentSessionId && visited.size < 64) {
-          const parent = sessions.get(ancestor.parentSessionId);
-          if (!parent || visited.has(parent.id)) break;
-          visited.add(parent.id);
-          ancestor = parent;
-          origin = sessionOrigin(parent.threadRef);
-        }
+        const origin = await originThroughParents(session, (id) => sessions.get(id));
         for (const r of records) {
           if (!r.usage) continue;
           if (r.createdAt < range.from || r.createdAt >= range.to) continue;

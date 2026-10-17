@@ -361,6 +361,23 @@ export function sessionOrigin(threadRef: string | null | undefined): SessionOrig
   return "conversation";
 }
 
+export async function originThroughParents(
+  session: Pick<Session, "id" | "threadRef" | "parentSessionId">,
+  get: (id: string) => Session | null | undefined | Promise<Session | null | undefined>,
+): Promise<SessionOrigin> {
+  let origin = sessionOrigin(session.threadRef);
+  let ancestor = session;
+  const visited = new Set([session.id]);
+  while (origin === "conversation" && ancestor.parentSessionId && visited.size < 64) {
+    const parent = await get(ancestor.parentSessionId);
+    if (!parent || visited.has(parent.id)) break;
+    visited.add(parent.id);
+    ancestor = parent;
+    origin = sessionOrigin(parent.threadRef);
+  }
+  return origin;
+}
+
 export function sessionCategory(origin: SessionOrigin): SessionCategory {
   return origin === "conversation" ? "conversation" : "background";
 }

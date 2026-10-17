@@ -13,6 +13,7 @@ import type {
   TurnRuntime,
 } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
+import type { ModelRequestPurpose } from "../model/provider-endpoints.ts";
 import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
@@ -196,8 +197,13 @@ export interface HarnessModelUtilities {
   shouldRespond?(input: HarnessDetectInput): Promise<HarnessDetectResult>;
   compactHistory?(input: HarnessCompactInput): Promise<string>;
   contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
-  oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
-  judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
+  oneShot?(systemPrompt: string, prompt: string, purpose?: ModelRequestPurpose): Promise<string | undefined>;
+  judge?(
+    systemPrompt: string,
+    prompt: string,
+    signal?: AbortSignal,
+    purpose?: ModelRequestPurpose,
+  ): Promise<string | undefined>;
   screenSecurity?(input: HarnessSecurityScreenInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   generateTitle?(transcript: string): Promise<string | undefined>;

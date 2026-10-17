@@ -37,3 +37,7 @@ export function absoluteAppLinks(text: string, baseUrl: string | undefined): str
     (match, code, _fence, _ticks, label, path) => (code ? match : `[${label}](${new URL(path, baseUrl).href})`),
   );
 }
+
+export function attestable(value: unknown): value is string {
+  return typeof value === "string" && /^[\x21-\x7e]{1,256}$/.test(value);
+}
