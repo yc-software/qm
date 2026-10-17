@@ -2,9 +2,11 @@ import type { CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { compileSafeRegex } from "../util/safe-regex.ts";
 
+const RECURSIVE_DELETE_PATTERN = "\\brm\\b[^\\n]*(?:-[a-zA-Z]*r|--recursive)";
+
 const ORG_FLOOR_RULES: CommandRule[] = [
   {
-    pattern: "\\brm\\b[^\\n]*(?:-[a-zA-Z]*r|--recursive)",
+    pattern: RECURSIVE_DELETE_PATTERN,
     decision: "require_approval",
     reason: "recursive delete",
   },
@@ -861,7 +863,74 @@ function pipedSqlPayloads(input: string): string[] {
   return payloads;
 }
 
-function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {
+function recursiveDeleteArguments(command: string, depth = 0): { matched?: string; seen: boolean; uncertain: boolean } {
+  if (depth >= 8 || /[$`<>\\{}()|*?[^#~]|[^\S \t\n]/.test(command)) return { seen: false, uncertain: true };
+  let seen = false;
+  let uncertain = false;
+  const scan = scanShell(command);
+  for (const words of scan.commands) {
+    const start = commandStart(words);
+    const executable = words[start]?.split("/").pop()?.toLowerCase();
+    if (executable === "rm") {
+      seen = true;
+      for (const arg of words.slice(start + 1)) {
+        if (arg === "--") break;
+        if (/^-[^-]*[rR]/.test(arg) || (arg.length > 2 && "--recursive".startsWith(arg.toLowerCase()))) {
+          return { matched: words.slice(start).join(" "), seen, uncertain };
+        }
+      }
+    } else if (executable) {
+      const args = words.slice(start + 1);
+      const shellPayload =
+        ["bash", "sh", "dash", "zsh", "ksh"].includes(words[start]!.split("/").pop()!) &&
+        args.length === 2 &&
+        /^-(?:c|lc|cl)$/.test(args[0]!) &&
+        !/^[-+]/.test(args[1]!);
+      if (
+        !shellPayload &&
+        ([
+          "bash",
+          "sh",
+          "dash",
+          "zsh",
+          "ksh",
+          "eval",
+          "env",
+          "command",
+          "exec",
+          "sudo",
+          "nice",
+          "timeout",
+          "time",
+          "nohup",
+          "coproc",
+          "xargs",
+          "find",
+        ].includes(executable) ||
+          words.some(
+            (word) =>
+              /\brm\b|['"]/i.test(word) ||
+              ["bash", "sh", "dash", "zsh", "ksh", "eval"].includes(word.split("/").pop()?.toLowerCase() ?? ""),
+          ))
+      )
+        uncertain = true;
+      if (
+        words.some((word) => word.split("/").pop()?.toLowerCase() === "env") &&
+        words.some((word) => word.startsWith("-S") || word.startsWith("--split-string"))
+      )
+        uncertain = true;
+    }
+  }
+  for (const payload of executedShellPayloads(command)) {
+    const result = recursiveDeleteArguments(payload, depth + 1);
+    if (result.matched) return result;
+    seen ||= result.seen;
+    uncertain ||= result.uncertain;
+  }
+  return { seen, uncertain };
+}
+
+function firstMatch(command: string, scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {
   for (const rule of rules) {
     let re: RegExp;
     try {
@@ -872,12 +941,16 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
       );
       continue;
     }
-    const hit = re.exec(scannable);
-    if (hit) {
+    let matched = re.exec(scannable)?.[0];
+    if (rule.pattern === RECURSIVE_DELETE_PATTERN && matched !== undefined) {
+      const result = recursiveDeleteArguments(command);
+      if (!result.matched && result.seen && !result.uncertain) matched = undefined;
+    }
+    if (matched !== undefined) {
       return {
         decision: rule.decision,
         ...(rule.reason ? { reason: rule.reason } : {}),
-        matched: hit[0],
+        matched,
         approvalKey: rule.pattern,
       };
     }
@@ -886,7 +959,7 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
 }
 
 export function evaluateCommand(command: string, policy: CommandPolicy): CommandEvaluation {
-  const matched = firstMatch(scannableCommand(command), policy.rules);
+  const matched = firstMatch(command, scannableCommand(command), policy.rules);
   if (matched) return matched;
   if (policy.mode === "allowlist") {
     return { decision: "deny", reason: "not in allowlist" };
@@ -900,12 +973,12 @@ export function evaluateCommandWithLayer(
   layerRules: readonly CommandRule[],
 ): CommandEvaluation {
   const scannable = scannableCommand(command);
-  const scopeMatch = firstMatch(scannable, policy.rules);
+  const scopeMatch = firstMatch(command, scannable, policy.rules);
   if (scopeMatch) return scopeMatch;
   if (policy.mode === "allowlist") {
     return { decision: "deny", reason: "not in allowlist" };
   }
-  const layerMatch = firstMatch(scannable, layerRules);
+  const layerMatch = firstMatch(command, scannable, layerRules);
   if (layerMatch) return layerMatch;
   return { decision: "allow" };
 }
