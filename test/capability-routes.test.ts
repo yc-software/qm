@@ -9,6 +9,7 @@ import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "route-test-secret".repeat(3);
@@ -275,6 +276,40 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(archived.cron.enabled, false);
     await del(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") });
   });
+
+  for (const auth of ["capability", "source"] as const) {
+    for (const field of ["text", "message"] as const) {
+      it(`preserves exact-message edits through ${auth} auth using ${field}`, async () => {
+        const headers = { "x-agent-capability": await capFor("U1") };
+        const created = await post(
+          "/v1/crons",
+          { title: `${auth} ${field} edit`, schedule: { everyMs: 60_000 }, text: "original reminder" },
+          headers,
+        );
+        assert.equal(created.status, 200);
+        const { cron } = (await created.json()) as any;
+        const path = `/v1/crons/${cron.id}`;
+        const edit = (body: unknown) =>
+          patch(
+            path,
+            body,
+            auth === "capability" ? headers : signedRequestHeaders(SECRET, "PATCH", path, JSON.stringify(body)),
+          );
+        try {
+          const updated = await edit({ [field]: "edited reminder" });
+          assert.equal(updated.status, 200);
+          assert.equal(((await updated.json()) as any).cron.message, "edited reminder");
+          const combined = await edit({ title: "Renamed reminder", [field]: "final reminder" });
+          assert.equal(combined.status, 200);
+          assert.equal(((await combined.json()) as any).cron.message, "final reminder");
+          assert.equal((await built.app.getCron(cron.id))?.message, "final reminder");
+          assert.equal((await edit({ [field]: 12 })).status, 400);
+        } finally {
+          await del(path, headers);
+        }
+      });
+    }
+  }
 
   it("accepts calendar cron schedules and defaults timezone from the capability", async () => {
     const withTz = await post(
