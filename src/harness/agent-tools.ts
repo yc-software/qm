@@ -2260,7 +2260,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                       ? jobs
                           .map(
                             (j) =>
-                              `${j.processId}  ${j.registryStatus === "reaped" ? "stopped (ttl)" : fmtStatus(j.status)}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
+                              `${j.processId}  ${j.status === "reaped" ? "stopped (ttl)" : j.status}  ${new Date(j.startedAt).toISOString()}  ${j.purpose ?? j.command}${j.purpose ? `\n  ${j.command}` : ""}`,
                           )
                           .join("\n")
                       : "(no background jobs)",

@@ -419,8 +419,8 @@ test("list reports the scope's background jobs from the registry (id, status, st
   const jobs = await broker.list();
   assert.equal(jobs.length, 2);
   const byId = new Map(jobs.map((j) => [j.processId, j]));
-  assert.equal(byId.get(a.processId)!.status.state, "running");
-  assert.equal(byId.get(b.processId)!.status.state, "exited");
+  assert.equal(byId.get(a.processId)!.status, "running");
+  assert.equal(byId.get(b.processId)!.status, "exited");
   assert.match(byId.get(a.processId)!.command, /job-a/);
 });
 
@@ -431,11 +431,8 @@ test("list distinguishes a TTL-reaped row from a clean exit (registry view, not 
   await registry.markStatus(killed.processId, "reaped");
 
   const byId = new Map((await broker.list()).map((j) => [j.processId, j]));
-  assert.equal(byId.get(clean.processId)!.registryStatus, "running");
-  assert.equal(byId.get(killed.processId)!.registryStatus, "reaped");
-  const ks = byId.get(killed.processId)!.status;
-  assert.equal(ks.state, "exited");
-  assert.notEqual(ks.state === "exited" ? ks.code : 0, 0, "a reaped job is NOT surfaced as a clean exit-0");
+  assert.equal(byId.get(clean.processId)!.status, "running");
+  assert.equal(byId.get(killed.processId)!.status, "reaped");
 });
 
 test("start stamps the conversation's sessionRef on the registry row", async () => {
@@ -520,4 +517,20 @@ test("every registered background job records the computer it runs on", async ()
     (await registry.listByScope(SCOPE)).map((row) => row.sandboxId),
     ["sandbox-1"],
   );
+});
+
+test("list reports lifecycle without inventing exit codes for failed or stopped jobs", async () => {
+  const { broker, finish, registry } = build();
+  const failed = await broker.start(handle, "failed-job", "Run background tests");
+  finish(failed.processId, 3);
+  assert.deepEqual((await broker.poll(handle, failed.processId)).status, { state: "exited", code: 3 });
+  const stopped = await broker.start(handle, "stopped-job", "Run background tests");
+  assert.deepEqual((await broker.stop(handle, stopped.processId)).status, { state: "exited", code: 143 });
+  const reaped = await broker.start(handle, "reaped-job", "Run background tests");
+  await registry.markStatus(reaped.processId, "reaped");
+
+  const jobs = new Map((await broker.list()).map((job) => [job.processId, job]));
+  assert.equal(jobs.get(failed.processId)?.status, "exited");
+  assert.equal(jobs.get(stopped.processId)?.status, "exited");
+  assert.equal(jobs.get(reaped.processId)?.status, "reaped");
 });
