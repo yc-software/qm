@@ -819,6 +819,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   assert.match(empty, /## Credentials/);
   assert.match(empty, /No credentials available/);
   assert.match(empty, /`request-access` skill/);
+  assert.match(empty, /`secret-drop` skill/, "the manifest names the drop-link skill");
   assert.doesNotMatch(empty, /Teammate keychains/);
   assert.ok(!empty.includes("/v1/keychain/grants"), "no chat-driven approval route");
 

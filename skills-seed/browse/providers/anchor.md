@@ -93,13 +93,8 @@ when the site expires the session. If the person wants re-auth without being pin
 time, Anchor's Identities store their login and re-run the auth flow automatically before
 each session. Check `GET /v1/keychain/credentials` for an existing login for the domain
 first (use it via a grant; NEVER bind a login registered for a different site); otherwise
-mint a one-time secret-drop so the password never transits chat:
-
-```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"service":"<domain>","fields":[{"key":"EMAIL","secret":false},{"key":"PASSWORD"}],"purpose":"sign in to <domain> in the managed browser"}'
-```
+mint a one-time link with the `secret-drop` skill so the password never transits chat
+(service `<domain>`, fields `EMAIL` with `secret:false` and `PASSWORD`).
 
 Hand over the returned `url` with the consent stated plainly: _filling it stores this login
 with Anchor (our managed-browser provider) so it can sign in and re-sign-in for you_ — that

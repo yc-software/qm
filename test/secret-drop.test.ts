@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -469,6 +469,38 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
       { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
     ]);
+  });
+
+  it("an agent call without the capability header is told which header to send", async () => {
+    const cap = await capFor("U_A");
+    for (const path of ["/v1/keychain/drops", "/v1/secret-drops"]) {
+      const res = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${cap}` },
+        body: JSON.stringify({ service: "stripe", purpose: "p" }),
+      });
+      assert.equal(res.status, 401);
+      const body = (await res.json()) as { message: string };
+      assert.match(body.message, /x-agent-capability/, `${path}: the 401 names the agent header`);
+    }
+    const ok = await post("/v1/keychain/drops", { service: "stripe", purpose: "p" }, cap);
+    assert.equal(ok.status, 200, "the same token in x-agent-capability mints");
+  });
+
+  it("the secret-drop skill's mint command works as written", async () => {
+    const skill = readFileSync(new URL("../skills-seed/secret-drop/SKILL.md", import.meta.url), "utf8");
+    const command = skill.slice(skill.indexOf("curl "), skill.indexOf("\n```", skill.indexOf("curl ")));
+    const [, method, path] = /-X (\w+) "\$AGENT_API_URL([^"]+)"/.exec(command) ?? [];
+    const [, header] = /-H "([\w-]+): \$AGENT_API_TOKEN"/.exec(command) ?? [];
+    const [, body] = /-d '([^']+)'/.exec(command) ?? [];
+    assert.ok(method && path && header && body, "the skill shows one complete curl call");
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { "content-type": "application/json", [header]: await capFor("U_A") },
+      body,
+    });
+    assert.equal(res.status, 200);
+    assert.match(((await res.json()) as { formPath: string }).formPath, /^\/drop\//);
   });
 
   it("rejects a malformed fields[] at mint", async () => {

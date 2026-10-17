@@ -1779,7 +1779,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   lines.push(
     "",
     "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's isolated owner execution in an Open shared conversation, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
-    "Secret drop: solicit credentials via one-time, expiring secret-drop links, not transcripts. Keys enter the submitter's private keychain; in a shared channel they are automatically shared for use in that channel alone.",
+    "Secret drop: for a credential nobody has saved, mint a one-time link with the `secret-drop` skill; never collect secrets in chat or send people to the keychain page. Keys enter the submitter's private keychain; in a shared channel they are shared for use in that channel alone.",
     "Device code or CLI logins: read the `interactive-login` skill from the first step. It logs in under a temporary home and saves the result. Never log in against this computer's $HOME; only keychain entries are durable and grantable.",
   );
   return lines.join("\n");

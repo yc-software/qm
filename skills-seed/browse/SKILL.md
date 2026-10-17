@@ -110,9 +110,8 @@ of them (asks and drops are refused only on trigger-fired turns).
    person whose approval you're waiting on. The approved grant's handle then works in
    `credentials`.
 4. **Not registered anywhere** → the person can supply their own keys on the spot: mint a
-   drop link per key (`POST /v1/keychain/drops` with
-   `{"service":"<your provider doc's keychain service>","envKey":"<the provider key name>","purpose":"browse"}`)
-   and hand the link over — the secret lands in
+   drop link per key with the `secret-drop` skill (service = your provider doc's keychain
+   service, envKey = the provider key name) and hand the link over — the secret lands in
    their keychain, never in chat.
 
 **If the profile has no handle in your manifest, do NOT jump to bootstrapping** — a

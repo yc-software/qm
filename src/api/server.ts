@@ -590,7 +590,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         Math.abs(Date.now() - timestamp * 1000) > SOURCE_AUTH_REPLAY_WINDOW_MS ||
         typeof req.headers["x-signature"] !== "string"
       ) {
-        sendJson(res, 401, { error: "unauthorized", message: "missing, invalid, or stale source-auth headers" });
+        sendJson(res, 401, {
+          error: "unauthorized",
+          message: `missing, invalid, or stale source-auth headers; agent calls must send the capability token as ${CAPABILITY_HEADER}: $AGENT_API_TOKEN`,
+        });
         return;
       }
     }
