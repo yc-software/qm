@@ -30,7 +30,7 @@ export function withOperatorTokenFallback(
       store.connectorDerivedAuth(host, principalId, accountType),
     async connectorAccessToken(host, principalId, accountType) {
       const token = await store.connectorAccessToken(host, principalId, accountType);
-      if (token !== null) return token;
+      if (token !== null || (accountType && accountType !== "default")) return token;
       if (!serviceHosts.some((s) => host === s || host.endsWith(`.${s}`))) return null;
       const perUser = principalId ? await secrets.get(envKey(host, principalId)) : undefined;
       if (perUser) return perUser;
