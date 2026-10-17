@@ -10508,6 +10508,15 @@ h3.ambient-field-label {
     flex: none;
     margin-right: 10px;
   }
+  .chat-topbar:has(.menu-popover:not([hidden])) {
+    z-index: 60;
+  }
+  .session-tools-more .menu-option {
+    align-items: center;
+  }
+  .session-tools-more .menu-option-copy {
+    flex: 1;
+  }
   .menu-title {
     padding: 10px 12px 6px;
     font-size: 13px;
