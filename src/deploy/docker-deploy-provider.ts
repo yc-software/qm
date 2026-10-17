@@ -18,6 +18,19 @@ const APP_READY_WINDOW_SEC = 60;
 const RUN_TIMEOUT_MS = 300_000;
 const LEGACY_NETWORK = "agent-deploynet";
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
+// Every other deploy provider (aws-deploy-provider.ts, e2b-deploy-provider.ts,
+// porter-deploy-provider.ts, fly-deploy-provider.ts) sets DATA_DIR to a path
+// backed by real persistent storage, and reports it as profile.dataDir so
+// agent-tools.ts can tell the agent to keep durable state there. This
+// provider had neither: the only volume it ever mounted was the read-only
+// snapshotDir at /app, so anything an app wrote anywhere (including a path
+// it guessed on its own, for lack of being told one) lived only in that
+// specific container's own writable layer and was silently lost on the next
+// apply() — which always docker rm -f's the old container before docker
+// run-ing a new one. A named volume per deployment, mounted at DATA_DIR and
+// left alone across apply() (only removed in destroy(), same lifecycle as
+// the per-deployment network), closes that gap.
+const DATA_DIR = "/data";
 
 export interface DockerDeployProviderOptions {
   image?: string;
@@ -84,6 +97,16 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     }
     return net;
   };
+  const dataVolume = (d: Deployment) => `${name(d)}-data`;
+  const ensureDataVolume = async (vol: string): Promise<string> => {
+    // Unlike `docker network create`, `docker volume create` on a name
+    // that already exists is already a no-op success (confirmed: exit 0,
+    // no "already exists" error) — simpler than ensureNetwork's inspect-
+    // first dance, nothing extra needed here.
+    const r = await dexec(["volume", "create", vol]);
+    if (r.code !== 0) throw new Error(`docker volume create ${vol} failed: ${r.stderr.trim()}`);
+    return vol;
+  };
 
   const migrateContainer = async (container: string): Promise<boolean> => {
     const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
@@ -119,10 +142,11 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   };
 
   return {
-    profile: { managedScaleToZero: false },
+    profile: { managedScaleToZero: false, dataDir: DATA_DIR },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       const net = await ensureNetwork(network(d));
+      const vol = await ensureDataVolume(dataVolume(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
@@ -146,10 +170,14 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
           `127.0.0.1:${hostPort}:${APP_PORT}`,
           "-v",
           `${version.snapshotDir}:/app:ro`,
+          "-v",
+          `${vol}:${DATA_DIR}`,
           "-w",
           "/app",
           "-e",
           `PORT=${APP_PORT}`,
+          "-e",
+          `DATA_DIR=${DATA_DIR}`,
           ...envArgs,
           image,
           "sh",
@@ -182,6 +210,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     async destroy(d: Deployment): Promise<void> {
       await dexec(["rm", "-f", name(d)]);
       await dexec(["network", "rm", network(d)]);
+      await dexec(["volume", "rm", dataVolume(d)]);
       freePort(name(d));
     },
 
