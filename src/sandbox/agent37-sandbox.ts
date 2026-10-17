@@ -420,11 +420,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
           if (existing.status !== "running") await ensureRunning(existing.id);
           return { coldStart: false };
         }
-        try {
-          onStatus?.("Creating the sandbox…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Creating the sandbox…");
         const info = await createInstance(name);
         idByName.set(name, info.id);
         return { coldStart: true };

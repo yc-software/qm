@@ -402,11 +402,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       return { coldStart: false };
     }
     await mergeStored(scope, { initializationPending: true });
-    try {
-      onStatus?.("Preparing the sandbox…");
-    } catch (error) {
-      void error;
-    }
+    onStatus?.("Preparing the sandbox…");
     try {
       const info = existing ?? (await createMachine(name, false)).info;
       idByName.set(name, info.id);

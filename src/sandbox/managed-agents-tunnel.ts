@@ -91,8 +91,9 @@ export async function openManagedAgentsTunnel(opts: ManagedAgentsTunnelOptions):
           local.on("data", (chunk: Buffer) => {
             local.pause();
             ws.send(chunk, (err) => {
-              if (err) return;
-              local.resume();
+              if (!err) return void local.resume();
+              if (failure === null) fail(`send failed: ${err.message}`);
+              local.destroy();
             });
           });
           ws.on("message", (data: Buffer) => {

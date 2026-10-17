@@ -23,14 +23,14 @@ export interface ModalSession {
   terminate(): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
-  constructor(sandboxId: string, detail: string) {
-    super(`modal sandbox ${sandboxId} is gone: ${detail}`);
+  constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
+    super(`modal sandbox ${sandboxId} is gone: ${detail}`, options);
     this.name = "ModalSandboxGoneError";
   }
 }
 export class ModalNameConflictError extends Error {
-  constructor(name: string, detail: string) {
-    super(`modal sandbox name ${name} already taken: ${detail}`);
+  constructor(name: string, detail: string, options?: ErrorOptions) {
+    super(`modal sandbox name ${name} already taken: ${detail}`, options);
     this.name = "ModalNameConflictError";
   }
 }
@@ -193,7 +193,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         return { stdout, stderr, exitCode };
       } catch (err) {
         if (isDeadlineError(err)) return { stdout: "", stderr: errText(err), exitCode: 124 };
-        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -201,7 +201,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       try {
         return await sbx.filesystem.readBytes(absPath);
       } catch (err) {
-        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         if (isFileNotFoundError(err)) return null;
         if (isFileTooLargeError(err))
           throw new Error(
@@ -215,7 +215,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       try {
         await sbx.filesystem.writeBytes(data, absPath);
       } catch (err) {
-        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (isSandboxGoneError(err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -253,7 +253,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         });
         return wrap(sbx);
       } catch (err) {
-        if (isNameConflictError(err)) throw new ModalNameConflictError(createOpts.name ?? "(unnamed)", errText(err));
+        if (isNameConflictError(err))
+          throw new ModalNameConflictError(createOpts.name ?? "(unnamed)", errText(err), { cause: err });
         throw err;
       }
     },
@@ -266,7 +267,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         return wrap(sbx);
       } catch (err) {
         if (err instanceof ModalSandboxGoneError) throw err;
-        if (isSandboxIdLookupGone(err)) throw new ModalSandboxGoneError(sandboxId, errText(err));
+        if (isSandboxIdLookupGone(err)) throw new ModalSandboxGoneError(sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -284,6 +285,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         if (exited !== null) return null;
       } catch (err) {
         if (isSandboxGoneError(err)) return null;
+        throw err;
       }
       return wrap(sbx);
     },

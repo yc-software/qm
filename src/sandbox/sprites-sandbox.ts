@@ -67,6 +67,11 @@ function parsePressure(ioFull10Raw: string, ioFull60Raw: string, load1Raw: strin
   };
 }
 
+function withoutSdkUrl(message: string): string {
+  const url = message.lastIndexOf(" (url: ");
+  return url < 0 ? message : message.slice(0, url);
+}
+
 export function spritesErrorDetail(e: unknown): string {
   if (!(e instanceof APIError)) return errMessage(e);
   const parts = [e.message];
@@ -194,13 +199,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         const phase = submissionStarted ? "script submission started; execution unknown" : "script not submitted";
         reject(new Error(`sprites exec: WebSocket error (${phase}): ${detail}`));
       };
-      cmd.on("error", (e) => {
-        const detail =
-          /^(?:WebSocket error: )?(TypeError|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|connection reset by peer|Received network error or non-101 status code|WebSocket closed before open)\b/.exec(
-            errMessage(e),
-          )?.[1] ?? "unknown transport error";
-        fail(detail);
-      });
+      cmd.on("error", (e) => fail(withoutSdkUrl(e.message)));
       cmd.once("exit", (code) => {
         if (code < 0) fail("connection closed without an exit status");
         else resolve(code);
@@ -468,11 +467,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
           return { coldStart: false };
         }
         await initializationStore.put(name, { pending: true });
-        try {
-          onStatus?.("Preparing the sandbox…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Preparing the sandbox…");
         const scope = base.scopeFor(name);
         try {
           if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
@@ -637,12 +632,13 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       };
       let guestResponsive = false;
       let pressure: ExecPressure | undefined;
+      let probeError: string | undefined;
       try {
         const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC);
         guestResponsive = probe.code === 0;
         pressure = probe.pressure;
       } catch (e) {
-        void e;
+        probeError = errMessage(e);
       }
       return {
         machine,
@@ -650,6 +646,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         guestResponsive,
         recovery,
         ...(pressure ? { pressure } : {}),
+        ...(probeError ? { probeError } : {}),
       };
     },
 
