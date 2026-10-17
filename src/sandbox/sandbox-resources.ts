@@ -287,6 +287,7 @@ export function createSandboxResources(opts: {
             [{ scopeId: record.backingScopeId, mountPath: "/", mode: "rw" }],
             await opts.provisionOptions?.(scopeId),
           );
+          if (sandbox.profile.parksOnTeardown) await sandbox.teardown(handle, { homeUnchanged: true });
           const ready: SandboxResource = {
             ...record,
             state: "ready",
