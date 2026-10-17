@@ -2356,7 +2356,7 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
+    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -3205,6 +3205,7 @@ export function serverDeps(
             featureFlags: built.featureFlags,
             items: built.loops.items,
             errors: built.errors,
+            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),

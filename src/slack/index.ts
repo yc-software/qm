@@ -406,7 +406,7 @@ export async function startSlackPlugin(
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),
       });
-    })().catch(() => {});
+    })().catch((err) => swallow("slack: inbox message event", err));
   };
   registerSlackEvents(app, {
     handler,

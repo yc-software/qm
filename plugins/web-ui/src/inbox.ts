@@ -136,6 +136,7 @@ export interface InboxItem {
   dismissedAt?: number;
   repliedAt?: number;
   externalReplyText?: string;
+  noReplyNeeded?: { reason?: string };
   reactions?: string[];
   probablyResolved?: boolean;
   automated?: boolean;
@@ -459,6 +460,9 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
+    ...(entry.actionKind === "no_reply_needed"
+      ? { noReplyNeeded: entry.actionResult ? { reason: entry.actionResult } : {} }
+      : {}),
   };
 }
 
@@ -1453,7 +1457,7 @@ function reactionChipTpl(name: string): TemplateResult {
 function handledStateLabel(item: InboxItem): string {
   if (item.status === "sent") return "Sent";
   if (item.status === "replied") return "Replied";
-  return "Dismissed";
+  return item.noReplyNeeded ? "No reply needed" : "Dismissed";
 }
 
 function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
@@ -1485,8 +1489,14 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
       ${item.externalReplyText ? html`<div class="inbox-replied-text">${slackTextTpl(item, item.externalReplyText)}</div>` : nothing}
     </div>`;
   }
+  const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
+  if (item.noReplyNeeded?.reason)
+    return html`<div class="inbox-handled-note inbox-replied-note">
+      <div class="inbox-handled-line">${icon(X, 13)}<span>${label}</span> ${reopenButtonTpl(item)}</div>
+      <div class="inbox-replied-text">${item.noReplyNeeded.reason}</div>
+    </div>`;
   return html`<div class="inbox-handled-note">
-    ${icon(X, 13)}<span>Dismissed ${item.dismissedAt ? relTime(item.dismissedAt) : ""}</span>
+    ${icon(X, 13)}<span>${label}</span>
     ${reopenButtonTpl(item)}
   </div>`;
 }

@@ -5,6 +5,7 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../harness/redact-secrets.ts";
 import { errMessage } from "../util/errors.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
+import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
@@ -16,6 +17,7 @@ interface RefreshDeps {
   directory: Pick<DirectoryStore, "getBySlackId">;
   featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
+  enqueue: (loop: { id: string; owner: string }, entries: IngressEntry[]) => Promise<unknown>;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
   now?: () => number;
@@ -176,6 +178,11 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     );
   }
 
+  async function ownerReplied(owner: string, item: LoopItem, at: number, text: string): Promise<void> {
+    if (!Number.isFinite(at) || at <= (item.sourceAt ?? 0)) return;
+    await deps.enqueue({ id: item.loopId, owner }, [conversationEvent(item, { author: "owner", at, text })]);
+  }
+
   async function refresh(owner: string, item: LoopItem): Promise<void> {
     const source = item.source ?? item.sourcePayload?.source;
     if (source !== "gmail" && source !== "slack") return;
@@ -193,12 +200,12 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         .sort((a, b) => Number(a.internalDate) - Number(b.internalDate))
         .at(-1);
       if (latest && Array.isArray(latest.labelIds) && latest.labelIds.includes("SENT")) {
-        await deps.items.recordAction(item.id, {
-          kind: "replied",
-          outcome: "dismissed",
-          sourceAt: Number(latest.internalDate),
-          ...(typeof latest.snippet === "string" ? { result: latest.snippet.slice(0, 500) } : {}),
-        });
+        await ownerReplied(
+          owner,
+          item,
+          Number(latest.internalDate),
+          typeof latest.snippet === "string" ? latest.snippet : "",
+        );
       }
       if (payload.sourceRefreshError)
         await deps.items.annotate(item.id, { sourceRefreshError: null }, { expectedSourceAt: item.sourceAt });
@@ -304,12 +311,12 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     if ((!root || !partial) && latest && !isResolved(item)) {
       const identity = await slackInfo(owner, "auth.test", token);
       if (typeof identity.user_id === "string" && latest.user === identity.user_id) {
-        await deps.items.recordAction(item.id, {
-          kind: "replied",
-          outcome: "dismissed",
-          sourceAt: Math.round(Number(latest.ts) * 1000),
-          result: typeof latest.text === "string" ? latest.text.slice(0, 500) : "",
-        });
+        await ownerReplied(
+          owner,
+          item,
+          Math.round(Number(latest.ts) * 1000),
+          typeof latest.text === "string" ? latest.text : "",
+        );
       }
     }
   }

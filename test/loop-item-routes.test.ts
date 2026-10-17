@@ -499,71 +499,6 @@ test("a reaction slack refuses leaves the item untouched", async () => {
   assert.equal(stored?.sourcePayload?.reactions, undefined);
 });
 
-test("replied closes an item the person answered outside QM and keeps their words", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const out = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "  Answered in the thread.  " } },
-  });
-  assert.equal(out.status, 200, JSON.stringify(out.body));
-  const view = (out.body as { item: LedgerItemView }).item;
-  assert.equal(view.state, "dismissed");
-  assert.equal(view.actionKind, "replied");
-  assert.equal(view.actionResult, "Answered in the thread.");
-  assert.equal(w.sent.length, 0, "closing a loop externally never touches the source");
-});
-
-test("replied reopens like any dismissal and never demotes what was sent from here", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "handled it" } },
-  });
-  const reopened = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "reopen" },
-  });
-  const view = (reopened.body as { item: LedgerItemView }).item;
-  assert.equal(view.state, "held");
-  assert.equal(view.actionKind, undefined);
-  assert.equal(view.actionResult, undefined);
-
-  await w.loops.items.recordAction(item.id, { kind: "send", outcome: "actioned" });
-  const late = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "too late" } },
-  });
-  assert.equal(late.status, 409);
-  assert.equal((await w.loops.items.get(item.id))?.actionKind, "send");
-});
-
-test("a replied text longer than the cap is clipped, and an absent one still closes the item", async () => {
-  const w = world();
-  const { loop, item } = await seed(w);
-  const clipped = await call(w, {
-    method: "POST",
-    path: `/v1/loops/${loop.id}/items/${item.id}/action`,
-    body: { kind: "replied", args: { text: "x".repeat(900) } },
-  });
-  assert.equal((clipped.body as { item: LedgerItemView }).item.actionResult?.length, 500);
-
-  const bare = await seed(world());
-  const out = await call(bare.w, {
-    method: "POST",
-    path: `/v1/loops/${bare.loop.id}/items/${bare.item.id}/action`,
-    body: { kind: "replied" },
-  });
-  const view = (out.body as { item: LedgerItemView }).item;
-  assert.equal(view.state, "dismissed");
-  assert.equal(view.actionResult, undefined);
-});
-
 test("an action kind the source does not know is handed to the agent", async () => {
   const w = world();
   const { loop, item } = await seed(w);
@@ -853,15 +788,19 @@ test("a conversational send refuses a stale draft before starting an agent turn"
   assert.equal(w.followUps.length, 1);
 });
 
-test("inbox list refreshes open Gmail items before returning counts, but not another owner's loop", async () => {
+test("inbox list refreshes open Gmail items before returning, but not another owner's loop", async () => {
   const w = world();
   const loop = await ensureInboxLoop(w.loops.store, "josh");
   const refreshes: string[] = [];
   // Exercise the route with the real refresher via the same dependency used by wiring.
   const { createInboxSourceRefresh } = await import("../src/loops/inbox-source-refresh.ts");
+  const queued: unknown[] = [];
   w.sourceRefresh = createInboxSourceRefresh({
     featureFlags: { enabled: async () => true },
     items: w.loops.items,
+    enqueue: async (_loop, entries) => {
+      queued.push(...entries.map((entry) => entry.sourcePayload?.latestEvent));
+    },
     tokens: { connectorAccessToken: async () => "synthetic" },
     directory: { getBySlackId: async () => null },
     fetchImpl: async (url) => {
@@ -889,11 +828,11 @@ test("inbox list refreshes open Gmail items before returning counts, but not ano
   assert.equal(refreshes.length, 0);
   const result = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items` });
   assert.equal(result.status, 200);
-  assert.equal((result.body as { counts: Record<string, number> }).counts.dismissed, 1);
+  assert.deepEqual(queued, [{ author: "owner", at: 2000, text: "Already replied" }]);
   assert.equal(refreshes.length, 1);
 });
 
-test("Slack thread keys reuse a legacy item's identity, edits, and replied watermark", async () => {
+test("Slack thread keys reuse a legacy item's identity and edits", async () => {
   const w = world();
   const loop = await ensureInboxLoop(w.loops.store, "josh");
   await w.loops.items.ingest([
@@ -926,10 +865,6 @@ test("Slack thread keys reuse a legacy item's identity, edits, and replied water
   assert.equal((await ingest()).status, 200);
   assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
   assert.equal((await w.loops.items.get(original!.id))!.proposal!.data.body, "Keep this edit");
-  await w.loops.items.recordAction(original!.id, { kind: "replied", outcome: "dismissed", sourceAt: 3000 });
-  await ingest();
-  assert.equal((await w.loops.items.byLoop(loop.id)).length, 1);
-  assert.equal((await w.loops.items.get(original!.id))!.status, "skipped");
 });
 
 for (const migrated of [false, true])
@@ -1188,6 +1123,7 @@ test("an owner cannot trigger Slack avatar enrichment through item detail when I
   };
   w.sourceRefresh = createInboxSourceRefresh({
     items: w.loops.items,
+    enqueue: async () => undefined,
     featureFlags: { enabled },
     tokens: { connectorAccessToken: async () => assert.fail("disabled Inbox must not read credentials") },
     directory: { getBySlackId: async () => assert.fail("disabled Inbox must not read the directory") },

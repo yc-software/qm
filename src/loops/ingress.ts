@@ -1,10 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { Loop } from "../types.ts";
+import type { Loop, LoopItem } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
+import { isResolved } from "./ledger-view.ts";
 import type { LoopFireService } from "./loop-fire.ts";
 import { getVerifier, type VerifierInput } from "../webhooks/verifiers.ts";
 import { hashId } from "../util/crypto.ts";
@@ -17,7 +18,7 @@ export interface LoopIngress {
   id: string;
   loopId: string;
   owner: string;
-  kind: "webhook" | "slack" | "gmail";
+  kind: "webhook" | "slack" | "gmail" | "conversation";
   enabled: boolean;
   secret?: string;
   teamId?: string;
@@ -31,12 +32,62 @@ export interface LoopIngress {
   nextWorkAt?: number;
 }
 
+export type IngressEntry = IngestEntryInput & { merge?: boolean };
+
+export interface LatestEvent {
+  author: "owner" | "other";
+  at: number;
+  text?: string;
+  from?: string;
+}
+
+export const EVENT_TEXT_CHARS = 2_000;
+
+export function conversationEvent(
+  item: { loopId: string; sourceKey: string; source?: string | undefined },
+  event: LatestEvent,
+): IngressEntry {
+  const text = event.text?.trim().slice(0, EVENT_TEXT_CHARS);
+  const other = event.author === "other";
+  const from = other ? event.from?.slice(0, 300) : undefined;
+  return {
+    loopId: item.loopId,
+    dedupeKey: item.sourceKey,
+    ...(item.source !== undefined ? { source: item.source } : {}),
+    sourceAt: event.at,
+    merge: true,
+    sourcePayload: {
+      latestEvent: {
+        author: event.author,
+        at: event.at,
+        ...(text && !other ? { text } : {}),
+        ...(from ? { from } : {}),
+      },
+      ...(other ? { receivedAt: event.at, ...(text ? { snippet: text } : {}) } : {}),
+    },
+  };
+}
+
+function ledgerEntry(raw: IngressEntry, existing: LoopItem | undefined): IngestEntryInput | null {
+  const { merge, ...base } = raw;
+  if (!merge) return base;
+  if (!existing) return null;
+  if (isResolved(existing) && (base.sourcePayload?.latestEvent as LatestEvent | undefined)?.author === "owner")
+    return null;
+  return {
+    ...base,
+    ...(base.source === undefined && existing.source !== undefined ? { source: existing.source } : {}),
+    ...(base.summary === undefined && existing.sourceSummary !== undefined ? { summary: existing.sourceSummary } : {}),
+    sourcePayload: { ...existing.sourcePayload, ...base.sourcePayload },
+  };
+}
+
 export interface IngressDelivery {
   id: string;
   ingressId: string;
   queueKey?: string;
   receivedAt: number;
-  entries?: IngestEntryInput[];
+  entries?: IngressEntry[];
   historyId?: string;
   ingested?: boolean;
   completedAt?: number;
@@ -97,9 +148,11 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         .filter((delivery) => !delivery.completedAt && delivery.nextAttemptAt <= Date.now())
         .sort((a, b) => a.receivedAt - b.receivedAt)
         .slice(0, 20);
-      const ingest = async (entries: IngestEntryInput[]) => {
-        for (const entry of entries) {
-          const existing = (await deps.items.byLoop(source.loopId)).find((item) => item.sourceKey === entry.dedupeKey);
+      const ingest = async (entries: IngressEntry[]) => {
+        for (const raw of entries) {
+          const existing = (await deps.items.byLoop(source.loopId)).find((item) => item.sourceKey === raw.dedupeKey);
+          const entry = ledgerEntry(raw, existing);
+          if (!entry) continue;
           const refreshed = existing && (entry.sourceAt ?? 0) > (existing.sourceAt ?? 0);
           if (
             refreshed &&
@@ -134,6 +187,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           });
           await deps.sources.merge(source.id, { lastError: undefined });
         } catch (error) {
+          swallow("Loop ingress delivery", error);
           await deps.sources.merge(source.id, { lastError: errMessage(error) });
           await deps.deliveries.merge(delivery.id, {
             nextAttemptAt: Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.min(attempt, 7)),
@@ -180,10 +234,42 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     });
   }
 
+  async function conversationSource(loop: Pick<Loop, "id" | "owner">): Promise<LoopIngress> {
+    const find = async () =>
+      (await deps.sources.select({ where: { field: "loopId", anyOfFold: [loop.id] } })).find(
+        (source) => source.kind === "conversation",
+      );
+    const found = await find();
+    if (found) return found;
+    return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
+      const again = await find();
+      if (again) return again;
+      const source: LoopIngress = {
+        id: randomUUID(),
+        loopId: loop.id,
+        owner: loop.owner,
+        kind: "conversation",
+        enabled: true,
+        createdAt: Date.now(),
+      };
+      await deps.sources.put(source.id, source);
+      return source;
+    });
+  }
+
   return {
     gmailAvailable: Boolean(deps.gmailConfig && deps.gmailClient),
+    async enqueueConversation(loop: Pick<Loop, "id" | "owner">, entries: IngressEntry[]): Promise<boolean> {
+      if (!entries.length || !(await deps.enabledFor(loop.owner))) return false;
+      const source = await conversationSource(loop);
+      await enqueue(source, hashId(entries.map((entry) => `${entry.dedupeKey}:${entry.sourceAt}`)), { entries });
+      void process(source.id).catch((error) => swallow("Loop conversation event", error));
+      return true;
+    },
     async list(loopId: string) {
-      return await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } });
+      return (await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } })).filter(
+        (source) => source.kind !== "conversation",
+      );
     },
     async create(loop: Loop, input: IngressSetup): Promise<LoopIngress> {
       if (!(await deps.enabledFor(loop.owner))) throw new Error("Event ingestion is not enabled for this owner");
@@ -286,7 +372,12 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         return { status: 202, body: "Accepted" };
       }
       const source = await deps.sources.get(id);
-      if (!source?.enabled || !(await deps.enabledFor(source.owner)) || source.kind === "gmail")
+      if (
+        !source?.enabled ||
+        !(await deps.enabledFor(source.owner)) ||
+        source.kind === "gmail" ||
+        source.kind === "conversation"
+      )
         return { status: 404, body: "Not found" };
       const verifier = getVerifier(source.kind === "slack" ? "slack" : "hmac-sha256")!;
       const input = { ...request, secret: source.secret };

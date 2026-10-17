@@ -1,10 +1,26 @@
-import { scopeId } from "../../types.ts";
+import { z } from "zod";
+import { parseScopeId, scopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
 import { loadAdministrable } from "./loops.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
-import type { LoopIngress, IngressSetup } from "../../loops/ingress.ts";
+import { conversationEvent, type LoopIngress, type IngressSetup } from "../../loops/ingress.ts";
 import { errMessage } from "../../util/errors.ts";
+
+const eventsSchema = z.object({
+  events: z
+    .array(
+      z.object({
+        sourceKey: z.string().min(1),
+        author: z.enum(["owner", "other"]),
+        at: z.number().finite().positive(),
+        text: z.string().optional(),
+        from: z.string().optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
 
 function view(source: Omit<LoopIngress, "secret">, publicUrl?: string) {
   const { secret: _secret, ...safe } = source as LoopIngress;
@@ -65,6 +81,38 @@ async function change(ctx: ApiCtx) {
   }
 }
 
+async function events(ctx: ApiCtx) {
+  const loaded = await loadAdministrable(ctx);
+  if (!loaded) return;
+  const ingress = ctx.deps.loopIngress;
+  if (!ingress) return sendJson(ctx.res, 404, { error: "unavailable" });
+  if (loaded.loop.state === "archived") return sendJson(ctx.res, 409, { error: "archived" });
+  if (
+    ctx.capability &&
+    parseScopeId(loaded.loop.ownerScopeId).kind === "personal" &&
+    ctx.capability.privateScope !== true
+  )
+    return sendJson(ctx.res, 403, {
+      error: "forbidden",
+      message: "personal loop events come only from its owner's scope",
+    });
+  const parsed = eventsSchema.safeParse(ctx.body);
+  if (!parsed.success)
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: 'body needs {events: 1-20 of {sourceKey, author: "owner"|"other", at (ms), text?, from?}}',
+    });
+  const entries = parsed.data.events.map((event) =>
+    conversationEvent({ loopId: loaded.loop.id, sourceKey: event.sourceKey }, event),
+  );
+  const queued = await ingress.enqueueConversation(loaded.loop, entries);
+  return sendJson(
+    ctx.res,
+    queued ? 202 : 409,
+    queued ? { ok: true, queued: entries.length } : { error: "not_accepting" },
+  );
+}
+
 async function receive(ctx: BaseCtx) {
   if (!ctx.deps.loopIngress) {
     ctx.req.resume();
@@ -85,6 +133,7 @@ export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
   { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
   { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
+  { method: "POST", path: "/v1/loops/:id/events", auth: "either", handle: events },
 ];
 
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

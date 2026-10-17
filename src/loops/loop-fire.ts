@@ -1,5 +1,11 @@
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
-import { renderSourceInboxTask, renderInboxSyncTask } from "./inbox-loop.ts";
+import {
+  renderSourceInboxTask,
+  renderInboxSyncTask,
+  isReplyLoop,
+  applyReplyResolution,
+  REPLY_DECISION,
+} from "./inbox-loop.ts";
 import { cronTriggerAuthority } from "../cron/authority.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
@@ -428,8 +434,11 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     "```",
     shipActionContract(loop),
     `The item's success condition: ${promptText(loop.successCondition)}`,
-    adapterForItem(item) && loop.shipActions.length === 1 && loop.shipActions[0]?.action === "send"
-      ? 'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it. If no reply is needed, return {"outputs":[]}.'
+    isReplyLoop(loop, item)
+      ? [
+          REPLY_DECISION,
+          'For a reply, end with a fenced JSON object {"proposal":{"body":"the draft reply","to":["email recipients if applicable"],"subject":"email subject if applicable"},"outputs":[]}. Save the draft for human review; never send it.',
+        ].join("\n")
       : 'End your reply with a fenced json block: {"outputs": [{"shipAction": "<declared action>", "label": "<optional grouping label>", "title": "<one line>", "externalRef": "<url or id if any>", "summary": "<one line>"}]}. List every externally-reviewable artifact you prepared; an empty outputs array means the item needed none.',
     "[End loop work]",
     "",
@@ -721,6 +730,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
             const failure = stageFailure("work", outcome);
             if (failure) throw failure.error;
             const parsed = fencedJson(outcome.reply ?? "");
+            if (await applyReplyResolution(deps.items, loop, item, parsed))
+              return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
             const proposal =
               parsed && typeof parsed === "object" && "proposal" in parsed
                 ? adapterForItem(item)?.parseProposal(parsed.proposal)

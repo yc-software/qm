@@ -1,6 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
-import type { IngestEntryInput } from "./item-ledger.ts";
+import { conversationEvent, type IngressEntry } from "./ingress.ts";
 
 export interface GmailPushConfig {
   topic: string;
@@ -61,7 +61,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
       const profile = await request<{ emailAddress: string }>(owner, "profile");
       const watch = await request<{ historyId: string; expiration: string }>(owner, "watch", {
         topicName: config.topic,
-        labelIds: ["INBOX"],
+        labelIds: ["INBOX", "SENT"],
         labelFilterBehavior: "include",
       });
       if (!profile.emailAddress || !/^\d+$/.test(watch.historyId) || !Number.isFinite(Number(watch.expiration)))
@@ -76,7 +76,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
       owner: string,
       loopId: string,
       cursor: GmailCursor,
-      ingest: (entries: IngestEntryInput[]) => Promise<unknown>,
+      ingest: (entries: IngressEntry[]) => Promise<unknown>,
     ): Promise<string> {
       const profile = await request<{ emailAddress: string; historyId: string }>(owner, "profile");
       if (profile.emailAddress.toLowerCase() !== cursor.email)
@@ -90,11 +90,21 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
             if ((error as { status?: number }).status === 404) continue;
             throw error;
           }
-          if (!message.labelIds?.includes("INBOX")) continue;
+          const sent = message.labelIds?.includes("SENT") === true;
+          if (!sent && !message.labelIds?.includes("INBOX")) continue;
           const headers = message.payload?.headers ?? [];
           const header = (name: string) => headers.find((entry) => entry.name.toLowerCase() === name)?.value;
           const at = Number(message.internalDate);
           if (!message.threadId || !Number.isFinite(at)) throw new Error("Gmail returned invalid message metadata");
+          if (sent) {
+            await ingest([
+              conversationEvent(
+                { loopId, sourceKey: message.threadId, source: "gmail" },
+                { author: "owner", at, ...(message.snippet ? { text: message.snippet } : {}) },
+              ),
+            ]);
+            continue;
+          }
           await ingest([
             {
               loopId,
