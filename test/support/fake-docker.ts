@@ -6,6 +6,8 @@ export interface FakeContainer {
   running: boolean;
   labels: Record<string, string>;
   volume?: string;
+  network?: string;
+  networkGone?: boolean;
   args: string[];
 }
 
@@ -53,7 +55,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       else if (a === "--label") {
         const [k = "", v = ""] = args[++i]!.split("=");
         c.labels[k] = v;
-      } else if (a === "-v") c.volume = args[++i]!.split(":")[0]!;
+      } else if (a === "--network") c.network = args[++i]!;
+      else if (a === "-v") c.volume = args[++i]!.split(":")[0]!;
       else if (a === "-p" || a === "--cpus" || a === "--memory") i++;
     }
     return c;
@@ -85,10 +88,20 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
           networks.add(name);
           return ok(name);
         }
-        if (sub === "rm") return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        if (sub === "rm") {
+          // Like Docker, a stopped container keeps pointing at the removed network until reconnected.
+          for (const c of containers.values()) if (c.network === name) c.networkGone = true;
+          return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        }
         if (sub === "connect" || sub === "disconnect") {
           const container = rest[2]!;
           const key = `${name}|${container}`;
+          const sandbox = containers.get(container);
+          if (sub === "connect" && sandbox) {
+            sandbox.network = name;
+            sandbox.networkGone = false;
+            return ok(key);
+          }
           if (sub === "connect") {
             if (connections.has(key)) return fail("endpoint already exists");
             connections.add(key);
@@ -122,6 +135,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       case "start": {
         const c = containers.get(rest[0]!);
         if (!c) return fail("Error: No such container");
+        if (c.networkGone) return fail(`failed to set up container networking: network ${c.network} not found`);
         c.running = true;
         return ok(rest[0]!);
       }

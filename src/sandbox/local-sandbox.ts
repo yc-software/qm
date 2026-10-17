@@ -201,9 +201,12 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
 
   async function startContainer(name: string): Promise<void> {
     portByName.delete(name);
+    const net = await ensureNetwork(name);
+    // Re-bind before start: a parked container still points at its network's old id after a prune/recreate.
+    await dexec(["network", "connect", net, name]);
     const r = await dexec(["start", name]);
     if (r.code !== 0) throw new Error(`docker start ${name} failed: ${r.stderr.trim()}`);
-    await connectCore(await ensureNetwork(name));
+    await connectCore(net);
     await waitDaemon(name);
   }
 
