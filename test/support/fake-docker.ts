@@ -6,6 +6,7 @@ export interface FakeContainer {
   running: boolean;
   labels: Record<string, string>;
   volume?: string;
+  network?: string;
   args: string[];
 }
 
@@ -54,6 +55,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const [k = "", v = ""] = args[++i]!.split("=");
         c.labels[k] = v;
       } else if (a === "-v") c.volume = args[++i]!.split(":")[0]!;
+      else if (a === "--network") c.network = args[++i]!;
       else if (a === "-p" || a === "--cpus" || a === "--memory") i++;
     }
     return c;
@@ -75,6 +77,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
         if (!c) return fail(`Error: No such object: ${name}`);
+        if (rest.includes("{{json .NetworkSettings.Networks}}"))
+          return ok(JSON.stringify(c.network ? { [c.network]: { NetworkID: c.network } } : {}));
         return ok(`${c.running} ${c.imageId}`);
       }
       case "network": {
@@ -122,6 +126,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       case "start": {
         const c = containers.get(rest[0]!);
         if (!c) return fail("Error: No such container");
+        if (c.network && !networks.has(c.network))
+          return fail(`Error response from daemon: failed to set up container networking: network ${c.network} not found`);
         c.running = true;
         return ok(rest[0]!);
       }
