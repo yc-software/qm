@@ -1,6 +1,6 @@
 ---
 name: secret-drop
-description: Ask a person for a credential they have not saved yet (an API key, a site login, a password) with a one-time, expiring secret-drop link. They fill it in a browser, it lands in their own keychain, and this conversation resumes with a handle to use. Use this instead of asking for secrets in chat or sending people to edit the keychain page.
+description: Request a credential nobody has saved yet (an API key, a site login) with a one-time, expiring link that saves it to the person's keychain. Use instead of asking for secrets in chat or sending people to the keychain page.
 ---
 
 # Secret drop: request a new credential by link

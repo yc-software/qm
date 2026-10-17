@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
@@ -28,6 +30,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
+const execFileAsync = promisify(execFile);
 
 describe("SecretDropStore", () => {
   it("mint → peek (non-consuming) → redeem (single-use)", async () => {
@@ -486,18 +489,12 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("the secret-drop skill's mint command works as written", async () => {
     const skill = readFileSync(new URL("../skills-seed/secret-drop/SKILL.md", import.meta.url), "utf8");
-    const command = skill.slice(skill.indexOf("curl "), skill.indexOf("\n```", skill.indexOf("curl ")));
-    const [, method, path] = /-X (\w+) "\$AGENT_API_URL([^"]+)"/.exec(command) ?? [];
-    const [, header] = /-H "([\w-]+): \$AGENT_API_TOKEN"/.exec(command) ?? [];
-    const [, body] = /-d '([^']+)'/.exec(command) ?? [];
-    assert.ok(method && path && header && body, "the skill shows one complete curl call");
-    const res = await fetch(`${base}${path}`, {
-      method,
-      headers: { "content-type": "application/json", [header]: await capFor("U_A") },
-      body,
+    const start = skill.indexOf("```sh\n") + "```sh\n".length;
+    const command = skill.slice(start, skill.indexOf("```", start));
+    const { stdout } = await execFileAsync("sh", ["-c", command], {
+      env: { PATH: process.env.PATH, AGENT_API_URL: base, AGENT_API_TOKEN: await capFor("U_A") },
     });
-    assert.equal(res.status, 200);
-    assert.match(((await res.json()) as { formPath: string }).formPath, /^\/drop\//);
+    assert.match((JSON.parse(stdout) as { formPath: string }).formPath, /^\/drop\//);
   });
 
   it("rejects a malformed fields[] at mint", async () => {
