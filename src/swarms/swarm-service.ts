@@ -786,14 +786,10 @@ export function createSwarmService(deps: {
         else member.control = input.state;
       });
       if (input.state === "stopped") {
-        const stopped = new Set(
-          updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),
-        );
-        const runIds = updated.messages.flatMap((message) =>
-          Object.entries(message.notifications).flatMap(([id, n]) => (stopped.has(id) && n.runId ? [n.runId] : [])),
-        );
+        const stopped = updated.members.filter((member) => controlState(updated, member.id) === "stopped");
+        const active = await Promise.all(stopped.map((member) => runs.inFlightForThread(member.threadRef)));
         await Promise.all(
-          runIds.map(async (runId) => {
+          active.flat().map(async ({ id: runId }) => {
             if (await runs.withdraw(runId, { unstartedOnly: true }).catch(() => false)) return;
             const run = await runs.get(runId);
             if (run?.status === "running")
