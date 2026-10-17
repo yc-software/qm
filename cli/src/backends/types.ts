@@ -5,6 +5,7 @@ export interface BackendUpOptions {
   yes?: boolean;
   buildFrom?: boolean;
   buildFromPath?: string;
+  prebuilt?: Record<string, string>;
   imageLabel?: string;
   only?: string[];
   restart?: string[];
