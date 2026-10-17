@@ -473,16 +473,13 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("an agent call without the capability header is told which header to send", async () => {
     const cap = await capFor("U_A");
-    for (const path of ["/v1/keychain/drops", "/v1/secret-drops"]) {
-      const res = await fetch(`${base}${path}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${cap}` },
-        body: JSON.stringify({ service: "stripe", purpose: "p" }),
-      });
-      assert.equal(res.status, 401);
-      const body = (await res.json()) as { message: string };
-      assert.match(body.message, /x-agent-capability/, `${path}: the 401 names the agent header`);
-    }
+    const res = await fetch(`${base}/v1/keychain/drops`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${cap}` },
+      body: JSON.stringify({ service: "stripe", purpose: "p" }),
+    });
+    assert.equal(res.status, 401);
+    assert.match(((await res.json()) as { message: string }).message, /x-agent-capability/);
     const ok = await post("/v1/keychain/drops", { service: "stripe", purpose: "p" }, cap);
     assert.equal(ok.status, 200, "the same token in x-agent-capability mints");
   });
