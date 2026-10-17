@@ -489,3 +489,53 @@ describe("agent memory: cross-conversation writes are refused", () => {
     assert.equal((await post({ channel: 42, facts: ["x"] }, cap)).status, 400);
   });
 });
+
+describe("normalized memory edit validation", () => {
+  it("rejects an edit batch containing empty normalized text without changing any facts", async () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-empty-edit-")) }));
+    const server = createServer(built.app, { signingSecret: SECRET, memory: built.memory });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    const scope = scopeId("personal", "editor");
+    await built.memory.capture(scope, ["First retained fact", "Second retained fact"], Date.now());
+    const original = await built.memory.facts!(scope);
+    const token = await mintCapabilityToken(
+      {
+        actorId: "editor",
+        scopeId: scope,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        memory: { read: [scope], write: scope },
+      },
+      SECRET,
+    );
+    try {
+      for (const text of ["(2026-01-01)", "- (2026-01-01)", "* (2026-01-01)  "]) {
+        const response = await fetch(`${base}/v1/memory/facts`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json", "x-agent-capability": token },
+          body: JSON.stringify({
+            facts: [
+              { id: original[0]!.id, text: "Should not commit" },
+              { id: original[1]!.id, text },
+            ],
+          }),
+        });
+        assert.equal(response.status, 400);
+        assert.match(((await response.json()) as { message: string }).message, /non-empty/i);
+        assert.deepEqual(await built.memory.facts!(scope), original);
+      }
+      const response = await fetch(`${base}/v1/memory/facts`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", "x-agent-capability": token },
+        body: JSON.stringify({ facts: [{ id: original[0]!.id, text: "- (2026-01-01) Changed fact" }] }),
+      });
+      assert.equal(response.status, 200);
+      const updated = await built.memory.facts!(scope);
+      assert.equal(updated[0]!.text, "Changed fact");
+      assert.equal(updated[0]!.createdAt, original[0]!.createdAt);
+      assert.deepEqual(updated[1], original[1]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

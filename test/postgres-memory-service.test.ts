@@ -96,3 +96,18 @@ test("pg memory: add, edit and delete by id; a bad id rolls back the whole call"
   const [row] = await sql("SELECT deleted_at FROM memory_facts WHERE id = $1", [billing!.id]);
   assert.ok(row?.deleted_at, "delete keeps the row, marked deleted");
 });
+
+test("pg memory: an empty normalized edit rolls back the entire batch", { skip }, async () => {
+  const memory = createPostgresMemoryService(URL!);
+  const scope = scopeId("personal", "editor");
+  await memory.capture(scope, ["First retained fact", "Second retained fact"], at);
+  const original = await memory.facts!(scope);
+  await assert.rejects(
+    memory.edit!(scope, [
+      { id: original[0]!.id, text: "Should not commit" },
+      { id: original[1]!.id, text: "- (2026-01-01)" },
+    ]),
+    /non-empty/,
+  );
+  assert.deepEqual(await memory.facts!(scope), original);
+});
