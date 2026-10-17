@@ -22,7 +22,7 @@ import { AdminError } from "../admin/admin-service.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/attachments.ts";
+import { MAX_ATTACHMENT_BYTES, attachmentContentType, safeAttachmentName } from "../core/attachments.ts";
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -386,7 +386,7 @@ export function createSessionMethods(
       const createdInScope = input.scopeId ?? ownerScopeId;
       if (!(await canUseContext(principalId, createdInScope))) return null;
       const name = safeAttachmentName(input.name);
-      const mimetype = (input.mimetype ?? mimeFromName(name)).split(";")[0]!.trim().toLowerCase() || mimeFromName(name);
+      const mimetype = attachmentContentType(name, input.mimetype);
       const id = fileArtifactId(`upload:${principalId}:${createdInScope}:${Date.now()}:${randomUUID()}`, "in", 0);
       const path = artifactPath(id, name);
       const { artifact } = await deps.files.put({
