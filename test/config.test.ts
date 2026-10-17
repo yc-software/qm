@@ -973,32 +973,41 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
 
-test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
-  const env = {
-    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
-    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
-    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
-    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
-  };
-  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
-  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
-  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
-  for (const name of [
-    "CORE_SIGNING_SECRET",
-    "QM_SLACK_SERVICE_TOKEN",
-    "DEPLOY_APPS_SESSION_SECRET",
-    "SLACK_SIGNING_SECRET",
-  ]) {
-    assert.throws(
-      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
-      /SPEND_EXPORT_TOKEN/,
-      `${name} must not share the export token`,
-    );
-  }
-});
+for (const [tokenName, field] of [
+  ["SPEND_EXPORT_TOKEN", "spendExportToken"],
+  ["SESSION_STATUS_TOKEN", "sessionStatusToken"],
+] as const) {
+  test(`${tokenName} is optional, strong, trimmed and never shared with another environment value`, () => {
+    const token = `${tokenName.toLowerCase()}-0123456789abcdef01234`;
+    const env = {
+      CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+      CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+      PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
+      [tokenName]: token,
+    };
+    const pattern = new RegExp(tokenName);
+    assert.equal(loadConfig(env)[field], token);
+    assert.equal(loadConfig({ ...env, [tokenName]: undefined })[field], undefined);
+    assert.equal(loadConfig({ ...env, [tokenName]: "" })[field], undefined);
+    assert.throws(() => loadConfig({ ...env, [tokenName]: "short" }), pattern);
+    assert.throws(() => loadConfig({ ...env, [tokenName]: " ".repeat(40) }), pattern);
+    assert.throws(() => loadConfig({ ...env, [tokenName]: `${token}\n` }), pattern);
+    for (const name of [
+      "CORE_SIGNING_SECRET",
+      "QM_SLACK_SERVICE_TOKEN",
+      "DEPLOY_APPS_SESSION_SECRET",
+      "SLACK_SIGNING_SECRET",
+      "SPEND_EXPORT_TOKEN",
+      "SESSION_STATUS_TOKEN",
+    ].filter((name) => name !== tokenName)) {
+      assert.throws(
+        () => loadConfig({ ...env, [name]: token }),
+        new RegExp(`(${tokenName}|${name}) must`),
+        `${name} must not share ${tokenName}`,
+      );
+    }
+  });
+}
 
 test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
   assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);

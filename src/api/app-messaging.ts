@@ -6,6 +6,7 @@ import type { Destination, SurfaceContextRequest, SurfaceContextResult } from ".
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
+import { webhookThreadRef } from "../webhooks/webhook-store.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachEnqueue,
@@ -296,7 +297,7 @@ export function createMessagingMethods(
       const events = await deps.webhooks.listEvents(id);
       return Promise.all(
         events.map(async (event) => {
-          const session = await deps.sessions.getByThread(`webhook:${id}:${event.deliveryId}`);
+          const session = await deps.sessions.getByThread(webhookThreadRef(id, event.deliveryId));
           const visible = session && (await h.sessionForViewer(session.id, viewer));
           return { ...event, ...(visible ? { sessionId: session.id } : {}) };
         }),

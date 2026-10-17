@@ -156,6 +156,10 @@ export function isTerminal(status: Run["status"]): boolean {
   return TERMINAL.has(status);
 }
 
+export function runFailed(run: Pick<Run, "status" | "result">): boolean {
+  return run.status === "failed" || run.result?.status === "failed";
+}
+
 export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }

@@ -76,6 +76,7 @@ test("raw routes keep their declared auth contracts (front enforces capability a
     ["GET", "/healthz", "public"],
     ["GET", "/readyz", "public"],
     ["GET", "/v1/spend/export", "public"],
+    ["GET", "/v1/session-status", "public"],
     ["GET", "/v1/credentials/git/gitlab/acme/repo.git/info/refs", { aud: CREDENTIAL_BROKER_AUD }],
     ["POST", "/v1/credentials/git/gitlab/acme/repo.git/git-upload-pack", { aud: CREDENTIAL_BROKER_AUD }],
   ];

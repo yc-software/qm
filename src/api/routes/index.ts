@@ -9,6 +9,7 @@ import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
+import { sessionStatusRawRoutes } from "./session-status.ts";
 import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
@@ -71,6 +72,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   },
   ...slackEventRawRoutes,
   { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
+  ...sessionStatusRawRoutes,
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,

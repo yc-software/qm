@@ -130,6 +130,7 @@ export interface Config {
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
   spendExportToken?: string;
+  sessionStatusToken?: string;
   buildSha?: string;
   monitorPollMs: number;
   skillSyncPollMs: number;
@@ -1179,15 +1180,22 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const token = env.SPEND_EXPORT_TOKEN;
-  if (token) {
-    const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
+const NARROW_BEARER_TOKENS = ["SPEND_EXPORT_TOKEN", "SESSION_STATUS_TOKEN"] as const;
+
+function assertNarrowBearerTokens(env: NodeJS.ProcessEnv): void {
+  for (const tokenName of NARROW_BEARER_TOKENS) {
+    const token = env[tokenName];
+    if (!token) continue;
+    const reused = Object.entries(env).some(([name, value]) => name !== tokenName && value === token);
     if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
       throw new Error(
-        "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
+        `${tokenName} must be at least 32 characters, have no surrounding whitespace and differ from every other environment value`,
       );
   }
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  assertNarrowBearerTokens(env);
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
     if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
       throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
@@ -1587,6 +1595,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
+    ...(env.SESSION_STATUS_TOKEN ? { sessionStatusToken: env.SESSION_STATUS_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
     skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,

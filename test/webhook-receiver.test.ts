@@ -59,10 +59,13 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
   });
   const body = JSON.stringify({ action: "opened", issue: { number: 7 } });
   const out = await receiver.deliver(wh.id, githubReq(body));
-  assert.deepEqual(out, { status: 202 });
+  assert.equal(out.status, 202);
+  assert.ok(out.status === 202 && out.deliveryId);
+  assert.equal(out.sessionRef, `webhook:${wh.id}:${out.deliveryId}`);
   await flush();
 
   assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.conversation.threadRef, out.sessionRef);
   assert.equal(calls[0]?.surface, "webhook");
   assert.equal(calls[0]?.actor.externalId, "U1");
   assert.equal(calls[0]?.conversation.kind, "dm");
@@ -385,12 +388,12 @@ test("webhook fire accounting failures remain contained when recording the failu
     throw new Error("database unavailable");
   });
   const errors = t.mock.method(console, "error", () => {});
-  assert.deepEqual(await receiver.deliver(wh.id, githubReq("{}")), { status: 202 });
+  assert.equal((await receiver.deliver(wh.id, githubReq("{}"))).status, 202);
   await flush();
   assert.equal(record.mock.callCount(), 2);
   assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persist fire failure")));
   record.mock.restore();
-  assert.deepEqual(await receiver.deliver(wh.id, githubReq('{"next":true}', "d-2")), { status: 202 });
+  assert.equal((await receiver.deliver(wh.id, githubReq('{"next":true}', "d-2"))).status, 202);
   await flush();
   assert.equal(calls.length, 2);
   assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
@@ -406,8 +409,47 @@ test("an edited task applies to the next delivery at the same URL and secret", a
     verification: { scheme: "github", secret: SECRET },
   });
   await webhooks.update(wh.id, { action: "new orders" });
-  assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ n: 1 }), "d-edit")), { status: 202 });
+  assert.equal((await receiver.deliver(wh.id, githubReq(JSON.stringify({ n: 1 }), "d-edit"))).status, 202);
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+test("a delivery's record reports whether its fire failed, and unknown refs are not deliveries", async () => {
+  for (const [runResult, failed] of [
+    [{ status: "ok", reply: "done", sessionId: "s1" }, false],
+    [{ status: "refused", reason: "not a member" }, true],
+  ] as const) {
+    const { webhooks, receiver } = harness(runResult);
+    const wh = await webhooks.create({
+      ownerScopeId: scopeId("personal", "U1"),
+      owner: "U1",
+      createdBy: "U1",
+      action: "triage",
+      verification: { scheme: "github", secret: SECRET },
+    });
+    const out = await receiver.deliver(wh.id, githubReq("{}"));
+    assert.ok(out.status === 202);
+    await flush();
+    assert.deepEqual(await receiver.delivery(out.sessionRef), { failed });
+    assert.equal(await receiver.delivery(`webhook:${wh.id}:other`), null);
+    assert.equal(await receiver.delivery("dm:U1:t1"), null);
+  }
+});
+
+test("a delivery whose owner is no longer internal is recorded as failed", async () => {
+  const { webhooks, identity, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github", secret: SECRET },
+  });
+  identity.classify = (id) => ({ id, type: "guest" });
+  const out = await receiver.deliver(wh.id, githubReq("{}"));
+  assert.ok(out.status === 202);
+  await flush();
+  assert.deepEqual(await receiver.delivery(out.sessionRef), { failed: true });
+  assert.equal((await webhooks.get(wh.id))?.enabled, false);
 });
