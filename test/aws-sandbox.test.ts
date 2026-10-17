@@ -127,6 +127,41 @@ test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehyd
   assert.equal(await sb.readFile(h2, "keep.txt"), "v1", "state carried across the rotation");
 });
 
+test("a rotation whose snapshot fails keeps serving the old body instead of terminating it", async () => {
+  const fake = installFakeMicrovm();
+  const errors: string[] = [];
+  const sb = makeSandbox(fake, {
+    rotateAfterSeconds: 0,
+    snapshotIntervalMs: 0,
+    onError: (e: { code: string }) => errors.push(e.code),
+  });
+  const layers = rw(scopeId("personal", "U4b"));
+  const h1 = await sb.provision(layers);
+  await sb.writeFile(h1, "keep.txt", "v1");
+  await sb.teardown(h1);
+  await sleep(3);
+  const send = fake.s3.send;
+  fake.s3.send = async (command: unknown) => {
+    if (command?.constructor.name === "CreateMultipartUploadCommand") throw new Error("S3 unavailable");
+    return send(command);
+  };
+
+  const h2 = await sb.provision(layers);
+  assert.equal(h2.id, h1.id, "the stale body keeps serving until its home is safely snapshotted");
+  assert.equal(fake.bodies.get(h1.id)!.state, "RUNNING");
+  assert.deepEqual(errors, ["rotate_snapshot_failed"]);
+  await sb.writeFile(h2, "keep.txt", "v2");
+  fake.s3.send = send;
+  await sleep(3);
+  await sb.teardown(h2);
+  await sleep(3);
+
+  const h3 = await sb.provision(layers);
+  assert.notEqual(h3.id, h1.id, "rotation completes once the snapshot succeeds");
+  assert.equal(fake.bodies.get(h1.id)!.state, "TERMINATED");
+  assert.equal(await sb.readFile(h3, "keep.txt"), "v2", "the changes made on the stale body survived");
+});
+
 test("reapDeepIdle terminates a parked body but keeps its durable S3 state", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
