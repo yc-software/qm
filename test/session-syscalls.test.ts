@@ -275,6 +275,27 @@ test("read lists children with status and renders a child's recent transcript", 
   assert.match(transcript.rendered, /found 3 call sites/);
 });
 
+for (const result of ["[error] target session not found", "matched 3 records"]) {
+  test(`read includes a child's tool result: ${result}`, async () => {
+    const r = await rig();
+    const syscalls = r.syscallsFor(r.room);
+    const opened = await syscalls.open({ task: "check records" });
+    assert.ok(opened.ok);
+    const { lease } = await r.sessions.acquireLease(opened.sessionId, "turn");
+    assert.ok(lease);
+    await r.sessions.append(lease, {
+      type: "tool_result",
+      payload: { tool: "subagents", result },
+      scopeLabel: scope,
+    });
+    await r.sessions.releaseLease(lease);
+
+    const transcript = await syscalls.read({ target: opened.sessionId });
+    assert.ok(transcript.ok && transcript.mode === "transcript");
+    assert.ok(transcript.rendered.includes(result), transcript.rendered);
+  });
+}
+
 test("a finished child durably wakes its Slack parent exactly once and leaves the result in its mailbox", async () => {
   const r = await rig();
   const opened = await r.syscallsFor(r.room).open({ task: "summarize the logs" });

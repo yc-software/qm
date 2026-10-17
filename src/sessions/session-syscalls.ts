@@ -280,8 +280,10 @@ function autoTitle(task: string): string {
 }
 
 function entryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; tool?: unknown; aside?: unknown } | null;
+  const payload = entry.payload as { text?: unknown; result?: unknown; tool?: unknown; aside?: unknown } | null;
   if (typeof payload?.text === "string" && payload.text.trim()) return payload.text;
+  if (entry.type === "tool_result" && typeof payload?.result === "string" && payload.result.trim())
+    return payload.result;
   if (typeof payload?.tool === "string") return `[${payload.tool}]`;
   return undefined;
 }
