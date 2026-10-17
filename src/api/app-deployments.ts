@@ -4,6 +4,7 @@ import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
 import type { Reach } from "../deploy/deploy-service.ts";
+import type { Deployment } from "../deploy/deploy-store.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
@@ -47,8 +48,10 @@ export function createDeploymentMethods(
   | "resolveEnvironmentByName"
   | "attachScope"
 > {
-  const { effectiveDeploymentPermission, principalCanReadDeployment, principalGitPermission } = h;
+  const { effectiveDeploymentPermission, principalCanReadDeployment, principalDeploymentPermission } = h;
   const invitationLock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  const canReadInternals = async (deployment: Deployment, principalId: string) =>
+    (await principalDeploymentPermission(deployment, principalId)) === "write";
   return {
     deploy(input) {
       return deps.deploy.deploy(input);
@@ -120,7 +123,7 @@ export function createDeploymentMethods(
       const deployments = await deps.deploy.listDeployments();
       const enriched = await Promise.all(
         deployments.map(async (d): Promise<ViewerDeployment | null> => {
-          const permission = await principalGitPermission(d, principalId);
+          const permission = await principalDeploymentPermission(d, principalId);
           return permission ? { ...deploymentView(d), permission } : null;
         }),
       );
@@ -131,7 +134,7 @@ export function createDeploymentMethods(
     },
     async deploymentGitPermissionFor(idOrName, principalId) {
       const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
-      return deployment ? principalGitPermission(deployment, principalId) : null;
+      return deployment && (await canReadInternals(deployment, principalId)) ? "write" : null;
     },
     rollbackDeployment(id, version) {
       return deps.deploy.rollbackDeployment(id, version);
@@ -177,7 +180,7 @@ export function createDeploymentMethods(
     ): Promise<{ status: "ok"; logs: string | null } | { status: "not_found" | "denied" }> {
       const deployment = await deps.deploy.getDeployment(id);
       if (!deployment) return { status: "not_found" };
-      if (!(await principalCanReadDeployment(deployment, principalId))) return { status: "denied" };
+      if (!(await canReadInternals(deployment, principalId))) return { status: "denied" };
       return { status: "ok", logs: await deps.deploy.deploymentLogs(id, opts) };
     },
     deploymentGitRepoPath(id) {
@@ -189,8 +192,8 @@ export function createDeploymentMethods(
     async deploymentGitUrlFor(idOrName, principalId, opts) {
       const d = await deps.deploy.getDeployment(idOrName);
       if (!d) return null;
-      const permission = await principalGitPermission(d, principalId);
-      if (!permission) return null;
+      if (!(await canReadInternals(d, principalId))) return null;
+      const permission = "write" as const;
       const token = await mintDeployGitAccess(opts.secret, {
         deploymentId: d.id,
         permission,
@@ -202,11 +205,10 @@ export function createDeploymentMethods(
       url.password = token;
       return { url: url.toString(), permission };
     },
-    async authorizesDeploymentGitAccess(id, principalId, permission) {
+    async authorizesDeploymentGitAccess(id, principalId) {
       const d = await deps.deploy.getDeployment(id);
       if (!d) return false;
-      const current = await principalGitPermission(d, principalId);
-      return permission === "write" ? current === "write" : current !== null;
+      return canReadInternals(d, principalId);
     },
     reapIdleDeployments(ttlMs, now) {
       return deps.deploy.reapIdleDeployments(ttlMs, now);

@@ -120,7 +120,7 @@ export function createSessionMethods(
     principalCanAccessCurrentScope,
     principalCanWriteScope,
     canContinueOnWeb,
-    principalGitPermission,
+    principalDeploymentPermission,
     principalCanManageScope,
     membershipControlsScope,
     authorizesCapabilityScope,
@@ -820,7 +820,7 @@ export function createSessionMethods(
           allDeployments
             .filter((d) => d.createdInScope === scope || d.ownerScopeId === scope)
             .map(async (d): Promise<ScopeDeployment | null> => {
-              const permission = await principalGitPermission(d, principalId);
+              const permission = await principalDeploymentPermission(d, principalId);
               return permission
                 ? {
                     id: d.id,

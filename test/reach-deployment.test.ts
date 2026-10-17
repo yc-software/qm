@@ -248,7 +248,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
   }
 });
 
-test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ingress is configured", async () => {
+test("HTTP: managed /v1/deployments rows carry an authed gitUrl on the API ingress", async () => {
   const { app, acl, directory } = appWithFakeRuntime();
   const shared = await app.deploy({
     ownerScopeId: scopeId("personal", "U1"),
@@ -260,7 +260,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${shared.id}`,
     granteeScopeId: scopeId("channel", "C1"),
-    permission: "read",
+    permission: "write",
     grantedBy: "U1",
   });
   await directory.replaceChannels(
@@ -283,7 +283,7 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };
     assert.equal(body.deployments.length, 1);
     const row = body.deployments[0]!;
-    assert.equal(row.permission, "read");
+    assert.equal(row.permission, "write");
     assert.ok(row.gitUrl);
     const gitUrl = new URL(row.gitUrl!);
     assert.equal(gitUrl.host, "core.test");

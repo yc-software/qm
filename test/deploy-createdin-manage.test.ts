@@ -138,7 +138,7 @@ test("principalGitPermission: a member of the channel the app was created in get
   }
 });
 
-test("principalGitPermission: a member of a channel it was only SHARED into gets at most read", async () => {
+test("principalGitPermission: a view-shared channel member can use the app but cannot read source", async () => {
   const { f, d } = await setup();
   try {
     await f.acl.grant({
@@ -148,9 +148,8 @@ test("principalGitPermission: a member of a channel it was only SHARED into gets
       permission: "read",
       grantedBy: "U1",
     });
-    assert.equal((await gitPerm(f.base, d.id, "U3")).permission, "read");
-
-    assert.notEqual((await gitPerm(f.base, d.id, "U3")).permission, "write");
+    assert.equal((await gitPerm(f.base, d.id, "U3")).status, 403);
+    assert.equal((await f.app.listDeploymentsForViewer("U3"))[0]?.permission, "read");
   } finally {
     await f.close();
   }
@@ -165,7 +164,7 @@ test("principalGitPermission: an unrelated principal is denied (no access)", asy
   }
 });
 
-test("principalGitPermission: org-owned deployment is not manageable by membership (read only)", async () => {
+test("principalGitPermission: organization membership permits app viewing but not source access", async () => {
   const f = await fixture();
   try {
     const d = await f.app.deploy({
@@ -174,7 +173,8 @@ test("principalGitPermission: org-owned deployment is not manageable by membersh
       entrypoint: "node server.js",
       files: [{ path: "server.js", data: "console.log('v1')" }],
     });
-    assert.equal((await gitPerm(f.base, d.id, "U7")).permission, "read");
+    assert.equal((await gitPerm(f.base, d.id, "U7")).status, 403);
+    assert.equal((await f.app.listDeploymentsForViewer("U7"))[0]?.permission, "read");
   } finally {
     await f.close();
   }

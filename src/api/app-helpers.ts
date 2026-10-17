@@ -571,7 +571,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return (await effectiveDeploymentPermission(d, principalId)) != null;
   }
 
-  async function principalGitPermission(
+  async function principalDeploymentPermission(
     d: Pick<Deployment, "id" | "ownerScopeId" | "createdBy" | "createdInScope">,
     principalId: string,
   ): Promise<"read" | "write" | null> {
@@ -817,7 +817,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     effectiveDeploymentPermission,
     artifactGrantPermission,
     principalCanReadDeployment,
-    principalGitPermission,
+    principalDeploymentPermission,
     refreshSurfaceDirectory,
     reconcileProjectMember,
     syncProjectChannelRoster,

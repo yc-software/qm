@@ -39,6 +39,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 19998 }),
       destroy: async () => {},
+      logs: async () => "private-server-output",
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     acl,
@@ -177,7 +178,7 @@ test("a write token minted before principal deactivation is revoked at push time
   }
 });
 
-test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no access", async () => {
+test("git-url endpoint: source access requires management rather than app viewing", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -213,8 +214,7 @@ test("git-url endpoint: write for the owner, read for a read-grantee, 403 for no
     );
 
     const reader = await ask("U2");
-    assert.equal(reader.status, 200);
-    assert.equal(((await reader.json()) as { permission: string }).permission, "read");
+    assert.equal(reader.status, 403);
 
     const stranger = await ask("U3");
     assert.equal(stranger.status, 403);
@@ -276,7 +276,7 @@ test("git-url endpoint returns a clonable API URL when web and API origins diffe
   }
 });
 
-test("git-url endpoint: an org-owned deployment is read for a plain member, write only with a write grant", async () => {
+test("git-url endpoint: plain organization members need a manage grant to read source", async () => {
   const f = fixture();
   try {
     const d = await f.app.deploy({
@@ -291,8 +291,7 @@ test("git-url endpoint: an org-owned deployment is read for a plain member, writ
       });
 
     const member = await ask("U2");
-    assert.equal(member.status, 200);
-    assert.equal(((await member.json()) as { permission: string }).permission, "read");
+    assert.equal(member.status, 403);
 
     await f.acl.grant({
       ownerScopeId: scopeId("org", "default-org"),
@@ -336,6 +335,75 @@ test("a garbage push body that git rejects early fails the request without crash
     assert.deepEqual(uncaught, []);
   } finally {
     process.off("uncaughtException", onUncaught);
+    await f.close();
+  }
+});
+
+async function viewFixture() {
+  const f = fixture();
+  const d = await f.app.deploy({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    name: "private-fixture",
+    entrypoint: "node server.js",
+    files: [{ path: "server.js", data: "const privateNote = 'owner-only-fixture';" }],
+  });
+  await f.app.shareDeployment(d.id, scopeId("personal", "U2"), "read", { createdBy: "U1" });
+  return { ...f, d };
+}
+
+test("viewers keep app listings without source URLs or server logs", async () => {
+  const f = await viewFixture();
+  try {
+    const headers = { "x-agent-capability": await capFor("U2") };
+    for (const path of ["/v1/deployments", `/v1/deployments/${f.d.id}`]) {
+      const response = await fetch(f.base + path, { headers });
+      assert.equal(response.status, 200);
+      const body = (await response.json()) as {
+        deployment?: { gitUrl?: string };
+        deployments?: { id: string; gitUrl?: string }[];
+      };
+      const view = body.deployment ?? body.deployments?.find((row) => row.id === f.d.id);
+      assert.ok(view);
+      assert.equal(view.gitUrl, undefined);
+    }
+    assert.equal(await f.app.deploymentGitPermissionFor(f.d.id, "U2"), null);
+    assert.equal((await fetch(`${f.base}/v1/deployments/${f.d.id}/logs`, { headers })).status, 404);
+    assert.deepEqual(await f.app.deploymentLogsFor(f.d.id, "U1", { tailLines: 10 }), {
+      status: "ok",
+      logs: "private-server-output",
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("Git reads require current management authority even with a previously issued token", async () => {
+  const f = await viewFixture();
+  try {
+    const url = new URL(`/v1/deployments/${f.d.id}/git`, f.base);
+    url.username = "deployment";
+    url.password = await mintDeployGitAccess(SECRET, {
+      deploymentId: f.d.id,
+      permission: "read",
+      principalId: "U2",
+      exp: Date.now() + 60_000,
+    });
+    await assert.rejects(execFileP("git", ["ls-remote", url.toString()], { env: GIT_ENV }), /403|forbidden/i);
+    await f.app.shareDeployment(f.d.id, scopeId("personal", "U2"), "write", { createdBy: "U1" });
+    const manager = await f.app.deploymentGitUrlFor(f.d.id, "U2", { secret: SECRET, baseUrl: f.base });
+    assert.ok(manager);
+    await execFileP("git", ["ls-remote", manager.url], { env: GIT_ENV });
+    await f.app.shareDeployment(f.d.id, scopeId("personal", "U2"), "read", { createdBy: "U1" });
+    await assert.rejects(execFileP("git", ["ls-remote", manager.url], { env: GIT_ENV }), /403|forbidden/i);
+    url.password = await mintDeployGitAccess(SECRET, {
+      deploymentId: f.d.id,
+      permission: "read",
+      exp: Date.now() + 60_000,
+    });
+    await assert.rejects(execFileP("git", ["ls-remote", url.toString()], { env: GIT_ENV }), /403|forbidden/i);
+    assert.equal((await f.app.listDeploymentsForViewer("U2"))[0]?.permission, "read");
+  } finally {
     await f.close();
   }
 });
