@@ -8344,6 +8344,15 @@ h3.ambient-field-label {
 .chat-search-ask {
   border-radius: 8px;
 }
+.chat-search-who.title {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+}
+.chat-search-status {
+  padding: 6px 10px 8px 42px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
 .chat-search-empty {
   padding: 26px 16px;
   color: var(--muted-foreground);

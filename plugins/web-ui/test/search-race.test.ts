@@ -96,7 +96,11 @@ const chatRows = () =>
     .map((row) => row.querySelector(".chat-search-snippet")!.textContent);
 const resourceRows = () =>
   [...document.querySelectorAll(".chat-search-row:not(.chat-search-ask)")]
-    .filter((row) => !row.querySelector(".chat-search-who.user, .chat-search-who.agent"))
+    .filter((row) => !row.querySelector(".chat-search-who.user, .chat-search-who.agent, .chat-search-who.title"))
+    .map((row) => row.querySelector(".chat-search-snippet")!.textContent);
+const titleRows = () =>
+  [...document.querySelectorAll(".chat-search-row")]
+    .filter((row) => row.querySelector(".chat-search-who.title"))
     .map((row) => row.querySelector(".chat-search-snippet")!.textContent);
 const asked = () => document.querySelector("main")!.textContent!.includes("Find the chat");
 const hit = (sessionId: string) => ({ sessionId, entryType: "user", snippet: `${sessionId} text`, createdAt: 1 });
@@ -112,13 +116,13 @@ for (const outcome of ["resolve", "reject"] as const) {
     else requests[0]!.reject(new Error("timeout"));
     await settle();
     assert.deepEqual(chatRows(), []);
-    assert.doesNotMatch(results(), /Search failed/);
-    assert.match(results(), /Searching…/);
+    assert.doesNotMatch(results(), /search failed/i);
+    assert.match(results(), /Searching messages…/);
     await fire();
     requests[1]!.resolve({ hits: [hit("document")] });
     await settle();
     assert.deepEqual(chatRows(), ["document text"]);
-    assert.doesNotMatch(results(), /Searching…/);
+    assert.doesNotMatch(results(), /Searching messages…/);
   });
 }
 
@@ -133,10 +137,10 @@ test("new input clears selectable stale hits and previous errors", async () => {
   await fire();
   requests[1]!.reject(new Error("timeout"));
   await settle();
-  assert.match(results(), /Search failed/);
+  assert.match(results(), /search failed/i);
   type("document");
   assert.deepEqual(chatRows(), []);
-  assert.doesNotMatch(results(), /Search failed/);
+  assert.doesNotMatch(results(), /search failed/i);
 });
 
 test("closing and reopening cannot accept a previous request", async () => {
@@ -163,7 +167,7 @@ test("clearing the query cancels pending and in-flight searches", async () => {
   requests[0]!.resolve({ hits: [hit("old")] });
   await settle();
   assert.deepEqual(chatRows(), []);
-  assert.doesNotMatch(results(), /Searching…/);
+  assert.doesNotMatch(results(), /Searching messages…/);
   press("Enter");
   await settle();
   assert.deepEqual(opened, []);
@@ -176,7 +180,7 @@ test("Enter while searching does not start an unintended agent conversation", as
   assert.equal(asked(), false);
 });
 
-test("Enter opens resources before chats and offsets chat selection correctly", async () => {
+test("chats rank above resources and Enter follows display order", async () => {
   type("zzq");
   await fire();
   resourceRequests[0]!.resolve({ hits: [resource("Skill")], failed: [] });
@@ -189,7 +193,6 @@ test("Enter opens resources before chats and offsets chat selection correctly", 
   resourceRequests[1]!.resolve({ hits: [resource("Skill")], failed: [] });
   requests[1]!.resolve({ hits: [hit("chat1")] });
   await settle();
-  press("ArrowDown");
   press("Enter");
   await settle();
   assert.deepEqual(opened, ["/skills/skill", "chat1"]);
@@ -200,10 +203,42 @@ test("Enter opens resources before chats and offsets chat selection correctly", 
   requests[2]!.resolve({ hits: [hit("chat1")] });
   await settle();
   press("ArrowDown");
+  press("Enter");
+  assert.deepEqual(opened, ["/skills/skill", "chat1", "/skills/skill"]);
+  openChatSearch();
+  type("zzq");
+  await fire();
+  resourceRequests[3]!.resolve({ hits: [resource("Skill")], failed: [] });
+  requests[3]!.resolve({ hits: [hit("chat1")] });
+  await settle();
+  press("ArrowDown");
   press("ArrowDown");
   press("Enter");
   await settle();
   assert.equal(asked(), true);
+});
+
+test("chat titles match instantly, before any request, and open on Enter", async () => {
+  type("docu");
+  assert.deepEqual(titleRows(), ["document"]);
+  assert.equal(requests.length, 0);
+  press("Enter");
+  await settle();
+  assert.deepEqual(opened, ["document"]);
+});
+
+test("late message hits do not move the highlight off a title match", async () => {
+  type("chat");
+  assert.deepEqual([...titleRows()].sort(), ["chat", "chat1"]);
+  press("ArrowDown");
+  const picked = titleRows()[1]!;
+  await fire();
+  requests[0]!.resolve({ hits: [hit("first")] });
+  resourceRequests[0]!.resolve({ hits: [resource("Chat skill")], failed: [] });
+  await settle();
+  press("Enter");
+  await settle();
+  assert.deepEqual(opened, [picked]);
 });
 
 test("chat results do not wait for resource results, and stale resource replies are ignored", async () => {
@@ -220,7 +255,7 @@ test("chat results do not wait for resource results, and stale resource replies 
   resourceRequests[1]!.resolve({ hits: [resource("New")], failed: [] });
   await settle();
   assert.deepEqual(resourceRows(), ["New"]);
-  assert.match(results(), /Searching…/);
+  assert.match(results(), /Searching messages…/);
 });
 
 test("closing search aborts both requests and prevents old resources reappearing after reopen", async () => {
