@@ -1916,7 +1916,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionForReach,
         reclaimBox,
         provisionPending,
-        invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
         input,
@@ -1934,6 +1933,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         ownerAuthAvailable,
+        swarmSandboxId: swarmBinding?.sandboxId,
         visibleSkillsForTurn,
         emitGapWork,
       });
@@ -2660,7 +2660,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
-          invalidateProvision,
           provision,
           provisionScratch,
           provisionResource,
