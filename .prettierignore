@@ -11,3 +11,4 @@ deploy/helm/templates/
 .generated/
 
 src/deploy/vendor/
+src/bench/cases/

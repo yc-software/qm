@@ -1019,7 +1019,7 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   });
 }
 
-function harnessEnvStrict(value: string | undefined): Config["harness"] {
+export function harnessEnvStrict(value: string | undefined): Config["harness"] {
   if (value === undefined || value.trim() === "") return "mock";
   const harness = value.trim();
   if (harness === "mock" || harness === "pi" || harness === "claude") return harness;
