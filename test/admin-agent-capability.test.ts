@@ -56,6 +56,7 @@ function start(withConfig = true) {
     ...(withConfig ? { config: built.config } : {}),
     auditLog: built.auditLog,
     sessions: built.sessions,
+    sandboxResources: built.sandboxResources,
     runs: built.runs,
     errors: built.errors,
     keychain,
@@ -416,6 +417,37 @@ test("impersonation refuses agent tokens outright — acting as another user sta
       body: JSON.stringify({ target: "U9" }),
     });
     assert.equal(stop1.status, 403);
+  } finally {
+    await s.close();
+  }
+});
+
+test("private sandbox inventories require a DM or effective Open admin conversation", async () => {
+  const s = start();
+  try {
+    const record = await s.built.sandboxResources.create("admin-alice", "personal:U1", "sprites", "private project");
+    const read = (token: string, target = "personal:U1") =>
+      fetch(`${s.base}/v1/admin/sandboxes/${encodeURIComponent(target)}`, {
+        headers: { "x-agent-capability": token },
+      });
+    const channel = await capFor("admin-alice", { scope: "channel:C1" });
+    for (const target of ["personal:U1", ORG]) {
+      const denied = await read(channel, target);
+      assert.equal(denied.status, 403);
+      const body = await denied.text();
+      assert.match(body, /ask the agent in a DM/);
+      for (const privateValue of [record.name, record.ownerScopeId, record.backingScopeId, record.machineId!])
+        assert.equal(body.includes(privateValue), false);
+    }
+    const dm = await read(await capFor("admin-alice"));
+    assert.equal(dm.status, 200);
+    assert.ok(((await dm.json()) as { sandboxes: Array<{ id: string }> }).sandboxes.some((s) => s.id === record.id));
+    await s.built.config.setSharingPosture(ORG, "open");
+    assert.equal((await read(channel)).status, 200);
+    await s.built.config.setSharingPosture("personal:admin-alice", "isolated");
+    assert.equal((await read(channel)).status, 403);
+    assert.equal((await read(await capFor("U1"))).status, 403);
+    assert.equal((await read(await capFor("admin-alice", { live: false }))).status, 403);
   } finally {
     await s.close();
   }
