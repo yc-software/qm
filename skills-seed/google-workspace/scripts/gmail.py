@@ -67,6 +67,8 @@ def read_body(path: str) -> str:
     else:
         with open(path, encoding="utf-8") as f:
             text = f.read()
+    if not text.strip():
+        sys.exit("message body is empty; write the intended body before creating or updating a draft")
     out: list[str] = []
     for paragraph in text.replace("\r\n", "\n").split("\n\n"):
         lines = [ln.rstrip() for ln in paragraph.split("\n") if ln.strip()]
