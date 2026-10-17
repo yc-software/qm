@@ -3,6 +3,25 @@
   const TEXT_LIMIT = 100_000;
   const IMAGE_BUDGET = 800_000;
   const IMAGE_EDGE = 1568;
+  const appNotes = new Map([
+    [
+      "com.google.Chrome",
+      "Cmd+L focuses the address bar rather than page content. Use a screenshot when a page exposes little useful accessibility text.",
+    ],
+    [
+      "com.tinyspeck.slackmacgap",
+      "Return usually sends a message; Shift+Return inserts a line break. Message and channel panes can update independently, so observe the pane you intend to edit.",
+    ],
+    [
+      "notion.id",
+      "Pages are edited as separate blocks. Click the intended block before typing; neighboring block text is not necessarily one editable value.",
+    ],
+    [
+      "com.apple.finder",
+      "Changing folders or switching view modes changes the item layout. Observe the new view before selecting file or folder targets.",
+    ],
+  ]);
+  const notedApps = new Set();
   let emitted = new WeakSet();
   let text = [];
   let images = [];
@@ -57,11 +76,23 @@
     return { data: btoa(binary), width: canvas.width, height: canvas.height };
   }
 
+  function idRanges(ids) {
+    const out = [];
+    for (let i = 0; i < ids.length; i++) {
+      let j = i;
+      while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++;
+      out.push(j > i ? `${ids[i]}-${ids[j]}` : `${ids[i]}`);
+      i = j;
+    }
+    return out.join(", ");
+  }
+
   function stateText(o) {
-    const head = `${o.app} — "${o.window}" ${Math.round(o.frame.w)}x${Math.round(o.frame.h)}, ${o.elements} elements${o.truncated ? " (truncated)" : ""}`;
+    const cut = o.truncated ? " (truncated: size limit reached, some elements not shown)" : "";
+    const head = `${o.app} — "${o.window}" ${Math.round(o.frame.w)}x${Math.round(o.frame.h)}, ${o.elements} elements${cut}`;
     if (!o.diffed) return `${head}\n${o.tree}`;
-    const removed = o.removed.length ? `\nremoved: ${o.removed.join(", ")}` : "";
-    return `${head}, changes since last state:\n${o.tree || "(no changes)\n"}${removed}`;
+    const removed = o.removed.length ? `\nremoved: ${idRanges(o.removed)}` : "";
+    return `${head}, changes since last state (+ added, ~ changed):\n${o.tree || "(no changes)\n"}${removed}`;
   }
 
   const MODIFIERS = {
@@ -77,6 +108,7 @@
 
   class App {
     #scale = 1;
+    #offset = { x: 0, y: 0 };
 
     constructor(name) {
       this.name = name;
@@ -84,10 +116,20 @@
 
     async #observe(screenshot, diff, emit, tree = true) {
       const o = await desk({ type: "observe", app: this.name, screenshot, diff });
+      const note = appNotes.get(o.bundle_id);
+      if (emit && note && !notedApps.has(o.bundle_id)) {
+        const line = `App usage notes (${o.bundle_id}): ${note}`;
+        if (size + line.length <= TEXT_LIMIT) {
+          say(line);
+          notedApps.add(o.bundle_id);
+        }
+      }
       if (emit && tree) say(stateText(o));
       if (o.screenshot) {
         const image = await jpeg(o.screenshot);
-        this.#scale = image.width / o.frame.w;
+        const shot = o.screenshot.frame ?? o.frame;
+        this.#scale = image.width / shot.w;
+        this.#offset = { x: shot.x - o.frame.x, y: shot.y - o.frame.y };
         if (emit && images.length < 4 && imageSize + image.data.length <= IMAGE_BUDGET) {
           imageSize += image.data.length;
           images.push({ mimeType: "image/jpeg", data: image.data });
@@ -112,7 +154,8 @@
 
     #target(t) {
       if (typeof t === "number") return { index: t };
-      if (Array.isArray(t) && t.length === 2) return { point: { x: t[0] / this.#scale, y: t[1] / this.#scale } };
+      if (Array.isArray(t) && t.length === 2)
+        return { point: { x: this.#offset.x + t[0] / this.#scale, y: this.#offset.y + t[1] / this.#scale } };
       throw new Error("target must be an element index or [x, y] screenshot pixels");
     }
 
@@ -157,8 +200,10 @@
       return this.#act({ type: "select_text", index, text, prefix, suffix, selection: selectionType });
     }
 
-    setValue(index, value) {
-      return this.#act({ type: "set_value", index, value: String(value) });
+    setValue(index, value, { submit } = {}) {
+      if (submit !== undefined && typeof submit !== "boolean")
+        throw new TypeError("setValue submit must be true or false");
+      return this.#act({ type: "set_value", index, value: String(value), ...(submit === undefined ? {} : { submit }) });
     }
 
     performSecondaryAction(index, action) {
@@ -170,7 +215,11 @@
     }
 
     typeText(text) {
-      return this.#act({ type: "type_text", text });
+      return this.#act({ type: "type_text", text: String(text) });
+    }
+
+    paste(text, { format = "text" } = {}) {
+      return this.#act({ type: "paste", text: String(text), format });
     }
 
     raise() {
@@ -202,23 +251,39 @@ computer.getApp(nameOrBundleId) -> App. Opens an installed app in the background
 All apps are available subject to macOS permissions.
 
 Observation (each emits into the result; pass {emit: false} to only return the data):
-app.getAXState({disableDiffing}) the focused window's accessibility tree. Lines read
-  [id] Role "title" (description) = "value" [focused disabled selected settable] <Actions> @x,y wxh
-  with window-relative point frames. Ids stay stable across observations of the same window.
-  By default only changed or new lines are shown, plus removed ids; disableDiffing: true shows the whole tree.
-app.getScreenshot() a JPEG of the window. app.getAXStateAndScreenshot({disableDiffing}) both.
+app.getAXState({disableDiffing}) the visible part of the focused window's accessibility tree. Lines read
+  [id] Role:Subrole "name" (description) = "value" placeholder "…" url "…" [focused disabled selected checked expanded settable] <Actions>
+  Open menus and dialogs are listed first; Focus: and Selected text: lines follow the tree.
+  Content scrolled out of view is summarised as "… N more offscreen; scroll to reveal".
+  Ids stay stable across observations of the same window.
+  By default only new (+) or changed (~) lines are shown, plus removed ids; when most lines changed, or with
+  disableDiffing: true, the whole tree is shown.
+app.getScreenshot() a JPEG covering the window and its visible menus/panels. app.getAXStateAndScreenshot({disableDiffing}) both.
+  Screenshot pixel targets are translated automatically, including panels extending beyond the main window.
 
-Actions (each waits about a second, longer while a progress indicator shows; observe again to see the result):
+Actions return after input is sent. The next observation waits for the app's accessibility events to settle,
+and longer while a progress indicator shows; observe to see the result.
 app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift", durationMs})
   target is an element id from the tree or [x, y] in pixels of the latest screenshot.
+  Ids in web content, rows and cells get a real click; other ids use the accessibility press action.
+  A real click on an id scrolls it into view first and fails if it stays offscreen or something covers it.
+  While a menu is open, click its items by id or press Escape; other clicks and pointer actions fail.
+  Input uses app-local activation rather than automatically bringing the app to the front.
+  If the foreground app changes or you interact with the target app, the action stops.
 app.drag([x, y], [x, y]) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels})
 app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) prefix/suffix pick among repeats.
-app.setValue(id, value) writes the element's value directly.
+app.setValue(id, value, {submit}) writes the element's value directly, as a number or true/false when the element holds one.
+  It fails if the element is not settable or a text field keeps its old value. submit (default: search fields only) then
+  confirms the field or presses Return.
 app.performSecondaryAction(id, action) runs an action the element lists, e.g. "ShowMenu", "Increment".
-app.pressKey("cmd+shift+t", {durationMs}) key names: letters, digits, punctuation, return, tab, space, delete, escape, arrows, home, end, pageup, pagedown, f1-f12.
-app.typeText(text)
-app.raise() brings the window to the front; use when an app ignores background input.
+app.pressKey("cmd+shift+t", {durationMs}) key names: letters, digits, punctuation, return, tab, space, delete, escape, arrows, home, end, pageup, pagedown, f1-f20, KP_Enter/KP_0/KP_Add and other keypad names. Modifier names support left/right forms such as Control_R.
+app.typeText(text) types with the keyboard. "\\n" presses Return and "\\t" presses Tab, so they can submit
+  a form or send a chat message; use paste for multi-line text.
+app.paste(text, {format: text|markdown|html}) pastes through the clipboard, then restores the user's clipboard once the
+  field shows the text. If it cannot confirm that, it fails and leaves the text on the clipboard instead.
+  Prefer it for long, multi-line or formatted text. Needs a focused text field.
+app.raise() explicitly brings the window to the front and takes focus.
 app.wait(ms)
 
 Await every computer operation before returning. Background callbacks persist within the turn and may run during a later call; do not schedule computer actions in background callbacks. Cancellation or timeout destroys the runtime.

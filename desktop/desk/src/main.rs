@@ -1,5 +1,19 @@
 mod cancellation;
+#[cfg(target_os = "macos")]
+mod focus;
+#[cfg(target_os = "macos")]
+mod intervention;
+#[cfg(any(target_os = "macos", test))]
+mod keys;
 mod protocol;
+mod text;
+#[cfg(any(target_os = "macos", test))]
+mod tree;
+
+#[cfg(target_os = "macos")]
+mod capture;
+#[cfg(target_os = "macos")]
+mod pasteboard;
 
 #[cfg(target_os = "macos")]
 mod mac;
