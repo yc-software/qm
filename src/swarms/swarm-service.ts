@@ -584,11 +584,7 @@ export function createSwarmService(deps: {
       if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
       if (existing && input.settings !== undefined && auth.memberId !== existing.id)
         throw new Error("only the root session can change swarm settings");
-      const settings = existing
-        ? resolveSwarmSettings(input.settings ?? {}, existing.settings)
-        : resolveSwarmSettings(input.settings, defaults);
-      if (existing && settings.turnMs !== existing.settings.turnMs)
-        throw new Error("turnMs cannot change after swarm creation");
+      const settings = resolveSwarmSettings(input.settings ?? {}, existing?.settings ?? defaults);
       boundedText(input.text, settings.textBytes, "text");
       const requestedRuntime = spawnRuntime(input);
       const count = input.count ?? input.contexts?.length ?? 1;
@@ -615,7 +611,11 @@ export function createSwarmService(deps: {
             (input.backend !== undefined && input.backend !== swarm.backend)
           )
             throw new Error("conflicting initial swarm settings");
-        } else if (input.settings !== undefined) swarm.settings = settings;
+        } else if (input.settings !== undefined) {
+          const next = resolveSwarmSettings(input.settings, swarm.settings);
+          if (next.turnMs !== swarm.settings.turnMs) throw new Error("turnMs cannot change after swarm creation");
+          swarm.settings = next;
+        }
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
         if (swarm.members.length + count > swarm.settings.agents) throw new Error("swarm agent budget exhausted");

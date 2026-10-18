@@ -166,3 +166,24 @@ test("operators can disable swarms without changing other background work", () =
   assert.equal(disabled.backgroundWorkEnabled, true);
   assert.throws(() => loadConfig({ SWARMS_ENABLED: "invalid" }), /SWARMS_ENABLED/);
 });
+
+test("concurrent root settings changes both apply", async () => {
+  const f = await swarmFixture();
+  await f.service.spawn(f.caller, { requestId: "pool", text: "work" });
+  await f.service.sweep();
+  const update = f.store.update.bind(f.store);
+  const ready = Promise.withResolvers<void>();
+  let arrivals = 0;
+  f.store.update = async (...args) => {
+    if (++arrivals === 2) ready.resolve();
+    await ready.promise;
+    return update(...args);
+  };
+  await Promise.all([
+    f.service.spawn(f.caller, { requestId: "agents", text: "work", settings: { agents: 64 } }),
+    f.service.spawn(f.caller, { requestId: "depth", text: "work", settings: { depth: 8 } }),
+  ]);
+  const { settings } = (await f.store.get(f.root.id))!;
+  assert.equal(settings.agents, 64);
+  assert.equal(settings.depth, 8);
+});
