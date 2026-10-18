@@ -25,11 +25,9 @@ test("backend defaults validate every setting and preserve unspecified defaults"
   assert.deepEqual(resolveSwarmSettings(large), { ...SWARM_DEFAULTS, ...large });
 });
 
-test("retired budget settings are accepted and ignored", () => {
-  const retired = { messages: 128, notifications: 256, spawnRequests: 32, lifetimeMs: 28_800_000 };
-  assert.deepEqual(resolveSwarmSettings({ ...retired, agents: 12 }), { ...SWARM_DEFAULTS, agents: 12 });
-  assert.deepEqual(loadConfig({ SWARM_DEFAULTS: JSON.stringify(retired) }).swarmDefaults, SWARM_DEFAULTS);
-  assert.deepEqual(resolveSwarmSettings({}, { ...SWARM_DEFAULTS, ...retired }), SWARM_DEFAULTS);
+test("removed budget settings are unknown", () => {
+  for (const key of ["messages", "notifications", "spawnRequests", "lifetimeMs"])
+    assert.throws(() => resolveSwarmSettings({ [key]: 1 }), new RegExp(`unknown swarm setting: ${key}`));
 });
 
 test("resolved defaults, initial overrides, children, and restarted services share one immutable settings contract", async () => {

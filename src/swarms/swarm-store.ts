@@ -4,7 +4,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
 
-import { normalizeSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
+import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import type { SwarmMemberRuntime, SwarmTemplate } from "./swarm-runtime.ts";
 
@@ -84,18 +84,9 @@ function encode(swarm: Swarm): SwarmStorage {
   });
 }
 
-function decode(stored: SwarmStorage): Swarm {
-  const {
-    expiresAt: _expiresAt,
-    notificationCount: _notificationCount,
-    ...swarm
-  } = stored as SwarmStorage & {
-    expiresAt?: number;
-    notificationCount?: number;
-  };
+function decode(swarm: SwarmStorage): Swarm {
   return structuredClone({
     ...swarm,
-    settings: normalizeSwarmSettings(swarm.settings),
     members: swarm.members.map(({ contextJson, ...member }) => ({
       ...member,
       context: JSON.parse(contextJson) as unknown,

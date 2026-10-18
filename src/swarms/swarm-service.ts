@@ -615,11 +615,7 @@ export function createSwarmService(deps: {
             (input.backend !== undefined && input.backend !== swarm.backend)
           )
             throw new Error("conflicting initial swarm settings");
-        } else if (input.settings !== undefined) {
-          const next = resolveSwarmSettings(input.settings, swarm.settings);
-          if (next.turnMs !== swarm.settings.turnMs) throw new Error("turnMs cannot change after swarm creation");
-          swarm.settings = next;
-        }
+        } else if (input.settings !== undefined) swarm.settings = settings;
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
         if (swarm.members.length + count > swarm.settings.agents) throw new Error("swarm agent budget exhausted");

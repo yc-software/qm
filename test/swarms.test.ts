@@ -825,25 +825,6 @@ test("human messages preserve human actor attribution while notifications remain
   assert.equal(message.senderId, root.id);
 });
 
-test("swarms stored with a past work window keep reserving and waking work", async () => {
-  const { service, caller, root, store, runs } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
-  await store.update(root.id, (swarm) => {
-    Object.assign(swarm, { expiresAt: Date.now() - 1, notificationCount: 999 });
-    Object.assign(swarm.settings, { messages: 1, notifications: 1, spawnRequests: 1, lifetimeMs: 1 });
-  });
-  await service.sweep();
-  await service.spawn(caller, { requestId: "two", text: "Work" });
-  await service.sweep();
-  await service.send(caller, { requestId: "message", text: "Work", audience: "all" });
-  await service.sweep();
-  assert.equal((await runs.list()).filter((run) => run.request.swarm).length, 4);
-  const swarm = (await store.get(root.id))!;
-  assert.equal("expiresAt" in swarm, false);
-  assert.deepEqual(Object.keys(swarm.settings).sort(), Object.keys(SWARM_DEFAULTS).sort());
-  assert.equal("expiresAt" in (await service.inspect(caller)), false);
-});
-
 test("memory store has transaction rollback and detached read parity", async () => {
   const { service, caller, root, store } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });

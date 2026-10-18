@@ -129,14 +129,10 @@ for (const duplicate of [true, false]) {
   });
 }
 
-test("a legacy lifetime setting no longer expires the swarm", async (context) => {
+test("a swarm keeps accepting work long after it was created", async (context) => {
   const f = await swarmFixture();
   context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  const [worker] = await f.service.spawn(f.caller, {
-    requestId: "initial",
-    text: "work",
-    settings: JSON.parse('{"lifetimeMs":1}'),
-  });
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
   context.mock.timers.tick(30 * 86_400_000);
   const human = { kind: "human" as const, actorId: "alice", sessionId: f.root.id };

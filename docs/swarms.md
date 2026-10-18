@@ -66,9 +66,7 @@ unavailable model fails closed at dispatch.
 Optional `settings` overrides the defaults below at initial spawn. The backend
 can configure defaults with `SWARM_DEFAULTS`, a JSON object such as
 `{"agents":16,"turnMs":900000}`. Values must be positive safe integers within the
-safety bounds; unknown settings are rejected. The retired budget settings
-`messages`, `notifications`, `spawnRequests`, and `lifetimeMs` are accepted and
-ignored. Resolved settings and the chosen `backend` are stored once. Identical
+safety bounds; unknown settings are rejected. Resolved settings and the chosen `backend` are stored once. Identical
 initial requests can be retried. Later spawns by the root session may pass
 `settings` again to change any setting except `turnMs` (for example, to raise
 `agents`); workers inherit the settings and cannot reconfigure the swarm. The
