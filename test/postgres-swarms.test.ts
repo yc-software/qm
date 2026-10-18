@@ -229,12 +229,12 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
     assert.equal((await sibling.inspect(fixture.caller)).peers.length, 21);
     await assert.rejects(
       store.update(fixture.root.id, (swarm) => {
-        swarm.notificationCount = 999;
+        swarm.messages.length = 0;
         throw new Error("rollback");
       }),
       /rollback/,
     );
-    assert.equal((await store.get(fixture.root.id))!.notificationCount, 20);
+    assert.equal((await store.get(fixture.root.id))!.messages.length, 1);
     const applied = await first.pool.q("SELECT id FROM qm_schema_migrations WHERE id = 'durable-map/swarms/0001'");
     assert.equal(applied.length, 1);
     await first.map<SwarmStorage>("swarms").delete(fixture.root.id);
@@ -393,7 +393,6 @@ for (const scenario of ["same request", "distinct requests", "conflicting settin
       assert.equal(swarm.members.length, pools + 1);
       assert.equal(swarm.messages.length, pools);
       assert.equal(Object.keys(swarm.spawnRequests).length, pools);
-      assert.equal(swarm.notificationCount, pools);
       assert.equal(swarm.pending, true);
       assert.equal(swarm.template.turnWallClockMs, swarm.settings.turnMs);
       if (scenario === "same request") assert.deepEqual(results[0], results[1]);
@@ -443,44 +442,3 @@ test(
     }
   },
 );
-
-test("Postgres initial pool expires atomically while waiting for the write lock", { skip }, async (context) => {
-  const factory = createPostgresMapFactory(databaseUrl!);
-  const runtime = createPostgresRunStore(databaseUrl!);
-  const sessions = createPostgresSessionStore(databaseUrl!);
-  const store = createSwarmStore(factory.map<SwarmStorage>("swarms"), {
-    runs: runtime.runs,
-    sessions,
-    pg: factory.pool,
-  });
-  const f = await swarmFixture({ store, sessions, runs: runtime.runs });
-  const client = await (await factory.pool.pool()).connect();
-  const entered = Promise.withResolvers<void>();
-  const create = store.create.bind(store);
-  store.create = async (...args) => {
-    entered.resolve();
-    return create(...args);
-  };
-  try {
-    await store.get(f.root.id);
-    await client.query("INSERT INTO durable_map_versions (tbl,v) VALUES ('swarms',1) ON CONFLICT DO NOTHING");
-    await client.query("BEGIN");
-    await client.query("SELECT v FROM durable_map_versions WHERE tbl='swarms' FOR UPDATE");
-    context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-    const rejected = assert.rejects(
-      f.service.spawn(f.caller, { requestId: "initial", text: "work", settings: { lifetimeMs: 10_000 } }),
-      /work window expired/,
-    );
-    await entered.promise;
-    context.mock.timers.tick(20_000);
-    await client.query("COMMIT");
-    await rejected;
-    assert.equal(await store.get(f.root.id), null);
-  } finally {
-    context.mock.timers.reset();
-    await client.query("ROLLBACK");
-    client.release();
-    await runtime.close();
-    await factory.pool.close();
-  }
-});

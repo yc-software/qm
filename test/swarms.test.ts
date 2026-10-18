@@ -606,7 +606,7 @@ test("swarm settings are fixed at creation and reject conflicting attempts", asy
   assert.equal(swarm.settings.turnMs, 600_000);
   await assert.rejects(
     service.spawn(caller, { requestId: "second", text: "Work", settings: { turnMs: 300_000 } }),
-    /settings are only allowed on initial swarm creation/,
+    /turnMs cannot change after swarm creation/,
   );
 });
 
@@ -640,25 +640,16 @@ test("recursive spawn depth is enforced independently of arbitrary character", a
   await assert.rejects(service.spawn(current, { requestId: "too-deep", text: "Work" }), /depth budget/);
 });
 
-test("notification and message budgets include initial work and prevent recursion loops", async () => {
-  const { service, caller, store, root } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
+test("message, notification and spawn counts are not budgeted", async () => {
+  const { service, caller, runs } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work", settings: { agents: 64 } });
   await service.sweep();
-  await store.update(root.id, (swarm) => {
-    swarm.notificationCount = SWARM_DEFAULTS.notifications;
-  });
-  await assert.rejects(
-    service.send(caller, { requestId: "notify", audience: "all", text: "Work" }),
-    /notification budget/,
-  );
-  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
-  for (let index = 2; index < SWARM_DEFAULTS.messages; index++) {
-    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
-  }
-  await assert.rejects(
-    service.send(caller, { requestId: "excess", audience: [], text: "Archive", notify: false }),
-    /message budget/,
-  );
+  for (let index = 0; index < 300; index++)
+    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work" });
+  await service.sweep();
+  assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 301);
+  for (let index = 0; index < 40; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
+  assert.equal((await service.inspect(caller)).peers.length, 42);
   assert.equal((await service.read(caller, {})).length, 32);
 });
 
@@ -834,17 +825,23 @@ test("human messages preserve human actor attribution while notifications remain
   assert.equal(message.senderId, root.id);
 });
 
-test("expired swarms retain readable history but cannot reserve or wake more work", async () => {
+test("swarms stored with a past work window keep reserving and waking work", async () => {
   const { service, caller, root, store, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await store.update(root.id, (swarm) => {
-    swarm.expiresAt = Date.now() - 1;
+    Object.assign(swarm, { expiresAt: Date.now() - 1, notificationCount: 999 });
+    Object.assign(swarm.settings, { messages: 1, notifications: 1, spawnRequests: 1, lifetimeMs: 1 });
   });
   await service.sweep();
-  await assert.rejects(service.spawn(caller, { requestId: "two", text: "Work" }), /expired/);
-  await assert.rejects(service.send(caller, { requestId: "message", text: "Work", audience: "all" }), /expired/);
-  assert.equal((await service.read(caller, {})).length, 1);
-  assert.equal((await runs.list()).length, 1);
+  await service.spawn(caller, { requestId: "two", text: "Work" });
+  await service.sweep();
+  await service.send(caller, { requestId: "message", text: "Work", audience: "all" });
+  await service.sweep();
+  assert.equal((await runs.list()).filter((run) => run.request.swarm).length, 4);
+  const swarm = (await store.get(root.id))!;
+  assert.equal("expiresAt" in swarm, false);
+  assert.deepEqual(Object.keys(swarm.settings).sort(), Object.keys(SWARM_DEFAULTS).sort());
+  assert.equal("expiresAt" in (await service.inspect(caller)), false);
 });
 
 test("memory store has transaction rollback and detached read parity", async () => {
@@ -855,12 +852,12 @@ test("memory store has transaction rollback and detached read parity", async () 
   assert.deepEqual((await store.get(root.id))!.members[0]!.context, {});
   await assert.rejects(
     store.update(root.id, (swarm) => {
-      swarm.notificationCount = 999;
+      swarm.messages.length = 0;
       throw new Error("rollback");
     }),
     /rollback/,
   );
-  assert.equal((await store.get(root.id))!.notificationCount, 1);
+  assert.equal((await store.get(root.id))!.messages.length, 1);
 });
 
 test("the orchestrator sandbox path selects worker storage without changing authorization layers", async () => {

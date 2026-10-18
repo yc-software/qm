@@ -21,8 +21,15 @@ test("backend defaults validate every setting and preserve unspecified defaults"
       assert.throws(() => resolveSwarmSettings({ [key]: value }), new RegExp(key));
   }
   assert.throws(() => resolveSwarmSettings({ turnMs: 2_147_483_648 }), /turnMs/);
-  const large = { agents: 10_000, depth: 100, messages: 100_000, lifetimeMs: 30 * 86_400_000, turnMs: 2_147_483_647 };
+  const large = { agents: 10_000, depth: 100, turnMs: 2_147_483_647 };
   assert.deepEqual(resolveSwarmSettings(large), { ...SWARM_DEFAULTS, ...large });
+});
+
+test("retired budget settings are accepted and ignored", () => {
+  const retired = { messages: 128, notifications: 256, spawnRequests: 32, lifetimeMs: 28_800_000 };
+  assert.deepEqual(resolveSwarmSettings({ ...retired, agents: 12 }), { ...SWARM_DEFAULTS, agents: 12 });
+  assert.deepEqual(loadConfig({ SWARM_DEFAULTS: JSON.stringify(retired) }).swarmDefaults, SWARM_DEFAULTS);
+  assert.deepEqual(resolveSwarmSettings({}, { ...SWARM_DEFAULTS, ...retired }), SWARM_DEFAULTS);
 });
 
 test("resolved defaults, initial overrides, children, and restarted services share one immutable settings contract", async () => {
@@ -30,13 +37,9 @@ test("resolved defaults, initial overrides, children, and restarted services sha
   const defaults = resolveSwarmSettings({
     agents: 3,
     depth: 1,
-    messages: 4,
-    notifications: 4,
-    spawnRequests: 2,
     textBytes: 8,
     contextBytes: 16,
     waitMs: 2,
-    lifetimeMs: 60_000,
   });
   const service = createSwarmService({ ...f.serviceOptions, defaults });
   const [worker] = await service.spawn(f.caller, { requestId: "pool", text: "work", settings: { turnMs: 777 } });
@@ -45,8 +48,8 @@ test("resolved defaults, initial overrides, children, and restarted services sha
   const restarted = createSwarmService({ ...f.serviceOptions, defaults: resolveSwarmSettings({ turnMs: 999 }) });
   assert.deepEqual((await restarted.inspect(caller)).settings, { ...defaults, turnMs: 777 });
   await assert.rejects(
-    restarted.spawn(caller, { requestId: "change", text: "work", settings: { turnMs: 999 } }),
-    /initial/,
+    restarted.spawn(caller, { requestId: "change", text: "work", settings: { depth: 5 } }),
+    /only the root/,
   );
   await assert.rejects(restarted.spawn(caller, { requestId: "child", text: "work" }), /depth/);
   await assert.rejects(restarted.context(caller, { long: "x".repeat(20) }), /context/);
@@ -57,8 +60,13 @@ test("resolved defaults, initial overrides, children, and restarted services sha
   const run = (await f.runs.list()).find((r) => r.request.swarm?.recipientId === sibling!.id)!;
   assert.equal(run.request.turnWallClockMs, 777);
   await assert.rejects(restarted.spawn(f.caller, { requestId: "excess", text: "work" }), /agent budget/);
-  const swarm = (await f.store.get(f.root.id))!;
-  assert.equal(swarm.expiresAt - swarm.createdAt, 60_000);
+  await assert.rejects(
+    restarted.spawn(f.caller, { requestId: "turn", text: "work", settings: { agents: 4, turnMs: 999 } }),
+    /turnMs cannot change/,
+  );
+  const [extra] = await restarted.spawn(f.caller, { requestId: "raise", text: "work", settings: { agents: 4 } });
+  assert.ok(extra);
+  assert.deepEqual((await restarted.inspect(f.caller)).settings, { ...defaults, turnMs: 777, agents: 4 });
 });
 
 test("canonical recipient sets deduplicate retries but reject changed sets", async () => {

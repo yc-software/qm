@@ -1,11 +1,10 @@
-import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
 
-import type { SwarmSettings } from "./swarm-settings.ts";
+import { normalizeSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import type { SwarmMemberRuntime, SwarmTemplate } from "./swarm-runtime.ts";
 
@@ -54,7 +53,6 @@ export interface Swarm {
   ownerId: string;
   participants: string[];
   createdAt: number;
-  expiresAt: number;
   template: SwarmTemplate;
   settings: SwarmSettings;
   backend: SandboxBackendName;
@@ -63,12 +61,7 @@ export interface Swarm {
   messages: SwarmMessage[];
   spawnRequests: Record<string, { memberIds: string[]; signature: string }>;
   messageRequests: Record<string, { messageId: string; signature: string }>;
-  notificationCount: number;
   pending: boolean;
-}
-
-export function assertSwarmOpen(swarm: Swarm): void {
-  if (Date.now() >= swarm.expiresAt) throw new NonRetryableTurnError("swarm work window expired");
 }
 
 export interface SwarmStore {
@@ -91,9 +84,19 @@ function encode(swarm: Swarm): SwarmStorage {
   });
 }
 
-function decode(swarm: SwarmStorage): Swarm {
+function decode(stored: SwarmStorage): Swarm {
+  // Rows written before swarm budgets were removed still carry these fields.
+  const {
+    expiresAt: _expiresAt,
+    notificationCount: _notificationCount,
+    ...swarm
+  } = stored as SwarmStorage & {
+    expiresAt?: number;
+    notificationCount?: number;
+  };
   return structuredClone({
     ...swarm,
+    settings: normalizeSwarmSettings(swarm.settings),
     members: swarm.members.map(({ contextJson, ...member }) => ({
       ...member,
       context: JSON.parse(contextJson) as unknown,
@@ -166,7 +169,6 @@ export function createSwarmStore(
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {
         if (current) return current;
-        assertSwarmOpen(swarm);
         return encode(swarm);
       };
       if (fence) return decode(await fencedWrite(swarm.id, create, fence));

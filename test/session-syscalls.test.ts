@@ -748,7 +748,7 @@ test("private session replies stay read-only, queue behind running work, and do 
   assert.equal((await exhausted.write({ target: child.id, text: "loop" })).ok, false);
 });
 
-test("session tools cannot bypass swarm worker admission or message budgets", async () => {
+test("session tools cannot bypass swarm worker admission or messaging", async () => {
   const r = await rig();
   const worker = await r.sessions.getOrCreateByThread("swarm:root:worker", "dm", scope);
   await r.sessions.addParticipant(worker.id, actor.id);
