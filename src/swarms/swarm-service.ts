@@ -584,7 +584,7 @@ export function createSwarmService(deps: {
       if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
       if (existing && input.settings !== undefined && auth.memberId !== existing.id)
         throw new Error("only the root session can change swarm settings");
-      const settings = resolveSwarmSettings(input.settings ?? {}, existing?.settings ?? defaults);
+      const settings = resolveSwarmSettings(input.settings, existing?.settings ?? defaults);
       boundedText(input.text, settings.textBytes, "text");
       const requestedRuntime = spawnRuntime(input);
       const count = input.count ?? input.contexts?.length ?? 1;
