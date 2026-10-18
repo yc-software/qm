@@ -85,7 +85,6 @@ function encode(swarm: Swarm): SwarmStorage {
 }
 
 function decode(stored: SwarmStorage): Swarm {
-  // Rows written before swarm budgets were removed still carry these fields.
   const {
     expiresAt: _expiresAt,
     notificationCount: _notificationCount,

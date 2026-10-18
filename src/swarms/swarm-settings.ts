@@ -9,8 +9,6 @@ export const SWARM_DEFAULTS = {
 
 export type SwarmSettings = typeof SWARM_DEFAULTS;
 
-// Settings that used to cap a swarm's message, notification, spawn and lifetime budgets. They are
-// still accepted (and ignored) so stored swarms, SWARM_DEFAULTS and existing callers keep working.
 const RETIRED_SETTINGS = new Set(["messages", "notifications", "spawnRequests", "lifetimeMs"]);
 
 const MAX_TIMER_MS = 2_147_483_647;

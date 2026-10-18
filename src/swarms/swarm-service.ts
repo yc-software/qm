@@ -616,8 +616,6 @@ export function createSwarmService(deps: {
           )
             throw new Error("conflicting initial swarm settings");
         } else if (input.settings !== undefined) {
-          // The root may raise or lower its swarm's limits on a later spawn; turn deadlines are part of
-          // the dispatch contract of already-queued turns, so they stay fixed.
           const next = resolveSwarmSettings(input.settings, swarm.settings);
           if (next.turnMs !== swarm.settings.turnMs) throw new Error("turnMs cannot change after swarm creation");
           swarm.settings = next;
