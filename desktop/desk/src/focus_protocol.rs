@@ -108,7 +108,7 @@ impl Scope {
         if source == self.owner || self.yielded {
             return Decision::Pass;
         }
-        if matches!(kind, 1 | 3 | 25) && destination != self.keyboard_owner {
+        if (matches!(kind, 1 | 3 | 25) && destination != self.keyboard_owner) || (kind == 22 && self.targets.contains(&destination)) {
             self.yield_to_user();
             return Decision::Intervened;
         }
@@ -194,6 +194,18 @@ mod tests {
         assert_eq!(scope().user_event(1, 0, 300), Decision::Intervened);
         assert_eq!(scope().user_event(10, 0, 300), Decision::Intervened);
         assert_eq!(scope().user_event(10, 0, 200), Decision::Pass);
+    }
+
+    #[test]
+    fn physical_scroll_on_target_yields_without_consuming_the_event() {
+        let mut s = scope();
+        s.include(301);
+        assert_eq!(s.user_event(22, 100, 300), Decision::Pass);
+        assert_eq!(s.user_event(22, 0, 200), Decision::Pass);
+        assert_eq!(s.user_event(22, 0, 900), Decision::Pass);
+        assert_eq!(s.user_event(22, 0, 301), Decision::Intervened);
+        assert_eq!(s.notification(200, KEY_FOCUS_TAKEN, 300, 0), Decision::Pass);
+        assert_eq!(scope().user_event(22, 0, 300), Decision::Intervened);
     }
 
     #[test]

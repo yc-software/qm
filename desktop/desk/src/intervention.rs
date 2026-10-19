@@ -153,7 +153,7 @@ impl Intervention {
         let callback_context = Arc::clone(&context);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let mask = (1 << PROCESS_NOTIFICATION) | (1 << 1) | (1 << 3) | (1 << 25) | (1 << 10) | (1 << 11) | (1 << 12);
+            let mask = (1 << PROCESS_NOTIFICATION) | (1 << 1) | (1 << 3) | (1 << 25) | (1 << 22) | (1 << 10) | (1 << 11) | (1 << 12);
             let tap = unsafe {
                 CGEvent::tap_create(
                     CGEventTapLocation::AnnotatedSessionEventTap,
