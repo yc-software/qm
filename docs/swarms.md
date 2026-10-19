@@ -110,7 +110,7 @@ never retires the existing forum.
 
 ### Identity, peers, and character
 
-`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, and `settings`. Peer
+`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt` when a work window is set. Peer
 records keep trusted IDs, ancestry, session links, storage selection, and lifecycle
 state separate from arbitrary `context` data. Only this swarm is listed, not every
 session with the same owner, and never all private sessions in the organization.
@@ -156,7 +156,8 @@ delivery target, and the delivery layer also refuses swarm result delivery.
 
 Set `notify:false` for a durable message without a wakeup. Sending to oneself does
 not wake oneself. There are no automatic reply-to-reply notifications: agents
-explicitly decide whether a response warrants another turn.
+explicitly decide whether a response warrants another turn. When `notifications`
+is set, every generated turn consumes that budget.
 
 ### Ask, read, and tail
 
@@ -236,17 +237,27 @@ refreshes every few seconds only while workers are active and the tab is visible
 | `agents` (root and failed reservations included) | 32                   |
 | `depth` below root                               | 4                    |
 | `contextBytes` / `textBytes`                     | 8,192 each           |
+| `spawnRequests`                                  | unset (no limit)     |
+| `messages` including initial work                | unset (no limit)     |
+| `notifications` including initial work           | unset (no limit)     |
+| `lifetimeMs` from first spawn                    | unset (no limit)     |
 | `turnMs` per notification                        | 600,000 (10 minutes) |
 | `waitMs` per read                                | 10,000               |
 
 The root and at least one worker require `agents >= 2`. All other settings accept
 any positive integer; `turnMs` is limited only by the 2,147,483,647 ms timer ceiling. Read requests can still use `waitMs:0`.
-The agent budget is reserved atomically with the members consuming it. Swarms
-have no message, notification, or spawn-request budgets and no work window: they
-stay open until their workers are stopped. Both the orchestrator and independent worker cancellation honor the stored
-turn deadline; existing organization-wide limits can shorten it. Internal reconciliation limits, the 32-message read page, and
-bounded run retry counts are not swarm configuration.
+`spawnRequests`, `messages`, `notifications`, and `lifetimeMs` are off unless a
+spawn or `SWARM_DEFAULTS` sets them. When set, they are enforced as budgets that are
+reserved atomically with the members and messages that consume them. Both the
+orchestrator and independent worker cancellation honor the stored turn deadline;
+existing organization-wide limits can shorten it. Internal reconciliation limits,
+the 32-message read page, and bounded run retry counts are not swarm
+configuration.
 
+When `lifetimeMs` is set and the window passes, history remains readable, but new
+work, notifications, and character changes are rejected until the root extends
+`lifetimeMs` on a later spawn. Swarms without `lifetimeMs` never expire. Human-initiated
+ordinary session turns remain ordinary QM actions.
 Workers and their durable results remain visible; computers can be retired
 through the existing sandbox inventory. There is no automatic
 filesystem export on retirement: publish useful outputs through existing Files

@@ -63,6 +63,7 @@ for (const conflict of [false, true]) {
     else assert.deepEqual(results[0], results[1]);
     const swarm = (await f.store.get(f.root.id))!;
     assert.equal(swarm.messages.length, before.messages.length + 1);
+    assert.equal(swarm.notificationCount, before.notificationCount);
     const message = swarm.messages.at(-1)!;
     assert.equal(message.seq, initial.seq + 1);
     assert.equal(message.senderId, f.root.id);

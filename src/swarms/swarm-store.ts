@@ -1,3 +1,4 @@
+import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -53,6 +54,7 @@ export interface Swarm {
   ownerId: string;
   participants: string[];
   createdAt: number;
+  expiresAt?: number;
   template: SwarmTemplate;
   settings: SwarmSettings;
   backend: SandboxBackendName;
@@ -61,7 +63,16 @@ export interface Swarm {
   messages: SwarmMessage[];
   spawnRequests: Record<string, { memberIds: string[]; signature: string }>;
   messageRequests: Record<string, { messageId: string; signature: string }>;
+  notificationCount: number;
   pending: boolean;
+}
+
+export function swarmExpired(swarm: Swarm): boolean {
+  return swarm.expiresAt !== undefined && Date.now() >= swarm.expiresAt;
+}
+
+export function assertSwarmOpen(swarm: Swarm): void {
+  if (swarmExpired(swarm)) throw new NonRetryableTurnError("swarm work window expired");
 }
 
 export interface SwarmStore {
@@ -159,6 +170,7 @@ export function createSwarmStore(
     async create(swarm, fence) {
       const create = (current: SwarmStorage | null) => {
         if (current) return current;
+        assertSwarmOpen(swarm);
         return encode(swarm);
       };
       if (fence) return decode(await fencedWrite(swarm.id, create, fence));

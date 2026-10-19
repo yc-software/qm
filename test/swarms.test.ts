@@ -640,17 +640,46 @@ test("recursive spawn depth is enforced independently of arbitrary character", a
   await assert.rejects(service.spawn(current, { requestId: "too-deep", text: "Work" }), /depth budget/);
 });
 
-test("message, notification and spawn counts are not budgeted", async () => {
-  const { service, caller, runs } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work", settings: { agents: 64 } });
+test("notification and message budgets include initial work and prevent recursion loops", async () => {
+  const { service, caller, store, root } = await swarmFixture();
+  const settings = { messages: 40, notifications: 20 };
+  await service.spawn(caller, { requestId: "one", text: "Work", settings });
   await service.sweep();
-  for (let index = 0; index < 300; index++)
+  await store.update(root.id, (swarm) => {
+    swarm.notificationCount = settings.notifications;
+  });
+  await assert.rejects(
+    service.send(caller, { requestId: "notify", audience: "all", text: "Work" }),
+    /notification budget/,
+  );
+  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
+  for (let index = 2; index < settings.messages; index++) {
+    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
+  }
+  await assert.rejects(
+    service.send(caller, { requestId: "excess", audience: [], text: "Archive", notify: false }),
+    /message budget/,
+  );
+  assert.equal((await service.read(caller, {})).length, 32);
+});
+
+test("spawn request budget applies only when set", async () => {
+  const { service, caller } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work", settings: { spawnRequests: 2 } });
+  await service.spawn(caller, { requestId: "two", text: "Work" });
+  await assert.rejects(service.spawn(caller, { requestId: "three", text: "Work" }), /spawn budget/);
+});
+
+test("without caps, message, notification and spawn counts are unlimited", async () => {
+  const { service, caller, runs } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", count: 2, text: "Work", settings: { agents: 64 } });
+  await service.sweep();
+  for (let index = 0; index < 130; index++)
     await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work" });
   await service.sweep();
-  assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 301);
-  for (let index = 0; index < 40; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
-  assert.equal((await service.inspect(caller)).peers.length, 42);
-  assert.equal((await service.read(caller, {})).length, 32);
+  assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 262);
+  for (let index = 0; index < 33; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
+  assert.equal((await service.inspect(caller)).peers.length, 36);
 });
 
 test("restart between enqueue and outbox acknowledgement does not redeliver", async () => {
@@ -825,6 +854,33 @@ test("human messages preserve human actor attribution while notifications remain
   assert.equal(message.senderId, root.id);
 });
 
+test("expired swarms retain readable history but cannot reserve or wake more work", async () => {
+  const { service, caller, root, store, runs } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work" });
+  await store.update(root.id, (swarm) => {
+    swarm.expiresAt = Date.now() - 1;
+  });
+  await service.sweep();
+  await assert.rejects(service.spawn(caller, { requestId: "two", text: "Work" }), /expired/);
+  await assert.rejects(service.send(caller, { requestId: "message", text: "Work", audience: "all" }), /expired/);
+  assert.equal((await service.read(caller, {})).length, 1);
+  assert.equal((await runs.list()).length, 1);
+});
+
+test("the root can extend an expired work window", async () => {
+  const { service, caller, store, root } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work", settings: { lifetimeMs: 60_000 } });
+  await store.update(root.id, (swarm) => {
+    swarm.createdAt -= 120_000;
+    swarm.expiresAt = swarm.createdAt + 60_000;
+  });
+  await assert.rejects(service.spawn(caller, { requestId: "two", text: "Work" }), /expired/);
+  await service.spawn(caller, { requestId: "three", text: "Work", settings: { lifetimeMs: 3_600_000 } });
+  const swarm = (await store.get(root.id))!;
+  assert.equal(swarm.expiresAt, swarm.createdAt + 3_600_000);
+  await service.send(caller, { requestId: "message", text: "Work", audience: "all" });
+});
+
 test("memory store has transaction rollback and detached read parity", async () => {
   const { service, caller, root, store } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
@@ -833,12 +889,12 @@ test("memory store has transaction rollback and detached read parity", async () 
   assert.deepEqual((await store.get(root.id))!.members[0]!.context, {});
   await assert.rejects(
     store.update(root.id, (swarm) => {
-      swarm.messages.length = 0;
+      swarm.notificationCount = 999;
       throw new Error("rollback");
     }),
     /rollback/,
   );
-  assert.equal((await store.get(root.id))!.messages.length, 1);
+  assert.equal((await store.get(root.id))!.notificationCount, 1);
 });
 
 test("the orchestrator sandbox path selects worker storage without changing authorization layers", async () => {

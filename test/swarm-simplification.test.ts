@@ -10,6 +10,7 @@ test("initial persistence includes settings, pool, message and pending work in o
     assert.equal(swarm.members.length, 3);
     assert.equal(swarm.messages.length, 1);
     assert.equal(Object.keys(swarm.spawnRequests).length, 1);
+    assert.equal(swarm.notificationCount, 2);
     assert.equal(swarm.pending, true);
     assert.equal(swarm.settings.turnMs, 777);
     return create(swarm, fence);
@@ -129,11 +130,27 @@ for (const duplicate of [true, false]) {
   });
 }
 
-test("a swarm keeps accepting work long after it was created", async (context) => {
+test("initial pool cannot commit after its work window expires", async (context) => {
+  const f = await swarmFixture();
+  context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const create = f.store.create.bind(f.store);
+  f.store.create = async (...args) => {
+    context.mock.timers.tick(2);
+    return create(...args);
+  };
+  await assert.rejects(
+    f.service.spawn(f.caller, { requestId: "initial", text: "work", settings: { lifetimeMs: 1 } }),
+    /work window expired/,
+  );
+  assert.equal(await f.store.get(f.root.id), null);
+});
+
+test("a swarm without lifetimeMs keeps accepting work long after it was created", async (context) => {
   const f = await swarmFixture();
   context.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "work" });
   await f.service.sweep();
+  assert.equal((await f.store.get(f.root.id))!.expiresAt, undefined);
   context.mock.timers.tick(30 * 86_400_000);
   const human = { kind: "human" as const, actorId: "alice", sessionId: f.root.id };
   const message = await f.service.send(human, { requestId: "later", audience: "all", text: "more work" });
@@ -142,4 +159,13 @@ test("a swarm keeps accepting work long after it was created", async (context) =
   assert.equal((await f.service.inspect(human)).peers.find((p) => p.id === worker!.id)?.state, "ready");
   const [second] = await f.service.spawn(human, { requestId: "second", text: "more" });
   assert.ok(second);
+});
+
+test("initial work window uses one timestamp even when the clock advances between reads", async (context) => {
+  const f = await swarmFixture();
+  let now = Date.now();
+  context.mock.method(Date, "now", () => now++);
+  await f.service.spawn(f.caller, { requestId: "initial", text: "work", settings: { lifetimeMs: 60_000 } });
+  const swarm = (await f.store.get(f.root.id))!;
+  assert.equal(swarm.expiresAt! - swarm.createdAt, 60_000);
 });
