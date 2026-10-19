@@ -12,7 +12,9 @@ const section = (lines: string[], heading: string) => {
 const lines = (text: string) => text.replaceAll("\r\n", "\n").split("\n");
 
 const lensHeadings = (spec: string) =>
-  (section(lines(spec), "## Wall of shame") ?? []).filter((line) => line.startsWith("### "));
+  (section(lines(spec), "## Wall of shame") ?? []).filter(
+    (line) => line.startsWith("### ") && !line.includes("(reviewed in the owning session"),
+  );
 
 export function wallOfShameLenses(spec: string) {
   return lensHeadings(spec).map((line) => line.slice(4).split(" (")[0]!.trim());

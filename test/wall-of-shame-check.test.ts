@@ -4,7 +4,7 @@ import test from "node:test";
 import { wallOfShameLenses, wallOfShameProblems } from "../scripts/wall-of-shame-check.ts";
 
 const spec =
-  "## Wall of shame\n\n### Overengineering (6 examples)\n\n### Regex\n\n### Honorable mentions\n\n## Later\n\n### Not a lens\n";
+  "## Wall of shame\n\n### Overengineering (6 examples)\n\n### Regex\n\n### Loss of control (reviewed in the owning session)\n\n### Honorable mentions\n\n## Later\n\n### Not a lens\n";
 const head = "a".repeat(40);
 const body = (sha: string, rows: string[]) =>
   `Summary\n\n## Wall of shame review report\n\nReviewed commit: \`${sha}\`.\n\n| Lens | Reviewer | Verdict | Score | Assessment |\n| --- | --- | --- | --- | --- |\n${rows.join("\n")}\n`;

@@ -110,6 +110,12 @@ Helpful KPIs here are: how many env vars do we have? how large is the database s
 - **[qm#876](https://github.com/yc-software/qm/pull/876)** (2026-09-02): Porter added as yet another SANDBOX_BACKEND and DEPLOY_PROVIDER (plus a Helm chart), shortly after Modal and E2B.
 - **[qm#478](https://github.com/yc-software/qm/pull/478)** (2026-08-13): Added smolmachines as yet another sandbox backend, then SMOLMACHINES_CPUS/MEMORY_MB/DISK_GB env knobs ([qm#507](https://github.com/yc-software/qm/pull/507)).
 
+### Loss of control (reviewed in the owning session, 1 example)
+
+The PR must do what the person asked for, and nothing they would object to if told plainly. The danger is drift during the work. Agents restate a request in a worker brief. They add rules the person never stated. They remove behavior without saying so, and their reports read as compliance. Flag rules or constraints in a brief that the person never gave, and behavior the diff removes or changes that no report to the person stated plainly. Unlike the other lenses, this review reads private conversations, so it runs only inside the session that owns the PR (see AGENTS.md) and never appears in the PR description or CI.
+
+- **`files write` stopped writing to Files** (2026-10-12): The person asked for files to live in Files with an ID, and for shares to require that. The worker brief added a rule they never gave, that the tool must not copy the file into Files itself. The worker therefore deleted the server-side publish from `files write` and pointed agents at the raw upload API. Reports said only that sharing a path was refused. Agents then hand-built uploads through `execute`, and abandoned ones filled the per-person upload quota with `429 upload_quota`. [qm#2199](https://github.com/yc-software/qm/pull/2199); fixed in [qm#2319](https://github.com/yc-software/qm/pull/2319).
+
 ### Provider drift (2 examples)
 
 Every sandbox provider should give the agent the same machine. When one provider's image or behavior quietly differs, the agent hits failures that only reproduce there.
