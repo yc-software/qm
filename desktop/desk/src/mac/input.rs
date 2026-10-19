@@ -74,13 +74,14 @@ pub(super) fn window_geometry(id: u32) -> Option<(i32, Rect)> {
     Some((owner, Rect { x: bounds.origin.x, y: bounds.origin.y, w: bounds.size.width, h: bounds.size.height }))
 }
 
-fn hosted_window(host_pid: i32, host: &El, element: &El) -> Option<(i32, u32, Rect)> {
+pub(super) fn resolved_window(host: &El, element: &El) -> Result<(i32, u32, Rect), Failure> {
     if !within(element, host) {
-        return None;
+        return Err(fail(ErrorCode::ActionFailed, "The input target is no longer linked to this app; observe again"));
     }
     let id = window_id(element);
-    let (owner, bounds) = window_geometry(id)?;
-    (owner != host_pid).then_some((owner, id, bounds))
+    let (owner, bounds) =
+        window_geometry(id).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window ownership is unavailable; observe again"))?;
+    Ok((owner, id, bounds))
 }
 
 fn inside(inner: Rect, outer: Rect) -> bool {
@@ -91,10 +92,10 @@ fn inside(inner: Rect, outer: Rect) -> bool {
         && inner.y + inner.h <= outer.y + outer.h + SLACK
 }
 
-pub(super) fn service_at(app_pid: i32, ax: &El, p: CGPoint) -> Option<(i32, El, u32, Rect)> {
-    let element = element_at(ax, p)?;
-    let (owner, id, bounds) = hosted_window(app_pid, ax, &element)?;
-    Some((owner, element, id, bounds))
+pub(super) fn service_at(ax: &El, p: CGPoint) -> Result<(i32, El, u32, Rect), Failure> {
+    let element = element_at(ax, p).ok_or_else(|| fail(ErrorCode::ActionFailed, "Cannot identify the input target; observe again"))?;
+    let (owner, id, bounds) = resolved_window(ax, &element)?;
+    Ok((owner, element, id, bounds))
 }
 
 pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
@@ -112,8 +113,8 @@ pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
             }
             let id = window_id(&e);
             if checked.insert(id) {
-                if let Some((_, id, bounds)) = hosted_window(pid, window, &e) {
-                    if inside(bounds, outer) {
+                if let Ok((owner, id, bounds)) = resolved_window(window, &e) {
+                    if owner != pid && inside(bounds, outer) {
                         found.push(id);
                     }
                 }
@@ -125,9 +126,12 @@ pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
     found
 }
 
-pub(super) fn keyboard_target(app_pid: i32, ax: &El) -> (i32, El) {
-    let pid = attr(ax, "AXFocusedUIElement").and_then(|focused| hosted_window(app_pid, ax, &focused)).map(|(pid, _, _)| pid);
-    (pid.unwrap_or(app_pid), ax.clone())
+pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
+    let focused = attr(ax, "AXFocusedUIElement")
+        .or_else(|| window_of(ax))
+        .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the keyboard target; observe again"))?;
+    let (owner, _, _) = resolved_window(ax, &focused)?;
+    Ok((owner, ax.clone()))
 }
 
 pub(super) fn menu_open(ax: &El) -> bool {
@@ -284,7 +288,7 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         if actions(e).iter().any(|a| a == "AXConfirm") {
             perform(e, "AXConfirm")?;
         } else {
-            let target = hosted_window(pid, &app_element(pid), e).map(|(owner, _, _)| owner).unwrap_or(pid);
+            let (target, _, _) = resolved_window(&app_element(pid), e)?;
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
     }
