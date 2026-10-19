@@ -115,6 +115,7 @@ pub struct VisibleText {
     pub text: String,
     pub start: usize,
     pub end: usize,
+    pub shown_end: usize,
     pub total: usize,
 }
 
@@ -136,8 +137,8 @@ pub fn visible_text(value: &str, range: [isize; 2], limit: usize) -> Option<Visi
         }
     }
     let text: String = value[start_byte?..end_byte?].chars().take(limit).collect();
-    let end = start + text.encode_utf16().count();
-    Some(VisibleText { text, start, end, total: offset })
+    let shown_end = start + text.encode_utf16().count();
+    Some(VisibleText { text, start, end, shown_end, total: offset })
 }
 
 pub fn selection_range(value: &str, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<[isize; 2], &'static str> {

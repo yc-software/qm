@@ -189,7 +189,11 @@ impl Props {
             let n = if TEXT_ROLES.contains(&self.role.as_str()) { MAX_TEXT } else { 120 };
             s += &format!(" = \"{}\"", clip(v, n));
             if let Some(v) = &self.visible_text {
-                s += &format!(" [visible UTF-16 range {}..{} of {}]", v.start, v.end, v.total);
+                s += &format!(" [visible UTF-16 range {}..{} of {}", v.start, v.end, v.total);
+                if v.shown_end < v.end {
+                    s += &format!("; shown {}..{}, truncated", v.start, v.shown_end);
+                }
+                s.push(']');
             }
         }
         if let Some(p) = placeholder {
@@ -581,7 +585,10 @@ mod tests {
             visible_text: crate::text::visible_text(&value, [6, 2002], super::MAX_TEXT),
             ..Default::default()
         };
-        assert_eq!(p.describe().0, format!("TextArea = \"{}\" [visible UTF-16 range 6..2006 of 2012]", "😀".repeat(1000)));
+        assert_eq!(
+            p.describe().0,
+            format!("TextArea = \"{}\" [visible UTF-16 range 6..2008 of 2012; shown 6..2006, truncated]", "😀".repeat(1000))
+        );
         let empty = crate::text::visible_text(&value, [2012, 0], super::MAX_TEXT).unwrap();
         assert!(empty.text.is_empty());
         assert_eq!((empty.start, empty.end, empty.total), (2012, 2012, 2012));
