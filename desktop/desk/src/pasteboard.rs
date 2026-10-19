@@ -16,7 +16,7 @@ fn fail(code: ErrorCode, m: &str) -> Failure {
     Failure::new(code, m)
 }
 
-fn snapshot(board: &NSPasteboard) -> Result<Saved, Failure> {
+fn snapshot(board: &NSPasteboard) -> Result<(Saved, isize), Failure> {
     let before = board.changeCount();
     let mut saved = vec![];
     for item in board.pasteboardItems().iter().flat_map(|items| items.iter()) {
@@ -38,30 +38,34 @@ fn snapshot(board: &NSPasteboard) -> Result<Saved, Failure> {
     if board.changeCount() != before {
         return Err(fail(ErrorCode::PasteConflict, "The clipboard changed while being saved; paste was not attempted."));
     }
-    Ok(saved)
+    Ok((saved, before))
 }
 
-fn write(board: &NSPasteboard, items: Vec<Retained<NSPasteboardItem>>) -> bool {
-    board.clearContents();
-    if items.is_empty() {
-        return true;
-    }
+fn write(board: &NSPasteboard, items: Vec<Retained<NSPasteboardItem>>, expected: isize) -> Result<(bool, isize), Failure> {
     let objects: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> = items.into_iter().map(ProtocolObject::from_retained).collect();
-    board.writeObjects(&NSArray::from_retained_slice(&objects))
+    let objects = NSArray::from_retained_slice(&objects);
+    if board.changeCount() != expected {
+        return Err(fail(ErrorCode::PasteConflict, CONFLICT));
+    }
+    let cleared = board.clearContents();
+    if board.changeCount() != cleared {
+        return Err(fail(ErrorCode::PasteConflict, CONFLICT));
+    }
+    Ok((objects.is_empty() || board.writeObjects(&objects), cleared))
 }
 
-fn restore(board: &NSPasteboard, saved: &Saved) -> bool {
-    let items = saved
-        .iter()
-        .map(|types| {
-            let item = NSPasteboardItem::new();
-            for (t, d) in types {
-                item.setData_forType(d, t);
+fn restore(board: &NSPasteboard, saved: &Saved, expected: isize) -> bool {
+    let mut items = Vec::with_capacity(saved.len());
+    for types in saved {
+        let item = NSPasteboardItem::new();
+        for (kind, data) in types {
+            if !item.setData_forType(data, kind) {
+                return false;
             }
-            item
-        })
-        .collect();
-    write(board, items)
+        }
+        items.push(item);
+    }
+    write(board, items, expected).is_ok_and(|(written, _)| written)
 }
 
 pub enum Check {
@@ -98,10 +102,8 @@ pub fn paste(
     if let Some(html) = html {
         data.push((unsafe { NSPasteboardTypeHTML }.to_string(), html.into_bytes()));
     }
+    data.extend(MARKERS.iter().map(|marker| (marker.to_string(), vec![])));
     let item = NSPasteboardItem::new();
-    for marker in MARKERS {
-        item.setData_forType(&NSData::new(), &NSString::from_str(marker));
-    }
     for (kind, bytes) in data {
         if !item.setData_forType(&NSData::with_bytes(&bytes), &NSString::from_str(&kind)) {
             return Err(fail(ErrorCode::ActionFailed, "Could not put the text on the clipboard."));
@@ -109,11 +111,13 @@ pub fn paste(
     }
 
     let board = NSPasteboard::generalPasteboard();
-    let saved = snapshot(&board)?;
-    if !write(&board, vec![item]) {
+    let (saved, previous) = snapshot(&board)?;
+    interrupted()?;
+    let (written, cleared) = write(&board, vec![item], previous)?;
+    if !written {
         return Err(fail(
             ErrorCode::ActionFailed,
-            if restore(&board, &saved) {
+            if restore(&board, &saved, cleared) {
                 "Could not put the text on the clipboard."
             } else {
                 "Could not put the text on the clipboard, and the previous clipboard could not be restored."
@@ -143,7 +147,7 @@ pub fn paste(
             Check::NotYet => {}
         }
     }
-    if board.changeCount() != ours || !restore(&board, &saved) {
+    if !restore(&board, &saved, ours) {
         return Err(fail(
             ErrorCode::ActionFailed,
             "The text was pasted, but the previous clipboard could not be restored. Check the clipboard before continuing.",
