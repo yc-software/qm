@@ -13,6 +13,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS credential_usage CASCADE");
+  await p.query("DROP TABLE IF EXISTS credential_daily_calls CASCADE");
   await p.end();
 });
 
@@ -168,4 +169,14 @@ test("pg credential summaries do not wait for pending telemetry writes", { skip 
     }),
   ]);
   assert.equal(result[0]!.usageCount, 0);
+});
+
+test("pg credential-usage sink: every process shares one daily cap per credential", { skip }, async () => {
+  const processes = [createPostgresCredentialUsageSink(URL!), createPostgresCredentialUsageSink(URL!)];
+  const admitted = await Promise.all(
+    Array.from({ length: 10 }, (_, i) => processes[i % 2]!.admitDailyCall("capped", 3)),
+  );
+  assert.equal(admitted.filter(Boolean).length, 3);
+  assert.equal(await createPostgresCredentialUsageSink(URL!).admitDailyCall("capped", 3), false);
+  assert.equal(await processes[0]!.admitDailyCall("capped", 4), true);
 });

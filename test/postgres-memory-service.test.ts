@@ -71,6 +71,21 @@ test("pg memory: notebook snapshots migrate into one row per fact, in order", { 
   assert.equal(legacy[4]!.createdAt, at);
 });
 
+test("pg memory: notebooks written before the records column migrate into fact rows", { skip }, async () => {
+  await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
+    op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, UNIQUE (scope_id, seq))`);
+  await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
+    "personal:U3",
+    "# Memory\n- (2026-04-01) Owns billing\n",
+    at,
+  ]);
+  const memory = createPostgresMemoryService(URL!);
+  assert.deepEqual(
+    (await memory.facts!("personal:U3")).map((fact) => fact.text),
+    ["Owns billing"],
+  );
+});
+
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {
   const memory = createPostgresMemoryService(URL!);
   const sid = scopeId("personal", "U1");

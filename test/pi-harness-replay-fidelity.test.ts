@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness, EMPTY_ENDING_NOTE } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
@@ -193,6 +193,31 @@ test("the next turn's anthropic request replays the previous turn byte-for-byte:
   assert.deepEqual(after.slice(before.length + 1), [
     { role: "user", content: [{ type: "text", text: "thanks, and the Q3 one?" }] },
   ]);
+});
+
+test("a turn on a later day is prompted under that day's marker and replays it byte-for-byte on the next turn", async () => {
+  const reply = (text: string) => () => anthropicSse([{ type: "text", text }], "end_turn");
+  const userTexts = (body: Body) =>
+    (body.messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>)
+      .filter((m) => m.role === "user")
+      .map((m) => m.content.find((b) => b.type === "text")?.text);
+  mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-16T17:00:00Z") });
+  try {
+    const friday = await runTurn("the deadline is Friday", [], [reply("Noted.")]);
+    mock.timers.setTime(Date.parse("2026-10-19T18:00:00Z"));
+    const monday = await runTurn("has the deadline passed?", forModelContext(friday.emitted), [reply("Yes.")]);
+    assert.deepEqual(userTexts(monday.bodies[0]!), [
+      "── Friday, October 16, 2026 ──\nthe deadline is Friday",
+      "── Monday, October 19, 2026 ──\nhas the deadline passed?",
+    ]);
+    const later = await runTurn("thanks", forModelContext([...friday.emitted, ...monday.emitted]), [reply("Sure.")]);
+    const before = withoutCacheControl(monday.bodies[0]!.messages) as unknown[];
+    const after = withoutCacheControl(later.bodies[0]!.messages) as unknown[];
+    assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+    assert.equal(userTexts(later.bodies[0]!).at(-1), "thanks");
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test("the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly", async () => {

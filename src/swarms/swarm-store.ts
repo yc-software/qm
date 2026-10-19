@@ -4,10 +4,10 @@ import type { RunStore, Run } from "../runs/run-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { jsonbStringify, type DurableMap } from "../persistence/durable-map.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
 
 import type { SwarmSettings } from "./swarm-settings.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
+import type { SwarmMemberRuntime, SwarmTemplate } from "./swarm-runtime.ts";
 
 export const SWARM_LIMITS = {
   sweepBatch: 16,
@@ -24,6 +24,7 @@ export interface SwarmMember {
   parentId?: string;
   depth: number;
   context: unknown;
+  runtime?: SwarmMemberRuntime;
   sandboxId?: string;
   forumSandboxId?: string;
   state: "reserved" | "ready" | "failed";
@@ -53,8 +54,8 @@ export interface Swarm {
   ownerId: string;
   participants: string[];
   createdAt: number;
-  expiresAt: number;
-  template: OrchestratorInput;
+  expiresAt?: number;
+  template: SwarmTemplate;
   settings: SwarmSettings;
   backend: SandboxBackendName;
   board?: { sandboxId: string };
@@ -66,8 +67,12 @@ export interface Swarm {
   pending: boolean;
 }
 
+export function swarmExpired(swarm: Swarm): boolean {
+  return swarm.expiresAt !== undefined && Date.now() >= swarm.expiresAt;
+}
+
 export function assertSwarmOpen(swarm: Swarm): void {
-  if (Date.now() >= swarm.expiresAt) throw new NonRetryableTurnError("swarm work window expired");
+  if (swarmExpired(swarm)) throw new NonRetryableTurnError("swarm work window expired");
 }
 
 export interface SwarmStore {

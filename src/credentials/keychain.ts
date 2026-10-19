@@ -190,6 +190,8 @@ export interface PublicServiceCredential {
   deployments: boolean;
   enabled: boolean;
   hasSecret: boolean;
+  maxRequestsPerDay?: number;
+  source?: "deployment";
   updatedBy?: string;
   updatedAt: number;
 }
@@ -206,6 +208,8 @@ export interface DecryptedServiceCredential {
   allowedPathPrefixes?: string[];
   deployments: boolean;
   enabled: boolean;
+  maxRequestsPerDay?: number;
+  source?: "deployment";
 }
 
 export function isValidCredentialSlug(slug: string): boolean {
@@ -214,6 +218,18 @@ export function isValidCredentialSlug(slug: string): boolean {
 
 export function isValidServiceCredentialEnvKey(envKey: string): boolean {
   return /^[A-Z][A-Z0-9_]*$/.test(envKey) && !envKey.startsWith("AGENT_");
+}
+
+export function isValidBrokerHost(host: string): boolean {
+  return Boolean(host) && host === host.toLowerCase() && !/[/:\s]/.test(host);
+}
+
+export function isValidBrokerMethod(method: string): boolean {
+  return /^[A-Z]+$/.test(method);
+}
+
+export function isValidBrokerPathPrefix(path: string): boolean {
+  return path.startsWith("/") && !/[\r\n]/.test(path);
 }
 
 export interface ServiceCredentialReader {
@@ -1763,7 +1779,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   lines.push(
     "",
     "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's isolated owner execution in an Open shared conversation, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
-    "Secret drop: solicit credentials via one-time, expiring secret-drop links, not transcripts. Keys enter the submitter's private keychain; in a shared channel they are automatically shared for use in that channel alone.",
+    "Secret drop: for a credential nobody has saved, mint a one-time link with the `secret-drop` skill; never collect secrets in chat or send people to the keychain page. Keys enter the submitter's private keychain; in a shared channel they are shared for use in that channel alone.",
     "Device code or CLI logins: read the `interactive-login` skill from the first step. It logs in under a temporary home and saves the result. Never log in against this computer's $HOME; only keychain entries are durable and grantable.",
   );
   return lines.join("\n");

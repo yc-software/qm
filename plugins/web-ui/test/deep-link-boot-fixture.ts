@@ -15,9 +15,8 @@ export interface Harness {
   sessionsReady: () => Promise<void>;
   refreshSessions: () => Promise<boolean>;
   boot: () => Promise<void>;
-  switchView: (view: "chats" | "settings" | "crons" | "webhooks") => void;
+  switchView: (view: "chats" | "settings") => void;
   renderList: () => void;
-  setWebOnly: (value: boolean) => void;
   drawChatsPage: () => void;
   appState: { currentView: string };
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
@@ -224,7 +223,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     boot: shell.boot as () => Promise<void>,
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
-    setWebOnly: sessions.setWebOnly as (value: boolean) => void,
     drawChatsPage: sessions.drawChatsPage as () => void,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],

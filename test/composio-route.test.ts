@@ -508,6 +508,29 @@ test("execution never retries a provider failure", async () => {
   assert.equal(f.calls.length, 3);
 });
 
+test("execution failures tell the agent whether the tool timed out", async () => {
+  const f = fixture();
+  await f.own();
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  f.replies.push(aliceAccount, gmailTool, timeout);
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(result.data.cause, "timeout");
+  assert.match(result.data.message, /smaller pages/);
+});
+
+test("oversized provider responses are reported with their status", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push(aliceAccount, gmailTool, new Response("payload too large", { status: 413 }));
+  const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
+  assert.equal(result.status, 502);
+  assert.equal(result.data.cause, "provider_error");
+  assert.equal(result.data.providerStatus, 413);
+  assert.match(result.data.message, /smaller pages/);
+});
+
 test("callback completion is browser-only and preserves the durable return URL", async () => {
   const f = fixture();
   await f.own();
@@ -1108,4 +1131,17 @@ test("a confirmed Slack send is distinguished from a failed transcript write", a
   assert.equal(result.status, 502);
   assert.equal(result.data.error, "transcript_unavailable");
   assert.match(result.data.message, /Slack sent your message.*Do not resend/);
+});
+
+test("Slack reply failures redact both provider credentials from diagnostics", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => logged.push(args.map(String).join(" ")));
+  const composio = await slackReplyFixture();
+  composio.replies.push(new Response("provider rejected private-key", { status: 502 }));
+  assert.equal((await composio.invoke("/v1/composio/slack/reply", composio.message)).status, 502);
+  const native = await nativeSlackFixture();
+  native.nativeReplies.push(new Error("provider rejected alice-user"));
+  assert.equal((await native.invoke("/v1/composio/slack/reply", native.message)).status, 502);
+  assert.match(logged.join("\n"), /provider rejected/);
+  assert.doesNotMatch(logged.join("\n"), /private-key|alice-user/);
 });

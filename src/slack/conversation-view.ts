@@ -8,7 +8,6 @@ import {
   type RecentMessage,
   type SlackFile,
   MAX_RECENT_MESSAGES,
-  MAX_TOP_LEVEL_CONTEXT_AGE_S,
   decodeSlackEntities,
   isOversize,
   recentWindow,
@@ -147,9 +146,6 @@ export function createConversationSerializer(deps: {
         ...(m.ts === triggerTs ? { isTrigger: true } : {}),
         ...(m.bot_id ? { isBot: true } : {}),
         ...(isSelfMessage(m) ? { isSelf: true } : {}),
-        ...(isSelfMessage(m) && m.metadata?.event_type === "qm_delivery" && m.metadata.event_payload?.idempotency_key
-          ? { deliveryKey: m.metadata.event_payload.idempotency_key }
-          : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
         ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
         ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
@@ -206,11 +202,7 @@ export function createConversationSerializer(deps: {
     const raw = page.raw;
     if (inc.rawText !== undefined && !raw.some((m) => m.ts === inc.ts))
       raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
-    const messages = recentWindow(
-      await shapeRecentMessages(client, raw, inc.ts, nameById),
-      RECENT_MESSAGE_WINDOW,
-      inc.threadTs ? undefined : { triggerTs: inc.ts, maxAgeSeconds: MAX_TOP_LEVEL_CONTEXT_AGE_S },
-    );
+    const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
 
     const members =
       ctx.audience.length > 0 && ctx.audience.length <= MEMBERS_SHOW_MAX

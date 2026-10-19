@@ -1,4 +1,3 @@
-import { findRoute } from "./routes/route.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 
@@ -15,7 +14,7 @@ interface AgentApiView {
 }
 
 interface AgentApiFamily {
-  match?: (method: string, pathname: string) => boolean;
+  match: (method: string, pathname: string) => boolean;
   when?: (view: AgentApiView) => boolean;
   guidance?: string;
   routes: AgentApiRoute[];
@@ -64,7 +63,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
     routes: [
       {
         method: "GET",
@@ -378,6 +377,17 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) =>
+      (p === "/v1/ui/canvas" && ["GET", "POST", "DELETE"].includes(m)) || (m === "POST" && p === "/v1/ui/observe"),
+    when: () => false,
+    routes: [
+      { method: "GET", path: "/v1/ui/canvas", summary: "read this conversation's web UI canvas" },
+      { method: "POST", path: "/v1/ui/canvas", summary: "write, update, replace or pin the canvas (ui-canvas skill)" },
+      { method: "DELETE", path: "/v1/ui/canvas", summary: "dismiss the canvas" },
+      { method: "POST", path: "/v1/ui/observe", summary: "snapshot the person's open web UI (ui-state skill)" },
+    ],
+  },
+  {
     match: onPath("POST", "/v1/share"),
     when: () => false,
     routes: [
@@ -537,6 +547,10 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
+    match: (m, p) =>
+      (p === "/v1/webhooks" && (m === "POST" || m === "GET")) ||
+      (m === "GET" && /^\/v1\/webhooks\/[^/]+\/events$/.test(p)) ||
+      (m === "POST" && /^\/v1\/webhooks\/[^/]+\/(disable|enable|update)$/.test(p)),
     when: () => false,
     routes: [
       {
@@ -545,11 +559,26 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "register an inbound webhook that runs a prompt when an external system calls it (secret shown once)",
       },
       { method: "GET", path: "/v1/webhooks", summary: "list your webhooks" },
-      { method: "PATCH", path: "/v1/webhooks/:id", summary: "edit webhook title, instructions, or archived state" },
-      { method: "DELETE", path: "/v1/webhooks/:id", summary: "delete a webhook" },
-      { method: "GET", path: "/v1/webhooks/:id/runs", summary: "webhook run history" },
+      { method: "GET", path: "/v1/webhooks/:id/events", summary: "recent webhook payloads and sessions" },
       { method: "POST", path: "/v1/webhooks/:id/disable", summary: "disable a webhook" },
+      {
+        method: "POST",
+        path: "/v1/webhooks/:id/update",
+        summary: "update a webhook task in place (URL and secret unchanged)",
+      },
       { method: "POST", path: "/v1/webhooks/:id/enable", summary: "re-enable a webhook" },
+    ],
+  },
+  {
+    match: (m, p) => p === "/v1/pinned-skills" && (m === "GET" || m === "PUT"),
+    routes: [
+      { method: "GET", path: "/v1/pinned-skills", summary: "list the skills pinned to this conversation's scope" },
+      {
+        method: "PUT",
+        path: "/v1/pinned-skills",
+        summary:
+          "replace this scope's pinned skills — body {names: string[]} in display order (max 6; [] clears); they always lead the per-turn skills shortlist. Personal pins apply to that person's DMs, channel pins to that channel. Live person turns only",
+      },
     ],
   },
   {
@@ -630,7 +659,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          'mint a single-use, expiring link for someone to drop a credential into the keychain via a browser (no secret in chat; hand the returned url over VERBATIM — it carries a link-bound token, so a reconstructed url will not work; declare the form inputs with fields[], e.g. [{key:"X_EMAIL",label:"Email",secret:false},{key:"X_PASSWORD",label:"Password"}] for a login, or omit for a single token; the link binds to the person who will paste the secret — pass onBehalfOf with their id when that is a teammate who spoke in this conversation rather than the person whose turn this is; refused on trigger-fired turns)',
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -915,7 +944,7 @@ const WHOAMI_FOR_ALL: AgentApiFamily = {
 };
 
 export function agentApiMatches(method: string, pathname: string): boolean {
-  return FAMILIES.some((f) => (f.match ? f.match(method, pathname) : findRoute(f.routes, method, pathname) !== null));
+  return FAMILIES.some((f) => f.match(method, pathname));
 }
 
 export interface AgentApiListing {

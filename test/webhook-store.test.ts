@@ -1,4 +1,3 @@
-import { createMemoryAutomationRunStore } from "../src/triggers/run-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
@@ -128,13 +127,13 @@ test("re-creating a byte-identical disabled webhook re-enables it", async () => 
 });
 
 test("history survives reconstruction without entering webhook listings", async () => {
+  const history = createMemoryMap<import("../src/webhooks/webhook-store.ts").WebhookHistory>();
   const backing = createMemoryMap<Webhook>();
-  const fires = createMemoryAutomationRunStore();
-  const store = createWebhookStore(backing, fires);
+  const store = createWebhookStore(backing, history);
   const wh = await store.create(base);
   const event = { deliveryId: "one", receivedAt: 1, payload: "hello" };
   await store.recordEvent(wh.id, event);
-  const restored = createWebhookStore(backing, fires);
+  const restored = createWebhookStore(backing, history);
   assert.deepEqual(await restored.listEvents(wh.id), [event]);
   assert.equal(JSON.stringify(await restored.list()).includes("hello"), false);
   assert.deepEqual(await restored.listEvents("unknown"), []);
@@ -168,34 +167,4 @@ test("a repeated receipt preserves the original payload and timestamp", async ()
   await store.recordEvent(wh.id, original);
   await store.recordEvent(wh.id, { ...original, receivedAt: 2, payload: "changed" });
   assert.deepEqual(await store.listEvents(wh.id), [original]);
-});
-
-test("accepted receipts survive reconstruction even without a completion record", async () => {
-  const backing = createMemoryMap<Webhook>();
-  const fires = createMemoryAutomationRunStore();
-  const first = createWebhookStore(backing, fires);
-  const wh = await first.create(base);
-  await first.recordEvent(wh.id, { deliveryId: "new", receivedAt: 200, payload: "{}" });
-  await first.recordEvent(wh.id, { deliveryId: "old", receivedAt: 100, payload: "{}" });
-  const restored = createWebhookStore(backing, fires);
-  assert.equal((await restored.get(wh.id))?.lastReceivedAt, 200);
-  assert.equal((await restored.list())[0]?.lastReceivedAt, 200);
-  assert.equal((await restored.get(wh.id))?.lastFiredAt, 200);
-});
-
-test("editing instructions preserves webhook identity, configuration, disabled state, and history", async () => {
-  const store = createWebhookStore();
-  const wh = await store.create({ ...base, filters: [{ path: "action", in: ["opened"] }] });
-  await store.setEnabled(wh.id, false);
-  await store.recordFire(wh.id, { at: 100, deliveryId: "delivery" });
-  await store.recordEvent(wh.id, { deliveryId: "delivery", receivedAt: 90, payload: "{}" });
-  const before = await store.get(wh.id);
-  assert.deepEqual(await store.update(wh.id, { action: "  updated instructions  " }), {
-    ...before,
-    action: "updated instructions",
-  });
-  await assert.rejects(store.update(wh.id, { action: "  " }), /action is required/);
-  assert.equal((await store.listEvents(wh.id)).length, 1);
-  assert.equal((await store.get(wh.id))?.action, "updated instructions");
-  assert.equal(await store.update("missing", { action: "new" }), null);
 });

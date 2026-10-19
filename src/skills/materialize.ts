@@ -2,7 +2,7 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
-import { assertSafeSkillName } from "./skill-name.ts";
+import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
 import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
@@ -134,15 +134,31 @@ export function rankedSkills(
     .map(({ entry }) => entry);
 }
 
+const SHORTLIST_SIZE = 12;
+const MAX_PINNED_SKILLS = SHORTLIST_SIZE / 2;
+
+export function parsePinnedSkills(raw: unknown): { value: string[] } | { error: string } {
+  if (!Array.isArray(raw) || !raw.every((name) => typeof name === "string"))
+    return { error: "pinned skills require { names: string[] } (an empty list clears them)" };
+  const names = [...new Set(raw.map((name) => name.trim()).filter(Boolean))];
+  const bad = names.find((name) => !isSafeSkillName(name));
+  if (bad) return { error: `not a valid skill name: ${bad}` };
+  if (names.length > MAX_PINNED_SKILLS) return { error: `at most ${MAX_PINNED_SKILLS} skills can be pinned` };
+  return { value: names };
+}
+
 export function skillsIndex(
   resolved: SkillResolution[],
   provenanceScopes: readonly ScopeId[] = [],
   query = "",
   usedNames: readonly string[] = [],
+  pinnedNames: readonly string[] = [],
 ): string {
   const provenance = new Set(provenanceScopes);
   const ranked = rankedSkills(resolved, query, usedNames);
-  const items = ranked.slice(0, 12);
+  const byName = new Map(ranked.map((r) => [r.skill!.manifest.name, r]));
+  const pinned = pinnedNames.flatMap((name) => byName.get(name) ?? []);
+  const items = [...new Set([...pinned, ...ranked])].slice(0, SHORTLIST_SIZE);
   if (!items.length) return "";
   const lines = items.map((r) => {
     const m = r.skill!.manifest;

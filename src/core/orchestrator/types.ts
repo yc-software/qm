@@ -191,6 +191,11 @@ export interface OrchestratorDeps {
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;
   featureFlags?: FeatureFlagStore;
+  installSharedCanvas?: (
+    actorId: string,
+    fileId: string,
+    at: { threadRef: string; sessionId: string },
+  ) => Promise<string | null>;
   teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;

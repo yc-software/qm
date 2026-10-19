@@ -177,7 +177,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       spine.surfaceOutboundCount += 1;
       if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-      return { ok: true, deliveryId: delivery.id, deliveryKey: delivery.idempotencyKey };
+      return { ok: true, deliveryId: delivery.id };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
     }

@@ -16,7 +16,9 @@ export const decisionsResource: AdminResource = {
     deps.decisions && {
       ...decisionCatalog(),
       models: selectableBaseModels().map((m) => m.id),
-      credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? []).map((c) => c.slug),
+      credentials: ((await deps.serviceCreds?.listServiceCredentials(scope)) ?? [])
+        .filter((c) => c.source !== "deployment")
+        .map((c) => c.slug),
       providers: await deps.decisions.providers(),
       rules: await deps.decisions.rules(),
     },
@@ -37,6 +39,10 @@ export const decisionsResource: AdminResource = {
       } else if (body.provider !== undefined) {
         const parsed = parseDecisionProvider(body.provider);
         if ("error" in parsed) return parsed;
+        const credential = parsed.provider.credential;
+        const credentials = credential ? ((await ctx.deps.serviceCreds?.listServiceCredentials(scope)) ?? []) : [];
+        if (credentials.some((c) => c.slug === credential && c.source === "deployment"))
+          return { error: `credential ${credential} is supplied by this deployment for the broker only` };
         await store.saveProvider(parsed.provider, by);
         change = ["decision.provider.save", parsed.provider.id];
       } else if (body.rule !== undefined) {

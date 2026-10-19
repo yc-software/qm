@@ -56,9 +56,12 @@ test("Slack composer posts to the Slack endpoint and retains text after a reject
     assert.equal(field.value, "Hello Slack");
     assert.equal(messages.length, 1);
     assert.deepEqual(Object.keys(messages[0] as object).sort(), ["clientMessageId", "sessionId", "text"]);
+    const transcriptReads = () => h.requests.filter((path) => path.startsWith("/api/sessions/slack-chat")).length;
+    const beforeSend = transcriptReads();
     succeed = true;
     widget.querySelector("form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
     await until(() => field.value === "");
+    await until(() => transcriptReads() > beforeSend);
     assert.doesNotMatch(widget.textContent!, /Sending to Slack|Sent to Slack/);
     assert.equal(widget.querySelector('[role="alert"]'), null);
     assert.equal(messages.length, 2);

@@ -1,8 +1,7 @@
-import { loadWorkspaceEmoji, type CompletionEmoji } from "./workspace-emoji";
 import { html, nothing, render } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
-import { EMOJI_ROWS } from "./emoji-data";
+import { EMOJI_ROWS, type EmojiRow } from "./emoji-data";
 import { filterEmoji, rowForName } from "./emoji-picker";
 
 export function emojiToken(
@@ -24,8 +23,7 @@ class EmojiCompletion extends AsyncDirective {
   private input!: HTMLTextAreaElement;
   private popup: HTMLDivElement | null = null;
   private token: ReturnType<typeof emojiToken> = null;
-  private matches: CompletionEmoji[] = [];
-  private custom: CompletionEmoji[] = [];
+  private matches: EmojiRow[] = [];
   private active = 0;
   private id = `emoji-${crypto.randomUUID()}`;
 
@@ -43,20 +41,11 @@ class EmojiCompletion extends AsyncDirective {
   }
 
   private listen() {
-    this.input.addEventListener("focus", this.loadCustom);
     this.input.addEventListener("input", this.onInput, true);
     this.input.addEventListener("keydown", this.onKeydown, true);
     this.input.addEventListener("click", this.close);
     this.input.addEventListener("blur", this.close);
   }
-
-  private loadCustom = () => {
-    void loadWorkspaceEmoji().then((rows) => {
-      if (!this.isConnected) return;
-      this.custom = rows;
-      if (this.input.ownerDocument.activeElement === this.input && this.token) this.onInput(new Event("input"));
-    });
-  };
 
   private close = () => {
     if (this.popup) {
@@ -77,8 +66,8 @@ class EmojiCompletion extends AsyncDirective {
     this.token = emojiToken(this.input.value, this.input.selectionStart);
     if (!this.token) return;
     if (this.token.complete) {
-      const row = this.custom.find((row) => row.n === this.token!.query) ?? rowForName(this.token.query);
-      if (row && !(row as CompletionEmoji).custom && (event as InputEvent).inputType === "insertText") {
+      const row = rowForName(this.token.query);
+      if (row && (event as InputEvent).inputType === "insertText") {
         const value = this.input.value;
         const caret = this.input.selectionStart;
         setTimeout(() => {
@@ -89,18 +78,14 @@ class EmojiCompletion extends AsyncDirective {
     }
     if (this.token.query.length < 2) return;
     const query = this.token.query;
-    const customNames = new Set(this.custom.map((row) => row.n));
-    this.matches = filterEmoji([...this.custom, ...EMOJI_ROWS.filter((row) => !customNames.has(row.n))], query).slice(
-      0,
-      8,
-    );
-    const exact = this.custom.find((row) => row.n === query) ?? rowForName(query);
+    this.matches = filterEmoji(EMOJI_ROWS, query).slice(0, 8);
+    const exact = rowForName(query);
     if (exact) this.matches = [exact, ...this.matches.filter((row) => row !== exact)].slice(0, 8);
     this.active = 0;
     if (this.matches.length) this.draw();
   };
 
-  private insert(row: CompletionEmoji) {
+  private insert(row: EmojiRow) {
     if (!this.current()) return;
     const token = this.token!;
     this.close();
@@ -124,11 +109,6 @@ class EmojiCompletion extends AsyncDirective {
       return false;
     }
     return true;
-  }
-
-  private preview(row: CompletionEmoji) {
-    if (row.url) return html`<img src=${row.url} width="20" height="20" alt="" referrerpolicy="no-referrer" />`;
-    return row.custom ? rowForName(row.a?.[0] ?? "")?.c : row.c;
   }
 
   private draw() {
@@ -156,7 +136,7 @@ class EmojiCompletion extends AsyncDirective {
             @mousedown=${(event: MouseEvent) => event.preventDefault()}
             @click=${() => this.insert(row)}
           >
-            <span class="slash-icon">${this.preview(row)}</span><span>:${row.n}:</span>
+            <span class="slash-icon">${row.c}</span><span>:${row.n}:</span>
           </button>`,
       )}`,
       this.popup,
@@ -187,7 +167,6 @@ class EmojiCompletion extends AsyncDirective {
 
   protected override disconnected() {
     this.close();
-    this.input.removeEventListener("focus", this.loadCustom);
     this.input.removeEventListener("input", this.onInput, true);
     this.input.removeEventListener("keydown", this.onKeydown, true);
     this.input.removeEventListener("click", this.close);

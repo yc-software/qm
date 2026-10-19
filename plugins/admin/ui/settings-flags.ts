@@ -21,7 +21,8 @@ export function configureFlags(options: any) {
 function selector() {
   const choices = state.choices.filter(
     (row) =>
-      !["persistent_subagents", "app_annotations"].includes(state.feature) || row.scopeId.startsWith("personal:"),
+      !["persistent_subagents", "app_annotations", "ui_canvas"].includes(state.feature) ||
+      row.scopeId.startsWith("personal:"),
   );
   for (const id of state.selected) if (!choices.some((row) => row.scopeId === id)) state.selected.delete(id);
   state.selector = config.buildSelector(choices, state.selected, redraw);
@@ -140,6 +141,7 @@ function template() {
             <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
             <option value="external_app_sharing">External app sharing (public links, outside emails)</option>
             <option value="loop_triage">Loop triage (prioritize and consolidate)</option>
+            <option value="ui_canvas">UI canvas and UI state (agent code runs in the page)</option>
           </select></label
         >
         <div>
@@ -152,6 +154,8 @@ function template() {
               {
                 app_annotations:
                   "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
+                ui_canvas:
+                  "Lets the agent read the selected people's whole web UI and place live HTML/CSS/JS panels in their conversations. Canvas code runs unsandboxed in their page with their full session: it can do anything they can, including answering approvals. Personal scopes only. Turning it off stops canvases from loading on the next page load.",
                 slack_loading_indicator:
                   "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
               }[state.feature] ?? "Persistent subagents are available for personal scopes only."

@@ -18,7 +18,7 @@ interface SwarmView {
   self: SwarmPeer;
   peers: SwarmPeer[];
   board?: { sandboxId: string };
-  expiresAt: number;
+  expiresAt?: number;
 }
 
 type Control = "active" | "paused" | "stopped";

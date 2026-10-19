@@ -262,14 +262,12 @@ export interface CronSchedule {
   firstFireAt?: number;
 }
 
-export interface AutomationRun {
-  payload?: string;
-  deliveryId?: string;
+export interface CronFireLogEntry {
   fireKey: string;
   threadRef: string;
   firedAt: number;
   scheduledAt?: number;
-  status?: TurnResult["status"] | "queued" | "running" | "deferred";
+  status?: TurnResult["status"] | "running" | "deferred";
   endedAt?: number;
   note?: string;
   reply?: string;
@@ -282,25 +280,22 @@ export interface CronFireNote {
   by?: string;
 }
 
-export interface Automation extends TriggerBase {
-  title?: string;
-  archived?: boolean;
-  action?: string;
-  message?: string;
-}
-
-export interface Cron extends Automation {
+export interface Cron extends TriggerBase {
   runtime?: import("./harness/harness.ts").RuntimeChoice | null;
   schedule: CronSchedule;
   nextFireAt?: number;
   lastAttemptAt?: number;
   deferUntil?: number;
+  title?: string;
+  archived?: boolean;
+  action?: string;
+  message?: string;
   loopId?: string;
   createdAt: number;
   unattendedGrants?: string[];
   sessionRef?: string;
 
-  fireLog?: AutomationRun[];
+  fireLog?: CronFireLogEntry[];
   lastFireNote?: CronFireNote;
 }
 
@@ -314,9 +309,7 @@ interface WebhookFilter {
   in: string[];
 }
 
-export interface Webhook extends Automation {
-  lastRun?: Pick<AutomationRun, "firedAt" | "endedAt" | "status">;
-  lastReceivedAt?: number;
+export interface Webhook extends TriggerBase {
   action: string;
   verification: WebhookVerification;
   filters?: WebhookFilter[];
@@ -632,7 +625,6 @@ export interface ConversationTurn {
 }
 
 export interface OverheardMessage {
-  deliveryKey?: string;
   ts: string;
   role: "user" | "self";
   name?: string;
@@ -705,7 +697,6 @@ export interface TurnRequest {
   unattendedGrants?: string[];
   securityScreenData?: string;
   triggerDestination?: Destination;
-  triggerTitle?: string;
   ownerKeychainUnion?: boolean;
   unprompted?: boolean;
   liveActor?: boolean;

@@ -48,7 +48,7 @@ sites the profile holds state for.
 
 ## Create the browser
 
-In a DM, with the person's profile. First make sure no browser is still running on the
+With the person's profile. First make sure no browser is still running on the
 person's profile — state is written only when a browser stops, so one left running holds
 it. The v4 list doesn't say which profile a session is on, so every browser this doc
 creates is tagged with its profile id in `metadata`, and the check stops only tagged
@@ -89,16 +89,6 @@ LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(
 `cdpUrl` is an `https://…cdp.browser-use.com` base; the `/json/version` hop turns it into
 the websocket the runner drives. Both it and `LIVE_VIEW` are bearer material — anyone
 holding either controls the browser.
-
-In a channel or group, OMIT `profileId` (per the DM-only rule):
-
-```bash
-CREATE=$(curl -fsS -X POST https://api.browser-use.com/api/v4/browsers \
-  -H "X-Browser-Use-API-Key: $BROWSER_USE_API_KEY" -H 'content-type: application/json' \
-  -d '{"timeout":30}')
-```
-
-then extract `BU_SID` / `CDP_URL` / `LIVE_VIEW` exactly as above.
 
 `timeout` is minutes (1–240). `proxyCountryCode` defaults to `"us"`; pass another ISO
 code to change it, or `null` to drop the proxy. Browsers bill per minute, refunded

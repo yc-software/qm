@@ -210,7 +210,7 @@ test("reconstructMessagesFromHistory opens with a fixed user frame when the agen
     [
       ["user", [{ type: "text", text: AGENT_OPENED_TEXT }]],
       ["assistant", [{ type: "text", text: "daily digest" }]],
-      ["user", [{ type: "text", text: "thanks" }]],
+      ["user", [{ type: "text", text: "── Wednesday, December 31, 1969 ──\nthanks" }]],
     ],
   );
 });
@@ -528,7 +528,10 @@ test("reconstructMessagesFromHistory replays the environment note the user messa
   ];
   const [user] = reconstructMessagesFromHistory(history);
   assert.deepEqual(user!.content, [
-    { type: "text", text: "what's on today?\n\n<environment>\nIt is Monday 9am\n</environment>" },
+    {
+      type: "text",
+      text: "── Wednesday, December 31, 1969 ──\nwhat's on today?\n\n<environment>\nIt is Monday 9am\n</environment>",
+    },
   ]);
 });
 
@@ -691,4 +694,33 @@ test("a tool result cut off by a deploy says so in its replayed result", () => {
   ];
   const text = JSON.stringify(reconstructMessagesFromHistory(history));
   assert.match(text, /A routine platform deploy interrupted this call/);
+});
+
+test("replayed context marks each Pacific calendar day once, dating overheard Slack messages by when they were sent", () => {
+  const imported = Date.parse("2026-10-19T18:00:00Z");
+  const overheard = (iso: string, text: string): SessionEntry => ({
+    ...overheardEntry(String(Date.parse(iso) / 1000), "Dana", text),
+    createdAt: imported,
+  });
+  const msgs = reconstructMessagesFromHistory([
+    overheard("2026-10-15T20:00:00Z", "kickoff today"),
+    overheard("2026-10-16T16:00:00Z", "the deadline is Friday"),
+    overheard("2026-10-17T05:30:00Z", "still Friday night here"),
+    overheard("2026-10-17T08:00:00Z", "saturday early"),
+    { ...ent("user", { text: "has the deadline passed?" }, 5), createdAt: imported },
+  ]);
+  const lines = msgs.flatMap((m) =>
+    m.content.flatMap((b) => (b.type === "text" ? b.text.split("\n").filter((l) => l.startsWith("──")) : [])),
+  );
+  assert.deepEqual(lines, [
+    "── Thursday, October 15, 2026 ──",
+    "── Friday, October 16, 2026 ──",
+    "── Saturday, October 17, 2026 ──",
+    "── Monday, October 19, 2026 ──",
+  ]);
+  assert.match((msgs[2]!.content[0] as { text: string }).text, /^<message overheard="true"/);
+  assert.equal(
+    (msgs[4]!.content[0] as { text: string }).text,
+    "── Monday, October 19, 2026 ──\nhas the deadline passed?",
+  );
 });

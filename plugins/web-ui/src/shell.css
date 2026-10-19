@@ -5437,11 +5437,11 @@ a.connector-widget:focus-visible {
   gap: 6px;
 }
 
-.automation-edit-dialog {
+.cron-edit-dialog {
   width: min(560px, calc(100vw - 32px));
 }
 
-.automation-edit-dialog label {
+.cron-edit-dialog label {
   display: grid;
   gap: 7px;
   margin-top: 16px;
@@ -5449,8 +5449,8 @@ a.connector-widget:focus-visible {
   font-weight: 600;
 }
 
-.automation-edit-dialog input,
-.automation-edit-dialog textarea {
+.cron-edit-dialog input,
+.cron-edit-dialog textarea {
   width: 100%;
 }
 
@@ -10508,6 +10508,15 @@ h3.ambient-field-label {
     flex: none;
     margin-right: 10px;
   }
+  .chat-topbar:has(.menu-popover:not([hidden])) {
+    z-index: 60;
+  }
+  .session-tools-more .menu-option {
+    align-items: center;
+  }
+  .session-tools-more .menu-option-copy {
+    flex: 1;
+  }
   .menu-title {
     padding: 10px 12px 6px;
     font-size: 13px;
@@ -12574,69 +12583,51 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   min-width: 80px;
 }
 
-.webhook-event-row {
-  align-items: stretch;
-}
-.webhook-event {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  min-width: 0;
-}
-.webhook-event-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 600;
-}
-.webhook-event-heading span {
-  font-weight: 400;
-  color: var(--muted-foreground);
-}
-.webhook-event-action {
-  margin-top: 10px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.webhook-event details {
-  margin-top: 12px;
-}
-.webhook-event summary {
-  cursor: pointer;
-  color: var(--muted-foreground);
-}
-.webhook-event pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 320px;
-  overflow: auto;
-  background: var(--muted);
-  border-radius: 6px;
-  padding: 12px;
-}
-.webhook-event dd {
-  margin: 4px 0 12px;
-  overflow-wrap: anywhere;
-}
-
-.automation-run-input {
-  min-width: 0;
-  margin: 0 0 12px;
-  font-size: 12px;
-}
-
-.automation-run-input pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.split-canvas:not(.single-pane) .dv-groupview:not(.dv-active-group) .composer-wrap {
-  display: none;
-}
-
 .split-canvas:not(.single-pane)
   .dv-groupview:not(.dv-active-group):not(:hover):not(:focus-within)
   :is(.dv-right-actions-container, .split-tab-actions) {
   opacity: 0;
   pointer-events: none;
+}
+.ui-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+.ui-canvas-body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.ui-canvas.collapsed .ui-canvas-body {
+  display: none;
+}
+.ui-canvas-dock {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.ui-canvas-dock:empty {
+  display: none;
+}
+.ui-canvas-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 999px;
+  background: var(--background, #fff);
+  pointer-events: auto;
+}
+.ui-canvas-title {
+  font-weight: 600;
+  margin-right: 4px;
 }

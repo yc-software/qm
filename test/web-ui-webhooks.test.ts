@@ -140,24 +140,6 @@ test("removed Project members cannot list or disable their former Project webhoo
     (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("hook-owner", { method: "POST" }))).status,
     404,
   );
-  assert.equal(
-    (
-      await fetch(
-        `${webBase}/api/webhooks/${webhook.id}`,
-        asUser("hook-owner", { method: "PATCH", body: JSON.stringify({ action: "removed owner edit" }) }),
-      )
-    ).status,
-    404,
-  );
-  assert.equal(
-    (
-      await fetch(
-        `${webBase}/api/webhooks/${webhook.id}`,
-        asUser("project-teammate", { method: "PATCH", body: JSON.stringify({ action: "current member edit" }) }),
-      )
-    ).status,
-    200,
-  );
   assert.equal((await built.app.listWebhooks()).find((candidate) => candidate.id === webhook.id)?.enabled, true);
   assert.equal(
     (await fetch(`${webBase}/api/webhooks/${webhook.id}/disable`, asUser("project-teammate", { method: "POST" })))
@@ -244,78 +226,10 @@ test("webhook history is relayed with the authenticated viewer, not a query-stri
     }),
   );
   const { webhook } = (await res.json()) as { webhook: { id: string } };
-  const path = `${webBase}/api/webhooks/${webhook.id}/runs`;
+  const path = `${webBase}/api/webhooks/${webhook.id}/events`;
   const owner = await fetch(path, asUser("history-owner"));
   assert.equal(owner.status, 200);
-  assert.deepEqual(await owner.json(), { runs: [], total: 0 });
+  assert.deepEqual(await owner.json(), { events: [] });
   const stranger = await fetch(`${path}?viewer=history-owner`, asUser("stranger"));
   assert.equal(stranger.status, 404);
-});
-
-test("editing webhook instructions is owner-gated and preserves its URL and signing secret", async () => {
-  const webhook = await built.app.createWebhook({
-    ownerScopeId: "personal:editor",
-    owner: "editor",
-    createdBy: "editor",
-    action: "original",
-    verification: { scheme: "github", secret: "keep-this-secret" },
-  });
-  const path = `${webBase}/api/webhooks/${webhook.id}`;
-  const patch = (user: string, body: unknown) =>
-    fetch(path, asUser(user, { method: "PATCH", body: JSON.stringify(body) }));
-  assert.equal((await patch("outsider", { action: "stolen" })).status, 404);
-  for (const body of [
-    { action: " " },
-    { action: 123 },
-    { action: "changed", owner: "outsider" },
-    { action: "changed", verification: { secret: "replace" } },
-  ])
-    assert.equal((await patch("editor", body)).status, 400);
-  const response = await patch("editor", { action: "updated task" });
-  assert.equal(response.status, 200);
-  const result = (await response.json()) as {
-    webhook: { id: string; action: string; url: string; verification: { secret: string } };
-  };
-  assert.equal(result.webhook.id, webhook.id);
-  assert.equal(result.webhook.action, "updated task");
-  assert.equal(result.webhook.url, incoming(webhook.id));
-  assert.equal(result.webhook.verification.secret, "***");
-  assert.equal((await built.app.getWebhook(webhook.id))?.verification.secret, "keep-this-secret");
-  assert.equal((await fetch(path, { method: "PATCH", body: JSON.stringify({ action: "unsigned" }) })).status, 401);
-});
-
-test("shared webhook management supports titles, archives and deletion without widening access", async () => {
-  const wh = await built.app.createWebhook({
-    owner: "automation-owner",
-    createdBy: "automation-owner",
-    ownerScopeId: "personal:automation-owner",
-    action: "Inspect event",
-    verification: { scheme: "github", secret: "test-only" },
-  });
-  const path = `${webBase}/api/webhooks/${wh.id}`;
-  for (const method of ["PATCH", "DELETE"]) {
-    const res = await fetch(
-      path,
-      asUser("outsider", { method, ...(method === "PATCH" ? { body: JSON.stringify({ title: "Bad edit" }) } : {}) }),
-    );
-    assert.equal(res.status, 404);
-  }
-  assert.equal((await fetch(`${path}/runs`, asUser("outsider"))).status, 404);
-  const edited = await fetch(
-    path,
-    asUser("automation-owner", {
-      method: "PATCH",
-      body: JSON.stringify({ title: "Issue triage", task: "Summarize each issue", archived: true }),
-    }),
-  );
-  assert.equal(edited.status, 200);
-  const saved = await built.app.getWebhook(wh.id);
-  assert.equal(saved?.title, "Issue triage");
-  assert.equal(saved?.action, "Summarize each issue");
-  assert.equal(saved?.enabled, false);
-  assert.equal(saved?.archived, true);
-  assert.equal(saved?.verification.secret, "test-only");
-  assert.equal((await fetch(`${path}/runs`, asUser("automation-owner"))).status, 200);
-  assert.equal((await fetch(path, asUser("automation-owner", { method: "DELETE" }))).status, 200);
-  assert.equal(await built.app.getWebhook(wh.id), null);
 });

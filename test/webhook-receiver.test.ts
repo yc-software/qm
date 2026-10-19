@@ -53,7 +53,6 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
     createdBy: "U1",
-    title: "Issue triage",
     action: "triage this issue",
     verification: { scheme: "github", secret: SECRET },
     destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
@@ -65,7 +64,6 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.surface, "webhook");
-  assert.equal(calls[0]?.triggerTitle, "Issue triage");
   assert.equal(calls[0]?.actor.externalId, "U1");
   assert.equal(calls[0]?.conversation.kind, "dm");
   assert.match(calls[0]?.text ?? "", /^<wake reason="webhook" surface="webhook" webhook-id=/);
@@ -374,98 +372,42 @@ test("history capture failure rejects before acknowledging or starting a turn", 
   assert.equal(calls.length, 0);
 });
 
-test("accepted events have receipt status before the agent run completes", async () => {
-  const webhooks = createWebhookStore();
-  const identity = createIdentityService();
-  let finish!: (result: TurnResult) => void;
-  const pending = new Promise<TurnResult>((resolve) => {
-    finish = resolve;
-  });
-  const receiver = createWebhookReceiver({
-    webhooks,
-    identity,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    run: () => pending,
-  });
+test("webhook fire accounting failures remain contained when recording the failure also rejects", async (t) => {
+  const { webhooks, calls, receiver } = harness();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
     createdBy: "U1",
-    action: "wait",
+    action: "triage",
     verification: { scheme: "github", secret: SECRET },
   });
-  assert.equal((await receiver.deliver(wh.id, githubReq('{"action":"opened"}'))).status, 202);
+  const record = t.mock.method(webhooks, "recordFire", async () => {
+    throw new Error("database unavailable");
+  });
+  const errors = t.mock.method(console, "error", () => {});
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq("{}")), { status: 202 });
   await flush();
-  const accepted = await webhooks.get(wh.id);
-  assert.ok(accepted?.lastReceivedAt);
-  assert.equal(accepted?.lastFiredAt, accepted?.lastReceivedAt);
-  assert.equal(accepted?.lastRun?.status, "running");
-  finish({ status: "silent" });
+  assert.equal(record.mock.callCount(), 2);
+  assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("persist fire failure")));
+  record.mock.restore();
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq('{"next":true}', "d-2")), { status: 202 });
   await flush();
-  assert.ok((await webhooks.get(wh.id))?.lastFiredAt);
+  assert.equal(calls.length, 2);
+  assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
 });
 
-test("webhook runs use cron lifecycle records and duplicate deliveries preserve the final result", async () => {
-  const { receiver, webhooks, calls } = harness({ status: "ok", reply: "Recorded reply", sessionId: "run-session" });
-  const wh = await webhooks.create(historyWebhook);
-  await receiver.deliver(wh.id, githubReq('{"action":"opened"}'));
-  await flush();
-  const completed = await webhooks.listFires(wh.id);
-  assert.equal(completed.total, 1);
-  assert.equal(completed.runs[0]?.status, "ok");
-  assert.equal(completed.runs[0]?.reply, "Recorded reply");
-  assert.equal(completed.runs[0]?.sessionId, "run-session");
-  assert.match(completed.runs[0]?.payload ?? "", /opened/);
-  assert.ok(completed.runs[0]?.endedAt);
-  await receiver.deliver(wh.id, githubReq('{"action":"opened"}'));
-  await flush();
-  assert.equal(calls.length, 1);
-  assert.deepEqual(await webhooks.listFires(wh.id), completed);
-});
-
-test("archived webhooks reject deliveries and enabling them restores cron-style active state", async () => {
-  const { receiver, webhooks, calls } = harness();
-  const wh = await webhooks.create(historyWebhook);
-  await webhooks.update(wh.id, { archived: true, title: "Issue triage" });
-  assert.equal((await webhooks.get(wh.id))?.enabled, false);
-  assert.equal((await receiver.deliver(wh.id, githubReq('{"action":"opened"}'))).status, 404);
-  assert.equal(calls.length, 0);
-  await webhooks.setEnabled(wh.id, true);
-  assert.equal((await webhooks.get(wh.id))?.archived, false);
-  assert.equal((await receiver.deliver(wh.id, githubReq('{"action":"opened"}'))).status, 202);
-  await flush();
-  assert.equal(calls.length, 1);
-});
-
-test("a failed durable enqueue is not acknowledged and never falls back to inline execution", async () => {
-  const webhooks = createWebhookStore();
+test("an edited task applies to the next delivery at the same URL and secret", async () => {
+  const { webhooks, calls, receiver } = harness();
   const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    action: "review",
+    action: "old orders",
     verification: { scheme: "github", secret: SECRET },
   });
-  let calls = 0;
-  const receiver = createWebhookReceiver({
-    webhooks,
-    deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
-    run: async () => {
-      calls++;
-      return { status: "ok" };
-    },
-    jobQueue: {
-      start: async () => {},
-      enqueueFire: async () => {
-        throw new Error("database unavailable");
-      },
-      healthy: () => false,
-      stop: async () => {},
-    },
-  });
-  await assert.rejects(receiver.deliver(wh.id, githubReq("{}")), /database unavailable/);
-  assert.equal(calls, 0);
+  await webhooks.update(wh.id, { action: "new orders" });
+  assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ n: 1 }), "d-edit")), { status: 202 });
+  await flush();
+  assert.match(calls[0]?.text ?? "", /new orders/);
+  assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
 });

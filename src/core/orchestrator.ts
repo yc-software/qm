@@ -154,7 +154,7 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, jsonbSafeStringify } from "../util/text.ts";
 import {
@@ -207,6 +207,7 @@ import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
+import { GATED_TOOL_APPROVALS } from "../harness/agent-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
 
@@ -532,8 +533,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       )
         throw new NonRetryableTurnError("swarm service unavailable");
       const swarmBinding = await deps.swarms?.binding(input);
-      if (input.swarm && swarmBinding?.member.parentId && (await deps.config?.getPurposeRuntimeDurable("subagent")))
-        input = { ...input, model: undefined, harness: undefined, thinkingLevel: undefined, fastMode: undefined };
       const swarmEntryProvenance = input.swarm ? { origin: "automation", swarm: input.swarm } : {};
       await deps.refreshModels?.();
       input = await scopeTeamsToTurn(input, deps, external);
@@ -1279,10 +1278,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
       let fallbackTitleWrite: Promise<void> | undefined;
-      if (!session.title && input.triggerTitle?.trim()) {
-        session.title = input.triggerTitle.trim();
-        fallbackTitleWrite = deps.sessions.updateTitle(session.id, session.title);
-      }
       const assignSessionTitle = () => {
         if (!session.title && !syntheticInput && !input.approval)
           fallbackTitleWrite = titles.titleFromFirstMessage(session, scopeId, titleText);
@@ -1554,36 +1549,45 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       perf.credsMs += Date.now() - credsStart;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
+      const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
+        new Set(
+          (
+            await deps.acl.grantsOfKind(
+              "service-cred",
+              conversation.audience,
+              scopeId,
+              resolution.orgScopeId,
+              principalEntitledToScope,
+            )
+          ).map((g) => parseRef(g.ref).id),
+        );
+      const orgWideAudience =
+        conversation.audience.length > 0 &&
+        conversation.audience.every((p) =>
+          principalEntitledToScope(p, resolution.orgScopeId, scopeId, resolution.orgScopeId),
+        );
+      const grantedServiceCredSlugs = async (records: readonly PublicServiceCredential[]): Promise<Set<string>> => {
+        const granted = await aclGrantedServiceCredSlugs();
+        if (orgWideAudience) for (const record of records) if (record.source === "deployment") granted.add(record.slug);
+        return granted;
+      };
       let serviceCredRecords: PublicServiceCredential[] = [];
       let grantedCredSlugs = new Set<string>();
       if (!strictReadOnly && deps.serviceCreds) {
         serviceCredRecords = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
           serviceAllowed(record.slug),
         );
-        if (serviceCredRecords.length > 0) {
-          grantedCredSlugs = new Set(
-            (
-              await deps.acl.grantsOfKind(
-                "service-cred",
-                conversation.audience,
-                scopeId,
-                resolution.orgScopeId,
-                principalEntitledToScope,
-              )
-            ).map((g) => parseRef(g.ref).id),
-          );
-        }
+        if (serviceCredRecords.length > 0) grantedCredSlugs = await grantedServiceCredSlugs(serviceCredRecords);
       }
       const authorizeServiceCredential = async (slug: string): Promise<void> => {
         if (!serviceAllowed(slug)) throw new Error("Service is not approved for external Slack.");
-        const grants = await deps.acl.grantsOfKind(
-          "service-cred",
-          conversation.audience,
-          scopeId,
-          resolution.orgScopeId,
-          principalEntitledToScope,
-        );
-        if (!grants.some((grant) => parseRef(grant.ref).id === slug)) {
+        if ((await aclGrantedServiceCredSlugs()).has(slug)) return;
+        const supplied =
+          orgWideAudience &&
+          ((await deps.serviceCreds?.listServiceCredentials(resolution.orgScopeId)) ?? []).some(
+            (record) => record.slug === slug && record.source === "deployment",
+          );
+        if (!supplied) {
           throw new Error(`Service credential is no longer authorized: ${slug}`);
         }
       };
@@ -1729,14 +1733,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const records = (await deps.serviceCreds.listServiceCredentials(resolution.orgScopeId)).filter((record) =>
           serviceAllowed(record.slug),
         );
-        const grants = await deps.acl.grantsOfKind(
-          "service-cred",
-          conversation.audience,
-          scopeId,
-          resolution.orgScopeId,
-          principalEntitledToScope,
-        );
-        const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));
+        const granted = await grantedServiceCredSlugs(records);
         const available = records.filter(
           (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
         );
@@ -2646,8 +2643,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             `[orchestrator] trigger delivery has no surface tools (missing deliveries store?) — reply would be lost session=${session.id}`,
           );
 
+        const canInstallCanvas =
+          deps.installSharedCanvas &&
+          liveTurn &&
+          (await deps.featureFlags?.enabled("ui_canvas", personalScope(actor.id))) === true;
         const baseTools = createToolContext({
           desktopClientId: desktopClientForTurn(input),
+          ...(canInstallCanvas
+            ? {
+                installSharedCanvas: (fileId: string) =>
+                  deps.installSharedCanvas!(actor.id, fileId, {
+                    threadRef: conversation.threadRef,
+                    sessionId: session.id,
+                  }),
+              }
+            : {}),
           sandbox: deps.sandbox,
           sandboxResources: turnSandboxResources,
           invalidateProvision,
@@ -2976,11 +2986,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? [p.name]
             : [];
         });
+        const pinnedSkills = deps.config
+          ? await deps.config.getPinnedSkillsDurable(scopeId).catch(reportFailureAs("orchestrator: pinned skills", []))
+          : [];
         turnContextBlocks["Skills"] = skillsIndex(
           nativeSkills,
           [scopeId, resolution.orgScopeId],
           input.text,
           usedSkills,
+          pinnedSkills,
         );
         const turnEnvironmentContents = [
           manifest,
@@ -3602,7 +3616,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   },
                 }
               : {}),
-            ...(securityPolicy.toolApprovals === "all" ? { toolApprovalGate: authorizeToolCall } : {}),
+            toolApprovalGate:
+              securityPolicy.toolApprovals === "all"
+                ? authorizeToolCall
+                : (tool: string) => !GATED_TOOL_APPROVALS[tool] || authorizeToolCall(tool),
             systemPrompt,
             history: continuation?.history ?? history,
             tools,

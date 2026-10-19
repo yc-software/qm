@@ -92,8 +92,8 @@ confirmed absent, send one short message:
 - Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
   as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
   verification as described in QM's `docs/composio.md`. If they would rather paste the
-  key now, mint a one-time drop with `POST /v1/keychain/drops`
-  (`{"service":"composio","envKey":"COMPOSIO_API_KEY","purpose":"…"}`) and share its `url`.
+  key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
+  `COMPOSIO_API_KEY`) and share its `url`.
   A dropped key enables Composio only for them; teammates need the org credential.
 - Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
   `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also

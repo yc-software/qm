@@ -191,6 +191,7 @@ export type AttachResult = { ok: true; files: AttachedFileMeta[]; staged: number
 export type AttachFiles = (files: readonly OutboundFile[], sandboxId?: string) => Promise<AttachResult>;
 
 export interface ToolContext extends SurfaceToolDeps {
+  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
@@ -370,7 +371,6 @@ export interface PostedFileMeta {
 }
 
 export interface SurfacePostResult {
-  deliveryKey?: string;
   ok: boolean;
   deliveryId?: string;
   message?: string;
@@ -470,6 +470,7 @@ export const CONTROL_UNAVAILABLE: ControlUnavailable = {
 export interface ToolContextDeps {
   desktopClientId?: string;
   admin?: AdminToolAccess;
+  installSharedCanvas?: (fileId: string) => Promise<string | null>;
   sandbox: Sandbox;
   commandCredentials?: readonly CommandCredential[];
   resolveCommandCredentials?: (handles: readonly string[]) => Promise<readonly CommandCredential[]>;
@@ -751,6 +752,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
+    ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),

@@ -2,9 +2,11 @@ import "./support/auto-fake-sprites.ts";
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
@@ -28,6 +30,7 @@ import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 
 const SECRET = "secret-drop-test-secret".repeat(3);
+const execFileAsync = promisify(execFile);
 
 describe("SecretDropStore", () => {
   it("mint → peek (non-consuming) → redeem (single-use)", async () => {
@@ -469,6 +472,29 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       { key: "DOORDASH_EMAIL", value: "alice@acme.co", secret: false },
       { key: "DOORDASH_PASSWORD", value: "hunter2", secret: true },
     ]);
+  });
+
+  it("an agent call without the capability header is told which header to send", async () => {
+    const cap = await capFor("U_A");
+    const res = await fetch(`${base}/v1/keychain/drops`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${cap}` },
+      body: JSON.stringify({ service: "stripe", purpose: "p" }),
+    });
+    assert.equal(res.status, 401);
+    assert.match(((await res.json()) as { message: string }).message, /x-agent-capability/);
+    const ok = await post("/v1/keychain/drops", { service: "stripe", purpose: "p" }, cap);
+    assert.equal(ok.status, 200, "the same token in x-agent-capability mints");
+  });
+
+  it("the secret-drop skill's mint command works as written", async () => {
+    const skill = readFileSync(new URL("../skills-seed/secret-drop/SKILL.md", import.meta.url), "utf8");
+    const start = skill.indexOf("```sh\n") + "```sh\n".length;
+    const command = skill.slice(start, skill.indexOf("```", start));
+    const { stdout } = await execFileAsync("sh", ["-c", command], {
+      env: { PATH: process.env.PATH, AGENT_API_URL: base, AGENT_API_TOKEN: await capFor("U_A") },
+    });
+    assert.match((JSON.parse(stdout) as { formPath: string }).formPath, /^\/drop\//);
   });
 
   it("rejects a malformed fields[] at mint", async () => {

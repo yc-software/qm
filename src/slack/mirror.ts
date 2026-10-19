@@ -49,9 +49,6 @@ export function slackMessageToIngestEvent(
       ? { sub: m.thread_ts && m.thread_ts !== m.ts ? String(m.thread_ts) : null }
       : {}),
     ...(m.bot_id ? { botId: String(m.bot_id) } : {}),
-    ...(m.metadata?.event_type === "qm_delivery" && m.metadata.event_payload?.idempotency_key
-      ? { deliveryKey: m.metadata.event_payload.idempotency_key }
-      : {}),
     ...(m.user ? { authorId: String(m.user) } : {}),
     ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
     text: opts.text ?? decodeSlackEntities(raw),

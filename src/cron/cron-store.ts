@@ -1,33 +1,44 @@
-import {
-  createAutomationStore,
-  type AutomationStore,
-  type CreateAutomationInput,
-  normalizeAutomationTitle,
-  type AutomationPatch,
-} from "../triggers/automation-store.ts";
-import type { Cron, AutomationRun, CronFireNote, CronSchedule } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination, RecipientConsent } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
-  createMemoryAutomationRunStore,
+  createMemoryCronFireStore,
   type BeginFireResult,
-  type AutomationRunRecord,
-  type AutomationRunStore,
-} from "../triggers/run-store.ts";
-import { contentPart } from "../triggers/trigger-store.ts";
+  type CronFireRecord,
+  type CronFireStore,
+} from "./fire-store.ts";
+import {
+  assertNoEscalation,
+  buildTriggerBase,
+  contentPart,
+  createDeduped,
+  setTriggerRecipientConsent,
+  type CreateTriggerInput,
+} from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
+import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
-export interface CreateCronInput extends CreateAutomationInput {
+export interface CreateCronInput extends CreateTriggerInput {
   runtime?: Cron["runtime"];
+  enabled?: boolean;
   schedule: Cron["schedule"];
+  title?: string;
+  action?: string;
+  message?: string;
   unattendedGrants?: string[];
   loopId?: string;
   sessionRef?: string;
 }
 
-export interface CronPatch extends AutomationPatch {
+export interface CronPatch {
   runtime?: Cron["runtime"];
+  title?: string;
+  action?: string;
+  message?: string;
   schedule?: CronSchedule;
+  enabled?: boolean;
+  archived?: boolean;
+  destination?: Destination;
   unattendedGrants?: string[];
   sessionRef?: string | null;
 }
@@ -40,14 +51,22 @@ export const FIRE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const FIRE_RETENTION_KEEP_PER_CRON = 100;
 
-export interface CronStore extends AutomationStore<Cron, CreateCronInput, CronPatch> {
-  beginFire(id: string, entry: AutomationRun, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
+export interface CronStore {
+  create(input: CreateCronInput): Promise<Cron>;
+  get(id: string): Promise<Cron | null>;
+  list(): Promise<Cron[]>;
+  update(id: string, patch: CronPatch): Promise<Cron | null>;
+  delete(id: string): Promise<void>;
+  setEnabled(id: string, enabled: boolean): Promise<void>;
+  setDestination(id: string, destination: Destination | undefined): Promise<void>;
+  setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
+  beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   pruneFires(now: number): Promise<number>;
-  recordFire(id: string, entry: AutomationRun): Promise<void>;
-  listFires(id: string, opts?: { limit?: number }): Promise<{ runs: AutomationRun[]; total: number }>;
-  firesByThreadRefs(threadRefs: readonly string[]): Promise<AutomationRunRecord[]>;
-  latestFireForThread(id: string, threadRef: string): Promise<AutomationRun | undefined>;
+  recordFire(id: string, entry: CronFireLogEntry): Promise<void>;
+  listFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
+  firesByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  latestFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   backfillFires(): Promise<number>;
   setFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
   markFired(id: string, at: number, scheduledAt?: number): Promise<void>;
@@ -72,18 +91,26 @@ export function isDeferred(cron: Pick<Cron, "deferUntil">, now: number): boolean
   return cron.deferUntil !== undefined && now < cron.deferUntil;
 }
 
+function normalizeTitle(title: string | undefined): string | undefined {
+  const trimmed = title?.trim().replace(/\s+/g, " ");
+  if (!trimmed) return undefined;
+  return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
+}
+
 export function createCronStore(
   backing: DurableMap<Cron> = createMemoryMap<Cron>(),
-  opts?: { staleRunningMs?: number; fires?: AutomationRunStore },
+  opts?: { staleRunningMs?: number; fires?: CronFireStore },
 ): CronStore {
   const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
-  const fires = opts?.fires ?? createMemoryAutomationRunStore();
-  const management = createAutomationStore<Cron, CreateCronInput, CronPatch>(backing, {
-    create(input, now) {
+  const fires = opts?.fires ?? createMemoryCronFireStore();
+  return {
+    async create(input) {
+      assertNoEscalation(input);
       assertCronRuntime(input);
-      const title = normalizeAutomationTitle(input.title);
+      const now = Date.now();
+      const title = normalizeTitle(input.title);
       const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
-      const identity = [
+      const contentId = hashId([
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
         contentPart(input.schedule),
@@ -94,35 +121,55 @@ export function createCronStore(
         contentPart(title),
         ...(input.loopId !== undefined ? [contentPart(input.loopId)] : []),
         ...(input.runtime ? [contentPart(input.runtime)] : []),
-      ];
-      return {
-        identity,
-        fields: {
-          schedule,
-          ...(nextFireAt !== undefined ? { nextFireAt } : {}),
-          ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
-          ...(input.loopId ? { loopId: input.loopId } : {}),
-          ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
-          ...(input.runtime ? { runtime: input.runtime } : {}),
-        },
-      };
+      ]);
+      return createDeduped(backing, contentId, (id) => ({
+        ...buildTriggerBase(input, id, now),
+        enabled: input.enabled !== false,
+        schedule,
+        ...(nextFireAt !== undefined ? { nextFireAt } : {}),
+        ...(title ? { title } : {}),
+        ...(input.action !== undefined ? { action: input.action } : {}),
+        ...(input.message !== undefined ? { message: input.message } : {}),
+        ...(input.unattendedGrants ? { unattendedGrants: input.unattendedGrants } : {}),
+        ...(input.loopId ? { loopId: input.loopId } : {}),
+        ...(input.sessionRef ? { sessionRef: input.sessionRef } : {}),
+        ...(input.runtime ? { runtime: input.runtime } : {}),
+      }));
     },
-    update(before, patch) {
+    get: (id) => backing.get(id),
+    list: () => backing.all(),
+    async update(id, patch) {
+      const before = await backing.get(id);
+      if (!before) return null;
       assertCronRuntime({ ...before, ...patch });
       const fields: Partial<Cron> = {};
       if (patch.runtime !== undefined) fields.runtime = patch.runtime;
+      if (patch.title !== undefined) fields.title = normalizeTitle(patch.title);
+      if (patch.action !== undefined) fields.action = patch.action;
+      if (patch.message !== undefined) fields.message = patch.message;
       if (patch.schedule !== undefined) {
         const normalized = normalizeSchedule(patch.schedule, Date.now());
         fields.schedule = normalized.schedule;
         fields.nextFireAt = normalized.nextFireAt;
       }
+      if (patch.enabled !== undefined) fields.enabled = patch.enabled;
+      if (patch.archived !== undefined) fields.archived = patch.archived;
+      if (patch.destination !== undefined) fields.destination = patch.destination;
+      if (patch.archived === true) fields.enabled = false;
       if (patch.unattendedGrants !== undefined) fields.unattendedGrants = patch.unattendedGrants;
       if (patch.sessionRef !== undefined) fields.sessionRef = patch.sessionRef ?? undefined;
-      return fields;
+      return backing.merge(id, fields);
     },
-  });
-  return {
-    ...management,
+    delete: (id) => backing.delete(id),
+    async setEnabled(id, enabled) {
+      await backing.merge(id, { enabled, ...(enabled ? { archived: false } : {}) });
+    },
+    async setDestination(id, destination) {
+      await backing.merge(id, { destination });
+    },
+    setRecipientConsent(id, recipientConsent) {
+      return setTriggerRecipientConsent(backing, id, recipientConsent);
+    },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };
       if (opts?.exclusive) return fires.beginExclusive(id, entry, staleRunningMs);

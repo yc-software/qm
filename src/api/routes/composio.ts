@@ -1,20 +1,171 @@
-import { activeRun, composioUserId, composioUserIds, credential, request } from "./composio-client.ts";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
-export { composioUserId } from "./composio-client.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
+import { isBackendCredential } from "../../credentials/keychain.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
+import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
+import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
+import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
 import { redactSecrets } from "../../harness/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+
+export function composioUserId(org: string, principal: string): string {
+  return `qm_${createHash("sha256")
+    .update(JSON.stringify([org, principal]))
+    .digest("hex")}`;
+}
+
+export function composioUserIds(principal: string): string[] {
+  return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
+}
+
+async function activeRun(ctx: ApiCtx): Promise<boolean> {
+  const cap = ctx.capability;
+  if (!cap) return true;
+  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
+  if (
+    !run ||
+    run.status !== "running" ||
+    !cap.runLeaseToken ||
+    run.leaseToken !== cap.runLeaseToken ||
+    run.attempts !== cap.runAttempt ||
+    run.sessionId !== cap.threadRef ||
+    !samePerson(run.request.actor.id, cap.actorId) ||
+    (run.leaseExpiresAt ?? 0) <= Date.now()
+  ) {
+    sendJson(ctx.res, 403, {
+      error: "inactive_run",
+      message: "Connected app access requires this run's current capability.",
+    });
+    return false;
+  }
+  return true;
+}
+
+export async function credential(ctx: ApiCtx): Promise<{ key: string; principal: string } | null> {
+  if (!(await activeRun(ctx))) return null;
+  const principal = ctx.capability?.actorId ?? ctx.actor?.p;
+  if (!principal) {
+    sendJson(ctx.res, 401, { error: "unauthorized" });
+    return null;
+  }
+  if (!(await activePrincipal(ctx.deps, principal))) {
+    sendJson(ctx.res, 403, { error: "forbidden" });
+    return null;
+  }
+  const personal = scopeId("personal", principal);
+  if (ctx.capability) {
+    const cap = ctx.capability;
+    const shared = cap.scopeId !== personal;
+    if (
+      cap.ownerConnections !== true ||
+      cap.deployment ||
+      cap.botActor ||
+      (shared &&
+        livePersonCapability(cap) &&
+        (await ctx.deps.config?.resolveSharingPostureDurable(personal, cap.scopeId)) !== "open")
+    ) {
+      sendJson(ctx.res, 403, {
+        error: "private_connections",
+        message:
+          "Use your connected apps in your own conversation, or explicitly open sharing to this conversation on a human-started turn.",
+      });
+      return null;
+    }
+  }
+  const own = (await ctx.deps.keychain?.listByOwner(principal)) ?? [];
+  const candidates = own.filter(
+    (c) => c.kind === "env" && isBackendCredential(c) && (!c.expiresAt || c.expiresAt > Date.now()),
+  );
+  if (candidates.length > 1) {
+    sendJson(ctx.res, 409, {
+      error: "ambiguous_credential",
+      message: "Choose a single Composio credential in your keychain.",
+    });
+    return null;
+  }
+  if (candidates.length === 1) {
+    const key = await ctx.deps.keychain!.composioKey(principal, candidates[0]!.id);
+    if (key) return { key, principal };
+    sendJson(ctx.res, 503, { error: "credential_unavailable" });
+    return null;
+  }
+  const org = scopeId("org", orgId());
+  const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
+  const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
+  if (!audience?.length || audience.some((member) => member.type !== "internal")) {
+    sendJson(ctx.res, 403, { error: "unknown_audience" });
+    return null;
+  }
+  const grants =
+    (await ctx.deps.acl?.grantsOfKind(
+      "service-cred",
+      audience,
+      ctx.capability?.scopeId ?? personal,
+      org,
+      principalEntitledToScope,
+    )) ?? [];
+  const allowed = new Set(grants.map((g) => parseRef(g.ref).id));
+  const records = ((await ctx.deps.serviceCreds?.listServiceCredentials(org)) ?? []).filter(
+    (c) => c.enabled && c.hasSecret && c.delivery === "env" && c.envKey === "COMPOSIO_API_KEY" && allowed.has(c.slug),
+  );
+  if (records.length !== 1) {
+    sendJson(ctx.res, records.length ? 409 : 403, {
+      error: "composio_unavailable",
+      message: "App connections aren’t available for your account yet. Ask your administrator to enable them.",
+    });
+    return null;
+  }
+  const record = await ctx.deps.serviceCreds!.getServiceCredentialSecret(org, records[0]!.slug);
+  if (!record?.enabled || record.delivery !== "env" || record.envKey !== "COMPOSIO_API_KEY" || !record.secret) {
+    sendJson(ctx.res, 403, { error: "composio_unavailable" });
+    return null;
+  }
+  return { key: record.secret, principal };
+}
+
+class ComposioHttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function executeFailureCause(error: unknown, timedOut: boolean): string {
+  if (timedOut) return "timeout";
+  return error instanceof ComposioHttpError ? "provider_error" : "unavailable";
+}
+
+const EXECUTE_TIMEOUT_MS = 90_000;
+
+export async function request(
+  ctx: ApiCtx,
+  key: string,
+  path: string,
+  body?: unknown,
+  timeoutMs = 20_000,
+): Promise<Record<string, unknown>> {
+  const response = await (ctx.deps.composioFetch ?? fetch)(`https://backend.composio.dev/api/v3.1${path}`, {
+    method: body ? "POST" : "GET",
+    headers: { "x-api-key": key, "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok)
+    throw new ComposioHttpError(response.status, `Composio request failed: ${await httpFailure(response)}`);
+  return (await response.json()) as Record<string, unknown>;
+}
 
 async function catalog(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
@@ -275,12 +426,18 @@ async function execute(ctx: ApiCtx): Promise<void> {
       resource,
       scopeLabel: ctx.capability.scopeId,
     });
-    const result = await request(ctx, access.key, `/tools/execute/${body.tool}`, {
-      user_id: account.user_id,
-      connected_account_id: body.accountId,
-      version: body.version,
-      arguments: body.arguments,
-    });
+    const result = await request(
+      ctx,
+      access.key,
+      `/tools/execute/${body.tool}`,
+      {
+        user_id: account.user_id,
+        connected_account_id: body.accountId,
+        version: body.version,
+        arguments: body.arguments,
+      },
+      EXECUTE_TIMEOUT_MS,
+    );
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.execute.completed",
@@ -292,16 +449,24 @@ async function execute(ctx: ApiCtx): Promise<void> {
       successful: result.successful === true,
       error: result.error ?? null,
     });
-  } catch {
+  } catch (error) {
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.execute.failed",
       resource,
       scopeLabel: ctx.capability.scopeId,
     });
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: execute", new Error(mask(redactSecrets(errMessage(error)))), `tool=${body.tool}`);
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
     return sendJson(ctx.res, 502, {
       error: "composio_execution_failed",
-      message: "Execution failed or its outcome is unknown. Do not automatically retry a write.",
+      cause: executeFailureCause(error, timedOut),
+      ...(error instanceof ComposioHttpError ? { providerStatus: error.status } : {}),
+      message:
+        timedOut || (error instanceof ComposioHttpError && error.status === 413)
+          ? "The request was too large to complete. For reads, request less per call (smaller pages, metadata before bodies). Do not automatically retry a write."
+          : "Execution failed or its outcome is unknown. Do not automatically retry a write.",
     });
   }
 }

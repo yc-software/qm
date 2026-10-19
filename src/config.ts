@@ -1,4 +1,8 @@
 import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
+import {
+  deploymentBrokerCredentialsFromEnv,
+  type DeploymentBrokerCredential,
+} from "./credentials/deployment-credentials.ts";
 import { errMessage } from "./util/errors.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
@@ -99,6 +103,7 @@ export interface Config {
   modelProvider?: ModelProvider;
   providerBaseUrls: ProviderBaseUrls;
   modelGateway?: ModelGatewayTransportConfig;
+  brokerCredentials?: DeploymentBrokerCredential[];
   piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
   adminGrants?: string;
@@ -1426,6 +1431,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
   const modelGateway = modelGatewayFromEnv(env);
+  const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
   const claudeProcessEnv = Object.fromEntries(
     [
       "PATH",
@@ -1523,6 +1529,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelProvider ? { modelProvider } : {}),
     providerBaseUrls,
     ...(modelGateway ? { modelGateway } : {}),
+    ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS

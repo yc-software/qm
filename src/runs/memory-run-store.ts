@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
-import { isTerminal, leaseLapsed, releasesDedupKey } from "./run-store.ts";
+import { countedClaims, isTerminal, leaseLapsed, releasesDedupKey, runPriority } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
@@ -34,9 +34,12 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   }
 
   function pendingRuns(now: number): Run[] {
-    return [...runs.values()]
-      .filter((r) => r.status === "pending" && !sessionUnavailable(r.sessionId, now))
-      .sort((a, b) => a.createdAt - b.createdAt);
+    const heads = new Map<string, Run>();
+    for (const r of [...runs.values()].sort((a, b) => a.createdAt - b.createdAt)) {
+      if (r.status === "pending" && !heads.has(r.sessionId) && !sessionUnavailable(r.sessionId, now))
+        heads.set(r.sessionId, r);
+    }
+    return [...heads.values()].sort((a, b) => a.priority - b.priority || a.createdAt - b.createdAt);
   }
 
   function settle(run: Run): void {
@@ -68,6 +71,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         attempts: 0,
         errorAttempts: 0,
         maxAttempts,
+        priority: runPriority(
+          request,
+          request.delegatingRunId ? (runs.get(request.delegatingRunId)?.priority ?? null) : null,
+        ),
+        preemptions: 0,
         leaseToken: null,
         leaseExpiresAt: null,
         workerId: null,
@@ -85,6 +93,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       const run = pendingRuns(now)[0];
       if (!run) return null;
       return lease(run, workerId, ttlMs);
+    },
+
+    async personWaiting(createdBefore) {
+      return pendingRuns(Date.now()).some((run) => run.priority === 0 && run.createdAt <= createdBefore);
     },
 
     async claimById(runId, workerId, ttlMs) {
@@ -109,6 +121,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     async releaseLease(runId, leaseToken, stop) {
       const run = runs.get(runId);
       if (!run || run.status !== "running" || run.leaseToken !== leaseToken) return false;
+      if (stop?.kind === "parked") run.preemptions += 1;
       run.status = "pending";
       run.leaseToken = null;
       run.leaseExpiresAt = null;
@@ -377,7 +390,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.leaseExpiresAt = null;
     run.workerId = null;
     if (opts?.countsAsError) run.errorAttempts += 1;
-    const overClaimed = run.attempts >= maxClaims;
+    const overClaimed = countedClaims(run) >= maxClaims;
     if (retry && run.errorAttempts < run.maxAttempts && !overClaimed) {
       run.status = "pending";
       run.lastStop = opts?.stop ?? (opts?.countsAsError ? { kind: "error" } : { kind: "lease_expired" });
@@ -387,7 +400,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.status = "failed";
     const reason =
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${run.attempts} claims without completing (suspected crash loop)`
+        ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
         : error;
     run.result = { status: "failed", sessionId: run.sessionId, reason };
     run.finishedAt = Date.now();

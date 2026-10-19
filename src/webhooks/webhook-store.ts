@@ -1,57 +1,74 @@
-import {
-  createAutomationStore,
-  type AutomationStore,
-  type CreateAutomationInput,
-  type AutomationPatch,
-} from "../triggers/automation-store.ts";
-import { createMemoryAutomationRunStore, type AutomationRunStore } from "../triggers/run-store.ts";
-import type { AutomationRun } from "../types.ts";
-import type { Webhook } from "../types.ts";
+import type { RecipientConsent, Webhook } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { contentPart } from "../triggers/trigger-store.ts";
+import {
+  assertNoEscalation,
+  buildTriggerBase,
+  contentPart,
+  createDeduped,
+  setTriggerEnabled,
+  setTriggerRecipientConsent,
+  type CreateTriggerInput,
+} from "../triggers/trigger-store.ts";
+import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
-export interface CreateWebhookInput extends CreateAutomationInput {
+export interface CreateWebhookInput extends CreateTriggerInput {
   action: string;
   verification: Webhook["verification"];
   filters?: Webhook["filters"];
 }
 
-interface WebhookEvent {
+export interface WebhookEvent {
   deliveryId: string;
   receivedAt: number;
   payload: string;
 }
 
-export interface WebhookStore extends AutomationStore<Webhook, CreateWebhookInput, AutomationPatch> {
-  recordEvent(id: string, event: WebhookEvent): Promise<WebhookEvent>;
-  listEvents(id: string): Promise<WebhookEvent[]>;
-  beginFire(id: string, entry: AutomationRun): Promise<void>;
-  finishFire(id: string, entry: AutomationRun): Promise<void>;
-  listFires(id: string, opts?: { limit?: number }): Promise<{ runs: AutomationRun[]; total: number }>;
+export interface WebhookHistory {
+  events: WebhookEvent[];
+}
 
+export interface WebhookStore {
+  recordEvent(id: string, event: WebhookEvent): Promise<void>;
+  listEvents(id: string): Promise<WebhookEvent[]>;
+  create(input: CreateWebhookInput): Promise<Webhook>;
+  get(id: string): Promise<Webhook | null>;
+  list(): Promise<Webhook[]>;
+  setEnabled(id: string, enabled: boolean): Promise<void>;
+  update(id: string, patch: { action: string }): Promise<Webhook | null>;
+  setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
 export function createWebhookStore(
   backing: DurableMap<Webhook> = createMemoryMap<Webhook>(),
-  fires: AutomationRunStore = createMemoryAutomationRunStore(),
+  history: DurableMap<WebhookHistory> = createMemoryMap<WebhookHistory>(),
 ): WebhookStore {
-  const runId = (id: string) => `webhook:${id}`;
-  const withReceipt = async (webhook: Webhook): Promise<Webhook> => {
-    const latest = await fires.latest(runId(webhook.id));
-    const lastReceivedAt = latest?.firedAt;
-    const lastRun = latest ? { firedAt: latest.firedAt, endedAt: latest.endedAt, status: latest.status } : undefined;
-    return {
-      ...webhook,
-      ...(lastReceivedAt ? { lastReceivedAt, lastFiredAt: lastReceivedAt } : {}),
-      ...(lastRun ? { lastRun } : {}),
-    };
-  };
-  const management = createAutomationStore<Webhook, CreateWebhookInput, AutomationPatch>(backing, {
-    present: withReceipt,
-    reactivateDuplicate: true,
-    create(input) {
+  if (!history.update) throw new Error("webhook history requires atomic updates");
+  const updateHistory = history.update.bind(history);
+  return {
+    async recordEvent(id, event) {
+      await history.putIfAbsent(id, { events: [] });
+      await updateHistory(id, (value) => {
+        if (value.events.some((e) => e.deliveryId === event.deliveryId)) return value;
+        return {
+          events: [
+            ...value.events,
+            {
+              ...event,
+              payload: event.payload.slice(0, 16_100),
+            },
+          ]
+            .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId))
+            .slice(0, 50),
+        };
+      });
+    },
+    async listEvents(id) {
+      return structuredClone((await history.get(id))?.events ?? []);
+    },
+    async create(input) {
+      assertNoEscalation(input);
       if (!getVerifier(input.verification.scheme) || !input.verification.secret) {
         throw new Error("webhook verification requires a supported signed scheme and secret");
       }
@@ -63,62 +80,35 @@ export function createWebhookStore(
         throw new Error("every webhook filter requires a path and at least one value");
       }
       const filters = input.filters?.length ? input.filters : undefined;
-      const identity = [
+      const contentId = hashId([
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
         contentPart(input.action),
         contentPart(input.verification),
         contentPart(filters),
         contentPart(input.destination),
-      ];
-      return {
-        identity,
-        fields: {
-          verification: input.verification,
-          ...(filters ? { filters } : {}),
-        },
-      };
+      ]);
+      const webhook = await createDeduped(backing, contentId, (id) => ({
+        ...buildTriggerBase(input, id, Date.now()),
+        action: input.action,
+        verification: input.verification,
+        ...(filters ? { filters } : {}),
+      }));
+      if (webhook.enabled) return webhook;
+      await setTriggerEnabled(backing, webhook.id, true);
+      return { ...webhook, enabled: true };
     },
-    update(_before, patch) {
-      if (patch.action !== undefined && !patch.action.trim()) throw new Error("an action is required");
-      return patch.action !== undefined ? { action: patch.action.trim() } : {};
+    get: (id) => backing.get(id),
+    list: () => backing.all(),
+    setEnabled(id, enabled) {
+      return setTriggerEnabled(backing, id, enabled);
     },
-  });
-  return {
-    ...management,
-    async recordEvent(id, event) {
-      const fireKey = `webhook:${id}:${event.deliveryId}`;
-      const accepted = await fires.accept(runId(id), {
-        fireKey,
-        threadRef: fireKey,
-        firedAt: event.receivedAt,
-        status: "queued",
-        payload: event.payload.slice(0, 16_100),
-        deliveryId: event.deliveryId,
-      });
-      return {
-        deliveryId: event.deliveryId,
-        receivedAt: accepted.firedAt,
-        payload: accepted.payload ?? event.payload,
-      };
+    update(id, patch) {
+      return backing.merge(id, { action: patch.action });
     },
-    async listEvents(id) {
-      const { runs } = await fires.listByCron(runId(id), { limit: 50 });
-      return runs
-        .flatMap((run) =>
-          run.deliveryId !== undefined && run.payload !== undefined
-            ? [{ deliveryId: run.deliveryId, receivedAt: run.firedAt, payload: run.payload }]
-            : [],
-        )
-        .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId));
+    setRecipientConsent(id, recipientConsent) {
+      return setTriggerRecipientConsent(backing, id, recipientConsent);
     },
-    async beginFire(id, entry) {
-      await fires.record(runId(id), entry);
-    },
-    async finishFire(id, entry) {
-      await fires.record(runId(id), entry);
-    },
-    listFires: (id, opts) => fires.listByCron(runId(id), opts),
     async recordFire(id, info) {
       await backing.merge(id, {
         lastFiredAt: info.at,

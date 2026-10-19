@@ -33,7 +33,6 @@ import { startNewChat } from "./sessions";
 import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
-import { webhookRunSummary } from "./webhook-format.ts";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
 import { restoreDialogFocus } from "./dialog-focus";
@@ -917,15 +916,16 @@ function fileRow(f: ScopeFile): TemplateResult {
 }
 
 function webhookRow(w: WebhookView): TemplateResult {
-  let status = w.enabled ? "enabled" : "disabled";
-  if (w.archived) status = "archived";
+  let lastRun = "never fired";
+  if (w.lastError) lastRun = "error";
+  else if (w.lastFiredAt) lastRun = relTime(w.lastFiredAt);
   return html`
     <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${w.title ?? actionSnippet(w.action)}</span>
+      <span class="context-session-title">${actionSnippet(w.action)}</span>
       <span class="context-session-meta">
         <span class="badge">${w.verification.scheme}</span>
-        <span class="badge">${status}</span>
-        <span>${webhookRunSummary(w)}</span>
+        <span class="badge">${w.enabled ? "enabled" : "disabled"}</span>
+        <span>${lastRun}</span>
       </span>
     </div>
   `;

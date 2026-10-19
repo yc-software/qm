@@ -22,6 +22,7 @@ export const INTERRUPTED_TOOL_RESULT =
   "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
 
 const STOP_CAUSES = {
+  parked: "A pause to let a person's turn run first",
   shutdown: "A routine platform deploy",
   lease_expired: "A worker crash",
   error: "An internal error",

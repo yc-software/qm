@@ -1,10 +1,9 @@
-import { createPostgresAutomationRunStore } from "../src/triggers/run-store.ts";
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
+import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId, type Webhook, type Cron } from "../src/types.ts";
 import {
   createKeychain,
@@ -26,7 +25,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_webhooks, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -390,7 +389,7 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
 test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const makeStore = () =>
-    createWebhookStore(factory.map<Webhook>("map_webhooks"), createPostgresAutomationRunStore(URL!));
+    createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));
   const a = makeStore();
   const b = makeStore();
   const webhook = await a.create({

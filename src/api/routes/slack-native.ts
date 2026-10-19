@@ -1,3 +1,6 @@
+import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
+import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { errMessage } from "../../util/errors.ts";
 import { ErrorCode, type WebAPIPlatformError, type AuthTestResponse } from "@slack/web-api";
 import { slackWebClient } from "../../slack/web-client.ts";
 import { personIds, samePerson } from "../../directory/person.ts";
@@ -26,7 +29,8 @@ export async function nativeSlackConnection(ctx: ApiCtx) {
         } catch (error) {
           if (error instanceof Error && "code" in error && error.code === ErrorCode.PlatformError)
             return (error as WebAPIPlatformError).data as AuthTestResponse & { ts?: string };
-          throw error;
+          const sanitized = new Error(createExactSecretValueMasker([token])(redactSecrets(errMessage(error))));
+          throw sanitized;
         }
       };
       const identity = await call("auth.test");

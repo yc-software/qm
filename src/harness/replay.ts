@@ -17,6 +17,7 @@ import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult }
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
+import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 
 export const TURN_STOPPED_KIND = "turn_stopped";
 
@@ -67,7 +68,6 @@ export interface SeededMessage {
 }
 
 export interface OverheardEntryPayload {
-  deliveryKey?: string;
   overheard: true;
   sourceRole?: "agent";
   ts: string;
@@ -116,7 +116,6 @@ export function selectOverheardToImport(
     out.push({
       overheard: true,
       ...(m.role === "self" ? { sourceRole: "agent" as const } : {}),
-      ...(m.role === "self" && m.deliveryKey ? { deliveryKey: m.deliveryKey } : {}),
       ts: m.ts,
       ...(m.name ? { name: m.name } : {}),
       text,
@@ -125,6 +124,25 @@ export function selectOverheardToImport(
     });
   }
   return out;
+}
+
+const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: DEFAULT_CRON_TIMEZONE,
+});
+
+function entryDay(e: SessionEntry): string {
+  const ov = overheardPayload(e);
+  const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
+  return DAY_MARKER_FORMAT.format(Number.isFinite(sent) ? sent : e.createdAt);
+}
+
+export function dayMarkerPrefix(previous: SessionEntry | undefined, e: SessionEntry): string {
+  const day = entryDay(e);
+  return previous && entryDay(previous) === day ? "" : `── ${day} ──\n`;
 }
 
 export function renderOverheard(p: OverheardEntryPayload): string {
@@ -321,6 +339,7 @@ export function reconstructMessagesFromHistory(
   });
 
   let previous: SessionEntry | undefined;
+  let previousUser: SessionEntry | undefined;
   let batch: AssistantMessage | undefined;
   for (const e of history) {
     const prior = previous;
@@ -360,9 +379,11 @@ export function reconstructMessagesFromHistory(
       continue;
     }
     if (e.type === "user") {
+      const day = dayMarkerPrefix(previousUser, e);
+      previousUser = e;
       const ov = overheardPayload(e);
       if (ov) {
-        if (ov.text.trim() || ov.files?.length) raw.push(userMsg(renderOverheard(ov), e.createdAt));
+        if (ov.text.trim() || ov.files?.length) raw.push(userMsg(day + renderOverheard(ov), e.createdAt));
       } else {
         const p = (e.payload ?? {}) as Record<string, unknown>;
         const t = userPromptText(p);
@@ -370,7 +391,7 @@ export function reconstructMessagesFromHistory(
         if (t || images.length)
           raw.push({
             role: "user",
-            content: [{ type: "text", text: t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
+            content: [{ type: "text", text: day + t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
             timestamp: e.createdAt,
           });
       }

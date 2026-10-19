@@ -49,7 +49,7 @@ test("slow lazy migrations queue with dynamic and bulk migrations before pool ac
   });
 });
 
-test("migration entrypoint exits after cold and repeat startup and rejects checksum drift", { skip }, async () => {
+test("concurrent cold and repeat migration entrypoints exit and reject checksum drift", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     const run = () =>
       exec(process.execPath, ["src/migrate-main.ts"], {
@@ -65,8 +65,8 @@ test("migration entrypoint exits after cold and repeat startup and rejects check
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
         },
       });
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const result = await run();
+    const cold = await Promise.all([run(), run()]);
+    for (const result of [...cold, await run()]) {
       assert.match(result.stdout, /\[qm:migrate\] database migrations applied/);
     }
     const applied = await admin.query(`SELECT id FROM ${PG_MIGRATIONS_TABLE} ORDER BY id`);

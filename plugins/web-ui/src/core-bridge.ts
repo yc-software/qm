@@ -1,5 +1,4 @@
 import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
-import { webhookEventOf, type WebhookEvent } from "./webhook-event.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
@@ -492,9 +491,6 @@ export interface ApprovalDecision {
   scope?: "once" | "session" | "always";
 }
 export type AssistantWork = AssistantMessage & {
-  entrySeqs?: number[];
-  edited?: boolean;
-  deleted?: boolean;
   persisted?: boolean;
   streamingBaseline?: string;
   work?: WorkBlock;
@@ -1599,8 +1595,9 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle" | "metadata";
+  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
   at: number;
+  ui?: unknown;
 }
 
 export interface InboxItemEvent {
@@ -1847,7 +1844,6 @@ interface HistoryUserMessage {
   edited?: boolean;
   deleted?: boolean;
   subagentMail?: SubagentMailRef;
-  webhookEvent?: WebhookEvent;
 }
 
 export interface SubagentMailRef {
@@ -1881,7 +1877,6 @@ interface MessageRevisionNote {
   ts: string;
   content: string;
   speaker?: string;
-  sourceRole?: "agent";
   timestamp?: number;
 }
 
@@ -1972,14 +1967,7 @@ function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
 }
 
 function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
-  const p = payload as {
-    kind?: unknown;
-    action?: unknown;
-    ts?: unknown;
-    text?: unknown;
-    name?: unknown;
-    sourceRole?: unknown;
-  } | null;
+  const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
   if (typeof p.ts !== "string" || !p.ts) return null;
@@ -1989,7 +1977,6 @@ function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
     action: p.action,
     ts: p.ts,
     content: typeof p.text === "string" ? p.text : "",
-    ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
     ...(typeof p.name === "string" && p.name.trim() ? { speaker: p.name.trim() } : {}),
   };
 }
@@ -2016,13 +2003,10 @@ export function userEntryMessage(
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
-  const webhookEvent = payload?.hidden ? webhookEventOf(payload) : undefined;
-  if (payload?.hidden && !webhookEvent) return null;
-  const text = webhookEvent
-    ? [webhookEvent.action, webhookEvent.payload].filter(Boolean).join("\n\n")
-    : (userEntryText(payload) ?? "");
+  if (payload?.hidden) return null;
+  const text = userEntryText(payload) ?? "";
   const attachments = payload?.attachments ?? [];
-  if (!text && !attachments.length && !webhookEvent) return null;
+  if (!text && !attachments.length) return null;
   const mail = subagentMailOf(payload);
   return {
     role: "user",
@@ -2031,7 +2015,6 @@ export function userEntryMessage(
     content: text,
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),
-    ...(webhookEvent ? { webhookEvent } : {}),
     ...(payload?.steered ? { steered: true } : {}),
     ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
@@ -2062,6 +2045,14 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
+const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+
+function deliveredSilence(a: ToolActivity): boolean {
+  if (a.type !== "tool_result") return false;
+  const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
+  return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
+}
+
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
   if (entry.type !== "text") return false;
   const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
@@ -2071,12 +2062,12 @@ function isFinishedReplyEntry(entry: SessionEntry): boolean {
 
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
-  const messagesByTs = new Map<string, HistoryUserMessage | AssistantWork>();
-  const repliesByDelivery = new Map<string, AssistantWork>();
+  const userByTs = new Map<string, HistoryUserMessage>();
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
   let stoppedShown = false;
+  let hiddenPrompt = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -2117,16 +2108,17 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     timing?: { startedAt?: number; finishedAt?: number },
     stopped = false,
     entrySeqs: number[] = [],
-    deliveryKey?: string,
-  ): AssistantWork | undefined => {
+  ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
+    if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
+      pending = pending.filter((a) => !SILENCE_TOOLS.has((a.payload as { tool?: string } | null)?.tool ?? ""));
+      if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
+        pending = [];
+        return;
+      }
+    }
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
-    const deliveredSilence = (a: ToolActivity): boolean => {
-      if (a.type !== "tool_result") return false;
-      const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
-      return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
-    };
     const lastText = pending.findLastIndex((a) => a.type === "text");
     if (lastText >= 0) {
       const segment = ((pending[lastText]!.payload as { text?: string } | null)?.text ?? "").trim();
@@ -2166,10 +2158,8 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     }
     if (deliveryFiles.length) msg.deliveredFiles = deliveryFiles;
     out.push(msg as AgentMessage);
-    if (deliveryKey) repliesByDelivery.set(deliveryKey, msg);
     pending = [];
     deliveryFiles = [];
-    return msg;
   };
   for (const e of entries) {
     const payload = e.payload as {
@@ -2182,9 +2172,6 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       steered?: boolean;
       name?: string;
       ts?: string;
-      overheard?: boolean;
-      sourceRole?: string;
-      deliveryKey?: string;
       workStartedAt?: number;
       workFinishedAt?: number;
       stopped?: boolean;
@@ -2227,15 +2214,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         heldPosts.delete(payload.callId);
         if (postResultOk(e.payload)) {
           appendPostFiles(e.payload);
-          flushWork(
-            held.text,
-            e.createdAt,
-            false,
-            undefined,
-            false,
-            [held.activity.seq, ...(e.seq === undefined ? [] : [e.seq])],
-            payload?.deliveryKey,
-          );
+          flushWork(held.text, e.createdAt, false, undefined, false, [
+            held.activity.seq,
+            ...(e.seq === undefined ? [] : [e.seq]),
+          ]);
           posted = true;
         } else {
           pending.push(held.activity, activity);
@@ -2255,37 +2237,19 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
-      if (!payload?.steered) stoppedShown = false;
-      if (payload?.overheard && payload.sourceRole === "agent") {
-        if (payload.hidden) continue;
-        let original = payload.deliveryKey ? repliesByDelivery.get(payload.deliveryKey) : undefined;
-        if (original) {
-          if (e.seq !== undefined) original.entrySeqs = [...(original.entrySeqs ?? []), e.seq];
-        } else {
-          spillHeldPosts();
-          flushWork("", e.createdAt);
-          original = flushWork(
-            text,
-            e.createdAt,
-            false,
-            undefined,
-            false,
-            e.seq === undefined ? [] : [e.seq],
-            payload.deliveryKey,
-          );
-        }
-        if (original && payload.ts) messagesByTs.set(payload.ts, original);
-        continue;
+      if (!payload?.steered) {
+        stoppedShown = false;
+        hiddenPrompt = payload?.hidden === true;
       }
-      const msg = userEntryMessage(e);
-      if (payload?.hidden && !msg) continue;
+      if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
         spillHeldPosts();
         flushWork("", e.createdAt);
       }
+      const msg = userEntryMessage(e);
       if (msg) {
-        if (msg.ts) messagesByTs.set(msg.ts, msg);
+        if (msg.ts) userByTs.set(msg.ts, msg);
         if (msg.steered) {
           pending.push({
             seq: e.seq ?? out.length,
@@ -2340,7 +2304,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       if (revision) {
         spillHeldPosts();
         flushWork("", e.createdAt);
-        const original = messagesByTs.get(revision.ts);
+        const original = userByTs.get(revision.ts);
         if (original) {
           if (revision.action === "deleted") original.deleted = true;
           else original.edited = true;

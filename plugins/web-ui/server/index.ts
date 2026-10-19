@@ -5,6 +5,7 @@ import { flushErrorReporting, reportBackendError } from "../../chassis/src/error
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
+import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -1306,7 +1307,6 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
     },
   })),
-  { method: "GET", path: "/api/slack/emoji", handle: (c) => relayCore(c.res, "GET", "/v1/slack/emoji") },
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -1679,6 +1679,14 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
+  ...uiCanvasRoutes({
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
+    coreFetch,
+    relayCore,
+    relay,
+    json,
+    readJson,
+  }),
   {
     method: "GET",
     path: "/api/inbox",
@@ -2833,7 +2841,18 @@ const apiRoutes: readonly WebRoute[] = [
       return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
     },
   },
-
+  {
+    method: "GET",
+    path: "/api/webhooks/:id/events",
+    handle: async ({ res, user, params }) =>
+      relay(
+        res,
+        await coreFetch(
+          "GET",
+          `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
+        ),
+      ),
+  },
   {
     method: "POST",
     path: "/api/loops",
@@ -3060,33 +3079,6 @@ const apiRoutes: readonly WebRoute[] = [
       });
       return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
     },
-  },
-  {
-    method: "GET",
-    path: "/api/webhooks/:id/runs",
-    handle: ({ res, user, params }) =>
-      relayCore(res, "GET", `/v1/webhooks/${encodeURIComponent(params.id!)}/runs?viewer=${encodeURIComponent(user)}`),
-  },
-  {
-    method: "DELETE",
-    path: "/api/webhooks/:id",
-    handle: ({ res, user, params }) =>
-      relayCore(
-        res,
-        "DELETE",
-        `/v1/webhooks/${encodeURIComponent(params.id!)}?principalId=${encodeURIComponent(user)}`,
-      ),
-  },
-  {
-    method: "PATCH",
-    path: "/api/webhooks/:id",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "PATCH",
-        `/v1/webhooks/${encodeURIComponent(params.id!)}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
   },
   {
     method: "POST",

@@ -97,6 +97,7 @@ import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.t
 import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
+  dayMarkerPrefix,
   recordedMessageTimestamps,
   replayPreamble,
   userPromptText,
@@ -1840,7 +1841,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 },
                 scopeLabel: turn.scopeLabel,
               });
-          const modelPrompt = userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+          const modelPrompt =
+            (userEntry
+              ? dayMarkerPrefix(
+                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                  userEntry,
+                )
+              : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];

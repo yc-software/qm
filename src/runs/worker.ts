@@ -6,7 +6,16 @@ import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import { errorParks, type Run, type RunStop, type RunStore } from "./run-store.ts";
+import {
+  countedClaims,
+  errorParks,
+  handbackStop,
+  MAX_PREEMPTIONS,
+  PARKED,
+  type Run,
+  type RunStop,
+  type RunStore,
+} from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
@@ -75,7 +84,7 @@ export async function processRun(
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
     }
-    if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     started = true;
     const result = await deps.orchestrator.handleTurn({
@@ -124,7 +133,7 @@ export async function processRun(
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
       await deps.runs
-        .releaseLease(run.id, token, started ? { kind: "shutdown" } : undefined)
+        .releaseLease(run.id, token, started ? handbackStop(opts.shutdown) : undefined)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
 }
@@ -139,6 +148,8 @@ export interface WorkerDeps extends ProcessDeps {
 
 export interface Worker {
   start(): void;
+  held(): { run: Run; claimedAt: number; shutdown: AbortController } | null;
+  preempt(runId: string): void;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
@@ -174,7 +185,12 @@ export function createWorker(deps: WorkerDeps): Worker {
   let stopped = false;
   let loopDone: Promise<void> | null = null;
   let claimDone: Promise<void> | null = null;
-  let inFlight: { shutdown: AbortController; done: Promise<void> } | null = null;
+  let inFlight: {
+    run: Run;
+    claimedAt: number;
+    shutdown: AbortController;
+    done: Promise<void>;
+  } | null = null;
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -218,12 +234,15 @@ export function createWorker(deps: WorkerDeps): Worker {
       }
       const shutdown = new AbortController();
       let settled!: () => void;
-      inFlight = {
+      const current: NonNullable<typeof inFlight> = {
+        run,
+        claimedAt: Date.now(),
         shutdown,
         done: new Promise<void>((resolve) => {
           settled = resolve;
         }),
       };
+      inFlight = current;
       console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
       claimed();
       claimDone = null;
@@ -251,6 +270,11 @@ export function createWorker(deps: WorkerDeps): Worker {
   }
 
   return {
+    held: () => inFlight,
+    preempt(runId) {
+      if (inFlight?.run.id !== runId || inFlight.shutdown.signal.aborted) return;
+      inFlight.shutdown.abort(PARKED);
+    },
     start() {
       if (loopDone) return;
       stopped = false;
@@ -282,4 +306,25 @@ function runStopFor(err: unknown): RunStop {
   if (err instanceof ProviderTurnError)
     return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };
   return { kind: "error" };
+}
+
+export function createRunPreemption(deps: {
+  runs: RunStore;
+  workers: readonly Worker[];
+  canClaim?: () => boolean;
+  graceMs?: number;
+}): { sweep(): Promise<boolean> } {
+  return {
+    async sweep() {
+      if (deps.canClaim && !deps.canClaim()) return false;
+      const held = deps.workers.map((worker) => ({ worker, held: worker.held() }));
+      if (held.some(({ held }) => !held || held.shutdown.signal.aborted)) return false;
+      const victim = held
+        .filter(({ held }) => held!.run.priority === 2 && held!.run.preemptions < MAX_PREEMPTIONS)
+        .sort((a, b) => b.held!.claimedAt - a.held!.claimedAt)[0];
+      if (!victim || !(await deps.runs.personWaiting(Date.now() - (deps.graceMs ?? 1_000)))) return false;
+      victim.worker.preempt(victim.held!.run.id);
+      return true;
+    },
+  };
 }

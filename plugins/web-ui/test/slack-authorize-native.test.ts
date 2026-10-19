@@ -31,6 +31,7 @@ test("Slack account linking selects native OAuth and preserves the conversation 
     assert.equal(location.pathname, "/s/sess-deep");
   } finally {
     globalThis.fetch = previousFetch;
+    document.querySelector("#app")?.replaceChildren();
     await h.close();
   }
 });

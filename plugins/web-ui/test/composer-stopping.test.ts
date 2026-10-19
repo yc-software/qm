@@ -32,7 +32,6 @@ test("stopping returns Send immediately and queues every submit path without int
     requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     fetch: async (input: RequestInfo | URL) => {
-      if (String(input) === "/api/slack/emoji") return Response.json({ emoji: {} });
       requests.push(String(input));
       return Response.json({ runId: "queued-test", sessions: [] });
     },

@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { handbackStop } from "../runs/run-store.ts";
 import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
@@ -9,7 +10,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, AutomationRun, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -281,7 +282,7 @@ function fmtCronCreated(r: {
   return `Created cron ${fmtCronLine(r.cron)}${to}`;
 }
 
-function fmtCronRunLine(entry: AutomationRun): string {
+function fmtCronRunLine(entry: CronFireLogEntry): string {
   let lifecycle: string | null = null;
   if (entry.status === "running") {
     lifecycle = `in flight for ${Math.max(0, Math.round((Date.now() - entry.firedAt) / 60_000))}m`;
@@ -388,7 +389,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       sourceScopeId,
     });
     if (type === "tool_result" && isObj(payload)) {
-      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: { kind: "shutdown" } };
+      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: handbackStop(ref.shutdown) };
       else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
     }
     await ref.emit({ type, payload, scopeLabel });
@@ -1148,6 +1149,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         false,
         undefined,
         shared ? { provenance: "external", source: "shared file" } : undefined,
+      );
+    },
+  });
+
+  const installCanvas = defineTool({
+    name: "install_canvas",
+    label: "install_canvas",
+    description:
+      "Replace this person's always-on canvas with a copy of an always-on canvas someone shared with them as a Files record. Always asks them to approve first.",
+    parameters: Type.Object({ id: Type.String({ description: "Files ID of the shared canvas." }) }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc?.installSharedCanvas) return text("[error] installing a shared canvas isn't available on this turn");
+      await recordCall(callId, { tool: "files", action: "install_canvas", id: params.id });
+      const error = await tc.installSharedCanvas(params.id);
+      return recordResult(
+        callId,
+        { tool: "files", action: "install_canvas", id: params.id, ...(error ? { error } : {}) },
+        text(error ? `[error] ${error}` : "Installed the shared canvas as their always-on canvas."),
+        Boolean(error),
       );
     },
   });
@@ -2938,7 +2959,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "context it is shared by ALL of that person's sessions, not tied to the session that " +
       "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
       "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. `edit` swaps one exact passage `old` for `new` " +
+      "pins in the web UI, native pinning in Slack. To keep a skill in this scope's per-turn skills shortlist, " +
+      'pin it instead of writing guidance: PUT $AGENT_API_URL/v1/pinned-skills with header "x-agent-capability: $AGENT_API_TOKEN" ' +
+      'and body {"names": [...]}, the full list. `edit` swaps one exact passage `old` for `new` ' +
       "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +
       "`replace` REPLACES that scope's entire guidance with `content` — include everything that " +
       "should remain. Org-wide policy is always layered above and " +
@@ -3482,7 +3505,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               action: "post",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
-              ...(r.deliveryKey ? { deliveryKey: r.deliveryKey } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
@@ -3526,7 +3548,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               action: "reach",
               ok: r.ok,
               ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
-              ...(r.deliveryKey ? { deliveryKey: r.deliveryKey } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(
@@ -4312,7 +4333,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", { read, write, ...(controlTools ? { share: sharingTool("file") } : {}) }),
+    resourceTool("files", {
+      read,
+      write,
+      ...(controlTools ? { share: sharingTool("file") } : {}),
+      ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
+    }),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
@@ -4480,6 +4506,15 @@ function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): T
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
+export const GATED_TOOL_APPROVALS: Record<
+  string,
+  { reason: string; summary: (params: Record<string, unknown>) => string }
+> = {
+  "files:install_canvas": {
+    reason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
+    summary: (params) => `file ${String(params.id)}`,
+  },
+};
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 
 function withToolApprovalGate(
@@ -4514,12 +4549,18 @@ function withToolApprovalGate(
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       if (gate && !gate(approvalIdentity)) {
+        const gated = GATED_TOOL_APPROVALS[approvalIdentity];
+        const reason = gated?.reason ?? STRICT_TOOL_APPROVAL_REASON;
+        let summary: string | undefined;
+        if (gated && isObj(params)) summary = gated.summary(params);
+        else if (params !== undefined) summary = redactCommand(redactSecrets(JSON.stringify(params)));
         ref.pendingApprovals?.push({
           command: commandLabel,
-          reason: STRICT_TOOL_APPROVAL_REASON,
+          reason,
           kind: "approval",
           approvalKey: `tool:${approvalIdentity}`,
-          ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
+          ...(gated ? { grantModes: { session: false, always: false } } : {}),
+          ...(summary === undefined ? {} : { summary }),
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
         });
         ref.pausedOnApproval = true;
@@ -4528,7 +4569,7 @@ function withToolApprovalGate(
           ...(resourceAction ? { action: resourceAction } : {}),
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
           blocked: "needs_approval",
-          reason: STRICT_TOOL_APPROVAL_REASON,
+          reason,
         });
         return rec.recordResult(
           callId,
@@ -4536,12 +4577,10 @@ function withToolApprovalGate(
             tool: tool.name,
             ...(resourceAction ? { action: resourceAction } : {}),
             blocked: "needs_approval",
-            reason: STRICT_TOOL_APPROVAL_REASON,
+            reason,
           },
           {
-            content: [
-              { type: "text" as const, text: `[blocked: needs human approval] ${STRICT_TOOL_APPROVAL_REASON}` },
-            ],
+            content: [{ type: "text" as const, text: `[blocked: needs human approval] ${reason}` }],
             details: {},
             terminate: true,
           },

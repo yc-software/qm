@@ -52,7 +52,7 @@ after an interrupted startup. It walks every session at roughly 30 sessions per
 second, so a few thousand sessions take a couple of minutes; above that, run
 `node src/migrate-main.ts` with the release's configuration before starting the
 servers so readiness checks do not time out. Instances that start meanwhile wait for the copy on
-the migration lock, so a database or role `statement_timeout` must allow that wait.
+the migration lock.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

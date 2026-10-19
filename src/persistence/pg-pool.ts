@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { createKeyedQueue } from "../util/async.ts";
+import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -214,11 +214,23 @@ export function definePgMigration(
   };
 }
 
+const SCHEMA_LOCK_POLL_MS = 50;
+
+async function lockSchema(client: PoolClient, name: string): Promise<void> {
+  for (;;) {
+    const result = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
+      name,
+    ]);
+    if (result.rows[0]?.locked) return;
+    await sleep(SCHEMA_LOCK_POLL_MS);
+  }
+}
+
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('qm:schema-migrations'))");
+    await lockSchema(client, "qm:schema-migrations");
     await client.query(
       `CREATE TABLE IF NOT EXISTS ${PG_MIGRATIONS_TABLE}(
         id TEXT PRIMARY KEY,
@@ -377,7 +389,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
   if (!maintenance.length) return;
   const client = await pool.connect();
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext('qm:schema-maintenance'))");
+    await lockSchema(client, "qm:schema-maintenance");
     for (const operation of maintenance) {
       await client.query("BEGIN");
       try {

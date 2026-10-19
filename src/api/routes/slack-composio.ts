@@ -1,5 +1,8 @@
+import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
+import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { errMessage } from "../../util/errors.ts";
 import { personIds, samePerson } from "../../directory/person.ts";
-import { composioUserIds, credential, request } from "./composio-client.ts";
+import { composioUserIds, credential, request as composioRequest } from "./composio.ts";
 import type { ApiCtx } from "./route.ts";
 
 export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {
@@ -13,6 +16,14 @@ export async function hasSlackAccount(ctx: ApiCtx): Promise<boolean> {
 export async function composioSlackConnection(ctx: ApiCtx) {
   const access = await credential(ctx);
   if (!access) return undefined;
+  const request: typeof composioRequest = async (...args) => {
+    try {
+      return await composioRequest(...args);
+    } catch (error) {
+      const sanitized = new Error(createExactSecretValueMasker([access.key])(redactSecrets(errMessage(error))));
+      throw sanitized;
+    }
+  };
   for (const id of personIds(access.principal)) {
     const record = await ctx.deps.slackAccounts?.get(id);
     if (!record || !samePerson(record.memberId, access.principal)) continue;

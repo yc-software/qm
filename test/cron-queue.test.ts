@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
 import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import { createMemoryAutomationRunStore, type AutomationRunStore } from "../src/triggers/run-store.ts";
+import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -32,11 +32,7 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
 }
 
-function instance(
-  calls: TurnRequest[],
-  turnMs = 0,
-  fires?: AutomationRunStore,
-): { scheduler: Scheduler; crons: CronStore } {
+function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), fires ? { fires } : undefined);
   const run = async (req: TurnRequest): Promise<TurnResult> => {
@@ -60,7 +56,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createMemoryAutomationRunStore();
+    const fires = createMemoryCronFireStore();
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
     a.scheduler.start(1000);
@@ -130,7 +126,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createMemoryAutomationRunStore();
+    const fires = createMemoryCronFireStore();
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
     const cron = await a.crons.create({

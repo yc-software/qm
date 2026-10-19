@@ -1,5 +1,4 @@
 export interface CachedMessage {
-  deliveryKey?: string;
   container: string;
   ts: string;
   sub?: string;
@@ -51,7 +50,6 @@ export interface ActiveThread {
 }
 
 export interface IngestEvent {
-  deliveryKey?: string;
   container: string;
   ts: string;
   sub?: string | null;

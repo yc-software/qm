@@ -1,4 +1,5 @@
 import { isComposioHost } from "../credentials/keychain.ts";
+import { errMessage } from "../util/errors.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
@@ -196,6 +197,24 @@ export async function brokerCredentialCall(opts: {
     return deny(403, "method_not_allowed", `method ${method} is not allowed for this credential`, rec.host);
   if (!brokerPathAllowed(parsed.pathname, rec.allowedPathPrefixes)) {
     return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
+  }
+
+  if (rec.maxRequestsPerDay !== undefined) {
+    let admitted: boolean;
+    try {
+      if (!opts.usage) throw new Error("no usage ledger");
+      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
+    } catch (err) {
+      console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
+      return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
+    }
+    if (!admitted)
+      return deny(
+        429,
+        "daily_cap_reached",
+        `this credential has used its ${rec.maxRequestsPerDay} requests for today (UTC); it resets at 00:00 UTC`,
+        rec.host,
+      );
   }
 
   const headers: Record<string, string> = {};

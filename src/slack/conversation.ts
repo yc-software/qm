@@ -52,7 +52,6 @@ export function buildContextWindow(
 }
 
 export interface RecentMessage {
-  deliveryKey?: string;
   ts: string;
   name: string;
   text: string;
@@ -68,23 +67,12 @@ export interface RecentMessage {
 export const MAX_RECENT_MESSAGES = 20;
 const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;
-export const MAX_TOP_LEVEL_CONTEXT_AGE_S = 24 * 60 * 60;
 
 export function recentWindow(
   candidates: readonly RecentMessage[],
   limit: number = MAX_RECENT_MESSAGES,
-  opts?: { triggerTs?: string; maxAgeSeconds?: number },
 ): RecentMessage[] {
-  const cutoff =
-    opts?.triggerTs && opts.maxAgeSeconds && Number.isFinite(Number(opts.triggerTs))
-      ? Number(opts.triggerTs) - opts.maxAgeSeconds
-      : undefined;
-  const usable = candidates.filter(
-    (m) =>
-      m.ts &&
-      (m.name || m.text?.trim() || m.files?.length) &&
-      (cutoff === undefined || m.isTrigger || Number(m.ts) >= cutoff),
-  );
+  const usable = candidates.filter((m) => m.ts && (m.name || m.text?.trim() || m.files?.length));
   if (!usable.length) return [];
   const window = Math.max(1, Math.floor(limit));
   const sorted = [...usable].sort(compareSlackTimestamps);
@@ -145,7 +133,6 @@ export interface ConversationTurn {
 }
 
 export interface OverheardMessage {
-  deliveryKey?: string;
   ts: string;
   role: "user" | "self";
   name?: string;
@@ -208,7 +195,6 @@ export function renderConversationView(view: ConversationView): RenderedConversa
         ts: m.ts,
         role: (m.isSelf ? "self" : "user") as "user" | "self",
         ...(m.isSelf ? {} : { name: m.name || "someone" }),
-        ...(m.isSelf && m.deliveryKey ? { deliveryKey: m.deliveryKey } : {}),
         text,
         ...(m.files?.length ? { files: m.files } : {}),
       };

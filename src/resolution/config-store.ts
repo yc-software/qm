@@ -110,6 +110,10 @@ export interface PersistedAckEmoji {
   scopeId: ScopeId;
   names: string[];
 }
+export interface PersistedPinnedSkills {
+  scopeId: ScopeId;
+  names: string[];
+}
 export interface PersistedSlackEmojiCatalog {
   scopeId: ScopeId;
   emoji: Record<string, string>;
@@ -247,6 +251,8 @@ export interface ScopedConfigStore {
   getAckEmoji(id: ScopeId): string[] | null;
   setAckEmoji(id: ScopeId, names: string[] | null): void;
   getAckEmojiDurable(id: ScopeId): Promise<string[] | null>;
+  getPinnedSkillsDurable(id: ScopeId): Promise<string[]>;
+  setPinnedSkills(id: ScopeId, names: string[]): Promise<void>;
   setSlackEmojiCatalog(id: ScopeId, emoji: Record<string, string>): void;
   getSlackEmojiCatalogDurable(id: ScopeId): Promise<PersistedSlackEmojiCatalog | null>;
   getPeopleDirectoryUrl(id: ScopeId): string | null;
@@ -295,6 +301,7 @@ export function createMemoryConfigStore(
     webuiModels?: DurableMap<PersistedWebuiModels>;
     peopleDirectoryUrls?: DurableMap<PersistedPeopleDirectoryUrl>;
     ackEmoji?: DurableMap<PersistedAckEmoji>;
+    pinnedSkills?: DurableMap<PersistedPinnedSkills>;
     slackEmojiCatalog?: DurableMap<PersistedSlackEmojiCatalog>;
     branding?: DurableMap<PersistedBranding>;
     browseMaxSteps?: DurableMap<PersistedBrowseMaxSteps>;
@@ -350,6 +357,7 @@ export function createMemoryConfigStore(
   const webuiModelStore = opts.webuiModels ?? createMemoryMap<PersistedWebuiModels>();
   const peopleDirectoryUrlStore = opts.peopleDirectoryUrls ?? createMemoryMap<PersistedPeopleDirectoryUrl>();
   const ackEmojiStore = opts.ackEmoji ?? createMemoryMap<PersistedAckEmoji>();
+  const pinnedSkillsStore = opts.pinnedSkills ?? createMemoryMap<PersistedPinnedSkills>();
   const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
   const brandingStore = opts.branding ?? createMemoryMap<PersistedBranding>();
   const browseMaxStepsStore = opts.browseMaxSteps ?? createMemoryMap<PersistedBrowseMaxSteps>();
@@ -1049,6 +1057,11 @@ export function createMemoryConfigStore(
       if (pending) await pending;
       return (await ackEmojiStore.get(id))?.names ?? null;
     },
+    getPinnedSkillsDurable: async (id) => (await pinnedSkillsStore.get(id))?.names ?? [],
+    setPinnedSkills: (id, names) =>
+      writeQueue(`pinnedSkills:${id}`, () =>
+        names.length ? pinnedSkillsStore.put(id, { scopeId: id, names }) : pinnedSkillsStore.delete(id),
+      ),
     setSlackEmojiCatalog(id, emoji) {
       persist(`slackEmojiCatalog:${id}`, "slack emoji catalog", () =>
         slackEmojiCatalogStore.put(id, { scopeId: id, emoji, updatedAt: Date.now() }),

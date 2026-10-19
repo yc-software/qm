@@ -63,6 +63,46 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
   assert.match(read.reply ?? "", /Step 1: gather/);
 });
 
+test("a skill pinned to the person's scope is listed in their DM shortlist even when the message doesn't mention it", async () => {
+  const { app, skills, config } = freshApp();
+  for (let i = 0; i < 13; i++) {
+    const sk = await skills.create({
+      scopeId: scopeId("personal", "U1"),
+      manifest: {
+        name: `aa-filler-${i}`,
+        description: "filler",
+        requiredCapabilities: [],
+        body: "# filler",
+      },
+      createdBy: "U1",
+    });
+    await skills.review(sk.id, "reviewer-1", []);
+    await skills.publish(sk.id);
+  }
+  const sk = await skills.create({
+    scopeId: scopeId("personal", "U1"),
+    manifest: { name: "zz-voice", description: "write in my voice", requiredCapabilities: [], body: "# voice" },
+    createdBy: "U1",
+  });
+  await skills.review(sk.id, "reviewer-1", []);
+  await skills.publish(sk.id);
+  const shortlist = async (thread: string) =>
+    (
+      await app.turn({
+        surface: "test",
+        actor,
+        conversation: { kind: "dm", threadRef: thread },
+        text: "!sysprompt",
+      } as TurnRequest)
+    ).reply ?? "";
+
+  assert.doesNotMatch(await shortlist("dm:U1:p1"), /zz-voice/);
+  await config.setPinnedSkills(scopeId("personal", "U1"), ["zz-voice", "not-a-real-skill"]);
+  const pinned = await shortlist("dm:U1:p2");
+  assert.match(pinned, /Showing 12 of \d+ available skills\.[^\n]*\n- \*\*zz-voice\*\*/);
+  assert.doesNotMatch(pinned, /not-a-real-skill/);
+});
+
 test("a channel session does NOT see a personal skill (scope boundary)", async () => {
   const { app, skills } = freshApp();
   await publishPersonalSkill(skills);

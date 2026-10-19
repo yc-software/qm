@@ -3,7 +3,12 @@ import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import {
+  createAgentTools,
+  GATED_TOOL_APPROVALS,
+  pauseStampAfterToolCall,
+  type ToolContextRef,
+} from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
@@ -304,7 +309,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       };
     },
     async post() {
-      return { ok: true, deliveryId: "d1", deliveryKey: "post-key" };
+      return { ok: true, deliveryId: "d1" };
     },
     async reach() {
       return { ok: true, deliveryId: "rc1", matched: "#somewhere" };
@@ -1086,7 +1091,6 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const posted = emitted.find((e) => e.type === "tool_result" && e.payload.action === "post")!.payload;
   assert.equal(posted.ok, true);
   assert.equal(posted.deliveryId, "d1");
-  assert.equal(posted.deliveryKey, "post-key");
   assert.equal(posted.tool, "slack");
 
   await call(slack, { action: "read_thread" });
@@ -1261,7 +1265,7 @@ test("post replies HERE only (placement via ts/broadcast, cross-targets rejected
     ...fakeToolContext(),
     async post(_text: string, opts?: unknown) {
       posts.push(opts);
-      return { ok: true, deliveryId: "d1", deliveryKey: "post-key" };
+      return { ok: true, deliveryId: "d1" };
     },
     async reach(_text: string, target?: unknown) {
       reaches.push(target);
@@ -4449,4 +4453,41 @@ test("client screenshots reach the model as images and remain subject to output 
     { type: "image", ...image },
   ]);
   assert.equal(unscreenable, true);
+});
+
+test("installing a shared sidebar always waits for the person's approval", async () => {
+  const installed: string[] = [];
+  let approved = false;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      installSharedCanvas: async (id) => {
+        installed.push(id);
+        return null;
+      },
+    },
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    toolApprovalGate: (tool) => !GATED_TOOL_APPROVALS[tool] || approved,
+  };
+  const files = createAgentTools(ref).find((t) => t.name === "files")!;
+  await call(files, { action: "install_canvas", id: "f1" });
+  assert.deepEqual(installed, []);
+  const card = ref.pendingApprovals?.[0];
+  assert.equal(card?.summary, "file f1");
+  assert.deepEqual(
+    [card?.approvalKey, card?.reason, card?.grantModes],
+    [
+      "tool:files:install_canvas",
+      GATED_TOOL_APPROVALS["files:install_canvas"]!.reason,
+      { session: false, always: false },
+    ],
+  );
+  approved = true;
+  ref.pausedOnApproval = false;
+  assert.match(textOut(await call(files, { action: "install_canvas", id: "f1" })), /Installed/);
+  assert.deepEqual(installed, ["f1"]);
+  ref.current = fakeToolContext();
+  const plain = createAgentTools(ref).find((t) => t.name === "files")!;
+  assert.doesNotMatch(JSON.stringify(plain.parameters), /install_canvas/);
 });

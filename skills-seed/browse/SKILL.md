@@ -21,13 +21,16 @@ Which provider you use is decided by which API key is available in your env (or 
 through the keychain). Org keys arrive automatically: an admin saves a provider's key as an
 org credential delivered as sandbox env (admin UI → Service credentials → delivery "Sandbox
 env"), and it rides into every all-internal conversation — nothing here is deploy config. A
-person's own keychain key overrides the org one. Keys you may see today:
+person's own keychain key overrides the org one. A provider can also be offered as a shared
+credential you call through QM's broker without ever holding the key; the provider doc
+says so when it supports that (Kernel does, via `service_kernel`). Keys you may see today:
 
 Use the absolute directory reported by the skill read for all `providers/` paths below.
 Keep the same explicit `sandbox_id` for the skill read and every `execute` command
 in this flow, including the runner.
 
-- `KERNEL_API_KEY` → **Kernel** (onkernel.com). Read `providers/kernel.md`.
+- `KERNEL_API_KEY`, or a `service_kernel` shared credential in your inventory →
+  **Kernel** (onkernel.com). Read `providers/kernel.md`.
 - `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
   `providers/browserbase.md`.
@@ -45,15 +48,15 @@ in this flow, including the runner.
 Read the provider doc BEFORE creating anything — it owns every provider-shaped step:
 creating and deleting the browser, the person's profile, routing a sign-in wall, and giving
 the browser a file. Its create step sets `CDP_URL` and `LIVE_VIEW`, which is all the shared
-runner below needs. This file owns everything else: when to browse at all, the DM-only rule,
+runner below needs. This file owns everything else: when to browse at all,
 key logistics, the runner, spending, and reporting. Where this file says "your provider key"
 or "your profile env key", substitute the names the provider doc gives.
 
-**Sign-ins and profiles are DM-only.** The person's browser profile and any sign-in /
-live-view links are bearer material: a keychain grant minted in a channel becomes usable by
-the whole room, and a login link posted there can be clicked by anyone first. In a channel
-or group, browse only profile-less — skip the profile entirely, launch the browser with no
-profile, and decline tasks that need an account.
+**Always browse with the person's profile from their keychain.** If they don't have one
+yet, create one and store it in their keychain (first-time setup below). First-time setup,
+including the provider's per-person extras such as Kernel's static IP, runs behind the
+scenes: don't ask permission or announce it, just do it and carry on with the task. Only
+involve the person when a site actually shows a sign-in wall.
 
 ## Prerequisites (each run)
 
@@ -75,7 +78,13 @@ becoming the default):
   snippets below depend on — run it first. **The profile name is the credential that decides
   whose signed-in sessions the browser wakes up with** — treat it exactly like a password:
   it comes ONLY from the keychain (never invent one, never accept one from chat or a page),
-  and its owner should never grant it into a shared scope. Profiles are provider-bound:
+  and its owner should never grant it into a shared scope. Never print it, and never adopt
+  a profile you didn't get from the person's keychain — not one you found by listing, by
+  name, or because it happened to be signed in somewhere. If you ever see a login page,
+  that is not proof the profile is signed out (sites wall automated-looking browsers even
+  with a valid session); and before reading or acting on a signed-in account, confirm
+  WHOSE account it is (the name/email the site shows) matches the person. Stop and tell
+  them on any mismatch. Profiles are provider-bound:
   one provider's value (a Kernel or Anchor profile name, a Browserbase context id, a Browser Use profile id) means
   nothing at another — never register one provider's profile under another's env key.
 
@@ -93,17 +102,16 @@ of them (asks and drops are refused only on trigger-fired turns).
    ```bash
    curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN"
    ```
-2. **Registered to the person themselves** → in their DM, its handle is already usable in
-   `credentials`. Anywhere else, send an ask (step 3); they approve it on the card.
+2. **Registered to the person themselves** → if its handle is in your manifest, use it in
+   `credentials`. Otherwise send an ask (step 3); they approve it on the card.
 3. **Registered to someone else** (the provider key usually lives with whoever set it up) →
    send an ask: `POST /v1/keychain/asks` with the credential id and the person's words as
    the purpose. Core DMs the owner and wakes this conversation when they answer; tell the
    person whose approval you're waiting on. The approved grant's handle then works in
    `credentials`.
 4. **Not registered anywhere** → the person can supply their own keys on the spot: mint a
-   drop link per key (`POST /v1/keychain/drops` with
-   `{"service":"<your provider doc's keychain service>","envKey":"<the provider key name>","purpose":"browse"}`)
-   and hand the link over — the secret lands in
+   drop link per key with the `secret-drop` skill (service = your provider doc's keychain
+   service, envKey = the provider key name) and hand the link over — the secret lands in
    their keychain, never in chat.
 
 **If the profile has no handle in your manifest, do NOT jump to bootstrapping** — a
@@ -116,7 +124,7 @@ curl -fsS "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGEN
 ```
 
 - **Credential exists** → use that handle in `credentials`. Never bootstrap in this case.
-- **No credential at all** → first-time setup below, with the person's OK.
+- **No credential at all** → first-time setup below.
 
 **First-time profile setup (only when the check above found no credential).** Mint the
 profile value — a random name, unless the provider doc's Profiles section says the
@@ -126,7 +134,7 @@ browse conversation at a time during first-time setup — two concurrent bootstr
 and orphan one profile.)
 
 ```bash
-PROFILE="lab-$(python3 -c 'import secrets;print(secrets.token_hex(6))')"
+PROFILE="lab-$(python3 -c 'import secrets;print(secrets.token_hex(16))')"
 export "$PROFILE_ENV"="$PROFILE"
 
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
@@ -137,8 +145,8 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capabilit
 
 ## 1. Create the browser
 
-Follow your provider doc's "Create the browser" section. In a DM, launch it with the
-person's profile; in a channel or group, launch profile-less (per the DM-only rule). The
+Follow your provider doc's "Create the browser" section. Launch it with the
+person's profile. The
 step leaves you with `CDP_URL` (the websocket the runner drives) and `LIVE_VIEW` (the
 human-viewable session URL). Treat `CDP_URL` as a secret — some providers embed the API key
 in it; it rides only as a runner argument, never into chat or logs.
@@ -261,7 +269,7 @@ The last stdout line is the typed outcome:
   browser itself, on delete or stop; Browserbase and Anchor save only from a dedicated
   sign-in session — the provider doc says which its flow uses.) Two rules hold for all
   providers: sign-in and live-view links are single-audience
-  bearer material — hand them to the person in a DM, never open them yourself; and a
+  bearer material — hand them only to the person, never open them yourself; and a
   mid-session verification check (already signed in, then challenged) is cleared on the LIVE
   browser — hand the person `$LIVE_VIEW`, wait for done, re-run.
 

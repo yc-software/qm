@@ -30,6 +30,9 @@ import {
   credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
+  isValidBrokerHost,
+  isValidBrokerMethod,
+  isValidBrokerPathPrefix,
   type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
@@ -936,6 +939,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = encodeRef(serviceCredRef(slug));
       const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
       const existing = allCreds.find((c) => c.slug === slug);
+      if (existing?.source === "deployment")
+        return {
+          error: `"${slug}" is supplied by this deployment's configuration and can't be edited, deleted or reused here.`,
+          code: "deployment_credential",
+          status: 409,
+        };
       const conflict = () => ({
         error: "Credential changed after this editor was loaded. Reload it before continuing.",
         code: "version_conflict",
@@ -1111,7 +1120,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const host = typeof b.host === "string" ? b.host.trim().toLowerCase() : "";
       if (!name) return { error: "service-credentials requires { slug, name }" };
-      if (delivery === "broker" && (!host || /[/:\s]/.test(host))) {
+      if (delivery === "broker" && !isValidBrokerHost(host)) {
         return { error: "broker delivery requires { host } (a bare hostname)" };
       }
       if (delivery === "env" && host) return { error: "a pinned host only applies to broker delivery" };
@@ -1124,7 +1133,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             .map((method) => method.trim().toUpperCase())
             .filter(Boolean)
         : undefined;
-      if (methods?.some((method) => !/^[A-Z]+$/.test(method)))
+      if (methods?.some((method) => !isValidBrokerMethod(method)))
         return { error: "allowed methods must be comma-separated HTTP method names" };
       const paths = Array.isArray(b.allowedPathPrefixes)
         ? b.allowedPathPrefixes
@@ -1132,7 +1141,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             .map((path) => path.trim())
             .filter(Boolean)
         : undefined;
-      if (paths?.some((path) => !path.startsWith("/") || /[\r\n]/.test(path)))
+      if (paths?.some((path) => !isValidBrokerPathPrefix(path)))
         return { error: "each allowed path prefix must be one line starting with /" };
       const desired = Array.isArray(b.grantees) ? [...new Set(b.grantees.map(String))] : undefined;
       const badGrantee = desired?.find((g) => {

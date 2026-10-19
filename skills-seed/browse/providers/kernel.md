@@ -7,8 +7,83 @@ Provider names for the shared flow in SKILL.md: API key `KERNEL_API_KEY`, keycha
 export PROFILE_ENV=KERNEL_PROFILE PROFILE_SERVICE=kernel-profile
 ```
 
-In a DM, name three handles in `credentials`: the Kernel key (if it isn't org env), the
+Name three handles in `credentials`: the Kernel key (see "Which key" below), the
 person's `KERNEL_PROFILE`, and their `KERNEL_PROXY_ID` (see "The person's static IP").
+
+## Which key
+
+Use the first of these that exists:
+
+1. **The person's own key**: a `KERNEL_API_KEY` handle of theirs in your keychain
+   manifest. Name it in `credentials`.
+2. **An org key delivered as env**: `KERNEL_API_KEY` already set in your shell.
+3. **The org's shared Kernel credential**: a `service_kernel` row in the Credentials
+   inventory (proxy, host `api.onkernel.com`). Name `service_kernel` in `credentials`.
+   You never see this key. QM adds it to each request you send through its credential
+   broker (see the use-shared-credential skill), so `KERNEL_API_KEY` stays unset.
+
+Make every Kernel API call in this doc through `kapi METHOD PATH [JSON-BODY]`, which
+picks the right route, prints the response body, and on any error exits non-zero with
+the status and body on stderr. Define it once per shell:
+
+```bash
+kapi() {
+  if [ -n "${KERNEL_API_KEY:-}" ]; then
+    if [ -n "${3:-}" ]; then
+      curl -fsS -X "$1" "https://api.onkernel.com$2" -H "Authorization: Bearer $KERNEL_API_KEY" \
+        -H 'content-type: application/json' -d "$3"
+    else
+      curl -fsS -X "$1" "https://api.onkernel.com$2" -H "Authorization: Bearer $KERNEL_API_KEY"
+    fi
+  else
+    python3 - "$1" "$2" "${3:-}" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+method, path, body = sys.argv[1:4]
+req = {"credential": "kernel", "method": method, "url": "https://api.onkernel.com" + path}
+if body:
+    req["headers"] = {"content-type": "application/json"}
+    req["body"] = body
+r = urllib.request.Request(os.environ["AGENT_API_URL"] + "/v1/credentials/broker",
+    data=json.dumps(req).encode(), method="POST",
+    headers={"x-agent-capability": os.environ["AGENT_CREDENTIAL_TOKEN"], "content-type": "application/json"})
+try:
+    env = json.load(urllib.request.urlopen(r))
+except urllib.error.HTTPError as e:
+    sys.stderr.write(f"broker {e.code}: {e.read().decode()[:500]}\n"); sys.exit(1)
+if not 200 <= env.get("status", 0) < 300:
+    sys.stderr.write(f"kernel {env.get('status')}: {(env.get('body') or '')[:500]}\n"); sys.exit(1)
+sys.stdout.write(env.get("body") or "")
+PY
+  fi
+}
+```
+
+The shared credential only creates and deletes (see "Org setup"), so with it you can't
+list or read anything back, and can't upload files (the broker carries JSON, not
+multipart). The flow below needs neither.
+
+## Org setup (admins: required before rollout)
+
+This doc's isolation depends on two settings that the skill can't enforce itself:
+
+1. **Shared credential: its own project, create and delete only.** Give QM's shared key
+   a dedicated Kernel project and a key restricted to it (`browsers`, `profiles` and
+   `proxies`, each with `use`, `create`, `write` and `delete` on `projects/<id>/*`, and no
+   `read`). Kernel requires project-wide `browsers:use` to create a browser at all, and
+   that also lets the key list and attach to every running browser in its project, so
+   never put the shared key in a project that people's own keys or other tools use. Then
+   configure the broker entry for `api.onkernel.com` with methods `POST` and `DELETE` only,
+   on paths `/browsers`, `/profiles` and `/proxies`. Do NOT allow `GET`: the paths match
+   by prefix, so any `GET` lets callers list every person's profiles and running browsers,
+   and their names are all anyone needs to open someone else's signed-in browser.
+   Nothing in this flow needs `GET`; the live view and CDP URL come back from the create.
+2. **Personal keys scoped to the person.** A person's own `KERNEL_API_KEY` must not be an
+   account-wide key; it would bypass rule 1. Give them their own Kernel project and a key
+   restricted to it, for the same reason as above: within one project, any key that can
+   create browsers can see every running browser.
+
+If you're an agent and the `service_kernel` row in your inventory allows `GET`, tell the person
+(and an org admin) that profiles aren't isolated yet. Don't work around it.
 
 ## Profiles
 
@@ -18,15 +93,20 @@ and a browser launched with `save_changes: true` writes its cookies back when it
 DELETED or times out (closing CDP does not save). No Managed Auth: the person signs in
 once on the live view and the profile keeps it.
 
+Profile names are secrets, not labels. One Kernel account holds every person's profiles
+and records no owner, so whoever knows a name can launch a browser signed in as that
+person. The org's shared Kernel credential must therefore allow only creating and
+deleting (see "Org setup" below); don't list profiles or browsers with any key,
+and don't try to find a person's profile by name or recency. Their profile is the one in
+their keychain, full stop. If it is missing, run first-time setup; don't go looking.
+
 Kernel profiles must be pre-created at the API — a browser create naming a profile that
 doesn't exist 400s (that's the usual cause of a 400 here, not a Kernel outage). During
 first-time setup, and whenever the create below 400s, create the profile under the EXISTING
 name from the keychain — never a fresh random one, which would orphan the credential:
 
 ```bash
-curl -fsS -X POST https://api.onkernel.com/profiles \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d "{\"name\":\"$KERNEL_PROFILE\"}" > /dev/null
+kapi POST /profiles "{\"name\":\"$KERNEL_PROFILE\"}" > /dev/null
 ```
 
 ## The person's static IP
@@ -36,16 +116,14 @@ the same on every session. Sites that remember devices (LinkedIn especially) see
 person on one connection instead of a new address every run, which is what keeps a
 saved sign-in from tripping verification. Its id lives in their keychain as
 `KERNEL_PROXY_ID` (service `kernel-proxy`); treat it like the profile name (it decides
-whose address the browser wears), so it comes only from the keychain, in a DM.
+whose address the browser wears), so it comes only from the keychain.
 
 If the manifest has no `KERNEL_PROXY_ID` handle, run the same existence check SKILL.md
 gives for the profile (`envKey == "KERNEL_PROXY_ID"`). Only when none exists, create one
-with the person's OK (it is a paid, per-person resource) and register it:
+and register it, as part of the same silent first-time setup (don't ask first):
 
 ```bash
-PX=$(curl -fsS -X POST https://api.onkernel.com/proxies \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
+PX=$(kapi POST /proxies '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
   | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
 [ -n "$PX" ] || { echo "proxy create returned no id; nothing registered" >&2; exit 1; }
 curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
@@ -53,51 +131,51 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capabilit
   -d "{\"service\":\"kernel-proxy\",\"envKey\":\"KERNEL_PROXY_ID\",\"secret\":\"$PX\"}" > /dev/null
 ```
 
-ISP proxies exist in US, GB, FR, DE and SG; pick the person's country. Use the person's
-own `KERNEL_API_KEY` for this when they have one (a shared brokered Kernel credential
-may only allow `/browsers` and `/profiles`). The first session from the new IP may ask the
+ISP proxies exist in US, GB, FR, DE and SG; pick the person's country. If the shared
+credential refuses `/proxies` (path_not_allowed), the org hasn't enabled it; launch
+without a proxy and tell the person. The first session from the new IP may ask the
 person to verify once on sites they were already signed in to elsewhere; after that it is
 stable. If a create fails on the proxy (`proxy_id` not found), check it with
-`POST /proxies/$KERNEL_PROXY_ID/check` and tell the person rather than silently launching
-without it.
+`kapi POST /proxies/$KERNEL_PROXY_ID/check` (own or env key only; the shared credential
+has no read access, so the check is refused) and tell the person rather than silently
+launching without it.
 
 ## Create the browser
 
-In a DM, with the person's profile and proxy. Only ONE browser may write to a profile at a
+With the person's profile and proxy. Only ONE browser may write to a profile at a
 time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
-profile, so a second writer silently clobbers the first. Check for a running browser on
-the profile first, and launch read-only when one exists:
+profile, so a second writer silently clobbers the first. Since browsers can't be listed,
+record your own writer in the person's keychain (`KERNEL_ACTIVE`, service
+`kernel-active`, value `<session_id>:<epoch>`) and launch read-only while a record younger
+than the browser timeout exists. Name its handle in `credentials` when it exists (absent =
+no writer):
 
 ```bash
-SAVE=$(curl -fsS https://api.onkernel.com/browsers -H "Authorization: Bearer $KERNEL_API_KEY" \
-  | python3 -c "import sys,json,os;p=os.environ['KERNEL_PROFILE'];print('false' if any((b.get('profile') or {}).get('name')==p for b in json.load(sys.stdin)) else 'true')")
-CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
+SAVE=true
+case "${KERNEL_ACTIVE:-}" in *:*) [ $(( $(date +%s) - ${KERNEL_ACTIVE#*:} )) -lt 1800 ] && SAVE=false;; esac
+CREATE=$(kapi POST /browsers "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
 CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cdp_ws_url',''))")
 KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
 ```
 
-`CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
-when you report: anything this run signs in to won't be kept. The check is not a lock —
-two creates in the same moment can both see an empty list — so keep one browse run at a
-time on a person's profile.
-
-In a channel or group, OMIT the profile AND `proxy_id` entirely (per the DM-only rule) —
-never send a personal profile name or proxy there:
+When `SAVE=true`, claim the profile right away:
 
 ```bash
-CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d '{"stealth":true,"headless":false,"timeout_seconds":1800}')
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d "{\"service\":\"kernel-active\",\"envKey\":\"KERNEL_ACTIVE\",\"secret\":\"$KERNEL_SID:$(date +%s)\"}" > /dev/null
 ```
 
-then extract `CDP_URL` / `KERNEL_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
+`CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
+when you report: anything this run signs in to won't be kept. The record is not a lock —
+two runs starting in the same moment can both see none — so keep one browse run at a
+time on a person's profile.
 
 ## Giving the browser a file
 
-Files land in `/home/kernel`:
+Files land in `/home/kernel`. This needs a real key (own or env); the shared credential
+can't carry a file upload, so say so rather than improvising:
 
 ```bash
 curl -fsS -X POST "https://api.onkernel.com/browsers/$KERNEL_SID/fs/upload" \
@@ -112,7 +190,7 @@ Then run the task with `BROWSE_FILES="/home/kernel/receipt.jpg"` per SKILL.md.
 The person signs in once on the live browser; the profile keeps it.
 
 1. Navigate the live browser to the wall URL (read from `/tmp/wall-url.txt`, never shell
-   source) so the person lands on the login page, then hand them `$LIVE_VIEW` in the DM —
+   source) so the person lands on the login page, then hand them `$LIVE_VIEW` —
    bearer material, never open it yourself. SKILL.md's shared `browse-nav.py` (written in
    its wall step) does the steering:
 
@@ -135,7 +213,11 @@ password never leaves them.
 ## Clean up
 
 ```bash
-curl -fsS -X DELETE "https://api.onkernel.com/browsers/$KERNEL_SID" -H "Authorization: Bearer $KERNEL_API_KEY"
+kapi DELETE "/browsers/$KERNEL_SID"
+# release the profile if this run held it
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d '{"service":"kernel-active","envKey":"KERNEL_ACTIVE","secret":"none:0"}' > /dev/null
 ```
 
 ## API reference

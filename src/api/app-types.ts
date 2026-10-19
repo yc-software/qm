@@ -57,8 +57,8 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
-import type { AutomationRunRecord } from "../triggers/run-store.ts";
-import type { WebhookStore, CreateWebhookInput } from "../webhooks/webhook-store.ts";
+import type { CronFireRecord } from "../cron/fire-store.ts";
+import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type {
   ChannelMembership,
@@ -72,7 +72,7 @@ import type {
 } from "../directory/directory-store.ts";
 import type {
   Cron,
-  AutomationRun,
+  CronFireLogEntry,
   CronFireNote,
   Delivery,
   Destination,
@@ -233,7 +233,7 @@ interface SessionBackgroundView {
     id: string;
     title?: string;
     nextFireAt?: number;
-    lastFire?: { firedAt: number; status?: AutomationRun["status"] };
+    lastFire?: { firedAt: number; status?: CronFireLogEntry["status"] };
   }>;
 }
 
@@ -457,30 +457,22 @@ export interface App {
   getCron(id: string): Promise<Cron | null>;
   listCrons(): Promise<Cron[]>;
   listCronsForViewer(principalId: string): Promise<{ owned: Cron[]; visible: VisibleCron[] }>;
-  updateCron(id: string, patch: CronPatch, actorId?: string): Promise<Cron | null>;
-  deleteCron(id: string, actorId?: string): Promise<void>;
-  setCronEnabled(id: string, enabled: boolean, actorId?: string): Promise<void>;
+  updateCron(id: string, patch: CronPatch): Promise<Cron | null>;
+  deleteCron(id: string): Promise<void>;
+  setCronEnabled(id: string, enabled: boolean): Promise<void>;
   setCronFireNote(id: string, note: CronFireNote): Promise<"applied" | "superseded" | "missing">;
-  listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: AutomationRun[]; total: number }>;
-  cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<AutomationRunRecord[]>;
-  latestCronFireForThread(id: string, threadRef: string): Promise<AutomationRun | undefined>;
+  listCronFires(id: string, opts?: { limit?: number }): Promise<{ runs: CronFireLogEntry[]; total: number }>;
+  cronFiresByThreadRefs(threadRefs: readonly string[]): Promise<CronFireRecord[]>;
+  latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
   setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
   setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
-  updateWebhook(
-    id: string,
-    patch: import("../triggers/automation-store.ts").AutomationPatch,
-    actorId: string,
-  ): Promise<Webhook | null>;
-  deleteWebhook(id: string, actorId: string): Promise<void>;
-  listWebhookFires(
-    id: string,
-    viewer: string,
-  ): Promise<{ runs: Array<AutomationRun & { payload?: string }>; total: number }>;
+  listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
-  setWebhookEnabled(id: string, enabled: boolean, actorId?: string): Promise<void>;
+  setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
+  updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
   setWebhookRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {

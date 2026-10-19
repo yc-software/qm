@@ -48,12 +48,7 @@ export function createSlackHistoryReader(deps: {
     expandThreads = false,
   ): Promise<SlackHistoryPage> {
     const historyClient = deps.historyClient ?? client;
-    const paging = {
-      channel,
-      limit,
-      include_all_metadata: true,
-      ...(before ? { latest: before, inclusive: false } : {}),
-    };
+    const paging = { channel, limit, ...(before ? { latest: before, inclusive: false } : {}) };
     const page = parseMessageList(
       threadTs
         ? await historyClient.conversations.replies({ ...paging, ts: threadTs })
@@ -67,9 +62,7 @@ export function createSlackHistoryReader(deps: {
         parents.map(async (m) => {
           try {
             return {
-              page: parseMessageList(
-                await historyClient.conversations.replies({ channel, ts: m.ts, limit, include_all_metadata: true }),
-              ),
+              page: parseMessageList(await historyClient.conversations.replies({ channel, ts: m.ts, limit })),
               failed: false,
             };
           } catch {
@@ -246,9 +239,6 @@ export function createSlackHistoryReader(deps: {
           .filter((m) => !m.deleted && (!before || m.ts < before))
           .map((m) => ({
             ts: m.ts,
-            ...(m.deliveryKey
-              ? { metadata: { event_type: "qm_delivery", event_payload: { idempotency_key: m.deliveryKey } } }
-              : {}),
             ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
             text: m.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
             ...(m.mentionsSelf ? { mentionsSelf: true } : {}),
