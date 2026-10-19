@@ -1,8 +1,7 @@
 use super::*;
 use crate::tree::clip;
-use objc2_app_kit::NSRunningApplication;
+use core_graphics::window::{create_description_from_array, kCGWindowBounds, kCGWindowOwnerPID};
 
-const VIEW_SERVICES: &[&str] = &["com.apple.appkit.xpc.openAndSavePanelService"];
 const MENU_ITEMS: &[&str] = &["AXMenuItem", "AXMenuBarItem"];
 const SELECTS: &[&str] = &["AXRow", "AXCell", "AXOutlineRow", "AXListItem"];
 const TEXT_ROLES: &[&str] = &["AXTextField", "AXTextArea", "AXComboBox"];
@@ -62,10 +61,26 @@ pub(super) fn clickable(ax: &El, e: &El, index: u32, visible: Rect) -> Result<CG
     })
 }
 
-fn view_service(pid: i32) -> bool {
-    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-        .and_then(|a| a.bundleIdentifier())
-        .is_some_and(|b| VIEW_SERVICES.contains(&b.to_string().as_str()))
+pub(super) fn window_geometry(id: u32) -> Option<(i32, Rect)> {
+    if id == 0 {
+        return None;
+    }
+    let windows = create_description_from_array(CFArray::from_copyable(&[id]))?;
+    let window = windows.get(0)?;
+    let owner = window.find(unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) })?.downcast::<CFNumber>()?.to_i64()?;
+    let owner = i32::try_from(owner).ok().filter(|pid| *pid > 0)?;
+    let bounds = window.find(unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) })?.downcast::<CFDictionary>()?;
+    let bounds = core_graphics::geometry::CGRect::from_dict_representation(&bounds)?;
+    Some((owner, Rect { x: bounds.origin.x, y: bounds.origin.y, w: bounds.size.width, h: bounds.size.height }))
+}
+
+fn hosted_window(host_pid: i32, host: &El, element: &El) -> Option<(i32, u32, Rect)> {
+    if !within(element, host) {
+        return None;
+    }
+    let id = window_id(element);
+    let (owner, bounds) = window_geometry(id)?;
+    (owner != host_pid).then_some((owner, id, bounds))
 }
 
 fn inside(inner: Rect, outer: Rect) -> bool {
@@ -76,30 +91,16 @@ fn inside(inner: Rect, outer: Rect) -> bool {
         && inner.y + inner.h <= outer.y + outer.h + SLACK
 }
 
-pub(super) fn service_at(app_pid: i32, ax: &El, window: Option<Rect>, p: CGPoint) -> Option<(i32, El, u32)> {
+pub(super) fn service_at(app_pid: i32, ax: &El, p: CGPoint) -> Option<(i32, El, u32, Rect)> {
     let element = element_at(ax, p)?;
-    let pid = pid_of(&element)?;
-    if pid == app_pid || !view_service(pid) {
-        return None;
-    }
-    let mut current = Some(element);
-    for _ in 0..MAX_DEPTH {
-        let candidate = current?;
-        if pid_of(&candidate) != Some(pid) {
-            return None;
-        }
-        if has_role(&candidate, &["AXWindow"]) {
-            let id = window_id(&candidate);
-            return (id != 0 && frame(&candidate).zip(window).is_some_and(|(f, outer)| inside(f, outer))).then_some((pid, candidate, id));
-        }
-        current = attr(&candidate, "AXParent");
-    }
-    None
+    let (owner, id, bounds) = hosted_window(app_pid, ax, &element)?;
+    Some((owner, element, id, bounds))
 }
 
 pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
     let own = window_id(window);
     let mut found = vec![];
+    let mut checked = HashSet::from([own]);
     let mut level = vec![window.clone()];
     let mut visited = 0;
     for _ in 0..4 {
@@ -109,15 +110,15 @@ pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
             if visited > 400 {
                 return found;
             }
-            match pid_of(&e) {
-                Some(p) if p != pid && view_service(p) => {
-                    let id = window_id(&e);
-                    if id != 0 && id != own && !found.contains(&id) && frame(&e).is_some_and(|f| inside(f, outer)) {
+            let id = window_id(&e);
+            if checked.insert(id) {
+                if let Some((_, id, bounds)) = hosted_window(pid, window, &e) {
+                    if inside(bounds, outer) {
                         found.push(id);
                     }
                 }
-                _ => next.push(e),
             }
+            next.push(e);
         }
         level = next;
     }
@@ -125,10 +126,8 @@ pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
 }
 
 pub(super) fn keyboard_target(app_pid: i32, ax: &El) -> (i32, El) {
-    match attr(ax, "AXFocusedUIElement").and_then(|f| pid_of(&f)) {
-        Some(pid) if pid != app_pid && view_service(pid) => (pid, app_element(pid)),
-        _ => (app_pid, ax.clone()),
-    }
+    let pid = attr(ax, "AXFocusedUIElement").and_then(|focused| hosted_window(app_pid, ax, &focused)).map(|(pid, _, _)| pid);
+    (pid.unwrap_or(app_pid), ax.clone())
 }
 
 pub(super) fn menu_open(ax: &El) -> bool {
@@ -285,7 +284,7 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         if actions(e).iter().any(|a| a == "AXConfirm") {
             perform(e, "AXConfirm")?;
         } else {
-            let target = pid_of(e).unwrap_or(pid);
+            let target = hosted_window(pid, &app_element(pid), e).map(|(owner, _, _)| owner).unwrap_or(pid);
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
     }
