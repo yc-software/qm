@@ -196,6 +196,13 @@ test("env-delivery credential: envKey validated, host refused, duplicates refuse
     });
     assert.equal(dup.status, 400);
     assert.match(await dup.text(), /already delivered by credential/);
+    for (const slug of ["composio-team-a", "composio-team-b"])
+      assert.equal(
+        (await putCred(srv.base, { slug, name: slug, delivery: "env", envKey: "COMPOSIO_API_KEY", secret: slug }))
+          .status,
+        200,
+        "backend-only Composio keys never reach a computer, so several may coexist",
+      );
 
     const cfg = await getCfg(srv.base);
     const cred = cfg.serviceCredentials.find(

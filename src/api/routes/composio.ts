@@ -101,7 +101,9 @@ export async function credential(ctx: ApiCtx): Promise<{ key: string; principal:
   }
   const org = scopeId("org", orgId());
   const identity = ctx.deps.identity?.classify(principal) ?? { id: principal, type: "internal" as const };
-  const audience = ctx.capability && ctx.capability.scopeId !== personal ? ctx.capability.keychainMembers : [identity];
+  const shared = ctx.capability && ctx.capability.scopeId !== personal;
+  const teamIds = shared ? [] : ((await ctx.deps.teams?.forTurn(personal, [principal])) ?? []).map((team) => team.id);
+  const audience = shared ? ctx.capability!.keychainMembers : [teamIds.length ? { ...identity, teamIds } : identity];
   if (!audience?.length || audience.some((member) => member.type !== "internal")) {
     sendJson(ctx.res, 403, { error: "unknown_audience" });
     return null;
