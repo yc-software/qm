@@ -489,22 +489,6 @@ fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     }
     let win = actual;
     let frame = frame(&window).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window has no frame"))?;
-    if bool_attr(&window, "AXFocused") != Some(true) {
-        if let Some(point) = ax_value::<CGPoint>(&window, "AXActivationPoint", 1)
-            .filter(|point| point.x >= frame.x && point.x < frame.x + frame.w && point.y >= frame.y && point.y < frame.y + frame.h)
-        {
-            let activation = Press { window: window.clone(), win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) };
-            let down = mouse_event(&activation, CGEventType::LeftMouseDown, point, CGMouseButton::Left, 1, CGEventFlags::empty())?;
-            let up = mouse_event(&activation, CGEventType::LeftMouseUp, point, CGMouseButton::Left, 1, CGEventFlags::empty())?;
-            down.set_integer_value_field(EventField::MOUSE_EVENT_SUB_TYPE, 3);
-            up.set_integer_value_field(EventField::MOUSE_EVENT_SUB_TYPE, 3);
-            active()?;
-            validate_input_window(&activation)?;
-            post(down, pid);
-            post(up, pid);
-            active()?;
-        }
-    }
     mouse(
         pid,
         &Press { window: window.clone(), win, frame, number: 0 },
