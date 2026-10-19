@@ -572,10 +572,12 @@ test("connects without a return page are still audited on completion, and failed
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
   f.replies.push(new Response("bad", { status: 400 }));
   assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).status, 400);
+  assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: null })).status, 400);
   assert.deepEqual(
     f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
     [
       ["composio.connected", "outlook"],
+      ["composio.connect_failed", "unknown"],
       ["composio.connect_failed", "unknown"],
     ],
   );
@@ -648,7 +650,7 @@ test("expired callback returns are discarded after successful browser verificati
   const f = fixture();
   await f.own();
   const key = `${composioUserId(orgId(), "alice")}:ca_test`;
-  await f.deps.composioReturns!.put(key, { url: "https://qm.example/old", expiresAt: Date.now() - 1 });
+  await f.deps.composioReturns!.put(key, { url: "https://qm.example/old", toolkit: "gmail", expiresAt: Date.now() - 1 });
   f.replies.push({ connected_account_id: "ca_test" });
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
   assert.equal(await f.deps.composioReturns!.get(key), null);
