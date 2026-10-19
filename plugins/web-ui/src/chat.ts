@@ -1607,7 +1607,7 @@ export function createChatSurface(
       content = assistantSidebar({
         context: ctx.inbox.context(),
         messages: html`${pinnedStrip()} ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing}
-        ${messageContent}
+        ${messageContent} ${waitingSteerRows(agent)}
         ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}`,
         status: liveWorkStatus(agent),
         busy: agent.state.isStreaming,
@@ -1650,7 +1650,7 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
-              ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent}
+              ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
               ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
@@ -3043,6 +3043,26 @@ export function createChatSurface(
     return html`<div class="approval-card inline-approval-marker">
       <div class="approval-text">${approvalSummaryView(a)}</div>
     </div>`;
+  }
+
+  // A steer shows in the transcript as soon as it is sent, like Codex. Once the
+  // model reads it, the recorded steer renders inside the work block instead.
+  function waitingSteerRows(agent: Agent): TemplateResult[] {
+    return ctx.composer.waitingSteers(agent).map(
+      (q) =>
+        html`<div class="inline-steer waiting-steer" aria-busy="true">
+          ${chatMessage(
+              {
+                role: "user",
+                content: q.text || (q.hasAttachments ? "(files)" : ""),
+                steered: true,
+              } as unknown as AgentMessage,
+              -1,
+              false,
+              true,
+            )}
+        </div>`,
+    );
   }
 
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {

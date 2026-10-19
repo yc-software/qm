@@ -137,6 +137,8 @@ export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
+  /** Steers sent to the running turn that the model has not read yet. */
+  waitingSteers(agent: Agent): QueuedRun[];
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;
