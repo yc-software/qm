@@ -436,15 +436,6 @@ struct Press {
     number: i64,
 }
 
-fn mouse_event(at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<CGEvent, Failure> {
-    let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
-    e.set_flags(flags);
-    e.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
-    e.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, at.number);
-    in_window(&e, at, p)?;
-    Ok(e)
-}
-
 fn validate_input_window(at: &Press) -> Result<(), Failure> {
     if window_id(&at.window) != at.win || frame(&at.window) != Some(at.frame) {
         return Err(fail(ErrorCode::ActionFailed, "The input window moved, resized or closed; observe again before sending input"));
@@ -453,10 +444,19 @@ fn validate_input_window(at: &Press) -> Result<(), Failure> {
 }
 
 fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<(), Failure> {
-    if !matches!(ty, CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp) {
+    let release = matches!(ty, CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp);
+    if !release {
         validate_input_window(at)?;
     }
-    post(mouse_event(at, ty, p, b, clicks, flags)?, pid);
+    let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
+    e.set_flags(flags);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, at.number);
+    in_window(&e, at, p)?;
+    if !release {
+        active()?;
+    }
+    post(e, pid);
     Ok(())
 }
 
@@ -1605,6 +1605,7 @@ impl Desk {
                     unsafe { CGEventSetLocation(e.as_ptr() as *mut c_void, p) };
                     validate_input_window(&press)?;
                     in_window(&e, &press, p)?;
+                    active()?;
                     post(e, to);
                 }
                 Ok(())
