@@ -50,6 +50,14 @@ test("coordinate actions require a screenshot of the current process, window and
   await app.getAXState({ emit: false });
   await app.click([20, 10]);
   assert.deepEqual(calls.at(-1).actions[0].target.point, { x: 0, y: 5 });
+  const alias = await window.computer.getApp("/Applications/Fixture.app", { emit: false });
+  await app.click([20, 10]);
+  observation.window_id += 1;
+  await alias.getAXState({ emit: false });
+  const beforeAliasClick = calls.length;
+  assert.throws(() => app.click([20, 10]), /screenshot/i);
+  assert.equal(calls.length, beforeAliasClick);
+  await app.getScreenshot({ emit: false });
   for (const change of [
     () => { observation.frame.w += 10; },
     () => { observation.frame.x -= 20; },

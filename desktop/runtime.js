@@ -22,6 +22,7 @@
     ],
   ]);
   const notedApps = new Set();
+  const observedWindows = new Map();
   let emitted = new WeakSet();
   let text = [];
   let images = [];
@@ -109,6 +110,7 @@
   class App {
     #scale = null;
     #screenshotWindow = null;
+    #appIdentity = null;
     #offset = { x: 0, y: 0 };
 
     constructor(name) {
@@ -118,6 +120,8 @@
     async #observe(screenshot, diff, emit, tree = true) {
       const o = await desk({ type: "observe", app: this.name, screenshot, diff });
       const identity = JSON.stringify([o.pid, o.window_id ?? o.window, o.frame.x, o.frame.y, o.frame.w, o.frame.h]);
+      this.#appIdentity = o.bundle_id ? `bundle:${o.bundle_id}` : `name:${o.app}`;
+      observedWindows.set(this.#appIdentity, identity);
       if (identity !== this.#screenshotWindow) this.#scale = null;
       const note = appNotes.get(o.bundle_id);
       if (emit && note && !notedApps.has(o.bundle_id)) {
@@ -159,7 +163,8 @@
     #target(t) {
       if (typeof t === "number") return { index: t };
       if (Array.isArray(t) && t.length === 2) {
-        if (this.#scale === null) throw new Error("Get a current screenshot before using point coordinates; the window may have changed.");
+        if (this.#scale === null || observedWindows.get(this.#appIdentity) !== this.#screenshotWindow)
+          throw new Error("Get a current screenshot before using point coordinates; the window may have changed.");
         return { point: { x: this.#offset.x + t[0] / this.#scale, y: this.#offset.y + t[1] / this.#scale } };
       }
       throw new Error("target must be an element index or [x, y] screenshot pixels");
