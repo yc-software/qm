@@ -325,7 +325,7 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
   }
 });
 
-test("pg spend refresh saves the newest days first and gets past a slow first day", { skip }, async (t) => {
+test("pg spend refresh takes today, then the stalest days, at least two per pass", { skip }, async (t) => {
   const pg = (await import("pg")).default;
   const admin = new pg.Pool({ connectionString: URL });
   const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
@@ -334,6 +334,7 @@ test("pg spend refresh saves the newest days first and gets past a slow first da
   url.searchParams.set("options", `-c search_path=${schema}`);
   const day = 86_400_000;
   const base = Date.UTC(2025, 5, 1);
+  const today = base + 3 * day;
   let at = base;
   let elapsed = 0;
   let slow = false;
@@ -344,27 +345,44 @@ test("pg spend refresh saves the newest days first and gets past a slow first da
     },
   });
   const raw = new pg.Pool({ connectionString: url.toString() });
-  const saved = async () =>
-    (await raw.query("SELECT day FROM session_spend_days ORDER BY day")).rows.map((r) => Number(r.day) - base / day);
-  try {
-    const scope = scopeId("personal", "spend-order");
-    const session = await store.getOrCreateByThread("spend-order", "dm", scope);
-    for (const offset of [0, 1, 2, 3]) {
-      at = base + offset * day;
-      await store.recordLlmRequest(session.id, {
-        turnSeq: null,
-        step: 0,
-        model: "order",
-        scopeLabel: scope,
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
-      });
-    }
-    t.mock.method(Date, "now", () => elapsed);
+  const scope = scopeId("personal", "spend-order");
+  const session = await store.getOrCreateByThread("spend-order", "dm", scope);
+  const bill = async (offset: number) => {
+    at = base + offset * day;
+    await store.recordLlmRequest(session.id, {
+      turnSeq: null,
+      step: 0,
+      model: "order",
+      scopeLabel: scope,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+    });
+    at = today;
+  };
+  const slowPass = async () => {
     slow = true;
     await store.refreshSpendRollup!();
-    assert.deepEqual(await saved(), [2, 3]);
-    await store.refreshSpendRollup!();
-    assert.deepEqual(await saved(), [0, 1, 2, 3]);
+    slow = false;
+  };
+  const pending = async () =>
+    (await raw.query("SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL ORDER BY day")).rows.map(
+      (r) => Number(r.day) - base / day,
+    );
+  try {
+    for (const offset of [0, 1, 2, 3]) {
+      await bill(offset);
+      at = base + offset * day;
+      await store.refreshSpendRollup!();
+    }
+    for (const offset of [0, 1, 2, 3]) await bill(offset);
+    t.mock.method(Date, "now", () => elapsed);
+    await slowPass();
+    assert.deepEqual(await pending(), [1, 2]);
+    await bill(2);
+    await bill(3);
+    await slowPass();
+    assert.deepEqual(await pending(), [2]);
+    await slowPass();
+    assert.deepEqual(await pending(), []);
   } finally {
     await raw.end();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);

@@ -1987,7 +1987,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [changed.rows.map((r) => r.session_id)],
         );
       });
-      const days = await q("SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL ORDER BY day DESC");
+      const days = await q(
+        `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
+         LEFT JOIN session_spend_days c ON c.day = d.day
+         ORDER BY d.day = $1 DESC, c.updated_at NULLS FIRST, d.day DESC`,
+        [Math.floor(now() / 86_400_000)],
+      );
       for (const [index, { day }] of days.entries()) {
         try {
           await withPgTransaction(await pool(), async (client) => {
