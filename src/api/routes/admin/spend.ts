@@ -2,8 +2,7 @@ import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
-import { constantTimeEqual } from "../../../util/crypto.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
+import { bearerMatches, contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
@@ -408,9 +407,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const { req, res, app, deps, url } = ctx;
   const token = deps.spendExportToken;
   if (!token) return sendJson(res, 404, { error: "not_found" });
-  const authorization = req.headers.authorization;
-  if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
-    return sendJson(res, 401, { error: "unauthorized" });
+  if (!bearerMatches(req, token)) return sendJson(res, 401, { error: "unauthorized" });
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const from = parseDay(url.searchParams.get("from") ?? "");
   const to = parseDay(url.searchParams.get("to") ?? "");

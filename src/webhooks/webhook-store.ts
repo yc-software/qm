@@ -12,6 +12,16 @@ import {
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
+export function webhookThreadRef(webhookId: string, deliveryId: string): string {
+  return `webhook:${webhookId}:${deliveryId}`;
+}
+
+export function parseWebhookThreadRef(ref: string): { webhookId: string; deliveryId: string } | null {
+  const [origin, webhookId, ...rest] = ref.split(":");
+  const deliveryId = rest.join(":");
+  return origin === "webhook" && webhookId && deliveryId ? { webhookId, deliveryId } : null;
+}
+
 export interface CreateWebhookInput extends CreateTriggerInput {
   action: string;
   verification: Webhook["verification"];
@@ -22,6 +32,7 @@ export interface WebhookEvent {
   deliveryId: string;
   receivedAt: number;
   payload: string;
+  failed?: true;
 }
 
 export interface WebhookHistory {
@@ -38,6 +49,7 @@ export interface WebhookStore {
   update(id: string, patch: { action: string }): Promise<Webhook | null>;
   setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
+  markDeliveryFailed(id: string, deliveryId: string): Promise<void>;
 }
 
 export function createWebhookStore(
@@ -63,6 +75,11 @@ export function createWebhookStore(
             .slice(0, 50),
         };
       });
+    },
+    async markDeliveryFailed(id, deliveryId) {
+      await updateHistory(id, (value) => ({
+        events: value.events.map((e) => (e.deliveryId === deliveryId ? { ...e, failed: true } : e)),
+      }));
     },
     async listEvents(id) {
       return structuredClone((await history.get(id))?.events ?? []);

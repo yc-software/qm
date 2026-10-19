@@ -1183,6 +1183,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     ]);
   }
 
+  if (pathname === "/v1/session-status" && method === "GET") {
+    return proxyToUpstream(req, res, { baseUrl: CORE, path: pathname, search: url.search }, ["authorization"]);
+  }
+
   if (
     method === "POST" &&
     (/^\/v1\/webhooks\/incoming\/[^/]+$/.test(pathname) || /^\/v1\/loop-ingress\/[^/]+$/.test(pathname))

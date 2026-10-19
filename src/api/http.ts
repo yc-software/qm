@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { gzip } from "node:zlib";
+import { constantTimeEqual } from "../util/crypto.ts";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 const COMPRESS_MIN_BYTES = 1024;
@@ -137,6 +138,11 @@ export function pipeToResponse(
 export function sendRedirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { location });
   res.end();
+}
+
+export function bearerMatches(req: IncomingMessage, token: string): boolean {
+  const authorization = req.headers.authorization;
+  return typeof authorization === "string" && constantTimeEqual(authorization, `Bearer ${token}`);
 }
 
 export function headerValue(req: IncomingMessage, name: string): string | undefined {

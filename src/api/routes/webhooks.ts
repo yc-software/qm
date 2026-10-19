@@ -72,7 +72,8 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     res.end(out.body);
     return;
   }
-  if (out.status === 202) return sendJson(res, 202, { ok: true });
+  if (out.status === 202)
+    return sendJson(res, 202, { ok: true, deliveryId: out.deliveryId, sessionRef: out.sessionRef });
   if (out.status === 401)
     return sendJson(res, 401, { error: "unauthorized", message: "signature verification failed" });
   return sendJson(res, 404, { error: "not_found" });

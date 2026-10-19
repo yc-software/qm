@@ -311,6 +311,20 @@ test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", 
   assert.equal((await fetch(`${base}/v1/webhooks`, { method: "POST" })).status, 404);
 });
 
+test("session status passes through with only its bearer, GET-only and exact-path", async () => {
+  const r = await fetch(`${base}/v1/session-status?session=webhook%3Aw1%3Ad1`, {
+    headers: { authorization: "Bearer status-token", cookie: "qm_portal=forged", "x-admin-actor": "U-admin" },
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
+  assert.equal(body.url, "/v1/session-status?session=webhook%3Aw1%3Ad1");
+  assert.equal(body.headers.authorization, "Bearer status-token");
+  assert.equal(body.cookie, null);
+  assert.equal(body.headers["x-admin-actor"], undefined);
+  assert.equal((await fetch(`${base}/v1/session-status`, { method: "POST" })).status, 404);
+  assert.equal((await fetch(`${base}/v1/session-status/x`)).status, 404);
+});
+
 test("the provider callback still passes through publicly with NO session/cookie", async () => {
   const cb = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=s`, { redirect: "manual" });
   assert.equal(cb.status, 200);

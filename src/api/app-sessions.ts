@@ -4,6 +4,7 @@ import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import { runFailed } from "../runs/run-store.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
@@ -493,7 +494,7 @@ export function createSessionMethods(
       const failedChildren = new Set<string>();
       for (const s of idleChildren) {
         const run = latestRuns.get(s.threadRef);
-        if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
+        if (run && runFailed(run)) failedChildren.add(s.id);
       }
       const goals = new Map<
         string,

@@ -17,7 +17,7 @@ import { canonicalJson } from "../util/objects.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { runFailed, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -415,8 +415,16 @@ export async function sessionTreeWorking(
   runs: Pick<RunStore, "activeForThread">,
   root: Session,
 ): Promise<boolean> {
-  for (const session of await treeSessions(sessions, root)) {
-    if (session.scopeId === root.scopeId && (await runs.activeForThread(session.threadRef))) return true;
+  const queue = [root];
+  const seen = new Set([root.id]);
+  while (queue.length) {
+    const next = queue.shift()!;
+    if (next.scopeId === root.scopeId && (await runs.activeForThread(next.threadRef))) return true;
+    for (const child of await sessions.childrenOf(next.id)) {
+      if (seen.has(child.id)) throw new Error("session parent cycle");
+      seen.add(child.id);
+      queue.push(child);
+    }
   }
   return false;
 }
@@ -1105,7 +1113,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const result = run.result;
   let kind: SubagentMailKind;
   let body: string;
-  if (run.status === "failed" || result?.status === "failed") {
+  if (runFailed(run)) {
     kind = "errored";
     body = snippet(result?.reason ?? "the turn failed", MAIL_ERROR_CAP);
   } else if (result?.pendingApprovals?.length || result?.status === "pending_approval") {
