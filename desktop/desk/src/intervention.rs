@@ -114,7 +114,7 @@ impl Intervention {
         let release = if target == foreground {
             None
         } else {
-            let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"_CPSReleaseKeyFocusWithID".as_ptr()) };
+            let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSReleaseKeyFocusWithID".as_ptr()) };
             if pointer.is_null() {
                 return Err(Failure::new(
                     ErrorCode::ActionFailed,

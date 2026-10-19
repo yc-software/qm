@@ -244,6 +244,7 @@ struct App {
     pid: i32,
     active: bool,
     launched: Option<f64>,
+    path: Option<std::path::PathBuf>,
 }
 
 struct Snapshot {
@@ -393,6 +394,7 @@ fn running() -> Vec<App> {
             pid: a.processIdentifier(),
             active: a.isActive(),
             launched: a.launchDate().map(|d| d.timeIntervalSinceReferenceDate()),
+            path: a.bundleURL().and_then(|url| url.path()).and_then(|path| std::fs::canonicalize(path.to_string()).ok()),
         })
         .collect()
 }
@@ -412,13 +414,24 @@ fn post(e: CGEvent, pid: i32) {
     std::thread::sleep(Duration::from_millis(8));
 }
 
-fn in_window(e: &CGEvent, win: u32) {
-    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER, win as i64);
-    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT, win as i64);
+const EVENT_WINDOW_ID: u32 = 51;
+
+fn in_window(e: &CGEvent, at: &Press, p: CGPoint) -> Result<(), Failure> {
+    let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
+    if pointer.is_null() {
+        return Err(fail(ErrorCode::ActionFailed, "Window-relative event delivery is unavailable"));
+    }
+    let set_location: unsafe extern "C" fn(*mut c_void, CGPoint) = unsafe { std::mem::transmute(pointer) };
+    e.set_integer_value_field(EVENT_WINDOW_ID, at.win as i64);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER, at.win as i64);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT, at.win as i64);
+    unsafe { set_location(e.as_ptr().cast(), pt(p.x - at.frame.x, p.y - at.frame.y)) };
+    Ok(())
 }
 
 struct Press {
     win: u32,
+    frame: Rect,
     number: i64,
 }
 
@@ -427,7 +440,7 @@ fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, cl
     e.set_flags(flags);
     e.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
     e.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, at.number);
-    in_window(&e, at.win);
+    in_window(&e, at, p)?;
     post(e, pid);
     Ok(())
 }
@@ -452,13 +465,16 @@ fn hit(ax: &El, p: CGPoint) -> Option<(El, bool)> {
 
 fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     active()?;
-    let win = match hit(ax, p) {
-        Some((w, _web)) if window_id(&w) != 0 => window_id(&w),
-        _ => win,
-    };
-    mouse(pid, &Press { win, number: 0 }, CGEventType::MouseMoved, p, CGMouseButton::Left, 0, CGEventFlags::empty())?;
+    let window = hit(ax, p)
+        .map(|(w, _)| w)
+        .filter(|w| window_id(w) != 0)
+        .or_else(|| window_of(ax).filter(|w| window_id(w) == win))
+        .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the input window"))?;
+    let win = window_id(&window);
+    let frame = frame(&window).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window has no frame"))?;
+    mouse(pid, &Press { win, frame, number: 0 }, CGEventType::MouseMoved, p, CGMouseButton::Left, 0, CGEventFlags::empty())?;
     cancellation::wait(Duration::from_millis(HOVER_MS));
-    Ok(Press { win, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) })
+    Ok(Press { win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) })
 }
 
 fn click_at(pid: i32, press: Press, p: CGPoint, button: Button, count: u8, mods: &[Modifier], hold: u32) -> Result<(), Failure> {
@@ -640,7 +656,7 @@ fn paste(pid: i32, ax: &El, s: &str, format: PasteFormat) -> Result<(), Failure>
             _ => Check::Unreadable,
         }
     };
-    let cmd_v = || key(pid, v, CGEventFlags::CGEventFlagCommand, Some("v"), 0);
+    let cmd_v = || key(pid, v, CGEventFlags::CGEventFlagCommand, None, 0);
     crate::pasteboard::paste(s, format, cmd_v, &mut check, &active)
 }
 
@@ -1528,7 +1544,6 @@ impl Desk {
                 }
                 .unwrap_or(Rect { x: 0.0, y: 0.0, w: 600.0, h: 600.0 });
                 let (to, press) = self.pointer(pid, ax, win, p)?;
-                let scroll_win = press.win;
                 let vertical = matches!(direction, Direction::Up | Direction::Down);
                 let mut left = match amount {
                     Amount::Pixels(n) => *n as i32,
@@ -1547,7 +1562,7 @@ impl Desk {
                     let e = CGEvent::new_scroll_event(source()?, ScrollEventUnit::PIXEL, 2, dy, dx, 0)
                         .map_err(|_| fail(ErrorCode::ActionFailed, "scroll event"))?;
                     unsafe { CGEventSetLocation(e.as_ptr() as *mut c_void, p) };
-                    in_window(&e, scroll_win);
+                    in_window(&e, &press, p)?;
                     post(e, to);
                 }
                 Ok(())
@@ -1610,26 +1625,78 @@ fn resolve(query: &str) -> Result<App, Failure> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err(fail(ErrorCode::PermissionMissing, "Accessibility not granted; run `desk permissions --prompt`"));
     }
-    let find = || {
-        running()
-            .into_iter()
-            .find(|a| a.name.eq_ignore_ascii_case(query) || a.bundle.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(query)))
+    let path = if std::path::Path::new(query).is_absolute() {
+        Some(
+            std::fs::canonicalize(query)
+                .map_err(|error| fail(ErrorCode::AppNotFound, format!("Cannot resolve app path {query}: {error}")))?,
+        )
+    } else {
+        None
     };
-    let app = match find() {
-        Some(app) => app,
-        None => {
-            let flag = if query.contains('.') && !query.contains(' ') { "-b" } else { "-a" };
-            let opened = std::process::Command::new("/usr/bin/open").args(["-g", flag, query]).status().is_ok_and(|s| s.success());
-            (0..25)
-                .take_while(|_| opened)
-                .find_map(|_| {
-                    std::thread::sleep(Duration::from_millis(200));
-                    find()
-                })
-                .ok_or_else(|| fail(ErrorCode::AppNotFound, format!("could not open {query}")))?
+    let find = || select_app(running(), query, path.as_deref());
+    if find()?.is_none() {
+        let flag = if path.is_none() && query.contains('.') && !query.contains(' ') { "-b" } else { "-a" };
+        let opened = std::process::Command::new("/usr/bin/open").args(["-g", flag, query]).status().is_ok_and(|s| s.success());
+        if !opened {
+            return Err(fail(ErrorCode::AppNotFound, format!("could not open {query}")));
         }
-    };
-    Ok(app)
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        active()?;
+        let pending = match find()? {
+            Some(app) => {
+                let launched =
+                    NSRunningApplication::runningApplicationWithProcessIdentifier(app.pid).is_some_and(|app| app.isFinishedLaunching());
+                if launched {
+                    match window(&app) {
+                        Ok(_) => return Ok(app),
+                        Err(error) => error,
+                    }
+                } else {
+                    fail(ErrorCode::NoWindow, format!("{} did not finish launching", app.name))
+                }
+            }
+            None => fail(ErrorCode::AppNotFound, format!("{query} did not start or exited before becoming ready")),
+        };
+        if Instant::now() >= deadline {
+            return Err(pending);
+        }
+        cancellation::wait(Duration::from_millis(100));
+    }
+}
+
+fn select_app(apps: Vec<App>, query: &str, path: Option<&std::path::Path>) -> Result<Option<App>, Failure> {
+    let mut matches: Vec<_> = apps
+        .into_iter()
+        .filter(|app| match path {
+            Some(path) => app.path.as_deref() == Some(path),
+            None => app.name.eq_ignore_ascii_case(query) || app.bundle.as_deref().is_some_and(|bundle| bundle.eq_ignore_ascii_case(query)),
+        })
+        .collect();
+    if matches.len() > 1 {
+        matches.sort_by_key(|app| app.pid);
+        let candidates = matches
+            .iter()
+            .map(|app| {
+                format!(
+                    "{} (PID {}, {}, {})",
+                    app.name,
+                    app.pid,
+                    app.bundle.as_deref().unwrap_or("no bundle ID"),
+                    app.path.as_ref().map(|path| path.display().to_string()).unwrap_or_else(|| "unknown path".into())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(fail(
+            ErrorCode::BadRequest,
+            format!(
+                "Ambiguous app {query:?}: {candidates}. Use a unique bundle ID or full application path, or close duplicate instances."
+            ),
+        ));
+    }
+    Ok(matches.pop())
 }
 
 fn window(app: &App) -> Result<(El, El), Failure> {
@@ -1647,4 +1714,32 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
         return Err(fail(ErrorCode::PermissionMissing, "Screen Recording not granted; run `desk permissions --prompt`"));
     }
     crate::capture::window(window_id(w), panels, f).map_err(|m| fail(ErrorCode::ActionFailed, m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(name: &str, bundle: &str, path: &str, pid: i32) -> App {
+        App { name: name.into(), bundle: Some(bundle.into()), path: Some(path.into()), pid, active: false, launched: None }
+    }
+
+    #[test]
+    fn app_identity_rejects_every_ambiguous_match() {
+        let result = select_app(vec![app("Editor", "test.one", "/One.app", 11), app("Editor", "test.two", "/Two.app", 22)], "editor", None);
+        let error = result.err().unwrap();
+        assert_eq!(error.code, ErrorCode::BadRequest);
+        assert!(error.message.contains("PID 11"));
+        assert!(error.message.contains("PID 22"));
+        let result = select_app(vec![app("One", "test.same", "/One.app", 11), app("Two", "test.same", "/Two.app", 22)], "test.same", None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn app_identity_selects_exact_path_or_unique_bundle() {
+        let apps = || vec![app("Editor", "test.one", "/One.app", 11), app("Editor", "test.two", "/Two.app", 22)];
+        assert_eq!(select_app(apps(), "test.TWO", None).unwrap().unwrap().pid, 22);
+        assert_eq!(select_app(apps(), "/One.app", Some(std::path::Path::new("/One.app"))).unwrap().unwrap().pid, 11);
+        assert!(select_app(apps(), "/Missing.app", Some(std::path::Path::new("/Missing.app"))).unwrap().is_none());
+    }
 }

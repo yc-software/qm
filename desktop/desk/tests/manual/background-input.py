@@ -62,15 +62,16 @@ def main():
                 time.sleep(0.02)
             result = request(desk, {"type": "act", "app": args.app, "actions": [
                 {"type": "click", "target": {"point": {"x": args.x, "y": args.y}}},
-                {"type": "type_text", "text": marker}
+                {"type": "type_text", "text": marker},
+                {"type": "paste", "text": "-pasted"}
             ], "pace": False, "observe": True, "screenshot": False, "diff": False}, 2)
-            desk.terminate()
+            desk.stdin.close()
             desk.wait(timeout=2)
             time.sleep(0.5)
             stop.touch()
             witness_result = json.loads(witness.communicate(timeout=5)[0])
             failure = result.get("failure") or result.get("observation_failure")
-            accepted = marker in (result.get("observation") or {}).get("tree", "")
+            accepted = marker + "-pasted" in (result.get("observation") or {}).get("tree", "")
             passed = not failure and accepted and not witness_result["violations"]
             print(json.dumps({"passed": passed, "markerObservedInTarget": accepted,
                               "violations": witness_result["violations"], "actionFailure": failure}, indent=2))
@@ -84,6 +85,8 @@ def main():
                 except subprocess.TimeoutExpired:
                     witness.terminate()
                     witness.wait(timeout=5)
+            if not desk.stdin.closed:
+                desk.stdin.close()
             desk.terminate()
             try:
                 desk.wait(timeout=2)
