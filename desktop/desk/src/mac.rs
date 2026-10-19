@@ -430,18 +430,33 @@ fn in_window(e: &CGEvent, at: &Press, p: CGPoint) -> Result<(), Failure> {
 }
 
 struct Press {
+    window: El,
     win: u32,
     frame: Rect,
     number: i64,
 }
 
-fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<(), Failure> {
+fn mouse_event(at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<CGEvent, Failure> {
     let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
     e.set_flags(flags);
     e.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
     e.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, at.number);
     in_window(&e, at, p)?;
-    post(e, pid);
+    Ok(e)
+}
+
+fn validate_input_window(at: &Press) -> Result<(), Failure> {
+    if window_id(&at.window) != at.win || frame(&at.window) != Some(at.frame) {
+        return Err(fail(ErrorCode::ActionFailed, "The input window moved, resized or closed; observe again before sending input"));
+    }
+    Ok(())
+}
+
+fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<(), Failure> {
+    if !matches!(ty, CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp) {
+        validate_input_window(at)?;
+    }
+    post(mouse_event(at, ty, p, b, clicks, flags)?, pid);
     Ok(())
 }
 
@@ -474,9 +489,33 @@ fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     }
     let win = actual;
     let frame = frame(&window).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window has no frame"))?;
-    mouse(pid, &Press { win, frame, number: 0 }, CGEventType::MouseMoved, p, CGMouseButton::Left, 0, CGEventFlags::empty())?;
+    if bool_attr(&window, "AXFocused") != Some(true) {
+        if let Some(point) = ax_value::<CGPoint>(&window, "AXActivationPoint", 1)
+            .filter(|point| point.x >= frame.x && point.x < frame.x + frame.w && point.y >= frame.y && point.y < frame.y + frame.h)
+        {
+            let activation = Press { window: window.clone(), win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) };
+            let down = mouse_event(&activation, CGEventType::LeftMouseDown, point, CGMouseButton::Left, 1, CGEventFlags::empty())?;
+            let up = mouse_event(&activation, CGEventType::LeftMouseUp, point, CGMouseButton::Left, 1, CGEventFlags::empty())?;
+            down.set_integer_value_field(EventField::MOUSE_EVENT_SUB_TYPE, 3);
+            up.set_integer_value_field(EventField::MOUSE_EVENT_SUB_TYPE, 3);
+            active()?;
+            validate_input_window(&activation)?;
+            post(down, pid);
+            post(up, pid);
+            active()?;
+        }
+    }
+    mouse(
+        pid,
+        &Press { window: window.clone(), win, frame, number: 0 },
+        CGEventType::MouseMoved,
+        p,
+        CGMouseButton::Left,
+        0,
+        CGEventFlags::empty(),
+    )?;
     cancellation::wait(Duration::from_millis(HOVER_MS));
-    Ok(Press { win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) })
+    Ok(Press { window: window.clone(), win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) })
 }
 
 fn click_at(pid: i32, press: Press, p: CGPoint, button: Button, count: u8, mods: &[Modifier], hold: u32) -> Result<(), Failure> {
@@ -1579,6 +1618,7 @@ impl Desk {
                     let e = CGEvent::new_scroll_event(source()?, ScrollEventUnit::PIXEL, 2, dy, dx, 0)
                         .map_err(|_| fail(ErrorCode::ActionFailed, "scroll event"))?;
                     unsafe { CGEventSetLocation(e.as_ptr() as *mut c_void, p) };
+                    validate_input_window(&press)?;
                     in_window(&e, &press, p)?;
                     post(e, to);
                 }
