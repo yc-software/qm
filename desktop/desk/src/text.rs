@@ -110,6 +110,36 @@ pub fn inserted(before: &str, selection: Option<(usize, usize)>, after: &str, pa
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisibleText {
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+    pub total: usize,
+}
+
+pub fn visible_text(value: &str, range: [isize; 2], limit: usize) -> Option<VisibleText> {
+    let start = usize::try_from(range[0]).ok()?;
+    let end = start.checked_add(usize::try_from(range[1]).ok()?)?;
+    let mut offset = 0;
+    let mut start_byte = None;
+    let mut end_byte = None;
+    for (byte, c) in value.char_indices().chain(std::iter::once((value.len(), '\0'))) {
+        if offset == start {
+            start_byte = Some(byte);
+        }
+        if offset == end {
+            end_byte = Some(byte);
+        }
+        if byte < value.len() {
+            offset += c.len_utf16();
+        }
+    }
+    let text: String = value[start_byte?..end_byte?].chars().take(limit).collect();
+    let end = start + text.encode_utf16().count();
+    Some(VisibleText { text, start, end, total: offset })
+}
+
 pub fn selection_range(value: &str, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<[isize; 2], &'static str> {
     if text.is_empty() {
         return Err("Selection text must not be empty");

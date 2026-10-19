@@ -96,6 +96,7 @@ const FETCH: &[&str] = &[
     "AXDescription",
     "AXHelp",
     "AXValue",
+    "AXVisibleCharacterRange",
     "AXPlaceholderValue",
     "AXURL",
     "AXIdentifier",
@@ -767,8 +768,17 @@ fn fetch(e: &El) -> Node {
         None
     };
     let has_value = get("AXValue").is_some();
+    let role = s("AXRole").unwrap_or_else(|| "AXUnknown".into());
+    let visible_text = matches!(role.as_str(), "AXTextArea" | "AXTextField")
+        .then(|| {
+            let value = get("AXValue").and_then(text_of)?;
+            let range = get("AXVisibleCharacterRange").and_then(|v| point_of::<[isize; 2]>(v, 4))?;
+            crate::text::visible_text(&value, range, tree::MAX_TEXT)
+        })
+        .flatten();
     let props = Props {
-        role: s("AXRole").unwrap_or_else(|| "AXUnknown".into()),
+        role,
+        visible_text,
         subrole: s("AXSubrole"),
         title,
         description: s("AXDescription").or_else(|| s("AXHelp")),

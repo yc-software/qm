@@ -81,6 +81,7 @@ pub struct Props {
     pub description: Option<String>,
     pub label: Option<String>,
     pub value: Option<String>,
+    pub visible_text: Option<crate::text::VisibleText>,
     pub placeholder: Option<String>,
     pub url: Option<String>,
     pub identifier: Option<String>,
@@ -147,7 +148,12 @@ impl Props {
     pub fn describe(&self) -> (String, bool) {
         let toggle = self.toggle();
         let name = self.name();
-        let value = self.value.as_deref().filter(|v| Some(*v) != name && toggle.is_none() && self.heading_level().is_none());
+        let value = self
+            .visible_text
+            .as_ref()
+            .map(|v| v.text.as_str())
+            .or(self.value.as_deref())
+            .filter(|v| Some(*v) != name && toggle.is_none() && self.heading_level().is_none());
         let description = self.description.as_deref().filter(|d| Some(*d) != name);
         let placeholder = self.placeholder.as_deref().filter(|_| value.is_none());
         let keep = self.list_item
@@ -182,6 +188,9 @@ impl Props {
         if let Some(v) = value {
             let n = if TEXT_ROLES.contains(&self.role.as_str()) { MAX_TEXT } else { 120 };
             s += &format!(" = \"{}\"", clip(v, n));
+            if let Some(v) = &self.visible_text {
+                s += &format!(" [visible UTF-16 range {}..{} of {}]", v.start, v.end, v.total);
+            }
         }
         if let Some(p) = placeholder {
             s += &format!(" placeholder \"{}\"", clip(p, 80));
@@ -535,6 +544,48 @@ pub fn sparse(region: Rect, window: Rect, lines_inside: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn visible_text_observation_preserves_native_offsets_and_value() {
+        let value = "  😀old\nvisible text\ntail";
+        let p = super::Props {
+            role: "AXTextArea".into(),
+            value: Some(value.into()),
+            visible_text: crate::text::visible_text(value, [8, 12], super::MAX_TEXT),
+            ..Default::default()
+        };
+        assert_eq!(p.describe().0, "TextArea = \"visible text\" [visible UTF-16 range 8..20 of 25]");
+        assert_eq!(p.text(), Some(value));
+    }
+
+    #[test]
+    fn visible_text_observation_rejects_invalid_native_ranges() {
+        for range in [[-1, 1], [0, -1], [2, 1], [1, 1], [0, 20], [isize::MAX, isize::MAX]] {
+            let value = "a😀bc";
+            let p = super::Props {
+                role: "AXTextArea".into(),
+                value: Some(value.into()),
+                visible_text: crate::text::visible_text(value, range, super::MAX_TEXT),
+                ..Default::default()
+            };
+            assert_eq!(p.describe().0, "TextArea = \"a😀bc\"");
+        }
+    }
+
+    #[test]
+    fn visible_text_observation_bounds_long_excerpts() {
+        let value = format!("prefix{}tail", "😀".repeat(1001));
+        let p = super::Props {
+            role: "AXTextArea".into(),
+            value: Some(value.clone()),
+            visible_text: crate::text::visible_text(&value, [6, 2002], super::MAX_TEXT),
+            ..Default::default()
+        };
+        assert_eq!(p.describe().0, format!("TextArea = \"{}\" [visible UTF-16 range 6..2006 of 2012]", "😀".repeat(1000)));
+        let empty = crate::text::visible_text(&value, [2012, 0], super::MAX_TEXT).unwrap();
+        assert!(empty.text.is_empty());
+        assert_eq!((empty.start, empty.end, empty.total), (2012, 2012, 2012));
+    }
     use super::*;
 
     fn r(x: f64, y: f64, w: f64, h: f64) -> Rect {
