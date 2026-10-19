@@ -71,7 +71,11 @@ impl Focus {
             return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
         }
         let original = frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?;
-        let intervention = crate::intervention::Intervention::begin(target, original)?;
+        let keyboard_owner = crate::intervention::keyboard_focus_pid()?;
+        let intervention = crate::intervention::Intervention::begin(target, original, keyboard_owner)?;
+        if keyboard_owner != crate::intervention::keyboard_focus_pid()? || frontmost() != Some(original) {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Focus changed while starting input; stopped"));
+        }
         if original == target {
             EXPECTED_FOREGROUND.store(original, Ordering::Release);
             return Ok(Self { target, activated: false, intervention: Some(intervention) });

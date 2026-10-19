@@ -14,6 +14,33 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
+type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
+type GetProcessPid = unsafe extern "C" fn(*const ProcessSerialNumber, *mut i32) -> i32;
+
+#[repr(C)]
+#[derive(Default)]
+struct ProcessSerialNumber {
+    high: u32,
+    low: u32,
+}
+
+pub fn keyboard_focus_pid() -> Result<i32, Failure> {
+    let query = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSGetKeyFocusProcess".as_ptr()) };
+    let resolve = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"GetProcessPID".as_ptr()) };
+    if query.is_null() || resolve.is_null() {
+        return Err(Failure::new(ErrorCode::ActionFailed, "Keyboard-focus ownership is unavailable; input was not started"));
+    }
+    let query = unsafe { std::mem::transmute::<*mut c_void, GetKeyFocus>(query) };
+    let resolve = unsafe { std::mem::transmute::<*mut c_void, GetProcessPid>(resolve) };
+    let mut process = ProcessSerialNumber::default();
+    let mut flags = 0;
+    let mut pid = 0;
+    if unsafe { query(&mut process, &mut flags) } != 0 || unsafe { resolve(&process, &mut pid) } != 0 || pid <= 0 {
+        return Err(Failure::new(ErrorCode::ActionFailed, "Cannot identify the keyboard-focus owner; input was not started"));
+    }
+    Ok(pid)
+}
+
 const NOTIFICATION_SUBTYPE: CGEventField = CGEventField(64);
 const FOCUS_THEFT_ID: CGEventField = CGEventField(71);
 const FOCUS_SUBJECT_PID: CGEventField = CGEventField(73);
@@ -22,7 +49,7 @@ static ACTIVE: Mutex<Option<Arc<Context>>> = Mutex::new(None);
 struct Context {
     scope: Mutex<Scope>,
     failure: Mutex<Option<String>>,
-    release: Option<ReleaseKeyFocus>,
+    release: ReleaseKeyFocus,
 }
 
 impl Context {
@@ -75,7 +102,7 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
             std::ptr::null_mut()
         }
         Decision::Release(id) => {
-            let status = context.release.map(|release| unsafe { release(id) }).unwrap_or(-1);
+            let status = unsafe { (context.release)(id) };
             scope.released(status == 0);
             if status != 0 {
                 context.fail(format!("Releasing target key-focus lease failed (status {status}); stopped"));
@@ -110,21 +137,14 @@ pub struct Intervention {
 }
 
 impl Intervention {
-    pub fn begin(target: i32, foreground: i32) -> Result<Self, Failure> {
-        let release = if target == foreground {
-            None
-        } else {
-            let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSReleaseKeyFocusWithID".as_ptr()) };
-            if pointer.is_null() {
-                return Err(Failure::new(
-                    ErrorCode::ActionFailed,
-                    "Key-focus lease release is unavailable; background input was not started",
-                ));
-            }
-            Some(unsafe { std::mem::transmute::<*mut c_void, ReleaseKeyFocus>(pointer) })
-        };
+    pub fn begin(target: i32, foreground: i32, keyboard_owner: i32) -> Result<Self, Failure> {
+        let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSReleaseKeyFocusWithID".as_ptr()) };
+        if pointer.is_null() {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Key-focus lease release is unavailable; input was not started"));
+        }
+        let release = unsafe { std::mem::transmute::<*mut c_void, ReleaseKeyFocus>(pointer) };
         let context = Arc::new(Context {
-            scope: Mutex::new(Scope::new(std::process::id() as i32, foreground, target)),
+            scope: Mutex::new(Scope::new(std::process::id() as i32, foreground, keyboard_owner, target)),
             failure: Mutex::new(None),
             release,
         });

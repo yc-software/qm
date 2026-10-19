@@ -27,18 +27,19 @@ struct Lease {
 pub struct Scope {
     owner: i32,
     foreground: i32,
+    keyboard_owner: i32,
     targets: HashSet<i32>,
     lease: Option<Lease>,
     yielded: bool,
 }
 
 impl Scope {
-    pub fn new(owner: i32, foreground: i32, target: i32) -> Self {
-        Self { owner, foreground, targets: HashSet::from([target]), lease: None, yielded: false }
+    pub fn new(owner: i32, foreground: i32, keyboard_owner: i32, target: i32) -> Self {
+        Self { owner, foreground, keyboard_owner, targets: HashSet::from([target]), lease: None, yielded: false }
     }
 
     pub fn include(&mut self, pid: i32) {
-        if pid > 0 && pid != self.foreground {
+        if pid > 0 && pid != self.foreground && pid != self.keyboard_owner {
             self.targets.insert(pid);
         }
     }
@@ -53,7 +54,7 @@ impl Scope {
             return Decision::Pass;
         }
         match subtype {
-            KEY_FOCUS_TAKEN if destination == self.foreground && subject != destination && self.targets.contains(&subject) => {
+            KEY_FOCUS_TAKEN if destination == self.keyboard_owner && subject != destination && self.targets.contains(&subject) => {
                 if self.lease.is_none_or(|lease| lease.returned) {
                     self.lease = Some(Lease { thief: subject, victim: destination, released: false, returned: false });
                     Decision::Suppress
@@ -107,7 +108,7 @@ impl Scope {
         if source == self.owner || self.yielded {
             return Decision::Pass;
         }
-        if matches!(kind, 1 | 3 | 25) && destination != self.foreground {
+        if matches!(kind, 1 | 3 | 25) && destination != self.keyboard_owner {
             self.yield_to_user();
             return Decision::Intervened;
         }
@@ -141,7 +142,21 @@ mod tests {
     use super::*;
 
     fn scope() -> Scope {
-        Scope::new(100, 200, 300)
+        Scope::new(100, 200, 200, 300)
+    }
+
+    #[test]
+    fn nonactivating_panel_keeps_keyboard_ownership_separate_from_foreground() {
+        let mut s = Scope::new(100, 200, 250, 300);
+        assert_eq!(s.notification(200, KEY_FOCUS_TAKEN, 300, 0), Decision::Pass);
+        assert_eq!(s.notification(250, KEY_FOCUS_TAKEN, 300, 0), Decision::Suppress);
+        assert_eq!(s.notification(400, KEY_FOCUS_CHANGED, 300, 7), Decision::Release(7));
+        s.released(true);
+        assert_eq!(s.notification(250, KEY_FOCUS_RETURNED, 0, 0), Decision::Suppress);
+        assert_eq!(s.user_event(10, 0, 300), Decision::Redirect(250));
+        assert_eq!(s.user_event(1, 0, 250), Decision::Pass);
+        assert_eq!(s.notification(200, NEW_FRONT, 200, 0), Decision::Pass);
+        assert!(matches!(s.notification(250, NEW_FRONT, 250, 0), Decision::Stop(_)));
     }
 
     #[test]
