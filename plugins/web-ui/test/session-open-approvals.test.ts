@@ -68,6 +68,43 @@ test("a transcript refresh that fails while approvals load doesn't lose the card
   }
 });
 
+test("approvals arriving mid-refresh wait for it instead of discarding its transcript", async () => {
+  let refreshHeld: Promise<void> | null = null;
+  let releaseRefresh = (): void => {};
+  const reply = { seq: 2, type: "assistant", createdAt: Date.now(), payload: { text: "deployed to prod" } };
+  const h = await harness({
+    path: "/s/sess-deep",
+    holdApprovals: true,
+    approvals: () => [approval],
+    api: (path) =>
+      refreshHeld && path === `/api/sessions/${SESSION.id}`
+        ? refreshHeld.then(() => Response.json({ session: SESSION, entries: [reply] }))
+        : undefined,
+  });
+  try {
+    await promptly(h.boot());
+    const conv = h.visibleConversation();
+    refreshHeld = new Promise((resolve) => (releaseRefresh = resolve));
+    conv.onDelivery(SESSION.threadRef);
+    await until(() => h.requests.includes(`/api/sessions/${SESSION.id}`));
+    h.releaseApprovals();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    releaseRefresh();
+    await until(() => cards() > 0);
+    assert.ok(
+      JSON.stringify(conv.state.agent?.state.messages).includes("deployed to prod"),
+      "the refresh's new reply is kept",
+    );
+    assert.deepEqual(
+      conv.activePendingApprovals().map((a) => a.requestId),
+      ["a1"],
+    );
+  } finally {
+    await h.close();
+  }
+});
+
 test("approvals that land after switching chats stay out of the new chat", async () => {
   const h = await harness({
     path: "/",

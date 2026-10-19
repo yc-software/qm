@@ -908,13 +908,35 @@ export function createChatSurface(
       !agent.state.isStreaming &&
       chatState.pendingSend === null &&
       chatState.resolvingApprovals.size === 0;
-    const nonEmpty = pending.then((r) => (r?.approvals.length ? r : null));
+    // Wait out any refresh in flight: one that succeeds re-syncs approvals itself (and
+    // moves the epoch), and attaching mid-refresh would make it discard its transcript.
+    const nonEmpty = pending.then(async (r) => {
+      await transcriptRefreshesSettled();
+      return r?.approvals.length ? r : null;
+    });
     void syncPendingApprovals(agent, undefined, nonEmpty, isCurrent).then((attached) => {
       if (attached) drawActiveChat(agent);
     });
   }
 
-  async function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
+  let transcriptRefresh: Promise<void> = Promise.resolve();
+
+  function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
+    const refresh = replaceTranscriptFromEntries(agent);
+    transcriptRefresh = refresh;
+    return refresh;
+  }
+
+  // Resolves once no transcript refresh is in flight, including ones that start while waiting.
+  async function transcriptRefreshesSettled(): Promise<void> {
+    let current: Promise<void>;
+    do {
+      current = transcriptRefresh;
+      await current.catch(() => undefined);
+    } while (current !== transcriptRefresh);
+  }
+
+  async function replaceTranscriptFromEntries(agent: Agent): Promise<void> {
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
     const generation = ++transcriptRefreshGeneration;

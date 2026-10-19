@@ -26,7 +26,7 @@ export interface Harness {
 }
 
 interface HarnessOptions {
-  api?: (path: string, init?: RequestInit) => Response | undefined;
+  api?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   path: string;
   session?: CoreSession;
   messageLink?: boolean;
