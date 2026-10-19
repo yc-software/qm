@@ -9,7 +9,6 @@ export interface Harness {
   setConnections: (items: unknown[], status?: number) => void;
   releaseSessions: () => void;
   releaseTranscript: () => void;
-  releaseApprovals: () => void;
   releaseRuntimeConfig: () => void;
   releaseRemoteSplit: () => void;
   sessionsReady: () => Promise<void>;
@@ -33,7 +32,6 @@ interface HarnessOptions {
   transcriptStatus?: number;
   transcriptFailures?: number;
   holdTranscript?: boolean;
-  holdApprovals?: boolean;
   holdRuntimeConfig?: boolean;
   holdRemoteSplit?: boolean;
   remoteCanvas?: unknown;
@@ -117,12 +115,10 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   };
   let releaseSessions = (): void => {};
   let releaseTranscript = (): void => {};
-  let releaseApprovals = (): void => {};
   let releaseRuntimeConfig = (): void => {};
   let releaseRemoteSplit = (): void => {};
   const runtimeHeld = new Promise<void>((resolve) => (releaseRuntimeConfig = resolve));
   const remoteSplitHeld = new Promise<void>((resolve) => (releaseRemoteSplit = resolve));
-  const approvalsHeld = new Promise<void>((resolve) => (releaseApprovals = resolve));
   const sessionsHeld = new Promise<void>((resolve) => (releaseSessions = resolve));
   const transcriptHeld = new Promise<void>((resolve) => (releaseTranscript = resolve));
   let failuresLeft = opts.transcriptFailures ?? (opts.transcriptStatus ? Number.POSITIVE_INFINITY : 0);
@@ -166,7 +162,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       return Response.json({ value: opts.remoteCanvas ?? null, updatedAt: opts.remoteCanvas ? 1 : 0 });
     }
     if (path.startsWith("/api/sessions/") && path.includes("/approvals")) {
-      if (opts.holdApprovals) await approvalsHeld;
       return Response.json({ approvals: [] });
     }
     if (path.startsWith(`/api/sessions/${session.id}`)) {
@@ -215,7 +210,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     },
     releaseSessions,
     releaseTranscript,
-    releaseApprovals,
     releaseRuntimeConfig,
     releaseRemoteSplit,
     sessionsReady: sessions.sessionsReady as () => Promise<void>,
@@ -237,7 +231,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       for (const conversation of conversations.allConversations()) conversations.disposeConversation(conversation);
       releaseSessions();
       releaseTranscript();
-      releaseApprovals();
       releaseRuntimeConfig();
       releaseRemoteSplit();
       for (let drain = 0; drain < 5 && inFlight.size; drain++) {

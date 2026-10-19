@@ -881,6 +881,42 @@ export function createChatSurface(
     attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
   }
 
+  // Attaches approvals fetched alongside a just-mounted transcript. Anything
+  // that happens first wins: another chat or a remount (new agent), a transcript
+  // refresh (which syncs approvals itself), a live run, or an approval already
+  // delivered by the stream.
+  function attachApprovalsWhenLoaded(
+    sessionId: string,
+    pending: Promise<{ approvals: PendingApproval[] } | null>,
+  ): void {
+    const agent = chatState.agent;
+    const generation = transcriptRefreshGeneration;
+    void pending.then((result) => {
+      if (
+        !result ||
+        !agent ||
+        agent !== chatState.agent ||
+        chatState.sessionId !== sessionId ||
+        generation !== transcriptRefreshGeneration ||
+        agent.state.isStreaming ||
+        chatState.pendingSend !== null
+      )
+        return;
+      const attached = new Set<string>();
+      for (const message of agent.state.messages)
+        for (const approval of (message as AssistantWork).work?.pendingApprovals ?? [])
+          attached.add(approval.requestId);
+      const fresh = unresolvedApprovals(result.approvals ?? []).filter(
+        (approval) => !attached.has(approval.requestId) && !chatState.resolvingApprovals.has(approval.requestId),
+      );
+      if (!fresh.length) return;
+      const messages = agent.state.messages.slice();
+      attachPendingApprovals(messages, fresh, transcriptModel());
+      agent.state.messages = messages;
+      drawActiveChat(agent);
+    });
+  }
+
   async function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
@@ -3540,6 +3576,7 @@ export function createChatSurface(
     resetChatState,
     mountContinuable,
     mountReadOnly,
+    attachApprovalsWhenLoaded,
     mountLoadingPane,
     mountLoadError,
     scrollToBottom,

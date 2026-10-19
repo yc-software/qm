@@ -138,14 +138,16 @@ test("a list landing mid-open still keeps the row of the conversation being open
     title: "Other",
     canContinue: true,
   };
-  const h = await harness({ path: "/s/sess-deep", holdApprovals: true, listSessions: [other] });
+  const h = await harness({ path: "/", holdTranscript: true, listSessions: [other] });
   try {
-    const booted = h.boot();
+    void h.boot();
+    h.sessionsState.list = [SESSION, ...h.sessionsState.list];
+    const opened = h.openSession(SESSION);
     while (!h.sessionsState.openingKey) await new Promise((resolve) => setTimeout(resolve, 0));
     h.releaseSessions();
     await h.sessionsReady();
-    h.releaseApprovals();
-    await booted;
+    h.releaseTranscript();
+    await opened;
     assert.ok(
       h.sessionsState.list.some((s) => s.id === SESSION.id),
       "the row must survive a refresh that lands between the open starting and the mount finishing",

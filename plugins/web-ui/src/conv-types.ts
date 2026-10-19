@@ -95,6 +95,7 @@ export interface ChatSurface {
     anchorSeq?: number | null,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
+  attachApprovalsWhenLoaded(sessionId: string, approvals: Promise<{ approvals: PendingApproval[] } | null>): void;
   mountLoadingPane(): () => boolean;
   mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
