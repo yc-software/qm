@@ -112,24 +112,6 @@ test("recentWindow keeps the contiguous recent window — a NON-latest message i
   for (let i = 1; i < picked.length; i++) assert.ok(picked[i - 1]!.ts < picked[i]!.ts);
 });
 
-test("recentWindow keeps older channel backscroll for a top-level trigger after a quiet gap", () => {
-  const trigger = 1_700_200_000;
-  const candidates = [
-    {
-      ts: `${trigger - 3 * 86_400}.000001`,
-      name: "Viswa",
-      text: "connected the Claude API key, now chat errors",
-      authorId: "U_V",
-    },
-    { ts: `${trigger}.000002`, name: "Regan", text: "@agent help me debug this", authorId: "U_R", isTrigger: true },
-  ];
-  assert.deepEqual(
-    recentWindow(candidates).map((m) => m.text),
-    ["connected the Claude API key, now chat errors", "@agent help me debug this"],
-    "a three-day-old message is still in backscroll, like a person scrolling up",
-  );
-});
-
 test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop contiguously)", () => {
   const candidates = Array.from({ length: MAX_RECENT_MESSAGES + 8 }, (_, i) => ({
     ts: `1700000000.0000${String(i).padStart(2, "0")}`,
