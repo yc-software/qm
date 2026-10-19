@@ -852,12 +852,13 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           ancestor = parent;
           origin = sessionOrigin(parent.threadRef);
         }
+        const cronId = cronIdOf(ancestor.threadRef);
         for (const r of records) {
           if (!r.usage) continue;
           if (r.createdAt < range.from || r.createdAt >= range.to) continue;
           const day = Math.floor(r.createdAt / DAY);
           const model = r.model ?? null;
-          const key = JSON.stringify([day, session.scopeId, origin, model]);
+          const key = JSON.stringify([day, session.scopeId, origin, cronId, model]);
           let row = buckets.get(key);
           if (!row) {
             row = {
@@ -865,6 +866,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
               model,
               scopeId: session.scopeId,
               origin,
+              cronId,
               calls: 0,
               costUsd: 0,
               input: 0,

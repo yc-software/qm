@@ -57,7 +57,7 @@ export async function assertSpendRollupParity(
 
   const day = Math.floor(BASE / DAY);
   const rollup = (await store.spendRollup({ from: BASE, to: BASE + 2 * DAY })).filter((r) => mine.has(r.scopeId));
-  const key = (r: SpendRow) => JSON.stringify([r.day, r.scopeId, r.origin, r.model]);
+  const key = (r: SpendRow) => JSON.stringify([r.day, r.scopeId, r.origin, r.cronId, r.model]);
   const byKey = (a: SpendRow, b: SpendRow) => {
     if (key(a) === key(b)) return 0;
     return key(a) < key(b) ? -1 : 1;
@@ -71,6 +71,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "other-model",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 0.75,
         input: 100,
@@ -83,6 +84,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 2,
         costUsd: 1.75,
         input: 200,
@@ -95,6 +97,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "cron",
+        cronId: `${prefix}-nightly`,
         calls: 1,
         costUsd: 0.5,
         input: 100,
@@ -107,6 +110,7 @@ export async function assertSpendRollupParity(
         scopeId: channel,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 2,
         input: 100,
@@ -119,6 +123,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 0.125,
         input: 100,
@@ -131,6 +136,7 @@ export async function assertSpendRollupParity(
         scopeId: bob,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 4,
         input: 100,
@@ -178,6 +184,7 @@ export async function assertSpendRollupParity(
   assert.equal(inherited.length, origins.size);
   for (const row of inherited) {
     assert.equal(row.origin, origins.get(row.model!), row.model!);
+    assert.equal(row.cronId, row.origin === "cron" ? `${prefix}-parent` : null, row.model!);
     assert.equal(row.scopeId, alice, "inherit origin, not the parent's scope");
     assert.equal(row.calls, 1);
     assert.equal(row.costUsd, 0.01);
@@ -199,8 +206,10 @@ export async function assertSpendRollupParity(
   const cronParent = await store.getOrCreateByThread(`cron:${prefix}-changing:fire:aaa`, "dm", bob);
   await store.setParentSession(changing.id, cronParent.id);
   assert.equal((await readChanging())[0]!.origin, "cron");
+  assert.equal((await readChanging())[0]!.cronId, `${prefix}-changing`);
   await store.deleteSession(cronParent.id);
   assert.equal((await readChanging())[0]!.origin, "conversation");
+  assert.equal((await readChanging())[0]!.cronId, null);
   await store.deleteSession(changing.id);
   assert.deepEqual(await readChanging(), []);
 }

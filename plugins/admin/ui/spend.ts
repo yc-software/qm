@@ -21,6 +21,13 @@ const COLUMNS: Array<[string, string]> = [
   ["tokens", "Tokens"],
   ["cacheHitRatio", "Cache hit"],
 ];
+const MODEL_COLUMNS: Array<[string, string]> = [["person", "Model"], ...COLUMNS.slice(1)];
+const CRON_COLUMNS: Array<[string, string]> = [
+  ["person", "Cron"],
+  ["costUsd", "Total"],
+  ["tokens", "Tokens"],
+  ["cacheHitRatio", "Cache hit"],
+];
 
 const rowName = (row: any) =>
   "model" in row ? row.model || "Unknown model" : row.displayName || row.principalId || row.scopeId || "";
@@ -119,7 +126,7 @@ export class SpendView {
       ],
       search: {
         value: this.filter,
-        placeholder: "person, scope or model",
+        placeholder: "person, scope, cron or model",
         onInput: (value: string) => {
           this.filter = value;
           this.draw();
@@ -165,12 +172,10 @@ export class SpendView {
     if (this.sortKey !== key) return "";
     return this.sortDir === "asc" ? " ↑" : " ↓";
   }
-  header(models = false) {
-    return COLUMNS.map(
+  header(columns = COLUMNS) {
+    return columns.map(
       ([key, label]) =>
-        html`<button type="button" class="rowbtn" @click=${() => this.sortBy(key)}>
-          ${models && key === "person" ? "Model" : label}${this.arrow(key)}
-        </button>`,
+        html`<button type="button" class="rowbtn" @click=${() => this.sortBy(key)}>${label}${this.arrow(key)}</button>`,
     );
   }
   rowCells(row: any) {
@@ -182,6 +187,23 @@ export class SpendView {
       { text: fmtUsd(row.live?.costUsd), cls: "num" },
       { text: fmtUsd(row.cron?.costUsd), cls: "num" },
       { text: fmtUsd(row.background?.costUsd), cls: "num" },
+      { text: s.fmtTokens(row.tokens || 0), cls: "num" },
+      { text: row.cacheHitRatio == null ? "n/a" : s.fmtPct(row.cacheHitRatio), cls: "num" },
+    ];
+  }
+  cronCells(row: any) {
+    const s = this.services;
+    const where = [
+      s.shortName(row.info?.ownerScopeId ?? row.scopeId),
+      row.info ? s.shortSchedule(row.info.schedule) : "deleted",
+    ];
+    return [
+      {
+        node: html`${row.displayName}
+          <div class="subline">${where.join(" · ")}</div>`,
+        cls: "mono",
+      },
+      { text: fmtUsd(row.costUsd), cls: "num" },
       { text: s.fmtTokens(row.tokens || 0), cls: "num" },
       { text: row.cacheHitRatio == null ? "n/a" : s.fmtPct(row.cacheHitRatio), cls: "num" },
     ];
@@ -201,6 +223,11 @@ export class SpendView {
       });
     const people = sorted((this.data.people || []).filter(matches));
     const scopes = sorted((this.data.scopes || []).filter(matches));
+    const crons = sorted(
+      (this.data.crons || [])
+        .map((row: any) => ({ ...row, displayName: s.cronName({ id: row.cronId, title: row.info?.title }) }))
+        .filter(matches),
+    );
     const models = sorted((this.data.models || []).filter((row: any) => rowName(row).toLowerCase().includes(needle)));
     const series = this.data.series || [];
     const org = this.data.org || {};
@@ -258,11 +285,26 @@ export class SpendView {
           this.data.scopes?.length ? "No scopes match." : "No shared-scope spend in this window.",
         ),
       )}${card(
+        "Spend per cron",
+        "Each cron's scheduled runs, including the subagents they start. A deleted cron keeps its spend under its id.",
+        html`<div class="spend-crons">
+          ${table(
+            this.header(CRON_COLUMNS),
+            crons.map((row: any) => this.cronCells(row)),
+            this.data.crons?.length ? "No crons match." : "No cron spend in this window.",
+            (i) => {
+              const info = crons[i]?.info;
+              if (info) s.openCron(info);
+            },
+          )}
+        </div>`,
+        html`<button type="button" @click=${() => s.downloadCsv("cron")}>Export cron CSV</button>`,
+      )}${card(
         "Spend by model",
         "Same org spend, split by the model recorded on each call. Unknown model covers calls without a model ID.",
         html`<div class="spend-models">
           ${table(
-            this.header(true),
+            this.header(MODEL_COLUMNS),
             models.map((row: any) => this.rowCells(row)),
             this.data.models?.length ? "No models match." : "No model breakdown available in this window.",
           )}

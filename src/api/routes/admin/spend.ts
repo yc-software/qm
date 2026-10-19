@@ -1,6 +1,6 @@
 import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
 import { canonicalPerson } from "../../../directory/person.ts";
-import { parseScopeId, personalScope, type ScopeId } from "../../../types.ts";
+import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
 import { constantTimeEqual } from "../../../util/crypto.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
@@ -29,7 +29,8 @@ const CSV_TOTALS_HEADER = [
   "cache_hit_ratio",
 ];
 
-type SpendBreakdown = "entity" | "model";
+const SPEND_BREAKDOWNS = ["entity", "model", "cron"] as const;
+type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
 type OriginBucket = "live" | "cron" | "background";
 const ORIGIN_BUCKETS: readonly OriginBucket[] = ["live", "cron", "background"];
@@ -61,6 +62,14 @@ interface SpendEntity extends SpendTotals {
   displayName: string;
 }
 
+type SpendCronInfo = Pick<Cron, "id" | "title" | "owner" | "ownerScopeId" | "schedule" | "enabled" | "archived">;
+
+interface SpendCron extends SpendTotals {
+  cronId: string;
+  scopeId: ScopeId;
+  info: SpendCronInfo | null;
+}
+
 interface SpendSeriesPoint {
   day: string;
   costUsd: number;
@@ -78,6 +87,7 @@ export interface SpendReport {
   series: SpendSeriesPoint[];
   people: SpendEntity[];
   scopes: SpendEntity[];
+  crons: SpendCron[];
   models: ({ model: string | null } & SpendTotals)[];
 }
 
@@ -88,6 +98,7 @@ export interface SpendExportRow extends Tally {
   principalId: string | null;
   displayName: string;
   origin: OriginBucket;
+  cronId: string | null;
   model: string | null;
 }
 
@@ -96,6 +107,7 @@ export interface SpendSummaryOptions {
   to: number;
   bucket: SpendBucket;
   label: (scopeId: ScopeId) => string;
+  cron: (cronId: string) => SpendCronInfo | null;
 }
 
 interface Tally {
@@ -216,18 +228,13 @@ function byCodePoint(a: string | null, b: string | null): number {
   return a < b ? -1 : 1;
 }
 
-function byCostThenId(a: SpendEntity, b: SpendEntity): number {
-  if (a.costUsd !== b.costUsd) return b.costUsd - a.costUsd;
-  return byCodePoint(a.scopeId, b.scopeId);
+function byCostThen<T extends { costUsd: number }>(id: (row: T) => string | null): (a: T, b: T) => number {
+  return (a, b) => (a.costUsd !== b.costUsd ? b.costUsd - a.costUsd : byCodePoint(id(a), id(b)));
 }
 
-function byCostThenModel(
-  a: { model: string | null; costUsd: number },
-  b: { model: string | null; costUsd: number },
-): number {
-  if (a.costUsd !== b.costUsd) return b.costUsd - a.costUsd;
-  return byCodePoint(a.model, b.model);
-}
+const byCostThenId = byCostThen<SpendEntity>((entity) => entity.scopeId);
+const byCostThenModel = byCostThen<{ model: string | null; costUsd: number }>((row) => row.model);
+const byCostThenCron = byCostThen<SpendCron>((row) => row.cronId);
 
 export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOptions): SpendReport {
   const accumulators = new Map<string, EntityAccumulator>();
@@ -236,6 +243,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
   >();
   const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
+  const cronBuckets = new Map<string, { scopeId: ScopeId; byOrigin: Record<OriginBucket, Tally> }>();
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
     const { key, person, kind } = resolveScope(row.scopeId);
@@ -248,6 +256,14 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     const origin = originBucket(row.origin);
     addRow(acc.byOrigin[origin], row);
     addRow(orgOrigins[origin], row);
+    if (row.cronId !== null) {
+      let cron = cronBuckets.get(row.cronId);
+      if (!cron) {
+        cron = { scopeId: key, byOrigin: emptyOrigins() };
+        cronBuckets.set(row.cronId, cron);
+      }
+      addRow(cron.byOrigin[origin], row);
+    }
     let model = modelBuckets.get(row.model);
     if (!model) {
       model = emptyOrigins();
@@ -269,6 +285,10 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const entities = [...accumulators.values()].map((acc) => entityOf(acc, opts.label));
   const people = entities.filter((e) => e.principalId !== null).sort(byCostThenId);
   const scopes = entities.filter((e) => e.principalId === null).sort(byCostThenId);
+
+  const crons = [...cronBuckets.entries()]
+    .map(([cronId, { scopeId, byOrigin }]) => ({ cronId, scopeId, info: opts.cron(cronId), ...totalsOf(byOrigin) }))
+    .sort(byCostThenCron);
 
   const models = [...modelBuckets.entries()]
     .map(([model, byOrigin]) => ({ model, ...totalsOf(byOrigin) }))
@@ -303,6 +323,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     series,
     people,
     scopes,
+    crons,
     models,
   };
 }
@@ -316,7 +337,7 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
     if (!seen) sources.set(scopeId, [row.scopeId]);
     else if (!seen.includes(row.scopeId)) seen.push(row.scopeId);
     const origin = originBucket(row.origin);
-    const key = JSON.stringify([row.day, scopeId, origin, row.model]);
+    const key = JSON.stringify([row.day, scopeId, origin, row.cronId, row.model]);
     let out = merged.get(key);
     if (!out) {
       out = {
@@ -326,6 +347,7 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
         principalId: person,
         displayName: "",
         origin,
+        cronId: row.cronId,
         model: row.model,
         ...emptyTally(),
       };
@@ -340,6 +362,7 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
         byCodePoint(a.day, b.day) ||
         byCodePoint(a.scopeId, b.scopeId) ||
         ORIGIN_BUCKETS.indexOf(a.origin) - ORIGIN_BUCKETS.indexOf(b.origin) ||
+        byCodePoint(a.cronId ?? "", b.cronId ?? "") ||
         byCodePoint(a.model ?? "", b.model ?? ""),
     );
 }
@@ -351,15 +374,34 @@ function csvCell(value: string | number | null): string {
   return CSV_NEEDS_QUOTES.test(defanged) ? `"${defanged.replaceAll('"', '""')}"` : defanged;
 }
 
-export function spendCsv(report: SpendReport, breakdown: SpendBreakdown = "entity"): string {
-  const modelBreakdown = breakdown === "model";
-  const header = modelBreakdown ? ["model"] : ["principal_id", "scope_id", "kind", "display_name"];
-  const rows = modelBreakdown
-    ? report.models.map((row) => ({ labels: [row.model ?? "Unknown model"], totals: row }))
-    : [...report.people, ...report.scopes].map((row) => ({
-        labels: [row.principalId, row.scopeId, row.kind, row.displayName],
+function csvBreakdown(
+  report: SpendReport,
+  breakdown: SpendBreakdown,
+): { header: string[]; rows: { labels: (string | null)[]; totals: SpendTotals }[] } {
+  if (breakdown === "model")
+    return {
+      header: ["model"],
+      rows: report.models.map((row) => ({ labels: [row.model ?? "Unknown model"], totals: row })),
+    };
+  if (breakdown === "cron")
+    return {
+      header: ["cron_id", "title", "owner", "scope_id"],
+      rows: report.crons.map((row) => ({
+        labels: [row.cronId, row.info?.title ?? null, row.info?.owner ?? null, row.info?.ownerScopeId ?? row.scopeId],
         totals: row,
-      }));
+      })),
+    };
+  return {
+    header: ["principal_id", "scope_id", "kind", "display_name"],
+    rows: [...report.people, ...report.scopes].map((row) => ({
+      labels: [row.principalId, row.scopeId, row.kind, row.displayName],
+      totals: row,
+    })),
+  };
+}
+
+export function spendCsv(report: SpendReport, breakdown: SpendBreakdown = "entity"): string {
+  const { header, rows } = csvBreakdown(report, breakdown);
   const lines = [[...header, ...CSV_TOTALS_HEADER].join(",")];
   for (const { labels, totals: row } of rows) {
     lines.push(
@@ -404,6 +446,16 @@ async function loadSpendRows(
   return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
 }
 
+async function cronInfoLookup(app: BaseCtx["app"]): Promise<(cronId: string) => SpendCronInfo | null> {
+  const crons = new Map((await app.listCrons()).map((cron) => [cron.id, cron]));
+  return (cronId) => {
+    const cron = crons.get(cronId);
+    if (!cron) return null;
+    const { id, title, owner, ownerScopeId, schedule, enabled, archived } = cron;
+    return { id, title, owner, ownerScopeId, schedule, enabled, archived };
+  };
+}
+
 export async function spendExport(ctx: BaseCtx): Promise<void> {
   const { req, res, app, deps, url } = ctx;
   const token = deps.spendExportToken;
@@ -430,6 +482,10 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const scope = orgScope(deps);
   const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
   const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
+  const cronInfo = await cronInfoLookup(app);
+  const crons = [...new Set(exported.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))]
+    .sort(byCodePoint)
+    .flatMap((cronId) => cronInfo(cronId) ?? []);
   audit(deps, {
     principalId: SPEND_EXPORT_PRINCIPAL,
     action: "spend.export",
@@ -437,7 +493,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
     scopeLabel: scope,
     detail: `${window.from}..${window.to} rows=${exported.length}`,
   });
-  sendJson(res, 200, { scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported });
+  sendJson(res, 200, { scopeId: scope, window, ...(asOf === undefined ? {} : { asOf }), rows: exported, crons });
 }
 
 export async function spend(ctx: ApiCtx): Promise<void> {
@@ -453,8 +509,8 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   const format = url.searchParams.get("format") ?? "json";
   if (format !== "json" && format !== "csv") return bad('format must be "json" or "csv"');
 
-  const breakdown = url.searchParams.get("breakdown") ?? "entity";
-  if (breakdown !== "entity" && breakdown !== "model") return bad('breakdown must be "entity" or "model"');
+  const breakdown = SPEND_BREAKDOWNS.find((value) => value === (url.searchParams.get("breakdown") ?? "entity"));
+  if (!breakdown) return bad('breakdown must be "entity", "model" or "cron"');
 
   const toRaw = url.searchParams.get("to");
   const to = toRaw === null ? Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS : parseBound(toRaw);
@@ -472,7 +528,13 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     deps,
     rows.map((r) => r.scopeId),
   );
-  const report = summarizeSpend(rows, { from, to, bucket, label: (id) => labels.get(id) ?? "" });
+  const report = summarizeSpend(rows, {
+    from,
+    to,
+    bucket,
+    label: (id) => labels.get(id) ?? "",
+    cron: await cronInfoLookup(app),
+  });
   if (format === "json")
     return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
 
@@ -481,7 +543,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     "content-type": contentTypeWithUtf8Charset("text/csv"),
     "content-length": String(Buffer.byteLength(body)),
     "content-disposition": contentDispositionAttachment(
-      `qm-spend-${breakdown === "model" ? "models-" : ""}${report.window.from}-${report.window.to}.csv`,
+      `qm-spend-${breakdown === "entity" ? "" : `${breakdown}s-`}${report.window.from}-${report.window.to}.csv`,
     ),
     "x-content-type-options": "nosniff",
   });

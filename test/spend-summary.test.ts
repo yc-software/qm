@@ -12,6 +12,7 @@ const WED = 20355;
 
 const row = (over: Partial<SpendRow> & Pick<SpendRow, "day" | "scopeId" | "origin">): SpendRow => ({
   model: null,
+  cronId: null,
   calls: 1,
   costUsd: 0,
   input: 0,
@@ -92,6 +93,7 @@ const summarize = (rows: SpendRow[], over: Partial<Parameters<typeof summarizeSp
     to: (WED + 1) * DAY,
     bucket: "day",
     label: () => "",
+    cron: () => null,
     ...over,
   });
 
@@ -180,7 +182,7 @@ test("summarizeSpend: the series is sparse, UTC-keyed, and restricted to [from, 
 
   const narrowed = summarizeSpend(
     ROWS.filter((r) => r.day >= TUE && r.day < WED),
-    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "" },
+    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "", cron: () => null },
   );
   assert.deepEqual(narrowed.window, { from: "2025-09-23", to: "2025-09-24", bucket: "day" });
   assert.deepEqual(
@@ -451,5 +453,82 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
     rows.map((r) => r.displayName),
     rows.map((r) => names.get(r.scopeId)),
     "the export names each scope exactly as the Spend page does",
+  );
+});
+
+test("summarizeSpend: crons group each cron's spend with its details, and deleted crons keep theirs", () => {
+  const nightly = {
+    id: "nightly",
+    title: "Nightly report",
+    owner: "alice",
+    ownerScopeId: "personal:alice",
+    schedule: { cron: "0 9 * * *", timezone: "UTC" },
+    enabled: true,
+  };
+  const rows = [
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m1", costUsd: 2 }),
+    row({ day: TUE, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m2", costUsd: 3, calls: 2 }),
+    row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "digest", costUsd: 4 }),
+    row({ day: WED, scopeId: "personal:bob", origin: "cron", cronId: "gone", costUsd: 1 }),
+    row({ day: WED, scopeId: "personal:bob", origin: "conversation", costUsd: 10 }),
+  ];
+  const infos = new Map([
+    ["nightly", nightly],
+    ["digest", { ...nightly, id: "digest", title: "Digest" }],
+  ]);
+  const report = summarize(rows, { cron: (id) => infos.get(id) ?? null });
+  assert.deepEqual(
+    report.crons.map((c) => [c.cronId, c.scopeId, c.info?.title ?? null, c.costUsd, c.calls]),
+    [
+      ["nightly", "personal:alice", "Nightly report", 5, 3],
+      ["digest", "channel:C1", "Digest", 4, 1],
+      ["gone", "personal:bob", null, 1, 1],
+    ],
+  );
+  assert.deepEqual(report.crons[0]!.info, nightly);
+  assert.equal(
+    report.crons.reduce((sum, c) => sum + c.costUsd, 0),
+    report.org.cron.costUsd,
+  );
+});
+
+test("spendCsv: cron export names each cron, falls back to the spend scope for deleted crons, and de-fangs titles", () => {
+  const rows = [
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "c1", costUsd: 2, calls: 1 }),
+    row({ day: MON, scopeId: "channel:C1", origin: "cron", cronId: "gone", costUsd: 1, calls: 1 }),
+  ];
+  const report = summarize(rows, {
+    cron: (id) =>
+      id === "c1"
+        ? { id, title: "=HYPERLINK()", owner: "alice", ownerScopeId: "personal:alice", schedule: {}, enabled: true }
+        : null,
+  });
+  const lines = spendCsv(report, "cron").trimEnd().split("\r\n");
+  assert.equal(
+    lines[0],
+    "cron_id,title,owner,scope_id,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+  );
+  assert.deepEqual(lines.slice(1), [
+    "c1,'=HYPERLINK(),alice,personal:alice,0,2,0,2,1,0,0,0,0,",
+    "gone,,,channel:C1,0,1,0,1,1,0,0,0,0,",
+  ]);
+});
+
+test("spendExportRows keeps two crons in the same scope, day and model apart", () => {
+  const rows = spendExportRows(
+    [
+      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "a", model: "m1", costUsd: 1 }),
+      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "b", model: "m1", costUsd: 2 }),
+      row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 4 }),
+    ],
+    () => "",
+  );
+  assert.deepEqual(
+    rows.map((r) => [r.origin, r.cronId, r.costUsd]),
+    [
+      ["live", null, 4],
+      ["cron", "a", 1],
+      ["cron", "b", 2],
+    ],
   );
 });

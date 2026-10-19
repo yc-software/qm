@@ -203,6 +203,7 @@ export interface SpendRow {
   model: string | null;
   scopeId: ScopeId;
   origin: SessionOrigin;
+  cronId: string | null;
   calls: number;
   costUsd: number;
   input: number;

@@ -419,3 +419,49 @@ test("spend view: Custom turns the current window into two editable UTC days, ap
   assert.equal(calls.api, 0);
   f.window.close();
 });
+
+test("spend view: crons show each cron's spend under its title, scope and schedule, filter by name, and open the cron", () => {
+  const opened: string[] = [];
+  const downloads: string[] = [];
+  const cron = (cronId: string, costUsd: number, info: unknown) => ({
+    ...person("", costUsd, { principalId: null, scopeId: "personal:alice", kind: "person" }),
+    cronId,
+    info,
+  });
+  const digest = {
+    id: "abc123",
+    title: "Morning digest",
+    owner: "alice",
+    ownerScopeId: "channel:C1",
+    schedule: { cron: "0 9 * * 1-5" },
+    enabled: true,
+  };
+  const { f, calls } = render(
+    { ...DATA, crons: [cron("gone1234567890", 1, null), cron("abc123", 7, digest)] },
+    {
+      cronName: (c: { id: string; title?: string }) => c.title || `Cron ${c.id.slice(0, 6)}`,
+      shortSchedule: (schedule: { cron: string }) => schedule.cron,
+      openCron: (info: { id: string }) => opened.push(info.id),
+      downloadCsv: (breakdown?: string) => downloads.push(breakdown ?? "entity"),
+    },
+  );
+  const rows = () => [...f.root.querySelectorAll<HTMLTableRowElement>(".spend-crons tbody tr")];
+  const labels = () =>
+    rows().map((row) => {
+      const cell = row.querySelector("td")!;
+      const where = cell.querySelector(".subline")!.textContent!;
+      return [cell.textContent!.replace(where, "").trim(), where.trim()];
+    });
+  assert.deepEqual(labels(), [
+    ["Morning digest", "channel:C1 · 0 9 * * 1-5"],
+    ["Cron gone12", "personal:alice · deleted"],
+  ]);
+  rows()[1]!.click();
+  rows()[0]!.click();
+  assert.deepEqual(opened, ["abc123"]);
+  [...f.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Export cron CSV")!.click();
+  assert.deepEqual(downloads, ["cron"]);
+  calls.shell.search.onInput("digest");
+  assert.deepEqual(labels(), [["Morning digest", "channel:C1 · 0 9 * * 1-5"]]);
+  f.window.close();
+});
