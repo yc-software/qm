@@ -913,13 +913,14 @@ fn attributed_text(e: &El, n: &Node) -> Option<String> {
 
 fn complete(e: &El, mut n: Node, cache: Option<&mut Cache>) -> Node {
     let hash = unsafe { CFHash(e.as_CFTypeRef()) };
-    let rich_candidate = n.children.is_empty() && matches!(n.props.role.as_str(), "AXTextArea" | "AXTextField" | "AXStaticText");
+    let text_role = matches!(n.props.role.as_str(), "AXTextArea" | "AXTextField" | "AXStaticText");
+    let rich_candidate = text_role && (n.props.role != "AXStaticText" || n.children.is_empty());
     let cached = cache.as_ref().and_then(|c| c.get(e, hash));
     let uncached = cached.is_none();
     let metadata = cached.unwrap_or_else(|| Metadata {
         actions: actions(e).into_iter().filter(|a| !BORING.contains(&a.as_str())).collect(),
         settable: n.props.settable && settable(e, "AXValue"),
-        attributed: rich_candidate && attributed_supported(e),
+        attributed: text_role && attributed_supported(e),
     });
     if metadata.attributed && rich_candidate {
         n.props.rich_text = attributed_text(e, &n);
