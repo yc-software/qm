@@ -3045,8 +3045,6 @@ export function createChatSurface(
     </div>`;
   }
 
-  // A steer shows in the transcript as soon as it is sent, like Codex. Once the
-  // model reads it, the recorded steer renders inside the work block instead.
   function waitingSteerRows(agent: Agent): TemplateResult[] {
     return ctx.composer.waitingSteers(agent).map(
       (q) =>
