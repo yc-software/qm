@@ -870,14 +870,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         statements: [`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_tools JSONB`],
       },
       {
-        id: "sessions/store/0034-session-origin-cron-spend",
+        id: "sessions/store/0034-session-origin-backfill",
         prepare: [SESSION_ORIGIN_BACKFILL_SQL],
-        statements: [
-          `SET LOCAL lock_timeout = '3s'`,
-          `ALTER TABLE session_spend_days ADD CONSTRAINT session_spend_days_rows_cron_id
-             CHECK (NOT rows @? '$[*] ? (!exists(@.cron_id))') NOT VALID`,
-          `INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`,
-        ],
+        statements: [],
       },
     ],
     [
