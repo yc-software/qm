@@ -1260,7 +1260,13 @@ impl Desk {
                 lines.push((Key::Info(1), format!("Selected text: \"{}\"", tree::clip(&sel, tree::MAX_TEXT))));
             }
         }
-        let screenshot = if shot { Some(capture(&w, f, &input::service_panels(app.pid, &w, f))?) } else { None };
+        let screenshot = if shot {
+            let mut related = input::service_panels(app.pid, &w, f);
+            related.extend(others.iter().map(window_id).filter(|id| *id != 0));
+            Some(capture(&w, f, &related)?)
+        } else {
+            None
+        };
         let moved: HashSet<u32> = moved.into_values().collect();
         let rendered = tree::render(&lines, prev.as_ref().filter(|_| diff).map(|p| &p.lines), &moved);
         let obs = Observation {
