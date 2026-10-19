@@ -462,14 +462,14 @@ async function cronInfoLookup(
   app: BaseCtx["app"],
   rows: readonly { cronId: string | null }[],
 ): Promise<(cronId: string) => SpendCronInfo | null> {
-  if (rows.every((row) => row.cronId === null)) return () => null;
-  const crons = new Map((await app.listCrons()).map((cron) => [cron.id, cron]));
-  return (cronId) => {
-    const cron = crons.get(cronId);
-    if (!cron) return null;
+  const crons = new Map<string, SpendCronInfo>();
+  for (const cronId of new Set(rows.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))) {
+    const cron = await app.getCron(cronId);
+    if (!cron) continue;
     const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
-    return { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived };
-  };
+    crons.set(cronId, { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived });
+  }
+  return (cronId) => crons.get(cronId) ?? null;
 }
 
 export async function spendExport(ctx: BaseCtx): Promise<void> {
