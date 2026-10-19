@@ -93,7 +93,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       assert.deepEqual(rowIds(), ["web", "slack", "group"]);
       assert.ok(slackRow()?.querySelector(".slack-logo"));
       assert.equal(slackRow()?.querySelector(".ro-lock"), null);
-      assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);
+      assert.doesNotMatch(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);
       if (stored !== "unavailable") assert.equal(localStorage.getItem("web-ui:web-only"), "0");
     } finally {
       await env.close();
