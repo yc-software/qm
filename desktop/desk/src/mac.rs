@@ -739,22 +739,22 @@ struct Node {
 
 thread_local! {
     static FETCH_NAMES: CFArray<CFString> = CFArray::from_CFTypes(&FETCH.iter().map(|n| cfs(n)).collect::<Vec<_>>());
+    static READINESS_NAMES: CFArray<CFString> = CFArray::from_CFTypes(&[cfs("AXRole"), cfs("AXChildren")]);
 }
 
-fn fetch_all(e: &El) -> Vec<Option<CFType>> {
+fn fetch_attributes(e: &El, names: &CFArray<CFString>) -> Vec<Option<CFType>> {
     let mut v: CFTypeRef = std::ptr::null();
-    let err =
-        FETCH_NAMES.with(|names| unsafe { AXUIElementCopyMultipleAttributeValues(e.as_CFTypeRef(), names.as_CFTypeRef(), 0, &mut v) });
+    let err = unsafe { AXUIElementCopyMultipleAttributeValues(e.as_CFTypeRef(), names.as_CFTypeRef(), 0, &mut v) };
     if err != 0 || v.is_null() {
         if !v.is_null() {
             drop(unsafe { CFType::wrap_under_create_rule(v) });
         }
-        return FETCH.iter().map(|n| attr(e, n)).collect();
+        return names.iter().map(|name| attr(e, &name.to_string())).collect();
     }
     let values = list(unsafe { CFType::wrap_under_create_rule(v) });
     let error = |x: &CFType| unsafe { CFGetTypeID(x.as_CFTypeRef()) == AXValueGetTypeID() && AXValueGetType(x.as_CFTypeRef()) == 5 };
     let mut out: Vec<Option<CFType>> = values.into_iter().map(|x| (!error(&x)).then_some(x)).collect();
-    out.resize(FETCH.len(), None);
+    out.resize(names.len() as usize, None);
     out
 }
 
@@ -764,7 +764,7 @@ fn point_of<T: Default>(v: &CFType, kind: u32) -> Option<T> {
 }
 
 fn fetch(e: &El) -> Node {
-    let v = fetch_all(e);
+    let v = FETCH_NAMES.with(|names| fetch_attributes(e, names));
     let get = |name: &str| v[FETCH.iter().position(|n| *n == name).unwrap()].as_ref();
     let s = |name: &str| get(name).and_then(text_of).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let b = |name: &str| get(name).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from);
@@ -1005,8 +1005,10 @@ fn empty_web(e: &El, depth: usize, seen: &mut usize) -> bool {
     if *seen > MAX_BUSY_VISITS || depth > MAX_DEPTH {
         return false;
     }
-    let kids = attr(e, "AXChildren").map(list).unwrap_or_default();
-    if str_attr(e, "AXRole").as_deref() == Some("AXWebArea") {
+    let mut values = READINESS_NAMES.with(|names| fetch_attributes(e, names)).into_iter();
+    let role = values.next().flatten().as_ref().and_then(text_of);
+    let kids = values.next().flatten().map(list).unwrap_or_default();
+    if role.as_deref() == Some("AXWebArea") {
         return kids.is_empty();
     }
     kids.iter().any(|c| empty_web(c, depth + 1, seen))
@@ -1050,10 +1052,11 @@ fn busy(e: &El, depth: usize, seen: &mut usize) -> bool {
     if *seen > MAX_BUSY_VISITS || depth > MAX_DEPTH {
         return false;
     }
-    if str_attr(e, "AXRole").is_some_and(|r| BUSY.contains(&r.as_str())) {
+    let mut values = READINESS_NAMES.with(|names| fetch_attributes(e, names)).into_iter();
+    if values.next().flatten().as_ref().and_then(text_of).is_some_and(|role| BUSY.contains(&role.as_str())) {
         return true;
     }
-    attr(e, "AXChildren").map(list).unwrap_or_default().iter().any(|c| busy(c, depth + 1, seen))
+    values.next().flatten().map(list).unwrap_or_default().iter().any(|c| busy(c, depth + 1, seen))
 }
 
 fn select(e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<(), Failure> {
