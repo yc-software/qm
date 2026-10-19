@@ -380,7 +380,8 @@ fn set_attr(e: &El, name: &str, v: &CFType) -> i32 {
     unsafe { AXUIElementSetAttributeValue(e.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), v.as_CFTypeRef()) }
 }
 
-fn perform(e: &El, action: &str) -> Result<(), Failure> {
+fn perform(host: &El, e: &El, action: &str) -> Result<(), Failure> {
+    input::register_action_target(host, e)?;
     match unsafe { AXUIElementPerformAction(e.as_CFTypeRef(), cfs(action).as_concrete_TypeRef()) } {
         0 => Ok(()),
         n => Err(fail(ErrorCode::ActionFailed, format!("{action} failed (AXError {n})"))),
@@ -1557,7 +1558,7 @@ impl Desk {
                 let r = match visible()? {
                     Some(r) => r,
                     None => {
-                        let scrolled = perform(&e, "AXScrollToVisible");
+                        let scrolled = perform(&app_element(pid), &e, "AXScrollToVisible");
                         cancellation::wait(Duration::from_millis(250));
                         visible()?.ok_or_else(|| {
                             let why = scrolled.err().map(|e| format!(" ({})", e.message)).unwrap_or_default();
@@ -1611,7 +1612,7 @@ impl Desk {
         match a {
             Action::Click { target: Target::Index(i), button: Button::Left, count: 1, modifiers, hold_ms: 0 } if modifiers.is_empty() => {
                 if let Some(e) = self.pressed(pid, ax, *i)? {
-                    return perform(&e, "AXPress");
+                    return perform(ax, &e, "AXPress");
                 }
                 match self.point(pid, Target::Index(*i)) {
                     Ok(p) => {
@@ -1659,7 +1660,7 @@ impl Desk {
                         None => input::area_at(ax, center(w)),
                     };
                     if let Some(area) = area {
-                        if input::scroll_pages(&area, *direction, *n)? {
+                        if input::scroll_pages(ax, &area, *direction, *n)? {
                             return Ok(());
                         }
                     }
@@ -1731,14 +1732,15 @@ impl Desk {
                         format!("action {name} is not listed for element {index}; listed actions: {}", listed.join(", ")),
                     ));
                 }
-                perform(&element, &name)
+                perform(ax, &element, &name)
             }
             Action::Raise => {
+                input::register_action_target(ax, w)?;
                 let status = set_attr(ax, "AXFrontmost", &CFBoolean::true_value().as_CFType());
                 if status != 0 {
                     return Err(fail(ErrorCode::ActionFailed, format!("setting AXFrontmost failed (AXError {status})")));
                 }
-                perform(w, "AXRaise")
+                perform(ax, w, "AXRaise")
             }
             Action::Wait { ms } => {
                 cancellation::wait(Duration::from_millis((*ms).min(10_000) as u64));

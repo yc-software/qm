@@ -91,6 +91,16 @@ pub(super) fn register_target(host: &El, element: &El) -> Result<i32, Failure> {
     Ok(owner)
 }
 
+pub(super) fn register_action_target(host: &El, element: &El) -> Result<(), Failure> {
+    if window_id(element) == 0 && is_menu_item(element) && within(element, host) {
+        if let Some(owner) = pid_of(host).filter(|owner| pid_of(element) == Some(*owner)) {
+            crate::intervention::include_target(owner);
+            return active();
+        }
+    }
+    register_target(host, element).map(|_| ())
+}
+
 fn inside(inner: Rect, outer: Rect) -> bool {
     const SLACK: f64 = 4.0;
     inner.x >= outer.x - SLACK
@@ -199,7 +209,7 @@ fn number(e: &El, name: &str) -> Option<f64> {
     attr(e, name)?.downcast::<CFNumber>()?.to_f64()
 }
 
-pub(super) fn scroll_pages(area: &El, direction: Direction, pages: f64) -> Result<bool, Failure> {
+pub(super) fn scroll_pages(host: &El, area: &El, direction: Direction, pages: f64) -> Result<bool, Failure> {
     if pages.is_nan() || pages <= 0.0 {
         return Ok(false);
     }
@@ -212,8 +222,7 @@ pub(super) fn scroll_pages(area: &El, direction: Direction, pages: f64) -> Resul
     let whole = pages.fract() == 0.0 && pages <= 20.0;
     if whole && actions(area).iter().any(|a| a == action) {
         for _ in 0..pages as u32 {
-            active()?;
-            perform(area, action)?;
+            perform(host, area, action)?;
         }
         return Ok(true);
     }
@@ -230,7 +239,7 @@ pub(super) fn scroll_pages(area: &El, direction: Direction, pages: f64) -> Resul
     if (target - value).abs() < 1e-6 {
         return Ok(true);
     }
-    active()?;
+    register_target(host, &bar)?;
     let status = set_attr(&bar, "AXValue", &CFNumber::from(target).as_CFType());
     if status == 0 {
         Ok(true)
@@ -293,10 +302,10 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         ));
     }
     if submit == Some(true) {
-        let target = register_target(&host, e)?;
         if actions(e).iter().any(|a| a == "AXConfirm") {
-            perform(e, "AXConfirm")?;
+            perform(&host, e, "AXConfirm")?;
         } else {
+            let target = register_target(&host, e)?;
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
     }
