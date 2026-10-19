@@ -276,8 +276,10 @@ app.getAXState({disableDiffing}) the visible part of the focused window's access
 app.getScreenshot() a JPEG covering the window and its visible menus/panels. app.getAXStateAndScreenshot({disableDiffing}) both.
   Screenshot pixel targets are translated automatically, including panels extending beyond the main window.
 
-Actions return after input is sent. The next observation waits for the app's accessibility events to settle,
-and longer while a progress indicator shows; observe to see the result.
+Observe the intended app before acting and use targets from its current state. Actions return after input is sent,
+not after the requested outcome is confirmed. Observe to verify each meaningful change, and stop once the requested
+result is visible. After an error, interruption or timeout, inspect the current state before retrying an action that
+may already have completed. Observations wait for accessibility events to settle, longer while a progress indicator shows.
 app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift", durationMs})
   target is an element id from the tree or [x, y] in pixels of the latest screenshot.
   Ids in web content, rows and cells get a real click; other ids use the accessibility press action.
