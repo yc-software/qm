@@ -417,7 +417,9 @@ impl<T: PartialEq + Clone> Ids<T> {
 
     pub fn assign(&mut self, el: &T, hash: usize, locator: Locator) -> u32 {
         let same = self.by_hash.get(&hash).and_then(|c| {
-            c.iter().copied().find(|&i| !self.known[i].now && !self.taken.contains(&self.known[i].id) && self.known[i].el == *el)
+            c.iter().copied().find(|&i| {
+                !self.known[i].now && !self.taken.contains(&self.known[i].id) && self.known[i].el == *el && self.known[i].locator == locator
+            })
         });
         let id = match same {
             Some(i) => self.known[i].id,
@@ -434,8 +436,8 @@ impl<T: PartialEq + Clone> Ids<T> {
 
     pub fn rebind(&mut self, dead: impl Fn(&T) -> bool) -> HashMap<u32, u32> {
         let mut count: HashMap<Locator, usize> = HashMap::new();
-        for (_, l) in &self.fresh {
-            *count.entry(*l).or_default() += 1;
+        for entry in self.known.iter().filter(|entry| entry.now) {
+            *count.entry(entry.locator).or_default() += 1;
         }
         let mut moved = HashMap::new();
         for (new, locator) in std::mem::take(&mut self.fresh) {
@@ -861,6 +863,32 @@ mod tests {
         let b = ids.assign(&"send-b", 3, loc("Send"));
         assert!(ids.rebind(|_| true).is_empty());
         assert!(a != send && b != send);
+    }
+
+    #[test]
+    fn reused_objects_get_new_ids_when_their_identity_changes() {
+        let mut ids: Ids<&str> = Ids::new();
+        let original = ids.assign(&"cell", 1, loc("Alice"));
+        let mut ids = ids.carry();
+        let recycled = ids.assign(&"cell", 1, loc("Bob"));
+        assert_ne!(recycled, original);
+        assert_eq!(ids.locator(recycled), Some(loc("Bob")));
+        let mut ids = ids.carry();
+        let parent = Locator::ROOT.child(&props("AXToolbar"));
+        let reparented = parent.child(&Props { role: "AXButton".into(), title: Some("Bob".into()), ..Default::default() });
+        assert_ne!(ids.assign(&"cell", 1, reparented), recycled);
+    }
+
+    #[test]
+    fn surviving_duplicate_prevents_rebinding_a_new_object() {
+        let mut ids: Ids<&str> = Ids::new();
+        let old = ids.assign(&"old", 1, loc("Send"));
+        ids.assign(&"survivor", 2, loc("Send"));
+        let mut ids = ids.carry();
+        ids.assign(&"survivor", 2, loc("Send"));
+        let new = ids.assign(&"new", 3, loc("Send"));
+        assert_ne!(new, old);
+        assert!(ids.rebind(|e| *e == "old").is_empty());
     }
 
     #[test]
