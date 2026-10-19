@@ -77,14 +77,24 @@ fn inside(inner: Rect, outer: Rect) -> bool {
 }
 
 pub(super) fn service_at(app_pid: i32, ax: &El, window: Option<Rect>, p: CGPoint) -> Option<(i32, El, u32)> {
-    let pid = pid_of(&element_at(ax, p)?)?;
+    let element = element_at(ax, p)?;
+    let pid = pid_of(&element)?;
     if pid == app_pid || !view_service(pid) {
         return None;
     }
-    let service = app_element(pid);
-    let (w, _) = hit(&service, p)?;
-    let id = window_id(&w);
-    (id != 0 && frame(&w).zip(window).is_some_and(|(f, outer)| inside(f, outer))).then_some((pid, service, id))
+    let mut current = Some(element);
+    for _ in 0..MAX_DEPTH {
+        let candidate = current?;
+        if pid_of(&candidate) != Some(pid) {
+            return None;
+        }
+        if has_role(&candidate, &["AXWindow"]) {
+            let id = window_id(&candidate);
+            return (id != 0 && frame(&candidate).zip(window).is_some_and(|(f, outer)| inside(f, outer))).then_some((pid, candidate, id));
+        }
+        current = attr(&candidate, "AXParent");
+    }
+    None
 }
 
 pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {

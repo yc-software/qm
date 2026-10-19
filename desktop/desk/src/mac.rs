@@ -465,12 +465,15 @@ fn hit(ax: &El, p: CGPoint) -> Option<(El, bool)> {
 
 fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     active()?;
-    let window = hit(ax, p)
-        .map(|(w, _)| w)
-        .filter(|w| window_id(w) != 0)
-        .or_else(|| window_of(ax).filter(|w| window_id(w) == win))
-        .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the input window"))?;
-    let win = window_id(&window);
+    let window = if str_attr(ax, "AXRole").as_deref() == Some("AXWindow") {
+        Some(ax.clone())
+    } else {
+        hit(ax, p).map(|(w, _)| w).or_else(|| window_of(ax))
+    }
+    .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the input window"))?;
+    if win == 0 || window_id(&window) != win {
+        return Err(fail(ErrorCode::ActionFailed, "The input window changed; observe again before sending input"));
+    }
     let frame = frame(&window).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window has no frame"))?;
     mouse(pid, &Press { win, frame, number: 0 }, CGEventType::MouseMoved, p, CGMouseButton::Left, 0, CGEventFlags::empty())?;
     cancellation::wait(Duration::from_millis(HOVER_MS));
