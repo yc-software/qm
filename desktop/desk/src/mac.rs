@@ -1018,7 +1018,7 @@ fn empty_web(e: &El, depth: usize, seen: &mut usize) -> bool {
 
 fn narrow(clip: Rect, role: &str, f: Option<Rect>) -> Rect {
     match f {
-        Some(f) if CLIPS.contains(&role) => tree::intersect(f, clip).unwrap_or(clip),
+        Some(f) if CLIPS.contains(&role) => tree::intersect(f, clip).unwrap_or(Rect { w: 0.0, h: 0.0, ..clip }),
         _ => clip,
     }
 }
@@ -1745,6 +1745,16 @@ mod tests {
 
     fn app(name: &str, bundle: &str, path: &str, pid: i32) -> App {
         App { name: name.into(), bundle: Some(bundle.into()), path: Some(path.into()), pid, active: false, launched: None }
+    }
+
+    #[test]
+    fn disjoint_scroll_clips_do_not_reveal_descendants() {
+        let window = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let outer = narrow(window, "AXScrollArea", Some(Rect { x: 0.0, y: 0.0, w: 30.0, h: 30.0 }));
+        let inner = narrow(outer, "AXWebArea", Some(Rect { x: 50.0, y: 50.0, w: 40.0, h: 40.0 }));
+        let child = Rect { x: 5.0, y: 5.0, w: 10.0, h: 10.0 };
+        assert!(tree::visible(child, inner).is_none());
+        assert!(tree::visible(child, narrow(inner, "AXScrollArea", Some(window))).is_none());
     }
 
     #[test]
