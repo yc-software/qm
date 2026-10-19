@@ -19,7 +19,8 @@ use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::{CGPoint, CGSize};
 use core_graphics::window::{copy_window_info, kCGWindowListOptionOnScreenOnly, kCGWindowNumber};
 use foreign_types::ForeignType;
-use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
+use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbolicTraits, NSRunningApplication, NSWorkspace};
+use objc2_foundation::NSString;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -825,14 +826,39 @@ fn attributed_supported(e: &El) -> bool {
     list(unsafe { CFType::wrap_under_create_rule(names) }).iter().any(|name| text_of(name).as_deref() == Some("AXAttributedStringForRange"))
 }
 
+fn native_font_traits(name: &str, size: f64) -> Option<NSFontDescriptorSymbolicTraits> {
+    if !size.is_finite() || size <= 0.0 {
+        return None;
+    }
+    let system = NSFont::systemFontOfSize(size).fontDescriptor();
+    for traits in [
+        NSFontDescriptorSymbolicTraits::empty(),
+        NSFontDescriptorSymbolicTraits::TraitBold,
+        NSFontDescriptorSymbolicTraits::TraitItalic,
+        NSFontDescriptorSymbolicTraits::TraitBold | NSFontDescriptorSymbolicTraits::TraitItalic,
+    ] {
+        let descriptor = system.fontDescriptorWithSymbolicTraits(traits);
+        if let Some(font) = NSFont::fontWithDescriptor_size(&descriptor, size).filter(|font| font.fontName().to_string() == name) {
+            return Some(font.fontDescriptor().symbolicTraits());
+        }
+    }
+    NSFont::fontWithName_size(&NSString::from_str(name), size)
+        .filter(|font| font.fontName().to_string() == name)
+        .map(|font| font.fontDescriptor().symbolicTraits())
+}
+
 fn attributed_runs(value: &CFAttributedString, expected: &str) -> Option<Vec<(String, text::TextStyle)>> {
     let plain = unsafe { CFString::wrap_under_get_rule(CFAttributedStringGetString(value.as_concrete_TypeRef())) }.to_string();
     if plain != expected {
         return None;
     }
     let mut runs = vec![];
+    let mut fonts = HashMap::new();
     let mut at = 0;
     while at < value.char_len() {
+        if cancellation::cancelled() {
+            return None;
+        }
         let mut range = CFRange { location: 0, length: 0 };
         let attrs = unsafe { CFAttributedStringGetAttributes(value.as_concrete_TypeRef(), at, &mut range) };
         if attrs.is_null() || range.location > at || range.length <= 0 {
@@ -848,18 +874,33 @@ fn attributed_runs(value: &CFAttributedString, expected: &str) -> Option<Vec<(St
         let flag = |key: &str| {
             get(key).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from).unwrap_or_else(|| number(key).is_some_and(|v| v != 0))
         };
+        let font_traits = get("AXFont")
+            .and_then(|font| {
+                let font = font.downcast::<CFDictionary>()?;
+                let font = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule(font.as_concrete_TypeRef()) };
+                let name = font.find(cfs("AXFontName")).and_then(|value| text_of(&value))?;
+                let size = font.find(cfs("AXFontSize")).and_then(|value| value.downcast::<CFNumber>()).and_then(|value| value.to_f64())?;
+                *fonts.entry((name.clone(), size.to_bits())).or_insert_with(|| native_font_traits(&name, size))
+            })
+            .unwrap_or_else(NSFontDescriptorSymbolicTraits::empty);
         let list_prefix = get("AXListItemPrefix")
             .and_then(|v| v.downcast::<CFAttributedString>())
             .map(|v| unsafe { CFString::wrap_under_get_rule(CFAttributedStringGetString(v.as_concrete_TypeRef())) }.to_string());
+        let link = if let Some(link) = get("AXLink").filter(|link| link.type_of() == unsafe { AXUIElementGetTypeID() }) {
+            if cancellation::cancelled() {
+                return None;
+            }
+            str_attr(&link, "AXURL").filter(|url| url.len() <= 2048)
+        } else {
+            None
+        };
         let style = text::TextStyle {
-            bold: flag("AXFontBold"),
-            italic: flag("AXFontItalic"),
+            bold: get("AXFontBold").map_or_else(|| font_traits.contains(NSFontDescriptorSymbolicTraits::TraitBold), |_| flag("AXFontBold")),
+            italic: get("AXFontItalic")
+                .map_or_else(|| font_traits.contains(NSFontDescriptorSymbolicTraits::TraitItalic), |_| flag("AXFontItalic")),
             underline: flag("AXUnderline"),
             strike: flag("AXStrikethrough"),
-            link: get("AXLink")
-                .filter(|link| link.type_of() == unsafe { AXUIElementGetTypeID() })
-                .and_then(|link| str_attr(&link, "AXURL"))
-                .filter(|url| url.len() <= 2048),
+            link,
             list_prefix,
             list_level: number("AXListItemLevel").and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
         };
@@ -1853,6 +1894,27 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attributed_observation_resolves_native_font_traits() {
+        use core_foundation::attributed_string::CFMutableAttributedString;
+        for (name, expected) in [(".AppleSystemUIFontBold", "**word**"), (".SFNS-RegularItalic", "*word*")] {
+            let mut value = CFMutableAttributedString::new();
+            value.replace_str(&cfs("word"), CFRange { location: 0, length: 0 });
+            let font = CFDictionary::from_CFType_pairs(&[
+                (cfs("AXFontName"), cfs(name).as_CFType()),
+                (cfs("AXFontSize"), CFNumber::from(14.0).as_CFType()),
+            ]);
+            value.set_attribute(CFRange { location: 0, length: 4 }, cfs("AXFont").as_concrete_TypeRef(), &font);
+            let immutable = value.as_CFType().downcast::<CFAttributedString>().unwrap();
+            let runs = attributed_runs(&immutable, "word").unwrap();
+            assert_eq!(text::attributed_markdown(&runs, true).as_deref(), Some(expected), "{name}");
+            value.set_attribute(CFRange { location: 0, length: 4 }, cfs("AXFontBold").as_concrete_TypeRef(), &CFBoolean::false_value());
+            value.set_attribute(CFRange { location: 0, length: 4 }, cfs("AXFontItalic").as_concrete_TypeRef(), &CFBoolean::false_value());
+            let runs = attributed_runs(&immutable, "word").unwrap();
+            assert!(text::attributed_markdown(&runs, true).is_none());
+        }
+    }
+
     #[test]
     fn attributed_observation_decodes_native_runs_and_rejects_mismatches() {
         use core_foundation::attributed_string::CFMutableAttributedString;

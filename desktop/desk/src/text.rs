@@ -185,9 +185,17 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
             out.push_str(&line[..leading]);
             if !body.is_empty() {
                 let mut rendered = escape(body);
-                for (enabled, open, close) in
-                    [(style.bold, "**", "**"), (style.italic, "_", "_"), (style.strike, "~~", "~~"), (style.underline, "<u>", "</u>")]
-                {
+                let html_emphasis = out.ends_with('*')
+                    || body.starts_with(|c: char| !c.is_alphanumeric())
+                    || body.ends_with(|c: char| !c.is_alphanumeric());
+                let (bold_open, bold_close, italic_open, italic_close) =
+                    if html_emphasis { ("<strong>", "</strong>", "<em>", "</em>") } else { ("**", "**", "*", "*") };
+                for (enabled, open, close) in [
+                    (style.bold, bold_open, bold_close),
+                    (style.italic, italic_open, italic_close),
+                    (style.strike, "~~", "~~"),
+                    (style.underline, "<u>", "</u>"),
+                ] {
                     if enabled {
                         rendered = format!("{open}{rendered}{close}");
                     }
@@ -248,10 +256,37 @@ mod tests {
         ];
         assert_eq!(
             attributed_markdown(&runs, true).unwrap(),
-            "**first**\n\n  - _item_ more\n[\\[link\\]](<https://example.test/%C3%A9%3Ea%20b>)"
+            "**first**\n\n  - *item* more\n[\\[link\\]](<https://example.test/%C3%A9%3Ea%20b>)"
         );
-        assert_eq!(attributed_markdown(&runs[1..2], false).unwrap(), "_item_");
+        assert_eq!(attributed_markdown(&runs[1..2], false).unwrap(), "*item*");
         assert!(attributed_markdown(&[("plain".into(), TextStyle::default())], true).is_none());
+    }
+
+    #[test]
+    fn attributed_observation_emphasizes_inside_words() {
+        let runs = vec![
+            ("a".into(), TextStyle::default()),
+            ("b".into(), TextStyle { italic: true, ..Default::default() }),
+            ("c".into(), TextStyle::default()),
+        ];
+        let markdown = attributed_markdown(&runs, true).unwrap();
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(&markdown));
+        assert_eq!(html, "<p>a<em>b</em>c</p>\n");
+        for (middle, suffix, expected) in [
+            ("(", TextStyle::default(), "<p>a<em>(</em>c</p>\n"),
+            ("b", TextStyle { bold: true, ..Default::default() }, "<p>a<em>b</em><strong>c</strong></p>\n"),
+        ] {
+            let runs = vec![
+                ("a".into(), TextStyle::default()),
+                (middle.into(), TextStyle { italic: true, ..Default::default() }),
+                ("c".into(), suffix),
+            ];
+            let markdown = attributed_markdown(&runs, true).unwrap();
+            let mut html = String::new();
+            pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(&markdown));
+            assert_eq!(html, expected);
+        }
     }
 
     #[test]
