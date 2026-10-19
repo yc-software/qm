@@ -61,7 +61,19 @@ import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/sec
 const threadRefOriginExpr = (threadRef: string): string =>
   `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
 
-export const SESSION_ORIGIN_BACKFILL_SQL = `UPDATE sessions SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")} WHERE origin IS NULL`;
+export const SESSION_ORIGIN_BACKFILL_SQL = `DO $session_origin_backfill$
+DECLARE
+  updated integer;
+BEGIN
+  LOOP
+    UPDATE sessions SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")}
+     WHERE id IN (SELECT id FROM sessions WHERE origin IS NULL LIMIT 5000);
+    GET DIAGNOSTICS updated = ROW_COUNT;
+    EXIT WHEN updated = 0;
+    COMMIT;
+    PERFORM pg_sleep(0.25);
+  END LOOP;
+END $session_origin_backfill$`;
 
 function rowToGoal(r: Record<string, unknown>): GoalRecord {
   return {
