@@ -82,6 +82,7 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
@@ -273,6 +274,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
+          ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
         },
         {
           ...cronTriggerAuthority(cron),

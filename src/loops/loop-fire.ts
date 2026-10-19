@@ -5,7 +5,7 @@ import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
-import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
+import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
@@ -604,7 +604,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       await deps.loops.setState(loop.id, "quarantined");
     }
     await deps.loops.setHealth(loop.id, verdict.health, verdict.reason, verdict.throttle);
-    if (verdict.escalate && healthWorsened(previous, verdict.health) && loop.destination) {
+    if (
+      verdict.escalate &&
+      healthWorsened(previous, verdict.health) &&
+      loop.destination &&
+      (await destinationVisible(deps.trigger, loop.owner, loop.destination))
+    ) {
       const lines = [
         `Loop "${loop.name}" is ${verdict.health}${verdict.reason ? `: ${verdict.reason}` : ""}.`,
         ...verdict.actions.map(

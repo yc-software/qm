@@ -10,6 +10,7 @@ import { createControlService, type ControlService } from "../src/api/control-se
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 const SECRET = "control-service-test";
 
@@ -306,6 +307,31 @@ test("a recurring cron addressed to a teammate targets them directly and sends n
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.cron.destination?.target, "U2");
   assert.equal((await built.deliveries.pending("principal")).length, 0);
+});
+
+test("a recurring teammate cron stops delivering once the recipient is no longer an addressable teammate", async () => {
+  const { built, control } = setup();
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Alice", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "internal" },
+  ]);
+  const r = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, text: "standup notes are due", recipient: "Bob" },
+    claims("U1"),
+  );
+  assert.ok(r.ok, JSON.stringify(r));
+  await runNowSettled(built.scheduler, r.cron.id);
+  assert.deepEqual(
+    (await built.deliveries.pending("principal")).map((d) => [d.destination.target, d.text]),
+    [["U2", "standup notes are due"]],
+  );
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Alice", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "guest" },
+  ]);
+  await runNowSettled(built.scheduler, r.cron.id);
+  assert.equal((await built.deliveries.pending("principal")).length, 1);
+  assert.equal((await built.crons.listFires(r.cron.id)).runs.at(-1)?.status, "refused");
 });
 
 test("a teammate-addressed cron runs in the OWNER's scope; the recipient is delivery-only (run scope ⊆ owner-accessible)", async () => {

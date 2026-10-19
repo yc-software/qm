@@ -7,7 +7,7 @@ import { turnModelOptions } from "../core/turn-options.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
@@ -30,6 +30,7 @@ export interface TriggerDeps {
     conversationMembers?: DirectoryStore["conversationMembers"];
   };
   sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
 export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
@@ -163,7 +164,12 @@ export async function destinationVisible(
     return isVisible(deps.directory, actorId, { kind: "channel", channelId: id });
   }
   if (destination.type === "group") return isVisible(deps.directory, actorId, { kind: "group", groupId: id });
-  return true;
+  if (samePerson(destination.target, actorId) || !deps.resolveRecipient) return true;
+  const recipient = await deps.resolveRecipient(destination.target);
+  return (
+    recipient.kind === "one" &&
+    (samePerson(recipient.member.principalId, destination.target) || recipient.member.slackId === destination.target)
+  );
 }
 
 const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);

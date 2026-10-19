@@ -11,6 +11,7 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 function fakeIdentity() {
@@ -43,6 +44,7 @@ function service(
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
+    directory?: ReturnType<typeof createDirectoryStore>;
   },
 ) {
   const loops = createLoopStore();
@@ -66,6 +68,7 @@ function service(
       deliveries: deliveries.store as never,
       idempotency,
       identity: fakeIdentity() as never,
+      ...(overrides?.directory ? { directory: overrides.directory } : {}),
       run: async (req): Promise<TurnResult> => {
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
@@ -343,6 +346,22 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
   await s.fire.sweepStale(loop.createdAt + 1_001);
   assert.equal(s.deliveries.sent.length, 1);
   assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
+});
+
+test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
+  const directory = createDirectoryStore();
+  await directory.replace([
+    { principalId: "josh", displayName: "Josh", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "internal" },
+  ]);
+  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  const s = service(HAPPY, { directory });
+  const loop = await makeLoop(s.loops, {
+    governor: { staleFireMs: 1_000 },
+    destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
+  });
+  await s.fire.sweepStale(loop.createdAt + 1_001);
+  assert.equal(s.deliveries.sent.length, 0);
 });
 
 test("review saturation pings once and recovers after outputs drain", async () => {

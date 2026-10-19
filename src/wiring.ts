@@ -2549,6 +2549,7 @@ export function buildApp(
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
   orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
+  const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
@@ -2560,6 +2561,7 @@ export function buildApp(
             directory,
             currentScopeMembers,
             sessions,
+            resolveRecipient,
             getCron: (id) => crons.get(id),
             getAsk: (id) => keychain.getAsk(id),
             getGrant: (id) => keychain.getGrant(id),
@@ -2590,6 +2592,7 @@ export function buildApp(
       directory,
       currentScopeMembers,
       sessions,
+      resolveRecipient,
     },
   });
   const loopIngress = createLoopIngress({
@@ -2641,6 +2644,7 @@ export function buildApp(
     directory,
     currentScopeMembers,
     sessions,
+    resolveRecipient,
     fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
@@ -2732,6 +2736,7 @@ export function buildApp(
     run: (req) => app.turn(req),
     directory,
     currentScopeMembers,
+    resolveRecipient,
   });
   const backgroundOwnership: BackgroundOwnershipControl | undefined = config.backgroundDeploymentId
     ? {
