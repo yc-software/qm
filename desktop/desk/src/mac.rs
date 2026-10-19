@@ -306,6 +306,7 @@ struct Snapshot {
     window_element: El,
     frame: Rect,
     elements: Vec<(u32, El)>,
+    text: HashMap<u32, text::ObservedText>,
     lines: HashMap<Key, String>,
     ids: tree::Ids<El>,
 }
@@ -787,6 +788,7 @@ fn on_current_space(win: u32) -> bool {
 struct Node {
     props: Props,
     raw: Option<String>,
+    rendered: Option<text::RenderedText>,
     frame: Option<Rect>,
     children: Vec<El>,
 }
@@ -863,7 +865,7 @@ fn fetch(e: &El) -> Node {
     };
     let children = get("AXChildren").cloned().map(list).unwrap_or_default();
     let raw = get("AXValue").or(get("AXTitle")).and_then(text_of);
-    Node { props, raw, frame, children }
+    Node { props, raw, rendered: None, frame, children }
 }
 
 fn attributed_supported(e: &El) -> bool {
@@ -959,7 +961,7 @@ fn attributed_runs(value: &CFAttributedString, expected: &str) -> Option<Vec<(St
     Some(runs)
 }
 
-fn attributed_text(e: &El, n: &Node) -> Option<String> {
+fn attributed_text(e: &El, n: &Node) -> Option<text::RenderedText> {
     let raw = n.raw.as_deref()?;
     let prefix;
     let visible = match n.props.visible_text.as_ref() {
@@ -993,9 +995,10 @@ fn attributed_text(e: &El, n: &Node) -> Option<String> {
     let value = unsafe { CFType::wrap_under_create_rule(value) }.downcast::<CFAttributedString>()?;
     let runs = attributed_runs(&value, &visible.text)?;
     let starts_line = visible.start == 0 || raw.encode_utf16().nth(visible.start - 1) == Some(10);
-    let mut markdown = text::attributed_markdown(&runs, starts_line)?;
+    let mut markdown = text::attributed_text(&runs, starts_line)?;
+    markdown.offset(visible.start);
     if visible.shown_end < visible.end {
-        markdown += "\n… text truncated";
+        markdown.syntax("\n… text truncated");
     }
     Some(markdown)
 }
@@ -1012,7 +1015,8 @@ fn complete(e: &El, mut n: Node, cache: Option<&mut Cache>) -> Node {
         attributed: text_role && attributed_supported(e),
     });
     if metadata.attributed && rich_candidate {
-        n.props.rich_text = attributed_text(e, &n);
+        n.rendered = attributed_text(e, &n);
+        n.props.rich_text = n.rendered.as_ref().map(|rendered| rendered.markdown.clone());
     }
     n.props.actions = metadata.actions.clone();
     n.props.settable = metadata.settable;
@@ -1062,6 +1066,7 @@ struct WalkAt {
 struct Walk {
     ids: tree::Ids<El>,
     elements: Vec<(u32, El)>,
+    text: HashMap<u32, text::ObservedText>,
     notes: HashMap<u32, u32>,
     truncated: bool,
     visited: usize,
@@ -1129,6 +1134,9 @@ impl Walk {
             kids.push(self.note(anchor, note.into()));
         }
         if keep {
+            if let (Some(value), Some(rendered)) = (n.raw, n.rendered) {
+                self.text.insert(anchor, text::ObservedText { value, rendered });
+            }
             out.push(Item { key: Key::Element(anchor), text: s, kids });
         } else {
             out.extend(kids);
@@ -1266,14 +1274,23 @@ fn busy(e: &El, depth: usize, seen: &mut usize) -> bool {
     values.next().flatten().map(list).unwrap_or_default().iter().any(|c| busy(c, depth + 1, seen))
 }
 
-fn select(ax: &El, e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<(), Failure> {
+fn select(
+    ax: &El,
+    e: &El,
+    observed: Option<&text::ObservedText>,
+    text: &str,
+    prefix: &str,
+    suffix: &str,
+    selection: Selection,
+) -> Result<(), Failure> {
     if !settable(e, "AXSelectedTextRange") {
         return Err(fail(ErrorCode::ActionFailed, "The element does not support setting its text selection"));
     }
     let value = attr(e, "AXValue")
         .and_then(|v| text_of(&v))
         .ok_or_else(|| fail(ErrorCode::ActionFailed, "The element's text value could not be read"))?;
-    let range = text::selection_range(&value, text, prefix, suffix, selection).map_err(|message| fail(ErrorCode::ActionFailed, message))?;
+    let range = text::observed_selection_range(&value, observed, text, prefix, suffix, selection)
+        .map_err(|message| fail(ErrorCode::ActionFailed, message))?;
     input::register_target(ax, e)?;
     if bool_attr(e, "AXFocused") != Some(true) {
         let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
@@ -1427,6 +1444,7 @@ impl Desk {
         let mut walk = Walk {
             ids: prev.as_mut().map(|p| std::mem::take(&mut p.ids)).unwrap_or_default(),
             elements: vec![],
+            text: HashMap::new(),
             notes: HashMap::new(),
             truncated: false,
             visited: 0,
@@ -1493,6 +1511,7 @@ impl Desk {
             removed: rendered.removed,
             screenshot,
         };
+        let lines: HashMap<_, _> = lines.into_iter().collect();
         self.cache.insert(
             app.pid,
             Snapshot {
@@ -1500,7 +1519,8 @@ impl Desk {
                 window_element: w.clone(),
                 frame: f,
                 elements: walk.elements,
-                lines: lines.into_iter().collect(),
+                text: walk.text.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
+                lines,
                 ids: walk.ids.carry(),
             },
         );
@@ -1722,9 +1742,15 @@ impl Desk {
                 let (to, target) = input::keyboard_target(ax)?;
                 paste(to, &target, text, *format)
             }
-            Action::SelectText { index, text, prefix, suffix, selection } => {
-                select(ax, &self.element(pid, *index)?, text, prefix, suffix, *selection)
-            }
+            Action::SelectText { index, text, prefix, suffix, selection } => select(
+                ax,
+                &self.element(pid, *index)?,
+                self.cache.get(&pid).and_then(|snapshot| snapshot.text.get(index)),
+                text,
+                prefix,
+                suffix,
+                *selection,
+            ),
             Action::PressKey { key: k, hold_ms } => {
                 let mut chord = crate::keys::parse(k).ok_or_else(|| fail(ErrorCode::UnknownKey, format!("unknown key {k}")))?;
                 if let Some(c) = chord.character {

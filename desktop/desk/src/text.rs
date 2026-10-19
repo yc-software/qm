@@ -152,7 +152,87 @@ pub struct TextStyle {
     pub list_level: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RenderedText {
+    pub markdown: String,
+    spans: Vec<(std::ops::Range<usize>, Option<std::ops::Range<usize>>)>,
+}
+
+impl RenderedText {
+    pub fn syntax(&mut self, value: &str) {
+        if !value.is_empty() {
+            let start = self.markdown.len();
+            self.markdown.push_str(value);
+            self.spans.push((start..self.markdown.len(), None));
+        }
+    }
+
+    fn native(&mut self, value: &str, escaped: bool, at: &mut usize) {
+        for c in value.chars() {
+            let start = self.markdown.len();
+            if escaped && c.is_ascii_punctuation() {
+                self.markdown.push('\\');
+            }
+            self.markdown.push(c);
+            let end = *at + c.len_utf16();
+            self.spans.push((start..self.markdown.len(), Some(*at..end)));
+            *at = end;
+        }
+    }
+
+    fn append(&mut self, other: Self) {
+        let offset = self.markdown.len();
+        self.markdown += &other.markdown;
+        self.spans.extend(other.spans.into_iter().map(|(range, native)| (range.start + offset..range.end + offset, native)));
+    }
+
+    fn wrap(self, open: &str, close: &str) -> Self {
+        let mut result = Self::default();
+        result.syntax(open);
+        result.append(self);
+        result.syntax(close);
+        result
+    }
+
+    pub fn offset(&mut self, offset: usize) {
+        for (_, native) in &mut self.spans {
+            if let Some(native) = native {
+                native.start += offset;
+                native.end += offset;
+            }
+        }
+    }
+
+    fn native_range(&self, start: usize, end: usize) -> Option<[isize; 2]> {
+        let spans: Vec<_> = self.spans.iter().filter(|(span, _)| span.start < end && span.end > start).collect();
+        if spans.first()?.0.start != start || spans.last()?.0.end != end {
+            return None;
+        }
+        let mut native = spans.iter().filter_map(|(_, native)| native.as_ref());
+        let first = native.next()?;
+        let mut end = first.end;
+        for next in native {
+            if next.start != end {
+                return None;
+            }
+            end = next.end;
+        }
+        Some([isize::try_from(first.start).ok()?, isize::try_from(end - first.start).ok()?])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservedText {
+    pub value: String,
+    pub rendered: RenderedText,
+}
+
+#[cfg(test)]
 pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> Option<String> {
+    attributed_text(runs, starts_line).map(|rendered| rendered.markdown)
+}
+
+pub fn attributed_text(runs: &[(String, TextStyle)], starts_line: bool) -> Option<RenderedText> {
     if runs.iter().all(|(_, style)| *style == TextStyle::default()) {
         return None;
     }
@@ -164,8 +244,8 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
             merged.push((text.clone(), style));
         }
     }
-    let escape = |s: &str| s.chars().flat_map(|c| if c.is_ascii_punctuation() { vec!['\\', c] } else { vec![c] }).collect::<String>();
-    let mut out = String::new();
+    let mut out = RenderedText::default();
+    let mut native_at = 0;
     let mut line_start = starts_line;
     for (text, style) in merged {
         for line in text.split_inclusive('\n') {
@@ -177,15 +257,16 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
                         .or_else(|| marker.strip_suffix(')'))
                         .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
                     let marker = ordered.map_or_else(|| "-".to_string(), |digits| format!("{digits}."));
-                    out += &format!("{}{marker} ", "  ".repeat(style.list_level.min(20)));
+                    out.syntax(&format!("{}{marker} ", "  ".repeat(style.list_level.min(20))));
                 }
             }
             let body = line.trim();
             let leading = line.len() - line.trim_start().len();
-            out.push_str(&line[..leading]);
+            out.native(&line[..leading], false, &mut native_at);
             if !body.is_empty() {
-                let mut rendered = escape(body);
-                let html_emphasis = out.ends_with('*')
+                let mut rendered = RenderedText::default();
+                rendered.native(body, true, &mut native_at);
+                let html_emphasis = out.markdown.ends_with('*')
                     || body.starts_with(|c: char| !c.is_alphanumeric())
                     || body.ends_with(|c: char| !c.is_alphanumeric());
                 let (bold_open, bold_close, italic_open, italic_close) =
@@ -197,7 +278,7 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
                     (style.underline, "<u>", "</u>"),
                 ] {
                     if enabled {
-                        rendered = format!("{open}{rendered}{close}");
+                        rendered = rendered.wrap(open, close);
                     }
                 }
                 if let Some(url) = &style.link {
@@ -205,10 +286,10 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
                         .bytes()
                         .map(|b| if b <= 32 || b >= 127 || b"<>\\".contains(&b) { format!("%{b:02X}") } else { (b as char).to_string() })
                         .collect::<String>();
-                    rendered = format!("[{rendered}](<{url}>)");
+                    rendered = rendered.wrap("[", &format!("](<{url}>)"));
                 }
-                out += &rendered;
-                out.push_str(&line[line.trim_end().len()..]);
+                out.append(rendered);
+                out.native(&line[line.trim_end().len()..], false, &mut native_at);
             }
             line_start = line.ends_with('\n');
         }
@@ -216,20 +297,48 @@ pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> O
     Some(out)
 }
 
+fn matches<'a>(value: &'a str, text: &'a str, prefix: &'a str, suffix: &'a str) -> impl Iterator<Item = usize> + 'a {
+    value
+        .char_indices()
+        .map(|(i, _)| i)
+        .filter(move |&i| value[i..].starts_with(text) && value[..i].ends_with(prefix) && value[i + text.len()..].starts_with(suffix))
+}
+
+#[cfg(test)]
 pub fn selection_range(value: &str, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<[isize; 2], &'static str> {
+    observed_selection_range(value, None, text, prefix, suffix, selection)
+}
+
+pub fn observed_selection_range(
+    value: &str,
+    observed: Option<&ObservedText>,
+    text: &str,
+    prefix: &str,
+    suffix: &str,
+    selection: Selection,
+) -> Result<[isize; 2], &'static str> {
     if text.is_empty() {
         return Err("Selection text must not be empty");
     }
-    let mut matches = value
-        .char_indices()
-        .map(|(i, _)| i)
-        .filter(|&i| value[i..].starts_with(text) && value[..i].ends_with(prefix) && value[i + text.len()..].starts_with(suffix));
-    let at = matches.next().ok_or("The requested text and context were not found in the element's value")?;
-    if matches.next().is_some() {
-        return Err("The requested text matches more than once; provide prefix or suffix to identify one occurrence");
+    if observed.is_some_and(|observed| observed.value != value) {
+        return Err("The element's text changed since its observation; observe it again before selecting");
     }
-    let start = value[..at].encode_utf16().count() as isize;
-    let len = text.encode_utf16().count() as isize;
+    let mut ranges: Vec<_> = matches(value, text, prefix, suffix)
+        .take(2)
+        .map(|at| [value[..at].encode_utf16().count() as isize, text.encode_utf16().count() as isize])
+        .collect();
+    if let Some(observed) = observed {
+        ranges.extend(
+            matches(&observed.rendered.markdown, text, prefix, suffix).filter_map(|at| observed.rendered.native_range(at, at + text.len())),
+        );
+    }
+    ranges.sort_unstable();
+    ranges.dedup();
+    let [start, len] = match ranges.as_slice() {
+        [range] => *range,
+        [] => return Err("The requested text and context were not found in the element's value or observed Markdown"),
+        _ => return Err("The requested text matches more than once; provide prefix or suffix to identify one occurrence"),
+    };
     Ok(match selection {
         Selection::Text => [start, len],
         Selection::CursorBefore => [start, 0],
@@ -246,6 +355,47 @@ fn strip_html(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    fn observed(runs: Vec<(String, TextStyle)>) -> ObservedText {
+        ObservedText { value: runs.iter().map(|(text, _)| text.as_str()).collect(), rendered: attributed_text(&runs, true).unwrap() }
+    }
+
+    #[test]
+    fn observed_selection_maps_escaped_unicode_and_link_labels() {
+        let observed = observed(vec![
+            ("😀 ".into(), TextStyle::default()),
+            ("[label]".into(), TextStyle { link: Some("https://example.test/target".into()), ..Default::default() }),
+        ]);
+        let choose = |text, selection| observed_selection_range(&observed.value, Some(&observed), text, "", "", selection);
+        assert_eq!(choose("[\\[label\\]](<https://example.test/target>)", Selection::Text).unwrap(), [3, 7]);
+        assert_eq!(choose("\\[label\\]", Selection::CursorAfter).unwrap(), [10, 0]);
+        assert_eq!(choose("label", Selection::Text).unwrap(), [4, 5]);
+        assert!(choose("https://example.test/target", Selection::Text).is_err());
+        assert!(choose("[label\\]", Selection::Text).is_err());
+    }
+
+    #[test]
+    fn observed_selection_disambiguates_formatting_without_guessing_literal_markup() {
+        let bold = TextStyle { bold: true, ..Default::default() };
+        let observed = observed(vec![("foo ".into(), TextStyle::default()), ("foo".into(), bold.clone())]);
+        assert!(observed_selection_range(&observed.value, Some(&observed), "foo", "", "", Selection::Text).is_err());
+        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "**foo**", "", "", Selection::Text).unwrap(), [4, 3]);
+        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "foo", "**", "**", Selection::Text).unwrap(), [4, 3]);
+        let literal = self::observed(vec![("**foo** ".into(), TextStyle::default()), ("foo".into(), bold)]);
+        assert!(observed_selection_range(&literal.value, Some(&literal), "**foo**", "", "", Selection::Text).is_err());
+        assert_eq!(observed_selection_range(&literal.value, Some(&literal), "**foo**", " ", "", Selection::Text).unwrap(), [8, 3]);
+    }
+
+    #[test]
+    fn observed_selection_uses_visible_offsets_and_rejects_stale_text_and_notices() {
+        let mut observed = observed(vec![("😀bold".into(), TextStyle { bold: true, ..Default::default() })]);
+        observed.rendered.offset(7);
+        observed.rendered.syntax("\n… text truncated");
+        observed.value = "prefix 😀bold tail".into();
+        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "😀bold", "", "", Selection::Text).unwrap(), [7, 6]);
+        assert!(observed_selection_range(&observed.value, Some(&observed), "text truncated", "", "", Selection::Text).is_err());
+        assert!(observed_selection_range("changed 😀bold tail", Some(&observed), "😀bold", "", "", Selection::Text).is_err());
+    }
+
     #[test]
     fn attributed_observation_preserves_paragraphs_lists_and_escaped_links() {
         let runs = vec![
