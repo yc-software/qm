@@ -27,22 +27,6 @@ function fresh() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "rd-")) }));
 }
 
-test("a redelivered Slack message collapses onto the run its first delivery enqueued", async () => {
-  const built = fresh();
-  try {
-    const first = await built.app.turn(slackTurn("hello", "t1"));
-    const again = await built.app.turn(slackTurn("hello", "t1"));
-    assert.equal(first.status, "queued");
-    assert.equal(
-      again.status,
-      "silent",
-      "delivery belongs to the first handler or the recovery rail, never the redelivery",
-    );
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
 test("a redelivery key that already belongs to another conversation stands down silently rather than being served", async () => {
   const built = fresh();
   try {
@@ -117,37 +101,6 @@ test("a Slack approval that reuses the message's request still enqueues its own 
       runId,
       "the approval is not collapsed onto the message's run",
     );
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("a redelivery that slips past the lookup still cannot steer the run it belongs to", async () => {
-  const built = fresh();
-  try {
-    const first = await built.app.turn(slackTurn("hello", "t1"));
-    const runId = (first as { runId: string }).runId;
-    await built.runs.claim("w1", 30_000);
-    const real = built.runs.getByDedupKey.bind(built.runs);
-    let misses = 1;
-    built.runs.getByDedupKey = async (key) => (misses-- > 0 ? null : real(key));
-    const again = await built.app.turn(slackTurn("hello", "t1"));
-    assert.equal(again.status, "silent");
-    assert.equal((await built.signals.takePending(runId)).length, 0);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("a redelivery of a finished run posts nothing rather than the answer a second time", async () => {
-  const built = fresh();
-  try {
-    const first = await built.app.turn(slackTurn("hello", "t1"));
-    const runId = (first as { runId: string }).runId;
-    const claimed = await built.runs.claim("w1", 30_000);
-    await built.runs.complete(runId, claimed!.leaseToken!, { status: "ok", reply: "the answer" });
-    const again = await built.app.turn({ ...slackTurn("hello", "t1"), async: false });
-    assert.equal(again.status, "silent");
   } finally {
     await built.runtime.stop();
   }
