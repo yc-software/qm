@@ -610,10 +610,10 @@ test("Composio backend access is announced without delivering the project key", 
   const granted = await prompt("granted");
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
-  assert.doesNotMatch(granted, /service_composio/);
+  assert.doesNotMatch(granted, /`composio`/);
   await assert.rejects(
     app.turn(
-      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["service_composio"] })}`, {
+      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
       }),
     ),
@@ -635,7 +635,7 @@ test("Composio backend access is announced without delivering the project key", 
     );
   const brokerDelivery = await prompt("backend-broker-delivery");
   assert.match(brokerDelivery, /Composio is configured in the backend/);
-  assert.doesNotMatch(brokerDelivery, /service_composio|Shared org credentials available to you/);
+  assert.doesNotMatch(brokerDelivery, /`composio`|Shared org credentials available to you/);
   serviceCreds.listServiceCredentials = listServiceCredentials;
   await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
@@ -691,7 +691,7 @@ test("org credentials are delivered only when requested and read live after rota
     return realProvision(layers, opts);
   };
 
-  const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel", "service_browse-model-key"] })}`;
+  const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel", "browse-model-key"] })}`;
   let res = await app.turn(dm(request, { conversation: { kind: "dm", threadRef: "dm:U1:env1" } }));
   assert.equal(res.status, "ok");
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
@@ -752,7 +752,7 @@ test("a disabled or broker-delivery credential never rides provision env", async
 
   const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   const env = captures.at(-1)?.env ?? {};
   assert.equal(env.STEEL_API_KEY, undefined, "disabled env credential stays home");
   assert.ok(
@@ -792,7 +792,7 @@ test("a credential flipped away from env between the metadata read and the secre
 
   await assert.rejects(
     app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:env4" },
       }),
     ),
@@ -837,7 +837,7 @@ test("env-delivery credentials are not offered to an external audience", async (
     }),
   );
   assert.equal(externalRoom.status, "ok");
-  assert.doesNotMatch(externalRoom.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(externalRoom.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
 });
 
@@ -907,7 +907,7 @@ test("a channel cron receives env credentials only when the directory proves an 
         ownerScopeId: scopeId("channel", channelId),
         input:
           channelId === "C-internal"
-            ? `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`
+            ? `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`
             : "!sysprompt",
         fireKey: `cron:${channelId}:1`,
         surface: "cron",
@@ -916,7 +916,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     assert.equal(out.status, "ok", `the ${channelId} cron turn runs`);
     assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
     if (channelId !== "C-internal") {
-      assert.doesNotMatch(out.reply ?? "", /service_browse-steel/);
+      assert.doesNotMatch(out.reply ?? "", /browse-steel/);
       return undefined;
     }
     return executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY;
@@ -958,18 +958,18 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
 
   let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "ungranted env credential stays home");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "somebody-else"));
   res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a grant to someone else does not admit this actor");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "U1"));
   res = await app.turn(
-    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
       conversation: { kind: "dm", threadRef: "dm:U1:gate3" },
     }),
   );
@@ -1180,7 +1180,7 @@ for (const hours of [undefined, "72", "0", "none"]) {
     };
     const before = Date.now();
     const res = await app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["service_test-service"] })}`),
+      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["test-service"] })}`),
     );
     assert.equal(res.status, "ok", res.reason);
     const tokens = {

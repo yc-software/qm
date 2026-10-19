@@ -88,9 +88,9 @@ test("external Slack strips private and org preloads before the prompt, but keep
   assert.equal(prompt.status, "ok", JSON.stringify(prompt));
   assert.doesNotMatch(
     prompt.reply!,
-    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|service_confidential/,
+    /PERSONAL_MEMORY_SENTINEL|ORG_MEMORY_SENTINEL|ORG_SOUL_SENTINEL|PERSONAL_FILE_SENTINEL|ORG_FILE_SENTINEL|confidential/,
   );
-  assert.match(prompt.reply!, /service_safe/);
+  assert.match(prompt.reply!, /safe/);
   const provisions: string[][] = [];
   const provision = b.sandbox.provision.bind(b.sandbox);
   b.sandbox.provision = (layers, opts) => {
@@ -108,7 +108,7 @@ test("external Slack strips private and org preloads before the prompt, but keep
     return run(handle, command, opts);
   };
   const code = await b.app.turn(
-    request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["service_safe"] })}`),
+    request(`!execute ${JSON.stringify({ command: "printf external-code-ok", credentials: ["safe"] })}`),
   );
   assert.equal(code.status, "ok", JSON.stringify(code));
   assert.match(code.reply!, /external-code-ok/);

@@ -1738,7 +1738,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           (record) => !isBackendCredential(record) && record.enabled && record.hasSecret && granted.has(record.slug),
         );
         const brokerSlugs = available
-          .filter((record) => record.delivery !== "env" && requestedHandles.includes(`service_${record.slug}`))
+          .filter((record) => record.delivery !== "env" && requestedHandles.includes(record.slug))
           .map((record) => record.slug)
           .sort();
         let brokerToken: Promise<string> | undefined;
@@ -1776,7 +1776,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             if ((!allInternal && !external) || !credential.envKey) continue;
             addCredential(
               {
-                handle: `service_${credential.slug}`,
+                handle: credential.slug,
                 resolve: async () => {
                   await authorizeServiceCredential(credential.slug);
                   const current = await deps.serviceCreds!.getServiceCredentialSecret(
@@ -1802,7 +1802,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           } else if (deps.signingSecret && deps.apiBaseUrl) {
             addCredential(
               {
-                handle: `service_${credential.slug}`,
+                handle: credential.slug,
                 resolve: async () => ({ env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: await resolveBrokerToken() }] }),
               },
               `${credential.name}; proxy ${credential.host}; ${(credential.allowedMethods?.length ? credential.allowedMethods : ["GET"]).toSorted().join("/")}; ${credential.allowedPathPrefixes?.length ? `paths ${credential.allowedPathPrefixes.toSorted().join(", ")}` : "any path"}; use the use-shared-credential skill`,

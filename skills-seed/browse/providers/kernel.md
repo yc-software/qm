@@ -17,8 +17,8 @@ Use the first of these that exists:
 1. **The person's own key**: a `KERNEL_API_KEY` handle of theirs in your keychain
    manifest. Name it in `credentials`.
 2. **An org key delivered as env**: `KERNEL_API_KEY` already set in your shell.
-3. **The org's shared Kernel credential**: a `service_kernel` row in the Credentials
-   inventory (proxy, host `api.onkernel.com`). Name `service_kernel` in `credentials`.
+3. **The org's shared Kernel credential**: a `kernel` row in the Credentials
+   inventory (proxy, host `api.onkernel.com`). Name `kernel` in `credentials`.
    You never see this key. QM adds it to each request you send through its credential
    broker (see the use-shared-credential skill), so `KERNEL_API_KEY` stays unset.
 
@@ -82,7 +82,7 @@ This doc's isolation depends on two settings that the skill can't enforce itself
    restricted to it, for the same reason as above: within one project, any key that can
    create browsers can see every running browser.
 
-If you're an agent and the `service_kernel` row in your inventory allows `GET`, tell the person
+If you're an agent and the `kernel` row in your inventory allows `GET`, tell the person
 (and an org admin) that profiles aren't isolated yet. Don't work around it.
 
 ## Profiles
