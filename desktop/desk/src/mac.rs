@@ -1264,8 +1264,7 @@ impl Desk {
             }
         }
         let screenshot = if shot {
-            let mut related = input::service_panels(app.pid, &w, f);
-            related.extend(others.iter().map(window_id).filter(|id| *id != 0));
+            let related = input::related_windows(app.pid, &w, f, &others);
             Some(capture(&w, f, &related)?)
         } else {
             None

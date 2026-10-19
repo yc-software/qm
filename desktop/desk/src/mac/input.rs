@@ -98,30 +98,30 @@ pub(super) fn service_at(ax: &El, p: CGPoint) -> Result<(i32, El, u32, Rect), Fa
     Ok((owner, element, id, bounds))
 }
 
-pub(super) fn service_panels(pid: i32, window: &El, outer: Rect) -> Vec<u32> {
+pub(super) fn related_windows(pid: i32, window: &El, outer: Rect, extras: &[El]) -> Vec<u32> {
     let own = window_id(window);
     let mut found = vec![];
-    let mut checked = HashSet::from([own]);
-    let mut level = vec![window.clone()];
     let mut visited = 0;
-    for _ in 0..4 {
-        let mut next = vec![];
-        for e in level.iter().flat_map(|e| attr(e, "AXChildren").map(list).unwrap_or_default()) {
+    for (root, contained) in extras.iter().map(|root| (root, false)).chain(std::iter::once((window, true))) {
+        let mut checked = HashSet::from([own]);
+        let mut queue = std::collections::VecDeque::from([(root.clone(), 0)]);
+        while let Some((element, depth)) = queue.pop_front() {
             visited += 1;
-            if visited > 400 {
+            if visited > 400 || cancellation::cancelled() {
                 return found;
             }
-            let id = window_id(&e);
-            if checked.insert(id) {
-                if let Ok((owner, id, bounds)) = resolved_window(window, &e) {
-                    if owner != pid && inside(bounds, outer) {
+            let id = window_id(&element);
+            if !found.contains(&id) && checked.insert(id) {
+                if let Ok((owner, id, bounds)) = resolved_window(root, &element) {
+                    if !contained || (owner != pid && inside(bounds, outer)) {
                         found.push(id);
                     }
                 }
             }
-            next.push(e);
+            if depth < MAX_DEPTH {
+                queue.extend(attr(&element, "AXChildren").map(list).unwrap_or_default().into_iter().map(|child| (child, depth + 1)));
+            }
         }
-        level = next;
     }
     found
 }
