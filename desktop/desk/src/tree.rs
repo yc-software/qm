@@ -52,6 +52,9 @@ pub fn render(lines: &[(Key, String)], base: Option<&HashMap<Key, String>>, move
         return full();
     }
     let present: HashSet<&Key> = lines.iter().map(|(k, _)| k).collect();
+    if base.keys().any(|key| !matches!(key, Key::Element(_)) && !present.contains(key)) {
+        return full();
+    }
     let mut removed: Vec<u32> = base
         .keys()
         .filter(|k| !present.contains(k))
@@ -605,6 +608,7 @@ mod tests {
             (Key::Element(2), "[2] C"),
             (Key::Element(4), "[4] E"),
             (Key::Element(5), "  [5] F"),
+            (Key::Note(ROOT, 0), "… 3 offscreen"),
         ]);
         let out = render(&after, Some(&base), &HashSet::new());
         assert!(out.diffed);
@@ -620,6 +624,18 @@ mod tests {
         assert!(!out.diffed);
         assert_eq!(out.tree, "[0] A2\n[1] B2\n[2] C\n");
         assert!(out.removed.is_empty());
+    }
+
+    #[test]
+    fn removed_selection_and_truncation_notes_refresh_the_tree() {
+        let after = lines(&[(Key::Element(0), "[0] TextField"), (Key::Info(0), "Focus: [0]")]);
+        for (key, text) in [(Key::Info(1), "Selected text: abc"), (Key::Note(ROOT, 0), "… 3 offscreen")] {
+            let mut base: HashMap<Key, String> = after.iter().cloned().collect();
+            base.insert(key, text.into());
+            let out = render(&after, Some(&base), &HashSet::new());
+            assert!(!out.diffed);
+            assert_eq!(out.tree, "[0] TextField\nFocus: [0]\n");
+        }
     }
 
     #[test]
