@@ -13,6 +13,21 @@ pub struct Chord {
     pub modifiers: Vec<u16>,
 }
 
+impl Chord {
+    pub fn remap(&mut self, stroke: crate::text::Stroke) {
+        self.code = stroke.code;
+        if !self.modifiers.iter().any(|code| modifier(*code) == Some(SHIFT)) {
+            self.flags &= !SHIFT;
+        }
+        if stroke.shift {
+            self.flags |= SHIFT;
+        }
+        if stroke.option {
+            self.flags |= OPTION;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Event {
     pub code: u16,
@@ -303,6 +318,24 @@ mod tests {
         assert_eq!(events_with_modifiers(right.code, right.flags, &right.modifiers)[0].code, 62);
         assert_eq!(parse("Super_L+Shift_L+t").unwrap().flags, COMMAND | SHIFT);
         assert_eq!(parse("Control_R").unwrap().code, 62);
+    }
+
+    #[test]
+    fn layout_mapping_replaces_implicit_shift_but_preserves_explicit_modifiers() {
+        let stroke = crate::text::Stroke { code: 30, shift: false, option: false };
+        let mut chord = parse("cmd+plus").unwrap();
+        chord.remap(stroke);
+        let events = events_with_modifiers(chord.code, chord.flags, &chord.modifiers);
+        assert_eq!(events.iter().map(|event| event.code).collect::<Vec<_>>(), [55, 30, 30, 55]);
+        assert_eq!(events.iter().map(|event| event.flags).collect::<Vec<_>>(), [COMMAND, COMMAND, COMMAND, 0]);
+        let mut explicit = parse("cmd+Shift_R+plus").unwrap();
+        explicit.remap(stroke);
+        let events = events_with_modifiers(explicit.code, explicit.flags, &explicit.modifiers);
+        assert_eq!(events[0].code, 60);
+        assert_eq!(events[2].flags, COMMAND | SHIFT);
+        let mut option = parse("cmd+numbersign").unwrap();
+        option.remap(crate::text::Stroke { code: 20, shift: false, option: true });
+        assert_eq!(option.flags, COMMAND | OPTION);
     }
 
     #[test]

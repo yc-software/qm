@@ -1523,13 +1523,7 @@ impl Desk {
                 let mut chord = crate::keys::parse(k).ok_or_else(|| fail(ErrorCode::UnknownKey, format!("unknown key {k}")))?;
                 if let Some(c) = chord.character {
                     if let Some(stroke) = keyboard_for_flags(CGEventFlags::from_bits_truncate(chord.flags)).get(&c) {
-                        chord.code = stroke.code;
-                        if stroke.shift {
-                            chord.flags |= crate::keys::SHIFT;
-                        }
-                        if stroke.option {
-                            chord.flags |= crate::keys::OPTION;
-                        }
+                        chord.remap(*stroke);
                     }
                 }
                 send_key_events(
