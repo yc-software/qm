@@ -1,20 +1,11 @@
-import type {
-  DeliveryProvenance,
-  Destination,
-  Principal,
-  RecipientConsent,
-  ScopeId,
-  TurnRequest,
-  TurnResult,
-} from "../types.ts";
+import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../core/turn-options.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { principalDestination, reachEnqueue } from "../reach/reach.ts";
-import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
+import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
@@ -54,8 +45,6 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   message?: string;
   threadRef?: string;
   unattendedGrants?: string[];
-  recipientConsent?: RecipientConsent;
-  recipientConsentRequired?: boolean;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -259,33 +248,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const requiredRecipient = consentRequiredRecipient({
-    owner: spec.owner,
-    standing: spec.recipientConsentRequired === true,
-    destination: spec.destination,
-  });
-  const consented = recipientConsentSatisfied(spec, requiredRecipient);
-  const consentNote =
-    spec.recipientConsent?.status === "declined"
-      ? "recipient turned this delivery off — skipped"
-      : "awaiting the recipient's consent — delivery skipped";
-  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && consented && deliverable;
+  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
-  const ownerSkipNotice = async () => {
-    if (runsAsScope) return;
-    await deps.deliveries.enqueue({
-      destination: principalDestination(spec.owner, spec.owner),
-      text: `Scheduled delivery skipped: ${consentNote}`,
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
-  };
   let deferred = false;
   const ran = await deps.idempotency
     .once(spec.fireKey, async () => {
@@ -293,12 +262,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (spec.message !== undefined) {
         status = "ok";
         if (!spec.destination) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
@@ -358,12 +321,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (res.status === "ok" && (res.reply || res.attachments?.length)) {
         if (!spec.destination) return;
         if (liveDelivery) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
@@ -403,7 +360,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (spec.errorNotice && spec.destination && consented && deliverable && isTriggerFailure(outcome)) {
+  if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
       text: spec.errorNotice(userNote ?? note ?? status!),

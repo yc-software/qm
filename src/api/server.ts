@@ -125,7 +125,7 @@ function isAdminContentRead(pathname: string): boolean {
   return false;
 }
 
-function strictPostAllowed(pathname: string, body: unknown): boolean {
+function strictPostAllowed(pathname: string): boolean {
   if (
     pathname === "/v1/surface-context" ||
     pathname === "/v1/projects" ||
@@ -135,10 +135,7 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
   )
     return true;
   if (/^\/v1\/projects\/[^/]+(?:\/members(?:\/[^/]+)?)?$/.test(pathname)) return true;
-  if (/^\/v1\/skills\/[^/]+\/restore$/.test(pathname)) return true;
-  return (
-    /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"
-  );
+  return /^\/v1\/skills\/[^/]+\/restore$/.test(pathname);
 }
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {
@@ -311,7 +308,7 @@ async function gate(
     capability &&
     !requiredAud &&
     method !== "GET" &&
-    !strictPostAllowed(pathname, body) &&
+    !strictPostAllowed(pathname) &&
     deps.config &&
     (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
   ) {

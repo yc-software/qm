@@ -7,7 +7,6 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { decideRecipientConsent } from "../../triggers/trigger-store.ts";
 import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
@@ -451,32 +450,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function triggerConsent(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const id = ctx.params.id!;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "consent requires an agent capability token" });
-  const decision = isObj(body) ? body.decision : undefined;
-  if (decision !== "accept" && decision !== "decline") {
-    return sendJson(res, 400, { error: "bad_request", message: 'decision must be "accept" or "decline"' });
-  }
-  const cron = await app.getCron(id);
-  const webhook = cron ? null : await app.getWebhook(id);
-  const trigger = cron ?? webhook;
-  if (!trigger) return sendJson(res, 404, { error: "not_found" });
-  const decided = decideRecipientConsent(trigger.recipientConsent, capability.actorId, decision, Date.now());
-  if (!decided.ok) {
-    return decided.reason === "no_consent"
-      ? sendJson(res, 400, { error: "bad_request", message: "this trigger has no recipient consent to decide on" })
-      : sendJson(res, 403, { error: "forbidden", message: "only the delivery recipient can accept or decline this" });
-  }
-  if (cron) await app.setCronRecipientConsent(id, decided.consent);
-  else await app.setWebhookRecipientConsent(id, decided.consent);
-  return sendJson(res, 200, { ok: true, consent: decided.consent });
-}
-
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/triggers/:id/consent", auth: "either", handle: triggerConsent },
   { method: "POST", path: "/v1/crons", auth: "either", handle: createCron },
   { method: "GET", path: "/v1/crons", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },

@@ -191,12 +191,6 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
-export interface RecipientConsent {
-  recipientId: string;
-  status: "pending" | "accepted" | "declined";
-  decidedAt?: number;
-}
-
 export interface TriggerBase {
   id: string;
   ownerScopeId: ScopeId;
@@ -207,7 +201,6 @@ export interface TriggerBase {
   enabled: boolean;
   createdAt: number;
   lastFiredAt?: number;
-  recipientConsent?: RecipientConsent;
 }
 
 export interface Destination {

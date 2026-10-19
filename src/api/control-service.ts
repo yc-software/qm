@@ -14,8 +14,6 @@ import {
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
-import { consentRequiredRecipient } from "../triggers/trigger-store.ts";
-import { sendConsentNotice } from "../triggers/consent-notice.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
 import { AdminError } from "../admin/admin-service.ts";
@@ -466,9 +464,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       if (destination) destination = withSlackUnfurlOption(destination, req.unfurlLinks);
 
-      const standing = req.schedule.cron !== undefined || req.schedule.everyMs !== undefined;
-      const consentRecipient = consentRequiredRecipient({ owner: capability.actorId, standing, destination });
-
       const input: CreateCronInput = {
         schedule: withDefaultTimezone(req.schedule, capability),
         ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
@@ -479,26 +474,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ownerScopeId,
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
-        ...(consentRecipient
-          ? { recipientConsent: { recipientId: consentRecipient, status: "pending" as const } }
-          : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
       };
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
       try {
         const cron = await app.createCron(input);
-        if (consentRecipient) {
-          const ownerMember = await app.directoryMember(capability.actorId);
-          await sendConsentNotice((i) => app.enqueueDelivery(i), {
-            triggerId: cron.id,
-            recipientId: consentRecipient,
-            ownerId: capability.actorId,
-            ...(ownerMember?.displayName ? { ownerName: ownerMember.displayName } : {}),
-            what:
-              typeof req.title === "string" ? `a scheduled message ("${req.title}")` : "a recurring scheduled message",
-          });
-        }
         return {
           ok: true,
           cron,
@@ -733,15 +714,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           message: "destinationKey is not one of the destinations available for this conversation",
         };
       }
-      // A webhook is standing (event-driven); a third-party-principal destination needs the
-      // recipient's consent, same as a recurring cron. (Today destinationKey only resolves the
-      // current conversation, so this won't fire — the gate is here so it stays correct if webhook
-      // addressing ever widens.)
-      const consentRecipient = consentRequiredRecipient({
-        owner: capability.actorId,
-        standing: true,
-        destination: resolved.destination,
-      });
       const input: CreateWebhookInput = {
         action: req.action,
         verification: req.verification,
@@ -750,22 +722,9 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ownerScopeId: capability.scopeId,
         ...(req.filters?.length ? { filters: req.filters } : {}),
         ...(resolved.destination ? { destination: resolved.destination } : {}),
-        ...(consentRecipient
-          ? { recipientConsent: { recipientId: consentRecipient, status: "pending" as const } }
-          : {}),
       };
       try {
         const webhook = await app.createWebhook(input);
-        if (consentRecipient) {
-          const ownerMember = await app.directoryMember(capability.actorId);
-          await sendConsentNotice((i) => app.enqueueDelivery(i), {
-            triggerId: webhook.id,
-            recipientId: consentRecipient,
-            ownerId: capability.actorId,
-            ...(ownerMember?.displayName ? { ownerName: ownerMember.displayName } : {}),
-            what: "an event-triggered message",
-          });
-        }
         const incomingPath = `/v1/webhooks/incoming/${webhook.id}`;
         const base = publicBase ? publicBase.replace(/\/$/, "") : "";
         return {

@@ -287,8 +287,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
-          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );

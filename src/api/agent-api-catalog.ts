@@ -348,19 +348,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => m === "POST" && /^\/v1\/triggers\/[^/]+\/consent$/.test(p),
-    guidance:
-      "If the person you're helping is told a teammate set up a recurring delivery (a cron or webhook that DMs them), THEY control whether it reaches them — not its behavior. When they say yes/no, call this with the ref id from the notice. Reversible anytime; only the recipient can decide.",
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/triggers/:id/consent",
-        summary:
-          'accept or decline a standing trigger\'s deliveries to you (a teammate\'s cron/webhook/watch that DMs you) — body {decision:"accept"|"decline"}; reversible; recipient-only',
-      },
-    ],
-  },
-  {
     match: (m, p) =>
       ((m === "POST" || m === "GET") && p === "/v1/pins") || (m === "DELETE" && /^\/v1\/pins\/[^/]+$/.test(p)),
     guidance:

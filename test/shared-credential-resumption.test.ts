@@ -44,7 +44,6 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
       audienceScopeId: "personal:U_REQUESTER",
       onBehalfOf: "U_JOB_OWNER",
     },
-    recipientConsent: { recipientId: "U_REQUESTER", status: "accepted" },
   });
   const state: { members: Principal[] } = { members: [{ id: "U_REQUESTER", type: "internal" }] };
   const requests: TurnRequest[] = [];
@@ -68,7 +67,6 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     fireKey: "original-fire",
     threadRef,
     surface: "cron",
-    recipientConsentRequired: true,
   });
   assert.equal(requests.length, 1);
   assert.equal(requests[0]!.actor.externalId, `system:${scope}`);
@@ -129,17 +127,6 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
     assert.equal(pending[0]!.destination.target, "U_REQUESTER");
   });
 }
-
-test("a scope approval still needs recipient consent for delivery", async () => {
-  const f = await fixture();
-  await f.crons.setRecipientConsent(f.cron.id, { recipientId: "U_REQUESTER", status: "declined" });
-
-  const outcome = await fireAskResolution(f.deps, f.ask);
-
-  assert.equal(outcome.status, "refused");
-  assert.equal(f.requests.length, 1);
-  assert.equal((await f.deliveries.pending("principal")).length, 0, "nobody's DM gets a conversation-owned notice");
-});
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
   test(`shared asks in ${scope} deduplicate by job across actors and keep live requests separate`, async () => {

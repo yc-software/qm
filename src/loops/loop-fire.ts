@@ -10,7 +10,6 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { consentRequiredRecipient, recipientConsentSatisfied } from "../triggers/trigger-store.ts";
 import { isRunnable, type LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
@@ -605,13 +604,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       await deps.loops.setState(loop.id, "quarantined");
     }
     await deps.loops.setHealth(loop.id, verdict.health, verdict.reason, verdict.throttle);
-    const escalationRecipient = consentRequiredRecipient({
-      owner: loop.owner,
-      standing: true,
-      destination: loop.destination,
-    });
-    const escalationConsented = recipientConsentSatisfied(loop, escalationRecipient);
-    if (verdict.escalate && healthWorsened(previous, verdict.health) && loop.destination && escalationConsented) {
+    if (verdict.escalate && healthWorsened(previous, verdict.health) && loop.destination) {
       const lines = [
         `Loop "${loop.name}" is ${verdict.health}${verdict.reason ? `: ${verdict.reason}` : ""}.`,
         ...verdict.actions.map(

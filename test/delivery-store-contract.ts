@@ -317,25 +317,25 @@ export async function exerciseDeliveryExpiryRevive(
 ): Promise<void> {
   const store = makeStore({ maxAgeMs: 300 });
 
-  const consent = await store.enqueue({
+  const notice = await store.enqueue({
     destination: { type: "slack", target: "C-gone" },
-    text: "please approve this cron",
-    idempotencyKey: "consent-notice:trigger-1",
+    text: "scheduled notice",
+    idempotencyKey: "notice:trigger-1",
     provenance: {
       trigger: "cron",
       surface: "cron",
-      fireKey: "consent-notice:trigger-1",
+      fireKey: "notice:trigger-1",
       sourceScopeId: "personal:U-owner",
       sourceThreadRef: "agent:main:cron:t1",
-      sourceSessionId: "consent-session",
+      sourceSessionId: "notice-session",
     },
   });
   await new Promise((r) => setTimeout(r, 400));
   assert.deepEqual(await store.claimPending("slack", 60_000), [], "the overaged notice is swept, not handed out");
-  assert.ok(((await store.get(consent.id))?.expiredAt ?? 0) > 0);
+  assert.ok(((await store.get(notice.id))?.expiredAt ?? 0) > 0);
   assert.equal(
-    (await store.sentCountsBySourceSessions([{ sessionId: "consent-session", threadRef: "agent:main:cron:t1" }])).get(
-      "consent-session",
+    (await store.sentCountsBySourceSessions([{ sessionId: "notice-session", threadRef: "agent:main:cron:t1" }])).get(
+      "notice-session",
     ),
     undefined,
     "dropped rows never count as sent",
@@ -343,10 +343,10 @@ export async function exerciseDeliveryExpiryRevive(
 
   const revived = await store.enqueue({
     destination: { type: "slack", target: "C-restored" },
-    text: "please approve this cron (retry)",
-    idempotencyKey: "consent-notice:trigger-1",
+    text: "scheduled notice (retry)",
+    idempotencyKey: "notice:trigger-1",
   });
-  assert.equal(revived.id, consent.id, "the once-ever key still owns one row");
+  assert.equal(revived.id, notice.id, "the once-ever key still owns one row");
   assert.equal(revived.deliveredAt, null);
   assert.equal(revived.expiredAt, undefined, "a dropped once-ever notice re-enqueues instead of deadlocking");
   assert.equal(revived.destination.target, "C-restored", "the revived row carries the fresh destination");
@@ -360,7 +360,7 @@ export async function exerciseDeliveryExpiryRevive(
   const dedup = await store.enqueue({
     destination: { type: "slack", target: "C-x" },
     text: "same key after delivery",
-    idempotencyKey: "consent-notice:trigger-1",
+    idempotencyKey: "notice:trigger-1",
   });
   assert.notEqual(dedup.deliveredAt, null, "a delivered key stays a dedup hit — no re-send after success");
 

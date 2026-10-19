@@ -17,7 +17,6 @@ import { settleGroup } from "../../loops/triage.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
-import { consentRequiredRecipient } from "../../triggers/trigger-store.ts";
 import { errMessage, swallow } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
@@ -248,7 +247,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     }
   }
   let destination;
-  let recipientConsent;
   if (b.destinationKey !== undefined) {
     if (typeof b.destinationKey !== "string")
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string" });
@@ -259,8 +257,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
     if (!requireLiveHuman(ctx, acting)) return;
     destination = resolved.destination;
-    const recipientId = consentRequiredRecipient({ owner: acting.actorId, standing: true, destination });
-    if (recipientId) recipientConsent = { recipientId, status: "pending" as const };
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
   const input: CreateLoopInput = {
@@ -280,7 +276,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     ...(governor && Object.keys(governor).length > 0 ? { governor } : {}),
     ...(schedule ? { schedule } : {}),
     ...(destination ? { destination } : {}),
-    ...(recipientConsent ? { recipientConsent } : {}),
   };
   let loop: Loop;
   let created: boolean;
@@ -470,18 +465,11 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
     if (!requireLiveHuman(ctx, acting)) return;
     if (b.destinationKey === null) {
       patch.destination = null;
-      patch.recipientConsent = null;
     } else {
       const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
       if (!resolved.ok || !resolved.destination)
         return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
       patch.destination = resolved.destination;
-      const recipientId = consentRequiredRecipient({
-        owner: loop.owner,
-        standing: true,
-        destination: resolved.destination,
-      });
-      patch.recipientConsent = recipientId ? { recipientId, status: "pending" } : null;
     }
   }
   const updated = Object.keys(patch).length > 0 ? await deps.store.update(loop.id, patch) : loop;

@@ -162,7 +162,6 @@ const SYSTEM: Rule[] = [
   pat("POST", "/v1/keychain/grants/:id/revoke"),
   pat("POST", "/v1/surface-context"),
   pat("POST", "/v1/surface-file"),
-  pat("POST", "/v1/triggers/:id/consent"),
 ];
 
 const WRITE = new Set(["POST", "PUT", "DELETE", "PATCH"]);
