@@ -87,6 +87,9 @@ fn above(id: u32) -> Vec<u32> {
 fn plan(content: &SCShareableContent, id: u32, above: &[u32], panels: &[u32], frame: Rect, tx: &Parts) -> Result<(), String> {
     let windows = unsafe { content.windows() };
     let target = windows.iter().find(|w| unsafe { w.windowID() } == id).ok_or("The window is not available to capture.")?;
+    if !unsafe { target.isOnScreen() } {
+        return Err("The window is not visible on the current Space; show it before capturing.".into());
+    }
     let candidates: Vec<(u32, Rect)> = windows
         .iter()
         .filter_map(|w| {
@@ -96,12 +99,6 @@ fn plan(content: &SCShareableContent, id: u32, above: &[u32], panels: &[u32], fr
         .collect();
     let (ids, area) = associated(frame, &candidates, panels);
     size(area)?;
-    if ids.is_empty() {
-        tx.send(Ok(Part::Plan { area: frame, pieces: 1 })).map_err(|e| e.to_string())?;
-        let filter = unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &target) };
-        grab(&filter, frame, None, tx.clone());
-        return Ok(());
-    }
     let shown: Vec<Retained<SCWindow>> =
         windows.iter().filter(|w| unsafe { w.windowID() } == id || ids.contains(&unsafe { w.windowID() })).collect();
     let shown = NSArray::from_retained_slice(&shown);
@@ -114,12 +111,12 @@ fn plan(content: &SCShareableContent, id: u32, above: &[u32], panels: &[u32], fr
     for (display, at) in parts {
         let filter = unsafe { SCContentFilter::initWithDisplay_includingWindows(SCContentFilter::alloc(), &display, &shown) };
         let origin = rect(unsafe { display.frame() });
-        grab(&filter, at, Some(Rect { x: at.x - origin.x, y: at.y - origin.y, w: at.w, h: at.h }), tx.clone());
+        grab(&filter, at, Rect { x: at.x - origin.x, y: at.y - origin.y, w: at.w, h: at.h }, tx.clone());
     }
     Ok(())
 }
 
-fn grab(filter: &SCContentFilter, at: Rect, source: Option<Rect>, tx: Parts) {
+fn grab(filter: &SCContentFilter, at: Rect, source: Rect, tx: Parts) {
     let config = unsafe { SCStreamConfiguration::new() };
     unsafe {
         config.setWidth(at.w.round().max(1.0) as usize);
@@ -127,9 +124,7 @@ fn grab(filter: &SCContentFilter, at: Rect, source: Option<Rect>, tx: Parts) {
         config.setShowsCursor(false);
         config.setIgnoreShadowsDisplay(true);
         config.setIgnoreShadowsSingleWindow(true);
-        if let Some(s) = source {
-            config.setSourceRect(cg(s));
-        }
+        config.setSourceRect(cg(source));
     }
     let done = RcBlock::new(move |image: *mut objc2_core_graphics::CGImage, error: *mut NSError| {
         let piece = match unsafe { image.as_ref() } {

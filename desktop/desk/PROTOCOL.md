@@ -129,3 +129,5 @@ With `pace: true`, before each `click`, `scroll` and `drag`, desk writes `pointe
 ## App access
 
 All installed apps are available subject to macOS permissions. Observation and control require Accessibility; screenshots also require Screen Recording.
+
+On macOS 14 and later, screenshots use display-relative crops of the selected window and associated transients. Windows outside the current Space are refused; portions outside all displays remain transparent.
