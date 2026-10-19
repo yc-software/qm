@@ -439,7 +439,10 @@ export function createSessionMethods(
       const all = await sessionsForViewer(principalId);
       const visibleById = new Map(all.map((session) => [session.id, session]));
       const approvalRows: PendingApprovalRecord[] = [];
-      for (const [, record] of (await deps.approvals?.entries()) ?? []) {
+      const approvals = visibleById.size
+        ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: [...visibleById.keys()] } })
+        : [];
+      for (const [, record] of approvals ?? []) {
         const session = visibleById.get(record.sessionId);
         if (session && (await approvalRecordIsCurrent(record, session))) approvalRows.push(record);
       }

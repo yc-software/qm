@@ -1576,15 +1576,21 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
-  const blockingApprovalSessions = async (): Promise<Set<string>> =>
-    new Set(
-      (await approvals.entries())
-        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
-        .map(([, r]) => r.sessionId),
+  const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
+    if (!sessionIds.length) return new Set();
+    const wanted = new Set(sessionIds);
+    return new Set(
+      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
+        .filter(
+          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
+        )
+        .map((r) => r.sessionId),
     );
+  };
   const workingAncestors = async (session: Session) => {
-    const awaiting = await blockingApprovalSessions();
-    const ancestors = (await stoppableAncestors(sessions, session)).filter((ancestor) => !awaiting.has(ancestor.id));
+    const candidates = await stoppableAncestors(sessions, session);
+    const awaiting = await blockingApprovalSessions(candidates.map((ancestor) => ancestor.id));
+    const ancestors = candidates.filter((ancestor) => !awaiting.has(ancestor.id));
     return Promise.all(
       ancestors.map(async (ancestor) => ({
         session: ancestor,
@@ -1975,7 +1981,7 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals"), deliveries);
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2415,10 +2421,9 @@ export function buildApp(
           sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
         return;
       }
-      const awaiting = await blockingApprovalSessions();
       const settle = async (target: Session): Promise<boolean> => {
         if (await runs.activeForThread(target.threadRef)) return false;
-        const waiting = awaiting.has(target.id);
+        const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
         if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
         const participants = await sessions.participantsOf(target.id);
         sessionStateBus.emit({

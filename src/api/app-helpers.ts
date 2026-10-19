@@ -152,7 +152,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     opts: { blockingOnly: boolean; viewer?: string },
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
-    const [entries, session] = await Promise.all([deps.approvals.entries(), deps.sessions.get(sessionId)]);
+    const [entries, session] = await Promise.all([
+      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.sessions.get(sessionId),
+    ]);
     if (!session) return [];
     const candidates: Array<{ key: string; record: PendingApprovalRecord }> = [];
     for (const [key, record] of entries) {
