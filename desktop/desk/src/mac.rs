@@ -1311,6 +1311,7 @@ impl Desk {
             bundle_id: app.bundle.clone(),
             pid: app.pid,
             window: str_attr(&w, "AXTitle").unwrap_or_default(),
+            window_id: win,
             frame: f,
             elements: lines.iter().filter(|(k, _)| matches!(k, Key::Element(_))).count() as u32,
             truncated: walk.truncated || cut,

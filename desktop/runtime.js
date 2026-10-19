@@ -107,7 +107,8 @@
   };
 
   class App {
-    #scale = 1;
+    #scale = null;
+    #screenshotWindow = null;
     #offset = { x: 0, y: 0 };
 
     constructor(name) {
@@ -116,6 +117,8 @@
 
     async #observe(screenshot, diff, emit, tree = true) {
       const o = await desk({ type: "observe", app: this.name, screenshot, diff });
+      const identity = JSON.stringify([o.pid, o.window_id ?? o.window, o.frame.x, o.frame.y, o.frame.w, o.frame.h]);
+      if (identity !== this.#screenshotWindow) this.#scale = null;
       const note = appNotes.get(o.bundle_id);
       if (emit && note && !notedApps.has(o.bundle_id)) {
         const line = `App usage notes (${o.bundle_id}): ${note}`;
@@ -128,6 +131,7 @@
       if (o.screenshot) {
         const image = await jpeg(o.screenshot);
         const shot = o.screenshot.frame ?? o.frame;
+        this.#screenshotWindow = identity;
         this.#scale = image.width / shot.w;
         this.#offset = { x: shot.x - o.frame.x, y: shot.y - o.frame.y };
         if (emit && images.length < 4 && imageSize + image.data.length <= IMAGE_BUDGET) {
@@ -154,8 +158,10 @@
 
     #target(t) {
       if (typeof t === "number") return { index: t };
-      if (Array.isArray(t) && t.length === 2)
+      if (Array.isArray(t) && t.length === 2) {
+        if (this.#scale === null) throw new Error("Get a current screenshot before using point coordinates; the window may have changed.");
         return { point: { x: this.#offset.x + t[0] / this.#scale, y: this.#offset.y + t[1] / this.#scale } };
+      }
       throw new Error("target must be an element index or [x, y] screenshot pixels");
     }
 

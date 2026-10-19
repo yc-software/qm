@@ -215,6 +215,7 @@ pub struct Observation {
     pub bundle_id: Option<String>,
     pub pid: i32,
     pub window: String,
+    pub window_id: u32,
     pub frame: Rect,
     pub elements: u32,
     pub truncated: bool,

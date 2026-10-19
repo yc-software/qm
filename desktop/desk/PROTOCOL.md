@@ -54,7 +54,7 @@ Reply    = permissions { accessibility: bool, screen_recording: bool, binary: st
          | error       { ...Failure }
 
 AppInfo     { name, bundle_id?, pid: i32, active: bool }
-Observation { app, bundle_id?, pid, window: string, frame: Rect, elements: u32, truncated: bool,
+Observation { app, bundle_id?, pid, window: string, window_id: u32, frame: Rect, elements: u32, truncated: bool,
               diffed: bool, tree: string, removed: [u32], screenshot: Screenshot? }
 Rect        { x, y, w, h }                   // global screen points, top-left origin
 Screenshot  { png_base64, width, height, pixels_per_point, frame: Rect }   // frame = global screen points the image covers
@@ -99,7 +99,7 @@ reached`.
 - `point` targets are **window-relative points** (origin = window top-left).
   On macOS 14+, the screenshot covers its own `frame`: the window plus the app's menus, popovers and sheets in front of it, so it can reach past the window. On macOS 12.3–13 it covers only the main window.
   It is captured at nominal resolution, so one PNG pixel is about one point; `pixels_per_point` says what it really was.
-  To send a `point`, divide PNG pixels by `pixels_per_point`, then add the screenshot `frame` origin minus the observation `frame` origin.
+  To send a `point`, divide PNG pixels by `pixels_per_point`, then add the screenshot `frame` origin minus the observation `frame` origin. `window_id` identifies the observed native window. The JavaScript API requires a screenshot before point actions and invalidates its image mapping when a later observation reports a different process, window ID or frame.
 - Observe before acting; absent snapshots are rejected. Ids are stable: an element keeps its id across observations of the same window for as long as it is the same AX object, including while it is scrolled out of view for up to 30 observations. When the app replaces an object (a re-render), the new one inherits the id if exactly one old object and exactly one new object have the same role, subrole, identifier, name and ancestry, the old object is gone, and neither sits inside a list, table, outline, row or cell. An inherited id's line is always marked `~` in a diff. Acting on an id whose object is gone looks for that single replacement first and fails with `bad_index` if there is none. A different window starts ids again. `index` in actions means this id, from the latest observation of that app.
 - With `diff` (the default) and an earlier observation of the same window, `tree` holds only new lines, prefixed `+ `, and changed ones, prefixed `~ `; `removed` lists ids that disappeared and `diffed` is true. When more than 60% of the lines are new or changed, or otherwise, `tree` is the whole tree, unprefixed, and `diffed` is false.
 - `act` returns as soon as its actions are sent. The next observation of that app (`observe`, or `act` with `observe`) first waits for that app's accessibility notifications to go quiet (other apps' notifications do not count): at least 200 ms after the last action, then until 300 ms pass with no notification, at most 2 s after the action. If desk could not subscribe to the app's notifications it waits until 1 s has passed instead. Then it waits up to 5 s more while the window shows a busy or progress indicator. An observation with no action since the previous one does not wait. A batch of only `wait` actions does not count as an action.
