@@ -84,6 +84,13 @@ pub(super) fn resolved_window(host: &El, element: &El) -> Result<(i32, u32, Rect
     Ok((owner, id, bounds))
 }
 
+pub(super) fn register_target(host: &El, element: &El) -> Result<i32, Failure> {
+    let (owner, _, _) = resolved_window(host, element)?;
+    crate::intervention::include_target(owner);
+    active()?;
+    Ok(owner)
+}
+
 fn inside(inner: Rect, outer: Rect) -> bool {
     const SLACK: f64 = 4.0;
     inner.x >= outer.x - SLACK
@@ -130,8 +137,7 @@ pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
     let focused = attr(ax, "AXFocusedUIElement")
         .or_else(|| window_of(ax))
         .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the keyboard target; observe again"))?;
-    let (owner, _, _) = resolved_window(ax, &focused)?;
-    Ok((owner, ax.clone()))
+    Ok((register_target(ax, &focused)?, ax.clone()))
 }
 
 pub(super) fn menu_open(ax: &El) -> bool {
@@ -259,6 +265,8 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         }
         _ => cfs(value).as_CFType(),
     };
+    let host = app_element(pid);
+    register_target(&host, e)?;
     let texty = has_role(e, TEXT_ROLES);
     if texty {
         let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
@@ -285,10 +293,10 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         ));
     }
     if submit == Some(true) {
+        let target = register_target(&host, e)?;
         if actions(e).iter().any(|a| a == "AXConfirm") {
             perform(e, "AXConfirm")?;
         } else {
-            let (target, _, _) = resolved_window(&app_element(pid), e)?;
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
     }

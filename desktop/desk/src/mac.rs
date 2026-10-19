@@ -1061,7 +1061,7 @@ fn busy(e: &El, depth: usize, seen: &mut usize) -> bool {
     values.next().flatten().map(list).unwrap_or_default().iter().any(|c| busy(c, depth + 1, seen))
 }
 
-fn select(e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<(), Failure> {
+fn select(ax: &El, e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<(), Failure> {
     if !settable(e, "AXSelectedTextRange") {
         return Err(fail(ErrorCode::ActionFailed, "The element does not support setting its text selection"));
     }
@@ -1069,6 +1069,7 @@ fn select(e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) 
         .and_then(|v| text_of(&v))
         .ok_or_else(|| fail(ErrorCode::ActionFailed, "The element's text value could not be read"))?;
     let range = text::selection_range(&value, text, prefix, suffix, selection).map_err(|message| fail(ErrorCode::ActionFailed, message))?;
+    input::register_target(ax, e)?;
     if bool_attr(e, "AXFocused") != Some(true) {
         let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
         if status != 0 || bool_attr(e, "AXFocused") != Some(true) {
@@ -1517,7 +1518,7 @@ impl Desk {
                 paste(to, &target, text, *format)
             }
             Action::SelectText { index, text, prefix, suffix, selection } => {
-                select(&self.element(pid, *index)?, text, prefix, suffix, *selection)
+                select(ax, &self.element(pid, *index)?, text, prefix, suffix, *selection)
             }
             Action::PressKey { key: k, hold_ms } => {
                 let mut chord = crate::keys::parse(k).ok_or_else(|| fail(ErrorCode::UnknownKey, format!("unknown key {k}")))?;
