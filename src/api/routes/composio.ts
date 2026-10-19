@@ -511,9 +511,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
 }
 
 export interface ComposioReturn {
-  /** Where the browser returns after consent; null when the connect was started without a return page. */
   url: string | null;
-  /** Toolkit slug from authorize, so completion can be audited even if Composio omits it. */
   toolkit?: string;
   expiresAt: number;
 }
