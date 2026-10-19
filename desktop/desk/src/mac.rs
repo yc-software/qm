@@ -820,6 +820,23 @@ fn fetch(e: &El) -> Node {
     Node { props, raw, rendered: None, frame, children }
 }
 
+impl Node {
+    fn limit_text(&mut self, budget: &mut usize) {
+        if let Some(rendered) = &self.rendered {
+            if let Some(remaining) = budget.checked_sub(rendered.retained_bytes()) {
+                *budget = remaining;
+            } else {
+                self.rendered = None;
+                self.props.rich_text = None;
+            }
+        }
+    }
+}
+
+fn rebind_text(text: HashMap<u32, text::ObservedText>, moved: &HashMap<u32, u32>) -> HashMap<u32, text::ObservedText> {
+    text.into_iter().map(|(id, text)| (*moved.get(&id).unwrap_or(&id), text)).collect()
+}
+
 fn attributed_supported(e: &El) -> bool {
     let mut names = std::ptr::null();
     if unsafe { AXUIElementCopyParameterizedAttributeNames(e.as_CFTypeRef(), &mut names) } != 0 || names.is_null() {
@@ -1019,6 +1036,7 @@ struct Walk {
     ids: tree::Ids<El>,
     elements: Vec<(u32, El)>,
     text: HashMap<u32, text::ObservedText>,
+    text_budget: usize,
     notes: HashMap<u32, u32>,
     truncated: bool,
     visited: usize,
@@ -1069,6 +1087,7 @@ impl Walk {
         }
         let locator = at.child(&n.props);
         self.fold(&mut n);
+        n.limit_text(&mut self.text_budget);
         let (s, keep) = n.props.describe();
         let keep = keep || force;
         let clip = narrow(clip, &n.props.role, n.frame);
@@ -1087,7 +1106,7 @@ impl Walk {
         }
         if keep {
             if let (Some(value), Some(rendered)) = (n.raw, n.rendered) {
-                self.text.insert(anchor, text::ObservedText { value, rendered });
+                self.text.insert(anchor, text::ObservedText::new(&value, rendered));
             }
             out.push(Item { key: Key::Element(anchor), text: s, kids });
         } else {
@@ -1397,6 +1416,7 @@ impl Desk {
             ids: prev.as_mut().map(|p| std::mem::take(&mut p.ids)).unwrap_or_default(),
             elements: vec![],
             text: HashMap::new(),
+            text_budget: 1024 * 1024,
             notes: HashMap::new(),
             truncated: false,
             visited: 0,
@@ -1427,6 +1447,7 @@ impl Desk {
         }
         let moved = walk.ids.rebind(dead);
         items.iter_mut().for_each(|i| i.renumber(&moved));
+        walk.text = rebind_text(walk.text, &moved);
         for (id, _) in walk.elements.iter_mut() {
             *id = *moved.get(id).unwrap_or(id);
         }
@@ -1920,6 +1941,43 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observed_selection_follows_rebound_element_ids() {
+        let locator = Locator::ROOT.child(&Props { role: "AXTextArea".into(), identifier: Some("editor".into()), ..Default::default() });
+        let mut ids = tree::Ids::default();
+        let old = ids.assign(&"old", 1, locator);
+        let mut ids = ids.carry();
+        let new = ids.assign(&"new", 2, locator);
+        let rendered = text::attributed_text(&[("hello".into(), text::TextStyle { bold: true, ..Default::default() })], true).unwrap();
+        let mapping = rebind_text(HashMap::from([(new, text::ObservedText::new("hello", rendered))]), &ids.rebind(|e| *e == "old"));
+        assert!(!mapping.contains_key(&new));
+        assert_eq!(text::observed_selection_range("hello", mapping.get(&old), "**hello**", "", "", Selection::Text).unwrap(), [0, 5]);
+    }
+
+    #[test]
+    fn observed_selection_budget_falls_back_to_plain_text() {
+        let rendered = text::attributed_text(&[("hello".into(), text::TextStyle { bold: true, ..Default::default() })], true).unwrap();
+        let mut budget = rendered.retained_bytes();
+        let mut node = Node {
+            props: Props {
+                role: "AXTextArea".into(),
+                value: Some("hello".into()),
+                rich_text: Some(rendered.markdown.clone()),
+                ..Default::default()
+            },
+            raw: Some("hello".into()),
+            rendered: Some(rendered),
+            frame: None,
+            children: vec![],
+        };
+        node.limit_text(&mut budget);
+        assert_eq!(budget, 0);
+        assert!(node.props.describe().0.contains("markdown:"));
+        node.limit_text(&mut budget);
+        assert!(node.rendered.is_none());
+        assert_eq!(node.props.describe().0, "TextArea = \"hello\"");
+    }
+
     #[test]
     fn attributed_observation_resolves_native_font_traits() {
         use core_foundation::attributed_string::CFMutableAttributedString;

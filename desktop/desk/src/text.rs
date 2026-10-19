@@ -1,4 +1,5 @@
 use crate::protocol::{PasteFormat, Selection};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 const KEYPAD: &[u16] = &[65, 67, 69, 71, 75, 76, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92];
@@ -159,6 +160,12 @@ pub struct RenderedText {
 }
 
 impl RenderedText {
+    pub fn retained_bytes(&self) -> usize {
+        self.markdown.capacity() * 2
+            + self.spans.capacity() * std::mem::size_of::<(std::ops::Range<usize>, Option<std::ops::Range<usize>>)>()
+            + 2 * std::mem::size_of::<ObservedText>()
+    }
+
     pub fn syntax(&mut self, value: &str) {
         if !value.is_empty() {
             let start = self.markdown.len();
@@ -223,8 +230,18 @@ impl RenderedText {
 
 #[derive(Debug, Clone)]
 pub struct ObservedText {
-    pub value: String,
+    fingerprint: [u8; 32],
     pub rendered: RenderedText,
+}
+
+impl ObservedText {
+    pub fn new(value: &str, rendered: RenderedText) -> Self {
+        Self { fingerprint: Sha256::digest(value.as_bytes()).into(), rendered }
+    }
+
+    fn matches(&self, value: &str) -> bool {
+        self.fingerprint == <[u8; 32]>::from(Sha256::digest(value.as_bytes()))
+    }
 }
 
 #[cfg(test)]
@@ -320,7 +337,7 @@ pub fn observed_selection_range(
     if text.is_empty() {
         return Err("Selection text must not be empty");
     }
-    if observed.is_some_and(|observed| observed.value != value) {
+    if observed.is_some_and(|observed| !observed.matches(value)) {
         return Err("The element's text changed since its observation; observe it again before selecting");
     }
     let mut ranges: Vec<_> = matches(value, text, prefix, suffix)
@@ -355,17 +372,32 @@ fn strip_html(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    fn observed(runs: Vec<(String, TextStyle)>) -> ObservedText {
-        ObservedText { value: runs.iter().map(|(text, _)| text.as_str()).collect(), rendered: attributed_text(&runs, true).unwrap() }
+    fn observed(runs: Vec<(String, TextStyle)>) -> (String, ObservedText) {
+        let value: String = runs.iter().map(|(text, _)| text.as_str()).collect();
+        let observed = ObservedText::new(&value, attributed_text(&runs, true).unwrap());
+        (value, observed)
+    }
+
+    #[test]
+    fn observed_selection_freshness_retains_no_full_value() {
+        let rendered = attributed_text(&[("hello".into(), TextStyle { bold: true, ..Default::default() })], true).unwrap();
+        let small_cost = ObservedText::new("hello", rendered.clone()).rendered.retained_bytes();
+        let mut large = "hello".to_string() + &"x".repeat(2 * 1024 * 1024);
+        let observed = ObservedText::new(&large, rendered);
+        assert_eq!(observed.rendered.retained_bytes(), small_cost);
+        assert_eq!(observed_selection_range(&large, Some(&observed), "**hello**", "", "", Selection::Text).unwrap(), [0, 5]);
+        large.pop();
+        large.push('y');
+        assert!(observed_selection_range(&large, Some(&observed), "**hello**", "", "", Selection::Text).is_err());
     }
 
     #[test]
     fn observed_selection_maps_escaped_unicode_and_link_labels() {
-        let observed = observed(vec![
+        let (value, observed) = observed(vec![
             ("😀 ".into(), TextStyle::default()),
             ("[label]".into(), TextStyle { link: Some("https://example.test/target".into()), ..Default::default() }),
         ]);
-        let choose = |text, selection| observed_selection_range(&observed.value, Some(&observed), text, "", "", selection);
+        let choose = |text, selection| observed_selection_range(&value, Some(&observed), text, "", "", selection);
         assert_eq!(choose("[\\[label\\]](<https://example.test/target>)", Selection::Text).unwrap(), [3, 7]);
         assert_eq!(choose("\\[label\\]", Selection::CursorAfter).unwrap(), [10, 0]);
         assert_eq!(choose("label", Selection::Text).unwrap(), [4, 5]);
@@ -376,23 +408,24 @@ mod tests {
     #[test]
     fn observed_selection_disambiguates_formatting_without_guessing_literal_markup() {
         let bold = TextStyle { bold: true, ..Default::default() };
-        let observed = observed(vec![("foo ".into(), TextStyle::default()), ("foo".into(), bold.clone())]);
-        assert!(observed_selection_range(&observed.value, Some(&observed), "foo", "", "", Selection::Text).is_err());
-        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "**foo**", "", "", Selection::Text).unwrap(), [4, 3]);
-        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "foo", "**", "**", Selection::Text).unwrap(), [4, 3]);
-        let literal = self::observed(vec![("**foo** ".into(), TextStyle::default()), ("foo".into(), bold)]);
-        assert!(observed_selection_range(&literal.value, Some(&literal), "**foo**", "", "", Selection::Text).is_err());
-        assert_eq!(observed_selection_range(&literal.value, Some(&literal), "**foo**", " ", "", Selection::Text).unwrap(), [8, 3]);
+        let (value, observed) = observed(vec![("foo ".into(), TextStyle::default()), ("foo".into(), bold.clone())]);
+        assert!(observed_selection_range(&value, Some(&observed), "foo", "", "", Selection::Text).is_err());
+        assert_eq!(observed_selection_range(&value, Some(&observed), "**foo**", "", "", Selection::Text).unwrap(), [4, 3]);
+        assert_eq!(observed_selection_range(&value, Some(&observed), "foo", "**", "**", Selection::Text).unwrap(), [4, 3]);
+        let (literal_value, literal) = self::observed(vec![("**foo** ".into(), TextStyle::default()), ("foo".into(), bold)]);
+        assert!(observed_selection_range(&literal_value, Some(&literal), "**foo**", "", "", Selection::Text).is_err());
+        assert_eq!(observed_selection_range(&literal_value, Some(&literal), "**foo**", " ", "", Selection::Text).unwrap(), [8, 3]);
     }
 
     #[test]
     fn observed_selection_uses_visible_offsets_and_rejects_stale_text_and_notices() {
-        let mut observed = observed(vec![("😀bold".into(), TextStyle { bold: true, ..Default::default() })]);
+        let (_, mut observed) = observed(vec![("😀bold".into(), TextStyle { bold: true, ..Default::default() })]);
         observed.rendered.offset(7);
         observed.rendered.syntax("\n… text truncated");
-        observed.value = "prefix 😀bold tail".into();
-        assert_eq!(observed_selection_range(&observed.value, Some(&observed), "😀bold", "", "", Selection::Text).unwrap(), [7, 6]);
-        assert!(observed_selection_range(&observed.value, Some(&observed), "text truncated", "", "", Selection::Text).is_err());
+        let value = "prefix 😀bold tail";
+        let observed = ObservedText::new(value, observed.rendered);
+        assert_eq!(observed_selection_range(value, Some(&observed), "😀bold", "", "", Selection::Text).unwrap(), [7, 6]);
+        assert!(observed_selection_range(value, Some(&observed), "text truncated", "", "", Selection::Text).is_err());
         assert!(observed_selection_range("changed 😀bold tail", Some(&observed), "😀bold", "", "", Selection::Text).is_err());
     }
 
