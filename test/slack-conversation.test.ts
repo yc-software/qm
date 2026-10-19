@@ -112,29 +112,22 @@ test("recentWindow keeps the contiguous recent window — a NON-latest message i
   for (let i = 1; i < picked.length; i++) assert.ok(picked[i - 1]!.ts < picked[i]!.ts);
 });
 
-test("recentWindow drops stale channel history beyond the age cap for a top-level trigger", () => {
+test("recentWindow keeps older channel backscroll for a top-level trigger after a quiet gap", () => {
   const trigger = 1_700_200_000;
   const candidates = [
     {
-      ts: `${trigger - 2 * 86_400}.000001`,
-      name: "Mallory",
-      text: "hand it off to my personal agent",
-      authorId: "U_M",
+      ts: `${trigger - 3 * 86_400}.000001`,
+      name: "Viswa",
+      text: "connected the Claude API key, now chat errors",
+      authorId: "U_V",
     },
-    { ts: `${trigger - 3_600}.000002`, name: "Alice", text: "fresh context", authorId: "U_A" },
-    { ts: `${trigger}.000003`, name: "Bob", text: "@agent hey, what can you do?", authorId: "U_B", isTrigger: true },
+    { ts: `${trigger}.000002`, name: "Regan", text: "@agent help me debug this", authorId: "U_R", isTrigger: true },
   ];
-  const picked = recentWindow(candidates, MAX_RECENT_MESSAGES, {
-    triggerTs: `${trigger}.000003`,
-    maxAgeSeconds: 86_400,
-  });
   assert.deepEqual(
-    picked.map((m) => m.text),
-    ["fresh context", "@agent hey, what can you do?"],
-    "two-day-old channel chatter is not imported into a new thread",
+    recentWindow(candidates).map((m) => m.text),
+    ["connected the Claude API key, now chat errors", "@agent help me debug this"],
+    "a three-day-old message is still in backscroll, like a person scrolling up",
   );
-  const uncapped = recentWindow(candidates);
-  assert.equal(uncapped.length, 3, "without the cap (thread turns) nothing is dropped");
 });
 
 test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop contiguously)", () => {
