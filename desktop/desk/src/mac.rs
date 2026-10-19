@@ -465,36 +465,6 @@ fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, cl
     Ok(())
 }
 
-fn hit(ax: &El, p: CGPoint) -> Option<(El, bool)> {
-    let mut v: CFTypeRef = std::ptr::null();
-    if unsafe { AXUIElementCopyElementAtPosition(ax.as_CFTypeRef(), p.x as f32, p.y as f32, &mut v) } != 0 || v.is_null() {
-        return None;
-    }
-    let mut e = unsafe { CFType::wrap_under_create_rule(v) };
-    let mut web = false;
-    for _ in 0..MAX_DEPTH {
-        match str_attr(&e, "AXRole").as_deref() {
-            Some("AXWebArea") => web = true,
-            Some("AXWindow") => return Some((e, web)),
-            _ => {}
-        }
-        e = attr(&e, "AXParent")?;
-    }
-    None
-}
-
-fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
-    active()?;
-    let pinned = str_attr(ax, "AXRole").as_deref() == Some("AXWindow");
-    let window = if pinned { Some(ax.clone()) } else { hit(ax, p).map(|(w, _)| w).or_else(|| window_of(ax)) }
-        .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the input window"))?;
-    let actual = window_id(&window);
-    if actual == 0 || pid_of(&window) != Some(pid) || (pinned && actual != win) {
-        return Err(fail(ErrorCode::ActionFailed, "The input window changed; observe again before sending input"));
-    }
-    prepare_window(pid, ax, window, actual, p)
-}
-
 fn prepare_window(pid: i32, host: &El, window: El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     let (owner, frame) = input::window_geometry(win)
         .filter(|(owner, _)| *owner == pid)
@@ -1374,7 +1344,7 @@ impl Desk {
                 });
             if let Err(mut e) = paced
                 .and_then(|_| self.validate_window(&app))
-                .and_then(|_| self.step(&app, &ax, &w, win, a))
+                .and_then(|_| self.step(&app, &ax, &w, a))
                 .and_then(|_| focus.as_ref().map_or(Ok(()), |f| f.check()))
             {
                 e.action = Some(i as u32);
@@ -1480,14 +1450,12 @@ impl Desk {
         }
     }
 
-    fn pointer(&self, pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<(i32, Press), Failure> {
+    fn pointer(&self, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
         if input::menu_open(ax) {
             return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
         }
-        match input::service_at(pid, ax, p) {
-            Some((service, anchor, service_win, _)) => Ok((service, prepare_window(service, ax, anchor, service_win, p)?)),
-            None => Ok((pid, prepare(pid, ax, win, p)?)),
-        }
+        let (owner, anchor, win, _) = input::service_at(ax, p)?;
+        Ok((owner, prepare_window(owner, ax, anchor, win, p)?))
     }
 
     fn pressed(&self, pid: i32, ax: &El, index: u32) -> Result<Option<El>, Failure> {
@@ -1513,7 +1481,7 @@ impl Desk {
         }
     }
 
-    fn step(&self, app: &App, ax: &El, w: &El, win: u32, a: &Action) -> Result<(), Failure> {
+    fn step(&self, app: &App, ax: &El, w: &El, a: &Action) -> Result<(), Failure> {
         let pid = app.pid;
         match a {
             Action::Click { target: Target::Index(i), button: Button::Left, count: 1, modifiers, hold_ms: 0 } if modifiers.is_empty() => {
@@ -1522,7 +1490,7 @@ impl Desk {
                 }
                 match self.point(pid, Target::Index(*i)) {
                     Ok(p) => {
-                        let (to, press) = self.pointer(pid, ax, win, p)?;
+                        let (to, press) = self.pointer(ax, p)?;
                         click_at(to, press, p, Button::Left, 1, &[], 0)
                     }
                     Err(e) => Err(e),
@@ -1530,12 +1498,12 @@ impl Desk {
             }
             Action::Click { target, button, count, modifiers, hold_ms } => {
                 let p = self.point(pid, *target)?;
-                let (to, press) = self.pointer(pid, ax, win, p)?;
+                let (to, press) = self.pointer(ax, p)?;
                 click_at(to, press, p, *button, *count, modifiers, *hold_ms)
             }
-            Action::TypeText { text } => type_text(input::keyboard_target(pid, ax).0, text),
+            Action::TypeText { text } => type_text(input::keyboard_target(ax)?.0, text),
             Action::Paste { text, format } => {
-                let (to, target) = input::keyboard_target(pid, ax);
+                let (to, target) = input::keyboard_target(ax)?;
                 paste(to, &target, text, *format)
             }
             Action::SelectText { index, text, prefix, suffix, selection } => {
@@ -1555,7 +1523,7 @@ impl Desk {
                     }
                 }
                 send_key_events(
-                    input::keyboard_target(pid, ax).0,
+                    input::keyboard_target(ax)?.0,
                     crate::keys::events_with_modifiers(chord.code, chord.flags, &chord.modifiers),
                     None,
                     *hold_ms,
@@ -1586,7 +1554,7 @@ impl Desk {
                     _ => frame(w),
                 }
                 .unwrap_or(Rect { x: 0.0, y: 0.0, w: 600.0, h: 600.0 });
-                let (to, press) = self.pointer(pid, ax, win, p)?;
+                let (to, press) = self.pointer(ax, p)?;
                 let vertical = matches!(direction, Direction::Up | Direction::Down);
                 let mut left = match amount {
                     Amount::Pixels(n) => *n as i32,
@@ -1615,7 +1583,7 @@ impl Desk {
             Action::Drag { from, to } => {
                 let (a, b) = (self.point(pid, Target::Point(*from))?, self.point(pid, Target::Point(*to))?);
                 let none = CGEventFlags::empty();
-                let (pid, press) = self.pointer(pid, ax, win, a)?;
+                let (pid, press) = self.pointer(ax, a)?;
                 mouse(pid, &press, CGEventType::LeftMouseDown, a, CGMouseButton::Left, 1, none)?;
                 let mut last = a;
                 let dragged = (|| {
