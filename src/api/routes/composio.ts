@@ -249,12 +249,11 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
     });
     if (typeof link.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(link.connected_account_id))
       throw new Error("Invalid account");
-    if (typeof callbackUrl === "string" && ctx.deps.composioReturns) {
-      await ctx.deps.composioReturns.put(`${userId}:${link.connected_account_id}`, {
-        url: callbackUrl,
-        expiresAt: Date.now() + 20 * 60_000,
-      });
-    }
+    await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
+      url: typeof callbackUrl === "string" ? callbackUrl : null,
+      toolkit,
+      expiresAt: Date.now() + 20 * 60_000,
+    });
     const url = new URL(String(link.redirect_url));
     if (
       !(
@@ -490,8 +489,20 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     const key = `${userId}:${result.connected_account_id}`;
     const saved = await ctx.deps.composioReturns?.get(key);
     await ctx.deps.composioReturns?.delete(key);
-    return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.connected",
+      resource: typeof result.toolkit_slug === "string" ? result.toolkit_slug : (saved?.toolkit ?? "unknown"),
+      scopeLabel: scopeId("personal", access.principal),
+    });
+    return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? (saved.url ?? null) : null });
   } catch {
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.connect_failed",
+      resource: "unknown",
+      scopeLabel: scopeId("personal", access.principal),
+    });
     return sendJson(ctx.res, 400, {
       error: "verification_failed",
       message: "Sign in to the QM account that started this connection and try connecting again.",
@@ -500,7 +511,10 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
 }
 
 export interface ComposioReturn {
-  url: string;
+  /** Where the browser returns after consent; null when the connect was started without a return page. */
+  url: string | null;
+  /** Toolkit slug from authorize, so completion can be audited even if Composio omits it. */
+  toolkit?: string;
   expiresAt: number;
 }
 

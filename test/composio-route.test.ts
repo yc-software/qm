@@ -24,12 +24,16 @@ function fixture() {
   const app = { getSessionForViewer: async (_id: string, _viewer: string): Promise<unknown> => null };
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const replies: unknown[] = [];
+  const audits: Array<{ action: string; resource?: string }> = [];
   const deps: Partial<ServerDeps> = {
     keychain,
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
     composioReturns: createMemoryMap(),
+    auditLog: {
+      record: (e: { action: string; resource?: string }) => audits.push(e),
+    } as unknown as ServerDeps["auditLog"],
     runs: {
       get: async () => ({
         status: "running",
@@ -104,7 +108,7 @@ function fixture() {
         grantedBy: "admin",
       });
   }
-  return { invoke, own, shared, calls, replies, deps, app };
+  return { invoke, own, shared, calls, replies, deps, app, audits };
 }
 
 test("Composio requires a verified actor and never uses another person's key", async () => {
@@ -550,6 +554,31 @@ test("callback completion is browser-only and preserves the durable return URL",
     user_id: composioUserId(orgId(), "alice"),
   });
   assert.equal((await f.deps.composioReturns!.entries()).length, 0);
+  assert.deepEqual(
+    f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
+    [["composio.connected", "gmail"]],
+  );
+});
+
+test("connects without a return page are still audited on completion, and failed completions too", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push(
+    { session_id: "trs_example" },
+    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
+  );
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "outlook" })).status, 200);
+  f.replies.push({ connected_account_id: "ca_test" });
+  assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
+  f.replies.push(new Response("bad", { status: 400 }));
+  assert.equal((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).status, 400);
+  assert.deepEqual(
+    f.audits.filter((e) => e.action.startsWith("composio.conn")).map((e) => [e.action, e.resource]),
+    [
+      ["composio.connected", "outlook"],
+      ["composio.connect_failed", "unknown"],
+    ],
+  );
 });
 
 test("finished runs and stale lease capabilities cannot reuse backend connection access", async () => {
