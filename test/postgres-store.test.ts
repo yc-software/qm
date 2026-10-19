@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import {
-  backfillSessionOriginBatch,
+  SESSION_ORIGIN_BACKFILL_SQL,
   createPostgresSessionStore,
   rowToSession,
 } from "../src/sessions/postgres-session-store.ts";
@@ -1163,7 +1163,7 @@ test(
 );
 
 test(
-  "pg session origin columns: written at insert, regex fallback while NULL, backfill restores them",
+  "pg session origin columns: written at insert, and the store migration fills rows that predate them",
   { skip },
   async () => {
     const s = createPostgresSessionStore(URL!);
@@ -1220,22 +1220,9 @@ test(
       assert.equal(stored.cronStats.total, 1);
 
       await q("UPDATE sessions SET origin = NULL, origin_id = NULL WHERE id = ANY($1)", [ids]);
-      assert.deepEqual(
-        await classify(),
-        stored,
-        "NULL columns fall back to the thread-ref regex and classify identically",
-      );
-
-      let batches = 0;
-      let updated = 0;
-      for (let n = await backfillSessionOriginBatch(q, 2); n > 0; n = await backfillSessionOriginBatch(q, 2)) {
-        batches++;
-        updated += n;
-      }
-      assert.ok(updated >= ids.length, "the backfill reaches every NULL row");
-      assert.ok(batches >= 3, "the backfill works in bounded batches until nothing is left");
-      assert.deepEqual(await columns(), shapes, "the backfill derives the same values the insert path wrote");
-      assert.deepEqual(await classify(), stored, "backfilled rows classify identically");
+      await q(SESSION_ORIGIN_BACKFILL_SQL);
+      assert.deepEqual(await columns(), shapes, "the migration derives the same values the insert path wrote");
+      assert.deepEqual(await classify(), stored, "migrated rows classify identically");
     } finally {
       await raw.end();
     }

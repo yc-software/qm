@@ -11,6 +11,7 @@ import { type ApiCtx, type BaseCtx } from "../route.ts";
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
 const EXPORT_MAX_DAYS = 93;
+const CRON_LOOKUP_CONCURRENCY = 8;
 const SPEND_EXPORT_PRINCIPAL = "spend-export";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
@@ -462,12 +463,15 @@ async function cronInfoLookup(
   app: BaseCtx["app"],
   rows: readonly { cronId: string | null }[],
 ): Promise<(cronId: string) => SpendCronInfo | null> {
+  const ids = [...new Set(rows.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))];
   const crons = new Map<string, SpendCronInfo>();
-  for (const cronId of new Set(rows.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))) {
-    const cron = await app.getCron(cronId);
-    if (!cron) continue;
-    const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
-    crons.set(cronId, { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived });
+  for (let start = 0; start < ids.length; start += CRON_LOOKUP_CONCURRENCY) {
+    const batch = await Promise.all(ids.slice(start, start + CRON_LOOKUP_CONCURRENCY).map((id) => app.getCron(id)));
+    for (const cron of batch) {
+      if (!cron) continue;
+      const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
+      crons.set(id, { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived });
+    }
   }
   return (cronId) => crons.get(cronId) ?? null;
 }
@@ -554,7 +558,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     to,
     bucket,
     label: (id) => labels.get(id) ?? "",
-    cron: await cronInfoLookup(app, rows),
+    cron: format === "csv" && breakdown !== "cron" ? () => null : await cronInfoLookup(app, rows),
   });
   if (format === "json")
     return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
