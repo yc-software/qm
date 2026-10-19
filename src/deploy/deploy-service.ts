@@ -149,6 +149,19 @@ export interface DeployServiceDeps {
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function assertAppSize(files: readonly DeployFile[] | undefined, maxBytes: number | undefined): void {
+  if (!maxBytes || !files) return;
+  const total = files.reduce(
+    (sum, f) => sum + (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength),
+    0,
+  );
+  if (total > maxBytes) {
+    throw new Error(
+      `the app is too large to publish: ${total} bytes, maximum ${maxBytes} bytes — publish fewer or smaller files`,
+    );
+  }
+}
+
 function validateName(name: string): void {
   if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
   if (!NAME_RE.test(name)) {
@@ -325,6 +338,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
       }
+      assertAppSize(input.files, deps.provider.profile.maxAppBytes);
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
@@ -369,6 +383,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const before = await deps.deployStore.get(id);
         if (!before) throw new Error(`unknown deployment: ${id}`);
         const current = currentVersionOf(before);
+        assertAppSize(input.files, deps.provider.profile.maxAppBytes);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);

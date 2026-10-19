@@ -228,3 +228,35 @@ test("runMicrovm retries a throttled create but never an ambiguous server error"
   await assert.rejects(api2.runMicrovm(run), /-> 502: bad gateway/);
   assert.equal(broken.calls.length, 1);
 });
+
+test("writeAbs splits writes above the chunk size into parts and joins them in the MicroVM", async () => {
+  const writes: Array<{ path: string; bytes: number }> = [];
+  const execs: string[] = [];
+  const { fetchImpl } = fakeFetch((rec) => {
+    const body = JSON.parse(rec.body ?? "{}") as { path?: string; b64?: string; cmd?: string };
+    if (rec.url.endsWith("/write")) writes.push({ path: body.path!, bytes: Buffer.from(body.b64!, "base64").length });
+    if (rec.url.endsWith("/exec")) {
+      execs.push(body.cmd!);
+      return { status: 200, body: { stdout: "", stderr: "", code: 0 } };
+    }
+    return { status: 200, body: { ok: true } };
+  });
+  const api = { createAuthToken: async () => "tok" } as unknown as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, writeChunkBytes: 4, fetchImpl });
+  await client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/small", new Uint8Array(4));
+  assert.deepEqual(writes, [{ path: "/app/small", bytes: 4 }]);
+  assert.equal(execs.length, 0);
+  writes.length = 0;
+  await client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/big", new Uint8Array(10));
+  assert.deepEqual(writes, [
+    { path: "/app/big.qm-part-0", bytes: 4 },
+    { path: "/app/big.qm-part-1", bytes: 4 },
+    { path: "/app/big.qm-part-2", bytes: 2 },
+  ]);
+  assert.equal(execs.length, 1);
+  assert.match(
+    execs[0]!,
+    /^cat '\/app\/big\.qm-part-0' '\/app\/big\.qm-part-1' '\/app\/big\.qm-part-2' > '\/app\/big'/,
+  );
+  assert.match(execs[0]!, /rm -f '\/app\/big\.qm-part-0'/);
+});

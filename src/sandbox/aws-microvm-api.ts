@@ -3,6 +3,7 @@ import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { errMessage, swallow, withRequestId } from "../util/errors.ts";
+import { shq } from "../util/shell.ts";
 
 type CredentialProvider = () => Promise<{
   accessKeyId: string;
@@ -273,6 +274,7 @@ export async function vmFetch(
 export interface MicrovmClientOptions {
   agentPort: number;
   tokenTtlMinutes: number;
+  writeChunkBytes?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -301,6 +303,7 @@ export interface MicrovmClient {
 
 export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptions): MicrovmClient {
   const { agentPort, tokenTtlMinutes } = opts;
+  const writeChunkBytes = opts.writeChunkBytes ?? 32 * 1024 * 1024;
   const fetchOpt = opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {};
   const tokenById = new Map<string, { token: string; expMs: number }>();
 
@@ -342,10 +345,26 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     return { stdout: j.stdout ?? "", stderr: j.stderr ?? "", code: j.code, timedOut: !!j.timedOut };
   }
 
-  async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
+  async function writeOnce(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
     const res = await daemon(id, endpoint, "/write", { path: absPath, b64: Buffer.from(data).toString("base64") });
     if (res.status !== 200)
       throw new Error(`microVM write ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
+  }
+
+  async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
+    if (data.byteLength <= writeChunkBytes) return writeOnce(id, endpoint, absPath, data);
+    const parts: string[] = [];
+    for (let offset = 0; offset < data.byteLength; offset += writeChunkBytes) {
+      const part = `${absPath}.qm-part-${parts.length}`;
+      await writeOnce(id, endpoint, part, data.subarray(offset, offset + writeChunkBytes));
+      parts.push(part);
+    }
+    const quoted = parts.map(shq).join(" ");
+    const r = await execRaw(id, endpoint, `cat ${quoted} > ${shq(absPath)}; rc=$?; rm -f ${quoted}; exit $rc`, 300);
+    if (r.code !== 0)
+      throw new Error(
+        `microVM write ${absPath} failed joining ${parts.length} parts (code ${r.code}): ${r.stderr.slice(0, 200)}`,
+      );
   }
 
   async function waitDaemon(id: string, endpoint: string): Promise<void> {

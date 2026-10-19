@@ -39,6 +39,7 @@ const DATA_CREDS_REFRESH_MS = 45 * 60_000;
 const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
 const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
+const MAX_APP_BYTES = 100 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
 const APP_READY_WINDOW_SEC = 60;
 const APP_PORT_RELEASE_TICKS = 40;
@@ -637,7 +638,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   };
 
   return {
-    profile: { managedScaleToZero: true, inPlaceReconcile: true, ...(s3 ? { dataDir: DATA_DIR } : {}) },
+    profile: {
+      managedScaleToZero: true,
+      inPlaceReconcile: true,
+      maxAppBytes: MAX_APP_BYTES,
+      ...(s3 ? { dataDir: DATA_DIR } : {}),
+    },
 
     apply: (d, version) => place(d, version),
 
