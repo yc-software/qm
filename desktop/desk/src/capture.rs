@@ -15,7 +15,7 @@ use core_graphics::context::CGContext;
 use core_graphics::image::CGImage;
 use core_graphics::window::{
     copy_window_info, create_image, kCGWindowImageBoundsIgnoreFraming, kCGWindowImageNominalResolution, kCGWindowListOptionIncludingWindow,
-    kCGWindowListOptionOnScreenAboveWindow, kCGWindowNumber, kCGWindowOwnerPID,
+    kCGWindowListOptionOnScreenAboveWindow, kCGWindowNumber,
 };
 use foreign_types::ForeignType;
 use objc2::rc::Retained;
@@ -71,7 +71,7 @@ pub fn window(id: u32, panels: &[u32], frame: Rect) -> Result<Screenshot, String
     encode(&image, area)
 }
 
-fn above(id: u32) -> Vec<(u32, i64)> {
+fn above(id: u32) -> Vec<u32> {
     let number = |d: &CFDictionary<CFString, CFType>, key| d.find(key).and_then(|v| v.downcast::<CFNumber>()).and_then(|n| n.to_i64());
     let infos = copy_window_info(kCGWindowListOptionOnScreenAboveWindow | kCGWindowListOptionIncludingWindow, id);
     infos
@@ -79,28 +79,23 @@ fn above(id: u32) -> Vec<(u32, i64)> {
         .flat_map(CFArray::iter)
         .filter_map(|item| {
             let d = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule(*item as _) };
-            Some((
-                number(&d, unsafe { CFString::wrap_under_get_rule(kCGWindowNumber) })? as u32,
-                number(&d, unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) })?,
-            ))
+            u32::try_from(number(&d, unsafe { CFString::wrap_under_get_rule(kCGWindowNumber) })?).ok()
         })
         .collect()
 }
 
-fn plan(content: &SCShareableContent, id: u32, above: &[(u32, i64)], panels: &[u32], frame: Rect, tx: &Parts) -> Result<(), String> {
+fn plan(content: &SCShareableContent, id: u32, above: &[u32], panels: &[u32], frame: Rect, tx: &Parts) -> Result<(), String> {
     let windows = unsafe { content.windows() };
     let target = windows.iter().find(|w| unsafe { w.windowID() } == id).ok_or("The window is not available to capture.")?;
-    let pid = above.iter().find(|(w, _)| *w == id).map(|(_, p)| *p);
-    let candidates: Vec<(u32, Rect, bool)> = windows
+    let candidates: Vec<(u32, Rect)> = windows
         .iter()
         .filter_map(|w| {
             let wid = unsafe { w.windowID() };
-            let (owner, shown) = (above.iter().find(|(a, _)| *a == wid).map(|(_, p)| *p), unsafe { w.isOnScreen() });
-            let forced = panels.contains(&wid);
-            (wid != id && shown && owner.is_some() && (forced || owner == pid)).then(|| (wid, rect(unsafe { w.frame() }), forced))
+            (wid != id && unsafe { w.isOnScreen() } && above.contains(&wid)).then(|| (wid, rect(unsafe { w.frame() })))
         })
         .collect();
-    let (ids, area) = associated(frame, &candidates);
+    let (ids, area) = associated(frame, &candidates, panels);
+    size(area)?;
     if ids.is_empty() {
         tx.send(Ok(Part::Plan { area: frame, pieces: 1 })).map_err(|e| e.to_string())?;
         let filter = unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &target) };
@@ -250,30 +245,16 @@ fn encode(image: &CGImage, area: Rect) -> Result<Screenshot, String> {
     })
 }
 
-fn associated(target: Rect, candidates: &[(u32, Rect, bool)]) -> (Vec<u32>, Rect) {
-    let mut ids: Vec<u32> = vec![];
+fn associated(target: Rect, candidates: &[(u32, Rect)], related: &[u32]) -> (Vec<u32>, Rect) {
+    let mut ids = vec![];
     let mut area = target;
-    let mut shown = vec![target];
-    loop {
-        let next = candidates.iter().find(|(id, r, forced)| {
-            !ids.contains(id)
-                && (*forced || shown.iter().any(|s| intersection(*s, *r).is_some()) || shown.iter().skip(1).any(|s| touching(*s, *r)))
-        });
-        match next {
-            Some((id, r, _)) => {
-                ids.push(*id);
-                shown.push(*r);
-                area = union(area, *r);
-            }
-            None => return (ids, area),
+    for (id, frame) in candidates {
+        if related.contains(id) && !ids.contains(id) {
+            ids.push(*id);
+            area = union(area, *frame);
         }
     }
-}
-
-fn touching(a: Rect, b: Rect) -> bool {
-    let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
-    let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
-    (w > 0.0 && h >= -1.0) || (h > 0.0 && w >= -1.0)
+    (ids, area)
 }
 
 fn union(a: Rect, b: Rect) -> Rect {
@@ -302,20 +283,22 @@ mod tests {
     }
 
     #[test]
-    fn menus_cascading_past_the_window_grow_the_shot() {
+    fn capture_excludes_unrelated_overlapping_windows() {
         let window = r(100.0, 100.0, 400.0, 300.0);
-        let menu = (1, r(450.0, 150.0, 200.0, 300.0), false);
-        let submenu = (2, r(650.0, 200.0, 200.0, 100.0), false);
-        let elsewhere = (3, r(1000.0, 0.0, 100.0, 100.0), false);
-        let menu_bar_icon = (4, r(200.0, 80.0, 20.0, 20.0), false);
-        let (ids, area) = associated(window, &[submenu, elsewhere, menu, menu_bar_icon]);
+        let menu = (1, r(450.0, 150.0, 200.0, 300.0));
+        let submenu = (2, r(650.0, 200.0, 200.0, 100.0));
+        let other_document = (3, r(150.0, 150.0, 600.0, 600.0));
+        let (ids, area) = associated(window, &[menu, other_document, submenu], &[1, 2]);
         assert_eq!(ids, vec![1, 2]);
         assert_eq!(tuple(area), (100.0, 100.0, 750.0, 350.0));
+        let (ids, area) = associated(window, &[other_document], &[]);
+        assert!(ids.is_empty());
+        assert_eq!(tuple(area), tuple(window));
     }
 
     #[test]
     fn named_panels_join_without_touching_the_window() {
-        let (ids, area) = associated(r(0.0, 0.0, 100.0, 100.0), &[(7, r(200.0, 0.0, 50.0, 50.0), true)]);
+        let (ids, area) = associated(r(0.0, 0.0, 100.0, 100.0), &[(7, r(200.0, 0.0, 50.0, 50.0))], &[7]);
         assert_eq!(ids, vec![7]);
         assert_eq!(tuple(area), (0.0, 0.0, 250.0, 100.0));
     }
@@ -380,7 +363,7 @@ mod tests {
 
     #[test]
     fn a_lone_window_keeps_its_frame() {
-        let (ids, area) = associated(r(10.0, 20.0, 30.0, 40.0), &[]);
+        let (ids, area) = associated(r(10.0, 20.0, 30.0, 40.0), &[], &[]);
         assert!(ids.is_empty());
         assert_eq!(tuple(area), (10.0, 20.0, 30.0, 40.0));
     }
