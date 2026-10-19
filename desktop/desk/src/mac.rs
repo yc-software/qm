@@ -23,7 +23,8 @@ use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbo
 use objc2_foundation::NSString;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 type El = CFType;
@@ -149,13 +150,35 @@ fn now_ms() -> i64 {
 #[derive(Default)]
 struct Notices {
     last: AtomicI64,
-    generation: AtomicU64,
+    changes: Mutex<Changes>,
 }
 
-extern "C" fn noticed(_: CFTypeRef, _: CFTypeRef, _: CFStringRef, refcon: *mut c_void) {
+#[derive(Default)]
+struct Changes {
+    all: bool,
+    elements: Vec<El>,
+}
+
+const MAX_PENDING_NOTICES: usize = 256;
+
+extern "C" fn noticed(_: CFTypeRef, element: CFTypeRef, name: CFStringRef, refcon: *mut c_void) {
     let n = unsafe { &*(refcon as *const Notices) };
     n.last.store(now_ms(), Ordering::Relaxed);
-    n.generation.fetch_add(1, Ordering::Relaxed);
+    let Ok(mut changes) = n.changes.lock() else { return };
+    if changes.all {
+        return;
+    }
+    let localized = !name.is_null()
+        && matches!(unsafe { CFString::wrap_under_get_rule(name) }.to_string().as_str(), "AXValueChanged" | "AXTitleChanged");
+    if !localized || element.is_null() || changes.elements.len() >= MAX_PENDING_NOTICES {
+        changes.all = true;
+        changes.elements.clear();
+        return;
+    }
+    let element = unsafe { CFType::wrap_under_get_rule(element) };
+    if !changes.elements.contains(&element) {
+        changes.elements.push(element);
+    }
 }
 
 #[derive(Clone)]
@@ -167,7 +190,6 @@ struct Metadata {
 
 #[derive(Default)]
 struct Cache {
-    generation: u64,
     entries: usize,
     map: HashMap<usize, Vec<(El, Metadata)>>,
 }
@@ -175,6 +197,30 @@ struct Cache {
 const MAX_CACHED: usize = 20_000;
 
 impl Cache {
+    fn invalidate(&mut self, changes: Changes) {
+        if changes.all {
+            *self = Self::default();
+            return;
+        }
+        for element in changes.elements {
+            let hash = unsafe { CFHash(element.as_CFTypeRef()) };
+            let Some(bucket) = self.map.get_mut(&hash) else {
+                *self = Self::default();
+                return;
+            };
+            let before = bucket.len();
+            bucket.retain(|(key, _)| *key != element);
+            if bucket.len() == before {
+                *self = Self::default();
+                return;
+            }
+            self.entries -= before - bucket.len();
+            if bucket.is_empty() {
+                self.map.remove(&hash);
+            }
+        }
+    }
+
     fn get(&self, e: &El, hash: usize) -> Option<Metadata> {
         self.map.get(&hash)?.iter().find(|(k, _)| k == e).map(|(_, metadata)| metadata.clone())
     }
@@ -228,13 +274,15 @@ impl Observer {
 
     fn take_cache(&mut self) -> Cache {
         Self::drain();
-        let generation = self.notices.generation.load(Ordering::Relaxed);
-        let cache = std::mem::take(&mut self.cache);
-        if cache.generation == generation {
-            cache
-        } else {
-            Cache { generation, ..Cache::default() }
-        }
+        let mut cache = std::mem::take(&mut self.cache);
+        let changes = self
+            .notices
+            .changes
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_else(|_| Changes { all: true, elements: vec![] });
+        cache.invalidate(changes);
+        cache
     }
 }
 
@@ -1894,6 +1942,65 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    fn cached_metadata(elements: &[El]) -> Cache {
+        let mut cache = Cache::default();
+        for element in elements {
+            cache.put(
+                element,
+                unsafe { CFHash(element.as_CFTypeRef()) },
+                Metadata { actions: vec!["AXPress".into()], settable: true, attributed: false },
+            );
+        }
+        cache
+    }
+
+    fn notify(notices: &Notices, element: &El, name: &str) {
+        noticed(std::ptr::null(), element.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), notices as *const Notices as *mut c_void);
+    }
+
+    #[test]
+    fn metadata_notices_evict_only_known_changed_elements() {
+        let elements = [app_element(10001), app_element(10002)];
+        let mut cache = cached_metadata(&elements);
+        let notices = Notices::default();
+        notify(&notices, &elements[0], "AXValueChanged");
+        notify(&notices, &elements[0], "AXTitleChanged");
+        let changes = std::mem::take(&mut *notices.changes.lock().unwrap());
+        assert_eq!(changes.elements.len(), 1);
+        cache.invalidate(changes);
+        assert!(cache.get(&elements[0], unsafe { CFHash(elements[0].as_CFTypeRef()) }).is_none());
+        assert_eq!(cache.get(&elements[1], unsafe { CFHash(elements[1].as_CFTypeRef()) }).unwrap().actions, ["AXPress"]);
+        assert_eq!(cache.entries, 1);
+        assert_eq!(cache.map.len(), 1);
+        notify(&notices, &app_element(10003), "AXValueChanged");
+        cache.invalidate(std::mem::take(&mut *notices.changes.lock().unwrap()));
+        assert_eq!(cache.entries, 0);
+        assert!(cache.map.is_empty());
+    }
+
+    #[test]
+    fn uncertain_and_overflowing_metadata_notices_clear_everything() {
+        let element = app_element(10001);
+        for name in ["AXUIElementDestroyed", "AXLayoutChanged", "AXCreated", "AXFocusedUIElementChanged", "UnexpectedNotification"] {
+            let notices = Notices::default();
+            notify(&notices, &element, name);
+            let changes = std::mem::take(&mut *notices.changes.lock().unwrap());
+            assert!(changes.all);
+            assert!(changes.elements.is_empty());
+            let mut cache = cached_metadata(std::slice::from_ref(&element));
+            cache.invalidate(changes);
+            assert_eq!(cache.entries, 0);
+            assert!(cache.map.is_empty());
+        }
+        let notices = Notices::default();
+        for index in 0..=MAX_PENDING_NOTICES {
+            notify(&notices, &app_element(20000 + index as i32), "AXValueChanged");
+        }
+        let changes = notices.changes.lock().unwrap();
+        assert!(changes.all);
+        assert!(changes.elements.is_empty());
+    }
+
     #[test]
     fn attributed_observation_resolves_native_font_traits() {
         use core_foundation::attributed_string::CFMutableAttributedString;
