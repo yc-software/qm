@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { CoreSession } from "../src/core-bridge.ts";
 import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
@@ -142,7 +143,7 @@ test("a list landing mid-open still keeps the row of the conversation being open
   try {
     void h.boot();
     h.sessionsState.list = [SESSION, ...h.sessionsState.list];
-    const opened = h.openSession(SESSION);
+    const opened = h.openSession(SESSION as CoreSession);
     while (!h.sessionsState.openingKey) await new Promise((resolve) => setTimeout(resolve, 0));
     h.releaseSessions();
     await h.sessionsReady();

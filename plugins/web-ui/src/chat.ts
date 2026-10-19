@@ -389,6 +389,9 @@ export function createChatSurface(
     </div>`;
   }
   let transcriptRefreshGeneration = 0;
+  // Bumped whenever approval state is replaced or a decision starts, so a late
+  // approvals result can tell it has been superseded.
+  let approvalsEpoch = 0;
   const forkOriginController = createForkOriginController({
     state: chatState,
     load: async () => {
@@ -808,6 +811,7 @@ export function createChatSurface(
     if (agent !== chatState.agent || !chatState.threadRef || agent.state.isStreaming) return;
     if (chatState.resolvingApprovals.size > 0) return;
     chatState.resolvingApprovals.add(decision.requestId);
+    approvalsEpoch++;
     let resolving = true;
     const releaseSubmission = (): void => {
       if (!resolving) return;
@@ -872,48 +876,41 @@ export function createChatSurface(
     return activePendingApprovals().some(approvalBlocksComposer);
   }
 
-  async function syncPendingApprovals(agent: Agent, messages = agent.state.messages): Promise<void> {
+  async function syncPendingApprovals(
+    agent: Agent,
+    messages?: AgentMessage[],
+    pending?: Promise<{ approvals: PendingApproval[] } | null>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<boolean> {
     const id = chatState.sessionId;
-    if (!id || agent !== chatState.agent) return;
-    const r = await fetchSessionApprovals(id);
-    if (!r || id !== chatState.sessionId || agent !== chatState.agent) return;
-    for (const message of messages) delete (message as AssistantWork).work?.pendingApprovals;
-    attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
+    if (!id || agent !== chatState.agent) return false;
+    const r = await (pending ?? fetchSessionApprovals(id));
+    if (!r || id !== chatState.sessionId || agent !== chatState.agent || !isCurrent()) return false;
+    const target = messages ?? agent.state.messages;
+    for (const message of target) delete (message as AssistantWork).work?.pendingApprovals;
+    attachPendingApprovals(target, r.approvals ?? [], transcriptModel());
+    if (target === agent.state.messages) approvalsEpoch++;
+    return true;
   }
 
-  // Attaches approvals fetched alongside a just-mounted transcript. Anything
-  // that happens first wins: another chat or a remount (new agent), a transcript
-  // refresh (which syncs approvals itself), a live run, or an approval already
-  // delivered by the stream.
+  // A chat's first draw doesn't wait for its approvals. They attach when the
+  // request settles, unless a fresher approvals sync, a decision, a run, or a
+  // pending send got there first (each of those re-syncs approvals itself).
   function attachApprovalsWhenLoaded(
     sessionId: string,
     pending: Promise<{ approvals: PendingApproval[] } | null>,
   ): void {
     const agent = chatState.agent;
-    const generation = transcriptRefreshGeneration;
-    void pending.then((result) => {
-      if (
-        !result ||
-        !agent ||
-        agent !== chatState.agent ||
-        chatState.sessionId !== sessionId ||
-        generation !== transcriptRefreshGeneration ||
-        agent.state.isStreaming ||
-        chatState.pendingSend !== null
-      )
-        return;
-      const attached = new Set<string>();
-      for (const message of agent.state.messages)
-        for (const approval of (message as AssistantWork).work?.pendingApprovals ?? [])
-          attached.add(approval.requestId);
-      const fresh = unresolvedApprovals(result.approvals ?? []).filter(
-        (approval) => !attached.has(approval.requestId) && !chatState.resolvingApprovals.has(approval.requestId),
-      );
-      if (!fresh.length) return;
-      const messages = agent.state.messages.slice();
-      attachPendingApprovals(messages, fresh, transcriptModel());
-      agent.state.messages = messages;
-      drawActiveChat(agent);
+    if (!agent || chatState.sessionId !== sessionId) return;
+    const epoch = approvalsEpoch;
+    const isCurrent = (): boolean =>
+      epoch === approvalsEpoch &&
+      !agent.state.isStreaming &&
+      chatState.pendingSend === null &&
+      chatState.resolvingApprovals.size === 0;
+    const nonEmpty = pending.then((r) => (r?.approvals.length ? r : null));
+    void syncPendingApprovals(agent, undefined, nonEmpty, isCurrent).then((attached) => {
+      if (attached) drawActiveChat(agent);
     });
   }
 
@@ -964,6 +961,7 @@ export function createChatSurface(
       if (!isCurrent()) return;
       if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
       agent.state.messages = messages;
+      approvalsEpoch++;
       const rawEarlier = page.earlierEntries ?? 0;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawEarlier);
       chatState.transcriptAnchorSeq = rawEarlier > 0 ? (page.entries?.[0]?.seq ?? null) : null;
