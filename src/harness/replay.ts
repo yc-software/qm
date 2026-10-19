@@ -17,6 +17,7 @@ import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult }
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
+import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 
 export const TURN_STOPPED_KIND = "turn_stopped";
 
@@ -130,7 +131,7 @@ const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
   month: "long",
   day: "numeric",
   year: "numeric",
-  timeZone: "America/Los_Angeles",
+  timeZone: DEFAULT_CRON_TIMEZONE,
 });
 
 function entryDay(e: SessionEntry): string {
