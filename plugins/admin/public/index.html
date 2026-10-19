@@ -9394,7 +9394,8 @@
           plural,
           window: governanceUI.spend.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
-          openCron: (cron) => go({ view: "crons", scope: cron.ownerScopeId, session: null, cron: cron.id, page: 1 }),
+          openCronRuns: (cron, cronScope) =>
+            go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
           setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
           setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {

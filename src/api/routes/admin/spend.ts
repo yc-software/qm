@@ -62,11 +62,13 @@ interface SpendEntity extends SpendTotals {
   displayName: string;
 }
 
-type SpendCronInfo = Pick<Cron, "id" | "title" | "owner" | "ownerScopeId" | "schedule" | "enabled" | "archived">;
+type SpendExportCron = Pick<Cron, "id" | "title" | "owner" | "ownerScopeId" | "schedule" | "enabled" | "archived">;
+type SpendCronInfo = SpendExportCron & Pick<Cron, "action" | "message">;
 
 interface SpendCron extends SpendTotals {
   cronId: string;
   scopeId: ScopeId;
+  scopeName: string;
   info: SpendCronInfo | null;
 }
 
@@ -243,7 +245,10 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
   >();
   const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
-  const cronBuckets = new Map<string, { scopeId: ScopeId; byOrigin: Record<OriginBucket, Tally> }>();
+  const cronBuckets = new Map<
+    string,
+    { scopeId: ScopeId; sources: ScopeId[]; byOrigin: Record<OriginBucket, Tally> }
+  >();
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
     const { key, person, kind } = resolveScope(row.scopeId);
@@ -259,9 +264,10 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     if (row.cronId !== null) {
       let cron = cronBuckets.get(row.cronId);
       if (!cron) {
-        cron = { scopeId: key, byOrigin: emptyOrigins() };
+        cron = { scopeId: key, sources: [], byOrigin: emptyOrigins() };
         cronBuckets.set(row.cronId, cron);
       }
+      if (!cron.sources.includes(row.scopeId)) cron.sources.push(row.scopeId);
       addRow(cron.byOrigin[origin], row);
     }
     let model = modelBuckets.get(row.model);
@@ -287,7 +293,13 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const scopes = entities.filter((e) => e.principalId === null).sort(byCostThenId);
 
   const crons = [...cronBuckets.entries()]
-    .map(([cronId, { scopeId, byOrigin }]) => ({ cronId, scopeId, info: opts.cron(cronId), ...totalsOf(byOrigin) }))
+    .map(([cronId, { scopeId, sources, byOrigin }]) => ({
+      cronId,
+      scopeId,
+      scopeName: displayNameOf(sources, opts.label),
+      info: opts.cron(cronId),
+      ...totalsOf(byOrigin),
+    }))
     .sort(byCostThenCron);
 
   const models = [...modelBuckets.entries()]
@@ -387,7 +399,7 @@ function csvBreakdown(
     return {
       header: ["cron_id", "title", "owner", "scope_id"],
       rows: report.crons.map((row) => ({
-        labels: [row.cronId, row.info?.title ?? null, row.info?.owner ?? null, row.info?.ownerScopeId ?? row.scopeId],
+        labels: [row.cronId, row.info?.title ?? null, row.info?.owner ?? null, row.scopeId],
         totals: row,
       })),
     };
@@ -446,13 +458,17 @@ async function loadSpendRows(
   return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
 }
 
-async function cronInfoLookup(app: BaseCtx["app"]): Promise<(cronId: string) => SpendCronInfo | null> {
+async function cronInfoLookup(
+  app: BaseCtx["app"],
+  rows: readonly { cronId: string | null }[],
+): Promise<(cronId: string) => SpendCronInfo | null> {
+  if (rows.every((row) => row.cronId === null)) return () => null;
   const crons = new Map((await app.listCrons()).map((cron) => [cron.id, cron]));
   return (cronId) => {
     const cron = crons.get(cronId);
     if (!cron) return null;
-    const { id, title, owner, ownerScopeId, schedule, enabled, archived } = cron;
-    return { id, title, owner, ownerScopeId, schedule, enabled, archived };
+    const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
+    return { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived };
   };
 }
 
@@ -482,10 +498,15 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const scope = orgScope(deps);
   const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
   const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
-  const cronInfo = await cronInfoLookup(app);
-  const crons = [...new Set(exported.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))]
+  const cronInfo = await cronInfoLookup(app, exported);
+  const crons: SpendExportCron[] = [...new Set(exported.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))]
     .sort(byCodePoint)
-    .flatMap((cronId) => cronInfo(cronId) ?? []);
+    .flatMap((cronId) => {
+      const info = cronInfo(cronId);
+      if (!info) return [];
+      const { id, title, owner, ownerScopeId, schedule, enabled, archived } = info;
+      return [{ id, title, owner, ownerScopeId, schedule, enabled, archived }];
+    });
   audit(deps, {
     principalId: SPEND_EXPORT_PRINCIPAL,
     action: "spend.export",
@@ -533,7 +554,7 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     to,
     bucket,
     label: (id) => labels.get(id) ?? "",
-    cron: await cronInfoLookup(app),
+    cron: await cronInfoLookup(app, rows),
   });
   if (format === "json")
     return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });

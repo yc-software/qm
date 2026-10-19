@@ -476,13 +476,16 @@ test("summarizeSpend: crons group each cron's spend with its details, and delete
     ["nightly", nightly],
     ["digest", { ...nightly, id: "digest", title: "Digest" }],
   ]);
-  const report = summarize(rows, { cron: (id) => infos.get(id) ?? null });
+  const report = summarize(rows, {
+    cron: (id) => infos.get(id) ?? null,
+    label: (id) => (id === "channel:C1" ? "#general" : ""),
+  });
   assert.deepEqual(
-    report.crons.map((c) => [c.cronId, c.scopeId, c.info?.title ?? null, c.costUsd, c.calls]),
+    report.crons.map((c) => [c.cronId, c.scopeId, c.scopeName, c.info?.title ?? null, c.costUsd, c.calls]),
     [
-      ["nightly", "personal:alice", "Nightly report", 5, 3],
-      ["digest", "channel:C1", "Digest", 4, 1],
-      ["gone", "personal:bob", null, 1, 1],
+      ["nightly", "personal:alice", "", "Nightly report", 5, 3],
+      ["digest", "channel:C1", "#general", "Digest", 4, 1],
+      ["gone", "personal:bob", "", null, 1, 1],
     ],
   );
   assert.deepEqual(report.crons[0]!.info, nightly);
@@ -492,7 +495,7 @@ test("summarizeSpend: crons group each cron's spend with its details, and delete
   );
 });
 
-test("spendCsv: cron export names each cron, falls back to the spend scope for deleted crons, and de-fangs titles", () => {
+test("spendCsv: cron export names each cron by id, title, owner and spend scope, and de-fangs titles", () => {
   const rows = [
     row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "c1", costUsd: 2, calls: 1 }),
     row({ day: MON, scopeId: "channel:C1", origin: "cron", cronId: "gone", costUsd: 1, calls: 1 }),

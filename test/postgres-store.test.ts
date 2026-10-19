@@ -525,6 +525,57 @@ test("pg spend usage guard upgrades the original migration without rewriting ind
   }
 });
 
+test(
+  "pg saved spend refuses rows without cron ids, so an older core's refresh leaves the day to this one",
+  { skip },
+  async () => {
+    const day = 86_400_000;
+    const base = Date.UTC(2024, 2, 1);
+    const at = base + 123;
+    const store = createPostgresSessionStore(URL!, { now: () => at });
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    const cron = `shape-${randomUUID()}`;
+    const scope = scopeId("personal", cron);
+    try {
+      const fire = await store.getOrCreateByThread(`cron:${cron}:fire:1`, "dm", scope);
+      await store.recordLlmRequest(fire.id, {
+        turnSeq: null,
+        step: 0,
+        model: "shape",
+        scopeLabel: scope,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+      });
+      const older = await raw.connect();
+      try {
+        await older.query("BEGIN");
+        await older.query("DELETE FROM session_spend_dirty WHERE day = $1", [base / day]);
+        const legacyRow = { day: base / day, scope_id: scope, origin: "cron", model: "shape", calls: 1, cost_usd: "1" };
+        await assert.rejects(
+          older.query("INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)", [
+            base / day,
+            JSON.stringify([legacyRow]),
+            at,
+          ]),
+          /session_spend_days_rows_cron_id/,
+        );
+        await older.query("ROLLBACK");
+      } finally {
+        older.release();
+      }
+      await store.refreshSpendRollup!();
+      const report = await store.spendReport!({ from: base, to: base + day });
+      assert.equal(report.asOf, at);
+      assert.deepEqual(
+        report.rows.filter((r) => r.scopeId === scope).map((r) => [r.origin, r.cronId, r.costUsd]),
+        [["cron", cron, 1]],
+      );
+    } finally {
+      await raw.end();
+    }
+  },
+);
+
 test("pg spend ancestry only visits sessions with usage inside the requested range", { skip }, async (t) => {
   const at = Date.UTC(2023, 0, 1);
   const store = createPostgresSessionStore(URL!, { now: () => at });

@@ -294,7 +294,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         FROM (SELECT safe_json(replace(${col}, '\\u0000', '')) AS j) _)`;
 
   const spendSql = `WITH RECURSIVE ancestry AS (
-           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ${cronIdExpr("s")} AS cron_id,
+           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, s.origin_id AS cron_id,
                   ARRAY[s.id] AS path
              FROM sessions s
             WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
@@ -302,7 +302,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                            WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
                              AND r.usage_json IS NOT NULL)
            UNION ALL
-           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, ${cronIdExpr("p")}, a.path || p.id
+           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, p.origin_id, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
             WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
          ), origins AS (
@@ -311,7 +311,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          ), rollup AS MATERIALIZED (
            SELECT (r.created_at / 86400000)::bigint AS day, s.scope_id,
                 COALESCE(o.origin, ${originExpr("s")}) AS origin,
-                COALESCE(o.cron_id, ${cronIdExpr("s")}) AS cron_id, r.model,
+                COALESCE(o.cron_id, s.origin_id) AS cron_id, r.model,
                 COUNT(*) AS calls,
                 COALESCE(SUM(cost_usd), 0)::text AS cost_usd,
                 COALESCE(SUM(input), 0) AS input,
@@ -341,7 +341,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                  OFFSET 0) r
            JOIN sessions s ON s.id = r.session_id
            LEFT JOIN origins o ON o.session_id = s.id
-          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), COALESCE(o.cron_id, ${cronIdExpr("s")}), r.model
+          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), COALESCE(o.cron_id, s.origin_id), r.model
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
@@ -885,7 +885,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0034-spend-days-cron",
-        statements: [`INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`],
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE session_spend_days ADD CONSTRAINT session_spend_days_rows_cron_id
+             CHECK (NOT rows @? '$[*] ? (!exists(@.cron_id))') NOT VALID`,
+          `INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`,
+        ],
       },
     ],
     [
@@ -1989,7 +1994,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       });
       const days = await q(
         `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
-         LEFT JOIN session_spend_days c ON c.day = d.day ORDER BY c.updated_at NULLS FIRST, d.day DESC`,
+         LEFT JOIN session_spend_days c ON c.day = d.day
+         ORDER BY d.day >= $1 DESC, c.updated_at NULLS FIRST, d.day DESC`,
+        [Math.floor(now() / 86_400_000) - 1],
       );
       for (const { day } of days) {
         try {

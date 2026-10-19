@@ -313,6 +313,41 @@ test("spend: an empty deployment answers 200 with zeroed totals", async () => {
   }
 });
 
+test("spend: cron JSON and CSV name each billed cron, giving admins the task an untitled cron is known by", async () => {
+  const clock = { at: Date.UTC(2026, 0, 5, 12) };
+  const store = createMemorySessionStore({ now: () => clock.at });
+  const s = start(store);
+  try {
+    const cron = await s.built.app.createCron({
+      ownerScopeId: "personal:alice",
+      owner: "alice",
+      createdBy: "alice",
+      schedule: { everyMs: 3_600_000 },
+      action: "check the build",
+    });
+    await bill(store, `cron:${cron.id}:fire:1`, "dm", scopeId("personal", "alice"), { costUsd: 3 });
+    await bill(store, "dm:alice:priced", "dm", scopeId("personal", "alice"), { costUsd: 2 });
+    const query = "from=2026-01-05&to=2026-01-06";
+    const json = await getJson(s.base, `/v1/admin/spend?${query}`);
+    assert.deepEqual(
+      json.crons.map((c: any) => [c.cronId, c.scopeId, c.costUsd, c.info.action]),
+      [[cron.id, "personal:alice", 3, "check the build"]],
+    );
+    const r = await get(s.base, `/v1/admin/spend?${query}&breakdown=cron&format=csv`);
+    assert.equal(r.status, 200);
+    assert.match(
+      r.headers.get("content-disposition")!,
+      /^attachment; filename="qm-spend-crons-2026-01-05-2026-01-06\.csv"/,
+    );
+    const [header, line, ...rest] = (await r.text()).trimEnd().split("\r\n");
+    assert.match(header!, /^cron_id,title,owner,scope_id,live_usd,cron_usd,background_usd,total_usd,/);
+    assert.deepEqual(line!.split(",").slice(0, 8), [cron.id, "", "alice", "personal:alice", "0", "3", "0", "3"]);
+    assert.deepEqual(rest, []);
+  } finally {
+    await s.close();
+  }
+});
+
 test("spend: model CSV selects the model breakdown with its own filename", async () => {
   const clock = { at: Date.UTC(2026, 0, 5, 12) };
   const store = createMemorySessionStore({ now: () => clock.at });

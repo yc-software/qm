@@ -21,6 +21,7 @@ const COLUMNS: Array<[string, string]> = [
   ["tokens", "Tokens"],
   ["cacheHitRatio", "Cache hit"],
 ];
+const SCOPE_COLUMNS: Array<[string, string]> = [["person", "Scope"], ...COLUMNS.slice(1)];
 const MODEL_COLUMNS: Array<[string, string]> = [["person", "Model"], ...COLUMNS.slice(1)];
 const CRON_COLUMNS: Array<[string, string]> = [
   ["person", "Cron"],
@@ -194,7 +195,7 @@ export class SpendView {
   cronCells(row: any) {
     const s = this.services;
     const where = [
-      s.shortName(row.info?.ownerScopeId ?? row.scopeId),
+      row.scopeName || s.shortName(row.scopeId),
       row.info ? s.shortSchedule(row.info.schedule) : "deleted",
     ];
     return [
@@ -225,8 +226,13 @@ export class SpendView {
     const scopes = sorted((this.data.scopes || []).filter(matches));
     const crons = sorted(
       (this.data.crons || [])
-        .map((row: any) => ({ ...row, displayName: s.cronName({ id: row.cronId, title: row.info?.title }) }))
-        .filter(matches),
+        .map((row: any) => ({ ...row, displayName: s.cronName({ ...row.info, id: row.cronId }, true) }))
+        .filter((row: any) =>
+          [row.cronId, row.scopeId, row.scopeName, row.info?.ownerScopeId, row.displayName]
+            .join(" ")
+            .toLowerCase()
+            .includes(needle),
+        ),
     );
     const models = sorted((this.data.models || []).filter((row: any) => rowName(row).toLowerCase().includes(needle)));
     const series = this.data.series || [];
@@ -280,7 +286,7 @@ export class SpendView {
         "Shared scopes",
         "Channels, groups and teams are billed to the scope, not to a speaker. These rows plus the people above make up the org total.",
         table(
-          this.header(),
+          this.header(SCOPE_COLUMNS),
           scopes.map((row: any) => this.rowCells(row)),
           this.data.scopes?.length ? "No scopes match." : "No shared-scope spend in this window.",
         ),
@@ -293,8 +299,8 @@ export class SpendView {
             crons.map((row: any) => this.cronCells(row)),
             this.data.crons?.length ? "No crons match." : "No cron spend in this window.",
             (i) => {
-              const info = crons[i]?.info;
-              if (info) s.openCron(info);
+              const row = crons[i];
+              if (row) s.openCronRuns(row.cronId, row.info?.ownerScopeId ?? row.scopeId);
             },
           )}
         </div>`,
