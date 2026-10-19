@@ -5,13 +5,14 @@ use crate::protocol::*;
 use crate::text::{self, Key as TextKey, Stroke};
 use crate::tree::{self, Item, Key, Locator, Props, ROOT};
 use core_foundation::array::CFArray;
-use core_foundation::base::{CFType, CFTypeRef, TCFType};
+use core_foundation::base::{CFGetTypeID, CFHash, CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource};
 use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::url::CFURL;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton, EventField, ScrollEventUnit};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::{CGPoint, CGSize};
@@ -76,14 +77,6 @@ extern "C" {
         len: *mut usize,
         out: *mut u16,
     ) -> i32;
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    fn CFHash(cf: CFTypeRef) -> usize;
-    fn CFGetTypeID(cf: CFTypeRef) -> usize;
-    fn CFURLGetTypeID() -> usize;
-    fn CFURLGetString(url: CFTypeRef) -> CFStringRef;
 }
 
 const MAX_TREE_CHARS: usize = 60_000;
@@ -327,9 +320,8 @@ fn text_of(v: &CFType) -> Option<String> {
     if let Some(s) = v.downcast::<CFString>() {
         return Some(s.to_string());
     }
-    if unsafe { CFGetTypeID(v.as_CFTypeRef()) == CFURLGetTypeID() } {
-        let s = unsafe { CFURLGetString(v.as_CFTypeRef()) };
-        return (!s.is_null()).then(|| unsafe { CFString::wrap_under_get_rule(s) }.to_string());
+    if let Some(url) = v.downcast::<CFURL>() {
+        return Some(url.get_string().to_string());
     }
     let n = v.downcast::<CFNumber>()?;
     n.to_i64().map(|i| i.to_string()).or_else(|| n.to_f64().map(|f| f.to_string()))
