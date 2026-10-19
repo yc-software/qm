@@ -430,6 +430,8 @@ fn in_window(e: &CGEvent, at: &Press, p: CGPoint) -> Result<(), Failure> {
 }
 
 struct Press {
+    host: El,
+    owner: i32,
     window: El,
     win: u32,
     frame: Rect,
@@ -437,7 +439,10 @@ struct Press {
 }
 
 fn validate_input_window(at: &Press) -> Result<(), Failure> {
-    if window_id(&at.window) != at.win || frame(&at.window) != Some(at.frame) {
+    if window_id(&at.window) != at.win
+        || !input::within(&at.window, &at.host)
+        || input::window_geometry(at.win) != Some((at.owner, at.frame))
+    {
         return Err(fail(ErrorCode::ActionFailed, "The input window moved, resized or closed; observe again before sending input"));
     }
     Ok(())
@@ -487,19 +492,17 @@ fn prepare(pid: i32, ax: &El, win: u32, p: CGPoint) -> Result<Press, Failure> {
     if actual == 0 || pid_of(&window) != Some(pid) || (pinned && actual != win) {
         return Err(fail(ErrorCode::ActionFailed, "The input window changed; observe again before sending input"));
     }
-    let win = actual;
-    let frame = frame(&window).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window has no frame"))?;
-    mouse(
-        pid,
-        &Press { window: window.clone(), win, frame, number: 0 },
-        CGEventType::MouseMoved,
-        p,
-        CGMouseButton::Left,
-        0,
-        CGEventFlags::empty(),
-    )?;
+    prepare_window(pid, ax, window, actual, p)
+}
+
+fn prepare_window(pid: i32, host: &El, window: El, win: u32, p: CGPoint) -> Result<Press, Failure> {
+    let (owner, frame) = input::window_geometry(win)
+        .filter(|(owner, _)| *owner == pid)
+        .ok_or_else(|| fail(ErrorCode::NoWindow, "Input window ownership is unavailable; observe again"))?;
+    let press = Press { host: host.clone(), owner, window, win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) };
+    mouse(pid, &press, CGEventType::MouseMoved, p, CGMouseButton::Left, 0, CGEventFlags::empty())?;
     cancellation::wait(Duration::from_millis(HOVER_MS));
-    Ok(Press { window: window.clone(), win, frame, number: EVENT_NUMBER.fetch_add(1, Ordering::Relaxed) })
+    Ok(press)
 }
 
 fn click_at(pid: i32, press: Press, p: CGPoint, button: Button, count: u8, mods: &[Modifier], hold: u32) -> Result<(), Failure> {
@@ -1481,9 +1484,8 @@ impl Desk {
         if input::menu_open(ax) {
             return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
         }
-        let window = self.cache.get(&pid).and_then(|s| frame(&s.window_element));
-        match input::service_at(pid, ax, window, p) {
-            Some((service, service_ax, service_win)) => Ok((service, prepare(service, &service_ax, service_win, p)?)),
+        match input::service_at(pid, ax, p) {
+            Some((service, anchor, service_win, _)) => Ok((service, prepare_window(service, ax, anchor, service_win, p)?)),
             None => Ok((pid, prepare(pid, ax, win, p)?)),
         }
     }

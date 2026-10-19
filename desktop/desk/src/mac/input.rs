@@ -12,7 +12,7 @@ fn element_at(root: &El, p: CGPoint) -> Option<El> {
     (status == 0 && !v.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(v) })
 }
 
-fn within(e: &El, ancestor: &El) -> bool {
+pub(super) fn within(e: &El, ancestor: &El) -> bool {
     let mut cur = Some(e.clone());
     for _ in 0..MAX_DEPTH {
         match cur {

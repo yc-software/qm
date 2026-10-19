@@ -155,3 +155,39 @@ pub fn paste(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(types: &[(&str, &[u8])]) -> Retained<NSPasteboardItem> {
+        let item = NSPasteboardItem::new();
+        for (kind, bytes) in types {
+            assert!(item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(kind)));
+        }
+        item
+    }
+
+    #[test]
+    fn restores_every_item_and_type_without_overwriting_a_new_owner() {
+        let board = NSPasteboard::pasteboardWithUniqueName();
+        let original = vec![
+            item(&[("public.utf8-plain-text", b"saved"), ("test.qm.binary", &[0, 255, 4])]),
+            item(&[("public.html", b"<b>second</b>")]),
+        ];
+        assert!(write(&board, original, board.changeCount()).unwrap().0);
+        let (saved, previous) = snapshot(&board).unwrap();
+        assert!(write(&board, vec![item(&[("public.utf8-plain-text", b"temporary")])], previous).unwrap().0);
+        assert!(restore(&board, &saved, board.changeCount()));
+        let items = board.pasteboardItems().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items.objectAtIndex(0).dataForType(&NSString::from_str("test.qm.binary")).unwrap().to_vec(), vec![0, 255, 4]);
+        assert_eq!(items.objectAtIndex(0).dataForType(&NSString::from_str("public.utf8-plain-text")).unwrap().to_vec(), b"saved");
+        assert_eq!(items.objectAtIndex(1).dataForType(&NSString::from_str("public.html")).unwrap().to_vec(), b"<b>second</b>");
+        let before_copy = board.changeCount();
+        assert!(write(&board, vec![item(&[("public.utf8-plain-text", b"new owner")])], before_copy).unwrap().0);
+        assert!(!restore(&board, &saved, before_copy));
+        assert_eq!(board.dataForType(&NSString::from_str("public.utf8-plain-text")).unwrap().to_vec(), b"new owner");
+        board.clearContents();
+    }
+}
