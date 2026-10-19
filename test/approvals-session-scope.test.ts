@@ -30,6 +30,7 @@ test("session approvals are read by session id, never by scanning every approval
   await backing.put("a-input", approval(mine.id, "alice", "ask", false));
   await backing.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
   await backing.put("orphan", approval("no-such-session", "alice", "noop"));
+  await backing.put("unicode", approval("sesión-ü", "alice", "echo"));
   const expectedFromFullScan = (await backing.entries()).filter(([, r]) => r.sessionId === mine.id).map(([id]) => id);
 
   let fullReads = 0;
