@@ -54,6 +54,13 @@ second, so a few thousand sessions take a couple of minutes; above that, run
 servers so readiness checks do not time out. Instances that start meanwhile wait for the copy on
 the migration lock.
 
+Sessions created before QM recorded each session's origin get `origin` and `origin_id`
+from their thread reference during startup migrations. The backfill commits 5,000
+sessions at a time, resumes after an interrupted startup, and fills roughly 10,000
+sessions per second; with more than a few hundred thousand such sessions, run
+`node src/migrate-main.ts` with the release's configuration before starting the servers
+so readiness checks do not time out.
+
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those
 records remain stored in `cron_fires`. Validate both old and new readers against the

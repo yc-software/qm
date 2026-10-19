@@ -61,7 +61,7 @@ import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/sec
 const threadRefOriginExpr = (threadRef: string): string =>
   `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
 
-export const SESSION_ORIGIN_BACKFILL_SQL = `DO $session_origin_backfill$
+const SESSION_ORIGIN_BACKFILL_SQL = `DO $session_origin_backfill$
 DECLARE
   updated integer;
 BEGIN
@@ -70,6 +70,7 @@ BEGIN
      WHERE id IN (SELECT id FROM sessions WHERE origin IS NULL LIMIT 5000);
     GET DIAGNOSTICS updated = ROW_COUNT;
     EXIT WHEN updated = 0;
+    DELETE FROM session_spend_dirty WHERE writer = pg_current_xact_id();
     COMMIT;
     PERFORM pg_sleep(0.25);
   END LOOP;
@@ -1986,13 +1987,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           [changed.rows.map((r) => r.session_id)],
         );
       });
-      const days = await q(
-        `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
-         LEFT JOIN session_spend_days c ON c.day = d.day
-         ORDER BY d.day >= $1 DESC, c.updated_at NULLS FIRST, d.day DESC`,
-        [Math.floor(now() / 86_400_000) - 1],
-      );
-      for (const { day } of days) {
+      const days = await q("SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL ORDER BY day DESC");
+      for (const [index, { day }] of days.entries()) {
         try {
           await withPgTransaction(await pool(), async (client) => {
             const pending = await client.query("DELETE FROM session_spend_dirty WHERE day = $1 RETURNING day", [day]);
@@ -2009,7 +2005,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           reportFailure("spend: refresh daily totals", error);
           continue;
         }
-        if (Date.now() - started >= 5_000) break;
+        if (index > 0 && Date.now() - started >= 5_000) break;
       }
     },
 

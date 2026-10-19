@@ -456,7 +456,9 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
   );
 });
 
-test("summarizeSpend: crons group each cron's spend with its details, and deleted crons keep theirs", () => {
+test("summarizeSpend: crons group each cron's spend under the scope it ran in, and deleted crons keep theirs", (t) => {
+  installPrincipalLinks({ canonical: (id) => (id === "slack-bob" ? "bob" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
   const nightly = {
     id: "nightly",
     title: "Nightly report",
@@ -469,7 +471,7 @@ test("summarizeSpend: crons group each cron's spend with its details, and delete
     row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m1", costUsd: 2 }),
     row({ day: TUE, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m2", costUsd: 3, calls: 2 }),
     row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "digest", costUsd: 4 }),
-    row({ day: WED, scopeId: "personal:bob", origin: "cron", cronId: "gone", costUsd: 1 }),
+    row({ day: WED, scopeId: "personal:slack-bob", origin: "cron", cronId: "gone", costUsd: 1 }),
     row({ day: WED, scopeId: "personal:bob", origin: "conversation", costUsd: 10 }),
   ];
   const infos = new Map([
@@ -485,7 +487,14 @@ test("summarizeSpend: crons group each cron's spend with its details, and delete
     [
       ["nightly", "personal:alice", "", "Nightly report", 5, 3],
       ["digest", "channel:C1", "#general", "Digest", 4, 1],
-      ["gone", "personal:bob", "", null, 1, 1],
+      ["gone", "personal:slack-bob", "", null, 1, 1],
+    ],
+  );
+  assert.deepEqual(
+    report.people.map((p) => [p.scopeId, p.costUsd]),
+    [
+      ["personal:bob", 11],
+      ["personal:alice", 5],
     ],
   );
   assert.deepEqual(report.crons[0]!.info, nightly);

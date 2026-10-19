@@ -265,7 +265,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     if (row.cronId !== null) {
       let cron = cronBuckets.get(row.cronId);
       if (!cron) {
-        cron = { scopeId: key, sources: [], byOrigin: emptyOrigins() };
+        cron = { scopeId: row.scopeId, sources: [], byOrigin: emptyOrigins() };
         cronBuckets.set(row.cronId, cron);
       }
       if (!cron.sources.includes(row.scopeId)) cron.sources.push(row.scopeId);
