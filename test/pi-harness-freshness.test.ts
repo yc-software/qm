@@ -24,7 +24,7 @@ function recordingTurn(
     tools: {} as HarnessTurnInput["tools"],
     scopeLabel: "scope" as HarnessTurnInput["scopeLabel"],
     orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
-    emit: async (entry) => ({ ...entry, seq: 1 }) as Awaited<ReturnType<HarnessTurnInput["emit"]>>,
+    emit: async (entry) => ({ ...entry, seq: 1, createdAt: 0 }) as Awaited<ReturnType<HarnessTurnInput["emit"]>>,
     recordModelCall: (rec) => recorded.push(rec),
   };
 }
@@ -49,7 +49,9 @@ test("every turn composes the freshly resolved system prompt", async () => {
   await runIgnoringPromptError(harness, recordingTurn(first, recorded, "fresh-prompt"));
   await runIgnoringPromptError(harness, recordingTurn(second, recorded, "fresh-prompt"));
 
-  assert.equal(recorded[1]!.inputTokens - recorded[0]!.inputTokens, countTokens(second) - countTokens(first));
+  const prompt = "── Wednesday, December 31, 1969 ──\nhi";
+  assert.equal(recorded[0]!.inputTokens, countTokens(first) + countTokens(prompt));
+  assert.equal(recorded[1]!.inputTokens, countTokens(second) + countTokens(prompt));
 });
 
 test("the cwd pi appends to the system prompt is one constant path per harness", () => {

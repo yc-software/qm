@@ -1844,7 +1844,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const modelPrompt =
             (userEntry
               ? dayMarkerPrefix(
-                  turn.history.findLast((e) => e.type === "user"),
+                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
                   userEntry,
                 )
               : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
