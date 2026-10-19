@@ -1399,14 +1399,23 @@ impl Desk {
             .find(|(id, _)| *id == index)
             .map(|(_, e)| e.clone())
             .ok_or_else(|| fail(ErrorCode::BadIndex, format!("no element {index}; observe again")))?;
-        if !dead(&e) {
-            return Ok(e);
-        }
-        let gone = || fail(ErrorCode::BadIndex, format!("element {index} is gone and no single replacement was found; observe again"));
-        let target = s.ids.locator(index).filter(|l| l.rebindable).ok_or_else(gone)?;
+        let gone = || fail(ErrorCode::BadIndex, format!("element {index} changed or is gone; observe again before acting"));
+        let target = s.ids.locator(index).ok_or_else(gone)?;
         let mut roots: Vec<(El, Locator)> =
             attr(&s.window_element, "AXChildren").map(list).unwrap_or_default().into_iter().map(|c| (c, Locator::ROOT)).collect();
         roots.extend(extras(&app_element(pid), &s.window_element).into_iter().map(|o| (o, Locator::ROOT)));
+        if !dead(&e) {
+            let current = tree::path_locator(&e, &roots, MAX_DEPTH, |element| {
+                if cancellation::cancelled() {
+                    return None;
+                }
+                Some((fetch(element).props, attr(element, "AXParent")))
+            });
+            return if current == Some(target) { Ok(e) } else { Err(gone()) };
+        }
+        if !target.rebindable {
+            return Err(gone());
+        }
         relocate(&roots, target).ok_or_else(gone)
     }
 
