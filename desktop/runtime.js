@@ -232,6 +232,9 @@
   }
 
   window.computer = Object.freeze({
+    docs() {
+      say(window.__docs);
+    },
     async listApps({ emit = true } = {}) {
       const { apps } = await desk({ type: "apps" });
       if (emit) say(apps.map((a) => `${a.name} (${a.bundle_id ?? "-"}) ${a.active ? " active" : ""}`).join("\n"));
@@ -246,8 +249,9 @@
   });
 
   window.__docs = `computer API (JavaScript, top-level await; bindings persist within this turn; reset with desktop {code: "", reset: true}):
+computer.docs() emits this API documentation again without resetting app objects or runtime state.
 computer.listApps() -> [{name, bundle_id, pid, active}]
-computer.getApp(nameOrBundleId) -> App. Opens an installed app in the background if needed and emits its UI tree.
+computer.getApp(nameOrBundleIdOrFullPath) -> App. Opens an installed app in the background if needed and emits its UI tree.
 All apps are available subject to macOS permissions.
 
 Observation (each emits into the result; pass {emit: false} to only return the data):

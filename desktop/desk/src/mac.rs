@@ -1662,7 +1662,7 @@ fn resolve(query: &str) -> Result<App, Failure> {
         if Instant::now() >= deadline {
             return Err(pending);
         }
-        cancellation::wait(Duration::from_millis(100));
+        CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(100), false);
     }
 }
 

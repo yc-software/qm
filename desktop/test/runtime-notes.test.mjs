@@ -75,3 +75,17 @@ test("setValue forwards explicit submission and rejects invalid options before s
   assert.throws(() => app.setValue(7, "bad", { submit: "true" }), /must be true or false/);
   assert.equal(calls.length, before);
 });
+
+
+test("documentation can be recovered without resetting existing app objects", async () => {
+  const calls = [];
+  const window = runtime((command) => calls.push(JSON.parse(JSON.stringify(command))));
+  const app = await window.computer.getApp("test.app", { emit: false });
+  const before = calls.length;
+  window.computer.docs();
+  assert.equal(window.__drain().text, window.__docs);
+  assert.equal(calls.length, before);
+  await app.setValue(7, "after documentation", { submit: false });
+  assert.equal(calls.at(-1).app, "test.app");
+  assert.equal(calls.at(-1).actions[0].value, "after documentation");
+});
