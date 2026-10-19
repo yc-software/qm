@@ -1059,20 +1059,26 @@ fn busy(e: &El, depth: usize, seen: &mut usize) -> bool {
 }
 
 fn select(e: &El, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<(), Failure> {
-    let value = attr(e, "AXValue").and_then(|v| text_of(&v)).unwrap_or_default();
-    let at = value
-        .match_indices(text)
-        .map(|(i, _)| i)
-        .find(|&i| value[..i].ends_with(prefix) && value[i + text.len()..].starts_with(suffix))
-        .ok_or_else(|| fail(ErrorCode::ActionFailed, format!("text {text:?} not found in the element's value")))?;
-    let start = value[..at].encode_utf16().count() as isize;
-    let len = text.encode_utf16().count() as isize;
-    let range: [isize; 2] = match selection {
-        Selection::Text => [start, len],
-        Selection::CursorBefore => [start, 0],
-        Selection::CursorAfter => [start + len, 0],
-    };
-    set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
+    if !settable(e, "AXSelectedTextRange") {
+        return Err(fail(ErrorCode::ActionFailed, "The element does not support setting its text selection"));
+    }
+    let value = attr(e, "AXValue")
+        .and_then(|v| text_of(&v))
+        .ok_or_else(|| fail(ErrorCode::ActionFailed, "The element's text value could not be read"))?;
+    let range = text::selection_range(&value, text, prefix, suffix, selection).map_err(|message| fail(ErrorCode::ActionFailed, message))?;
+    if bool_attr(e, "AXFocused") != Some(true) {
+        let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
+        if status != 0 || bool_attr(e, "AXFocused") != Some(true) {
+            return Err(fail(
+                ErrorCode::ActionFailed,
+                format!("Focusing the element failed (AXError {status}); its selection was not changed"),
+            ));
+        }
+    }
+    if attr(e, "AXValue").and_then(|v| text_of(&v)).as_ref() != Some(&value) {
+        return Err(fail(ErrorCode::ActionFailed, "The element's text changed while focusing it; observe it again before selecting"));
+    }
+    active()?;
     let v = unsafe { CFType::wrap_under_create_rule(AXValueCreate(4, range.as_ptr() as *const c_void)) };
     match set_attr(e, "AXSelectedTextRange", &v) {
         0 => Ok(()),

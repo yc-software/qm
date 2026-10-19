@@ -271,8 +271,7 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
             ),
         ));
     }
-    let search = str_attr(e, "AXSubrole").as_deref() == Some("AXSearchField");
-    if submit.unwrap_or(search) {
+    if submit == Some(true) {
         if actions(e).iter().any(|a| a == "AXConfirm") {
             perform(e, "AXConfirm")?;
         } else {

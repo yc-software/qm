@@ -278,8 +278,8 @@ app.drag([x, y], [x, y]) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels})
 app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) prefix/suffix pick among repeats.
 app.setValue(id, value, {submit}) writes the element's value directly, as a number or true/false when the element holds one.
-  It fails if the element is not settable or a text field keeps its old value. submit (default: search fields only) then
-  confirms the field or presses Return.
+  It fails if the element is not settable or a text field keeps its old value. Only submit: true
+  confirms the field or presses Return; omission and false never submit.
 app.performSecondaryAction(id, action) runs an action the element lists, e.g. "ShowMenu", "Increment".
 app.pressKey("cmd+shift+t", {durationMs}) key names: letters, digits, punctuation, return, tab, space, delete, escape, arrows, home, end, pageup, pagedown, f1-f20, KP_Enter/KP_0/KP_Add and other keypad names. Modifier names support left/right forms such as Control_R.
 app.typeText(text) types with the keyboard. "\\n" presses Return and "\\t" presses Tab, so they can submit

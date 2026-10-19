@@ -1,4 +1,4 @@
-use crate::protocol::PasteFormat;
+use crate::protocol::{PasteFormat, Selection};
 use std::collections::HashMap;
 
 const KEYPAD: &[u16] = &[65, 67, 69, 71, 75, 76, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92];
@@ -110,6 +110,27 @@ pub fn inserted(before: &str, selection: Option<(usize, usize)>, after: &str, pa
     }
 }
 
+pub fn selection_range(value: &str, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<[isize; 2], &'static str> {
+    if text.is_empty() {
+        return Err("Selection text must not be empty");
+    }
+    let mut matches = value
+        .char_indices()
+        .map(|(i, _)| i)
+        .filter(|&i| value[i..].starts_with(text) && value[..i].ends_with(prefix) && value[i + text.len()..].starts_with(suffix));
+    let at = matches.next().ok_or("The requested text and context were not found in the element's value")?;
+    if matches.next().is_some() {
+        return Err("The requested text matches more than once; provide prefix or suffix to identify one occurrence");
+    }
+    let start = value[..at].encode_utf16().count() as isize;
+    let len = text.encode_utf16().count() as isize;
+    Ok(match selection {
+        Selection::Text => [start, len],
+        Selection::CursorBefore => [start, 0],
+        Selection::CursorAfter => [start + len, 0],
+    })
+}
+
 fn strip_html(html: &str) -> String {
     html2text::config::plain_no_decorate()
         .string_from_read(html.as_bytes(), usize::MAX / 2)
@@ -211,6 +232,25 @@ mod tests {
         assert!(inserted("é", Some((1, 0)), "é😀", "😀"), "UTF-16 offsets");
         assert_eq!(expected("**hi** there", PasteFormat::Markdown), vec!["**hi** there".to_string(), "hi there".to_string()]);
         assert_eq!(expected("plain", PasteFormat::Text), vec!["plain".to_string()]);
+    }
+
+    #[test]
+    fn selection_requires_unique_context_including_overlapping_matches() {
+        assert!(selection_range("aaa", "aa", "", "", Selection::Text).is_err());
+        assert_eq!(selection_range("aaa", "aa", "a", "", Selection::Text), Ok([1, 2]));
+        assert_eq!(selection_range("one cat; two cat!", "cat", "two ", "!", Selection::Text), Ok([13, 3]));
+        assert!(selection_range("one cat", "cat", "two ", "", Selection::Text).is_err());
+    }
+
+    #[test]
+    fn selection_and_carets_use_utf16_offsets() {
+        let value = "é😀a界!";
+        assert_eq!(selection_range(value, "a界", "😀", "!", Selection::Text), Ok([3, 2]));
+        assert_eq!(selection_range(value, "a界", "", "", Selection::CursorBefore), Ok([3, 0]));
+        assert_eq!(selection_range(value, "a界", "", "", Selection::CursorAfter), Ok([5, 0]));
+        assert_eq!(selection_range(value, "😀", "", "", Selection::Text), Ok([1, 2]));
+        assert!(selection_range(value, "", "", "", Selection::CursorAfter).is_err());
+        assert!(selection_range(value, "", "!", "", Selection::CursorAfter).is_err());
     }
 
     #[test]
