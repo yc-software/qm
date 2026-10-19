@@ -81,6 +81,7 @@ pub struct Props {
     pub description: Option<String>,
     pub label: Option<String>,
     pub value: Option<String>,
+    pub rich_text: Option<String>,
     pub visible_text: Option<crate::text::VisibleText>,
     pub placeholder: Option<String>,
     pub url: Option<String>,
@@ -138,7 +139,12 @@ impl Props {
     }
 
     pub fn plain_text(&self) -> bool {
-        self.role == "AXStaticText" && self.actions.is_empty() && !self.focused && !self.selected && self.text().is_some()
+        self.role == "AXStaticText"
+            && self.rich_text.is_none()
+            && self.actions.is_empty()
+            && !self.focused
+            && !self.selected
+            && self.text().is_some()
     }
 
     pub fn text(&self) -> Option<&str> {
@@ -187,7 +193,9 @@ impl Props {
         }
         if let Some(v) = value {
             let n = if TEXT_ROLES.contains(&self.role.as_str()) { MAX_TEXT } else { 120 };
-            s += &format!(" = \"{}\"", clip(v, n));
+            if self.rich_text.is_none() {
+                s += &format!(" = \"{}\"", clip(v, n));
+            }
             if let Some(v) = &self.visible_text {
                 s += &format!(" [visible UTF-16 range {}..{} of {}", v.start, v.end, v.total);
                 if v.shown_end < v.end {
@@ -227,6 +235,9 @@ impl Props {
         let secondary: Vec<&str> = self.actions.iter().filter(|a| a.as_str() != "AXPress").map(|a| short(a)).collect();
         if !secondary.is_empty() {
             s += &format!(" <{}>", secondary.join(","));
+        }
+        if let Some(markdown) = &self.rich_text {
+            s += &format!(" markdown:\n{markdown}");
         }
         (s, keep)
     }
@@ -272,9 +283,10 @@ fn indent(depth: usize) -> String {
 
 impl Item {
     fn line(&self, depth: usize) -> String {
+        let text = self.text.replace('\n', &format!("\n{}", indent(depth + 1)));
         match self.key {
-            Key::Element(id) => format!("{}[{id}] {}", indent(depth), self.text),
-            _ => format!("{}{}", indent(depth), self.text),
+            Key::Element(id) => format!("{}[{id}] {}", indent(depth), text),
+            _ => format!("{}{}", indent(depth), text),
         }
     }
 
@@ -548,6 +560,20 @@ pub fn sparse(region: Rect, window: Rect, lines_inside: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attributed_observation_keeps_one_control_and_native_text() {
+        let p = super::Props {
+            role: "AXStaticText".into(),
+            value: Some("first\nsecond".into()),
+            rich_text: Some("**first**\nsecond".into()),
+            ..Default::default()
+        };
+        assert!(!p.plain_text());
+        assert_eq!(p.text(), Some("first\nsecond"));
+        assert_eq!(p.describe(), ("StaticText markdown:\n**first**\nsecond".into(), true));
+        let item = super::Item::leaf(super::Key::Element(3), p.describe().0);
+        assert_eq!(item.line(1), "  [3] StaticText markdown:\n    **first**\n    second");
+    }
 
     #[test]
     fn visible_text_observation_preserves_native_offsets_and_value() {

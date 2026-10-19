@@ -141,6 +141,73 @@ pub fn visible_text(value: &str, range: [isize; 2], limit: usize) -> Option<Visi
     Some(VisibleText { text, start, end, shown_end, total: offset })
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub link: Option<String>,
+    pub list_prefix: Option<String>,
+    pub list_level: usize,
+}
+
+pub fn attributed_markdown(runs: &[(String, TextStyle)], starts_line: bool) -> Option<String> {
+    if runs.iter().all(|(_, style)| *style == TextStyle::default()) {
+        return None;
+    }
+    let mut merged: Vec<(String, &TextStyle)> = vec![];
+    for (text, style) in runs {
+        if let Some((previous, _)) = merged.last_mut().filter(|(_, previous_style)| *previous_style == style) {
+            previous.push_str(text);
+        } else {
+            merged.push((text.clone(), style));
+        }
+    }
+    let escape = |s: &str| s.chars().flat_map(|c| if c.is_ascii_punctuation() { vec!['\\', c] } else { vec![c] }).collect::<String>();
+    let mut out = String::new();
+    let mut line_start = starts_line;
+    for (text, style) in merged {
+        for line in text.split_inclusive('\n') {
+            if line_start && !line.trim().is_empty() {
+                if let Some(prefix) = &style.list_prefix {
+                    let marker = prefix.trim();
+                    let ordered = marker
+                        .strip_suffix('.')
+                        .or_else(|| marker.strip_suffix(')'))
+                        .filter(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
+                    let marker = ordered.map_or_else(|| "-".to_string(), |digits| format!("{digits}."));
+                    out += &format!("{}{marker} ", "  ".repeat(style.list_level.min(20)));
+                }
+            }
+            let body = line.trim();
+            let leading = line.len() - line.trim_start().len();
+            out.push_str(&line[..leading]);
+            if !body.is_empty() {
+                let mut rendered = escape(body);
+                for (enabled, open, close) in
+                    [(style.bold, "**", "**"), (style.italic, "_", "_"), (style.strike, "~~", "~~"), (style.underline, "<u>", "</u>")]
+                {
+                    if enabled {
+                        rendered = format!("{open}{rendered}{close}");
+                    }
+                }
+                if let Some(url) = &style.link {
+                    let url = url
+                        .bytes()
+                        .map(|b| if b <= 32 || b >= 127 || b"<>\\".contains(&b) { format!("%{b:02X}") } else { (b as char).to_string() })
+                        .collect::<String>();
+                    rendered = format!("[{rendered}](<{url}>)");
+                }
+                out += &rendered;
+                out.push_str(&line[line.trim_end().len()..]);
+            }
+            line_start = line.ends_with('\n');
+        }
+    }
+    Some(out)
+}
+
 pub fn selection_range(value: &str, text: &str, prefix: &str, suffix: &str, selection: Selection) -> Result<[isize; 2], &'static str> {
     if text.is_empty() {
         return Err("Selection text must not be empty");
@@ -171,6 +238,29 @@ fn strip_html(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attributed_observation_preserves_paragraphs_lists_and_escaped_links() {
+        let runs = vec![
+            ("first\n\n".into(), TextStyle { bold: true, ..Default::default() }),
+            ("item".into(), TextStyle { italic: true, list_prefix: Some("•".into()), list_level: 1, ..Default::default() }),
+            (" more\n".into(), TextStyle { list_prefix: Some("•".into()), list_level: 1, ..Default::default() }),
+            ("[link]".into(), TextStyle { link: Some("https://example.test/é>a b".into()), ..Default::default() }),
+        ];
+        assert_eq!(
+            attributed_markdown(&runs, true).unwrap(),
+            "**first**\n\n  - _item_ more\n[\\[link\\]](<https://example.test/%C3%A9%3Ea%20b>)"
+        );
+        assert_eq!(attributed_markdown(&runs[1..2], false).unwrap(), "_item_");
+        assert!(attributed_markdown(&[("plain".into(), TextStyle::default())], true).is_none());
+    }
+
+    #[test]
+    fn attributed_observation_coalesces_equivalent_runs() {
+        let style = TextStyle { bold: true, strike: true, underline: true, ..Default::default() };
+        let runs = vec![("bo".into(), style.clone()), ("ld".into(), style)];
+        assert_eq!(attributed_markdown(&runs, true).unwrap(), "<u>~~**bold**~~</u>");
+    }
+
     use super::*;
 
     fn us(code: u16, shift: bool, option: bool) -> Option<char> {

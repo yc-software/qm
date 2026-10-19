@@ -5,7 +5,8 @@ use crate::protocol::*;
 use crate::text::{self, Key as TextKey, Stroke};
 use crate::tree::{self, Item, Key, Locator, Props, ROOT};
 use core_foundation::array::CFArray;
-use core_foundation::base::{CFGetTypeID, CFHash, CFType, CFTypeRef, TCFType};
+use core_foundation::attributed_string::{CFAttributedString, CFAttributedStringGetAttributes, CFAttributedStringGetString};
+use core_foundation::base::{CFGetTypeID, CFHash, CFRange, CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::data::CFData;
 use core_foundation::dictionary::CFDictionary;
@@ -33,6 +34,9 @@ extern "C" {
     fn AXUIElementGetPid(element: CFTypeRef, pid: *mut i32) -> i32;
     fn AXUIElementCopyAttributeValue(e: CFTypeRef, a: CFStringRef, v: *mut CFTypeRef) -> i32;
     fn AXUIElementCopyMultipleAttributeValues(e: CFTypeRef, names: CFTypeRef, options: u32, v: *mut CFTypeRef) -> i32;
+    fn AXUIElementCopyParameterizedAttributeNames(e: CFTypeRef, names: *mut CFTypeRef) -> i32;
+    fn AXUIElementCopyParameterizedAttributeValue(e: CFTypeRef, name: CFStringRef, parameter: CFTypeRef, value: *mut CFTypeRef) -> i32;
+    fn AXUIElementGetTypeID() -> usize;
     fn AXValueGetTypeID() -> usize;
     fn AXObserverCreate(pid: i32, cb: extern "C" fn(CFTypeRef, CFTypeRef, CFStringRef, *mut c_void), out: *mut CFTypeRef) -> i32;
     fn AXObserverAddNotification(o: CFTypeRef, e: CFTypeRef, name: CFStringRef, refcon: *mut c_void) -> i32;
@@ -153,27 +157,34 @@ extern "C" fn noticed(_: CFTypeRef, _: CFTypeRef, _: CFStringRef, refcon: *mut c
     n.generation.fetch_add(1, Ordering::Relaxed);
 }
 
+#[derive(Clone)]
+struct Metadata {
+    actions: Vec<String>,
+    settable: bool,
+    attributed: bool,
+}
+
 #[derive(Default)]
 struct Cache {
     generation: u64,
     entries: usize,
-    map: HashMap<usize, Vec<(El, Vec<String>, bool)>>,
+    map: HashMap<usize, Vec<(El, Metadata)>>,
 }
 
 const MAX_CACHED: usize = 20_000;
 
 impl Cache {
-    fn get(&self, e: &El, hash: usize) -> Option<(Vec<String>, bool)> {
-        self.map.get(&hash)?.iter().find(|(k, _, _)| k == e).map(|(_, a, s)| (a.clone(), *s))
+    fn get(&self, e: &El, hash: usize) -> Option<Metadata> {
+        self.map.get(&hash)?.iter().find(|(k, _)| k == e).map(|(_, metadata)| metadata.clone())
     }
 
-    fn put(&mut self, e: &El, hash: usize, actions: &[String], settable: bool) {
+    fn put(&mut self, e: &El, hash: usize, metadata: Metadata) {
         if self.entries >= MAX_CACHED {
             self.map.clear();
             self.entries = 0;
         }
         self.entries += 1;
-        self.map.entry(hash).or_default().push((e.clone(), actions.to_vec(), settable));
+        self.map.entry(hash).or_default().push((e.clone(), metadata));
     }
 }
 
@@ -779,6 +790,7 @@ fn fetch(e: &El) -> Node {
     let props = Props {
         role,
         visible_text,
+        rich_text: None,
         subrole: s("AXSubrole"),
         title,
         description: s("AXDescription").or_else(|| s("AXHelp")),
@@ -804,17 +816,119 @@ fn fetch(e: &El) -> Node {
     Node { props, raw, frame, children }
 }
 
+fn attributed_supported(e: &El) -> bool {
+    let mut names = std::ptr::null();
+    if unsafe { AXUIElementCopyParameterizedAttributeNames(e.as_CFTypeRef(), &mut names) } != 0 || names.is_null() {
+        return false;
+    }
+    list(unsafe { CFType::wrap_under_create_rule(names) }).iter().any(|name| text_of(name).as_deref() == Some("AXAttributedStringForRange"))
+}
+
+fn attributed_runs(value: &CFAttributedString, expected: &str) -> Option<Vec<(String, text::TextStyle)>> {
+    let plain = unsafe { CFString::wrap_under_get_rule(CFAttributedStringGetString(value.as_concrete_TypeRef())) }.to_string();
+    if plain != expected {
+        return None;
+    }
+    let mut runs = vec![];
+    let mut at = 0;
+    while at < value.char_len() {
+        let mut range = CFRange { location: 0, length: 0 };
+        let attrs = unsafe { CFAttributedStringGetAttributes(value.as_concrete_TypeRef(), at, &mut range) };
+        if attrs.is_null() || range.location > at || range.length <= 0 {
+            return None;
+        }
+        let end = range.location.checked_add(range.length)?;
+        if end <= at || end > value.char_len() {
+            return None;
+        }
+        let attrs = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule(attrs) };
+        let get = |key: &str| attrs.find(cfs(key)).map(|v| v.clone());
+        let number = |key: &str| get(key).and_then(|v| v.downcast::<CFNumber>()).and_then(|v| v.to_i64());
+        let flag = |key: &str| {
+            get(key).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from).unwrap_or_else(|| number(key).is_some_and(|v| v != 0))
+        };
+        let list_prefix = get("AXListItemPrefix")
+            .and_then(|v| v.downcast::<CFAttributedString>())
+            .map(|v| unsafe { CFString::wrap_under_get_rule(CFAttributedStringGetString(v.as_concrete_TypeRef())) }.to_string());
+        let style = text::TextStyle {
+            bold: flag("AXFontBold"),
+            italic: flag("AXFontItalic"),
+            underline: flag("AXUnderline"),
+            strike: flag("AXStrikethrough"),
+            link: get("AXLink")
+                .filter(|link| link.type_of() == unsafe { AXUIElementGetTypeID() })
+                .and_then(|link| str_attr(&link, "AXURL"))
+                .filter(|url| url.len() <= 2048),
+            list_prefix,
+            list_level: number("AXListItemLevel").and_then(|v| usize::try_from(v).ok()).unwrap_or(0),
+        };
+        let run = text::visible_text(&plain, [at, end - at], tree::MAX_TEXT)?;
+        runs.push((run.text, style));
+        at = end;
+    }
+    Some(runs)
+}
+
+fn attributed_text(e: &El, n: &Node) -> Option<String> {
+    let raw = n.raw.as_deref()?;
+    let prefix;
+    let visible = match n.props.visible_text.as_ref() {
+        Some(visible) => visible,
+        None => {
+            prefix = text::visible_text(raw, [0, isize::try_from(raw.encode_utf16().count()).ok()?], tree::MAX_TEXT)?;
+            &prefix
+        }
+    };
+    if visible.text.is_empty() {
+        return None;
+    }
+    let range = [isize::try_from(visible.start).ok()?, isize::try_from(visible.shown_end - visible.start).ok()?];
+    let parameter = unsafe { AXValueCreate(4, range.as_ptr() as *const c_void) };
+    if parameter.is_null() {
+        return None;
+    }
+    let parameter = unsafe { CFType::wrap_under_create_rule(parameter) };
+    let mut value = std::ptr::null();
+    let result = unsafe {
+        AXUIElementCopyParameterizedAttributeValue(
+            e.as_CFTypeRef(),
+            cfs("AXAttributedStringForRange").as_concrete_TypeRef(),
+            parameter.as_CFTypeRef(),
+            &mut value,
+        )
+    };
+    if result != 0 || value.is_null() {
+        return None;
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(value) }.downcast::<CFAttributedString>()?;
+    let runs = attributed_runs(&value, &visible.text)?;
+    let starts_line = visible.start == 0 || raw.encode_utf16().nth(visible.start - 1) == Some(10);
+    let mut markdown = text::attributed_markdown(&runs, starts_line)?;
+    if visible.shown_end < visible.end {
+        markdown += "\n… text truncated";
+    }
+    Some(markdown)
+}
+
 fn complete(e: &El, mut n: Node, cache: Option<&mut Cache>) -> Node {
     let hash = unsafe { CFHash(e.as_CFTypeRef()) };
-    if let Some((acts, can_set)) = cache.as_ref().and_then(|c| c.get(e, hash)) {
-        n.props.actions = acts;
-        n.props.settable = can_set;
-        return n;
+    let rich_candidate = n.children.is_empty() && matches!(n.props.role.as_str(), "AXTextArea" | "AXTextField" | "AXStaticText");
+    let cached = cache.as_ref().and_then(|c| c.get(e, hash));
+    let uncached = cached.is_none();
+    let metadata = cached.unwrap_or_else(|| Metadata {
+        actions: actions(e).into_iter().filter(|a| !BORING.contains(&a.as_str())).collect(),
+        settable: n.props.settable && settable(e, "AXValue"),
+        attributed: rich_candidate && attributed_supported(e),
+    });
+    if metadata.attributed && rich_candidate {
+        n.props.rich_text = attributed_text(e, &n);
     }
-    n.props.settable = n.props.settable && settable(e, "AXValue");
-    n.props.actions = actions(e).into_iter().filter(|a| !BORING.contains(&a.as_str())).collect();
+    n.props.actions = metadata.actions.clone();
+    n.props.settable = metadata.settable;
     if let Some(c) = cache {
-        c.put(e, hash, &n.props.actions, n.props.settable);
+        if uncached {
+            c.put(e, hash, metadata);
+        }
     }
     n
 }
@@ -1736,6 +1850,19 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attributed_observation_decodes_native_runs_and_rejects_mismatches() {
+        use core_foundation::attributed_string::CFMutableAttributedString;
+        let mut value = CFMutableAttributedString::new();
+        value.replace_str(&cfs("😀bold\nplain"), CFRange { location: 0, length: 0 });
+        value.set_attribute(CFRange { location: 2, length: 4 }, cfs("AXFontBold").as_concrete_TypeRef(), &CFBoolean::true_value());
+        let value = value.as_CFType().downcast::<CFAttributedString>().unwrap();
+        let runs = attributed_runs(&value, "😀bold\nplain").unwrap();
+        assert_eq!(text::attributed_markdown(&runs, true).unwrap(), "😀**bold**\nplain");
+        assert!(attributed_runs(&value, "stale text").is_none());
+        assert_eq!(text::selection_range("😀bold\nplain", "bold", "", "", Selection::Text).unwrap(), [2, 4]);
+    }
+
     use super::*;
 
     fn app(name: &str, bundle: &str, path: &str, pid: i32) -> App {
