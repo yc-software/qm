@@ -650,7 +650,11 @@ test("expired callback returns are discarded after successful browser verificati
   const f = fixture();
   await f.own();
   const key = `${composioUserId(orgId(), "alice")}:ca_test`;
-  await f.deps.composioReturns!.put(key, { url: "https://qm.example/old", toolkit: "gmail", expiresAt: Date.now() - 1 });
+  await f.deps.composioReturns!.put(key, {
+    url: "https://qm.example/old",
+    toolkit: "gmail",
+    expiresAt: Date.now() - 1,
+  });
   f.replies.push({ connected_account_id: "ca_test" });
   assert.deepEqual((await f.invoke("/v1/composio/complete-auth", { sessionUri: "opaque" })).data, { returnTo: null });
   assert.equal(await f.deps.composioReturns!.get(key), null);
