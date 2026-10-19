@@ -125,6 +125,25 @@ export function selectOverheardToImport(
   return out;
 }
 
+const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "America/Los_Angeles",
+});
+
+function entryDay(e: SessionEntry): string {
+  const ov = overheardPayload(e);
+  const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
+  return DAY_MARKER_FORMAT.format(Number.isFinite(sent) ? sent : e.createdAt);
+}
+
+export function dayMarkerPrefix(previous: SessionEntry | undefined, e: SessionEntry): string {
+  const day = entryDay(e);
+  return previous && entryDay(previous) === day ? "" : `── ${day} ──\n`;
+}
+
 export function renderOverheard(p: OverheardEntryPayload): string {
   const body = p.text || (p.files?.length ? "(shared file)" : "");
   return messageTag(
@@ -319,6 +338,7 @@ export function reconstructMessagesFromHistory(
   });
 
   let previous: SessionEntry | undefined;
+  let previousUser: SessionEntry | undefined;
   let batch: AssistantMessage | undefined;
   for (const e of history) {
     const prior = previous;
@@ -358,9 +378,11 @@ export function reconstructMessagesFromHistory(
       continue;
     }
     if (e.type === "user") {
+      const day = dayMarkerPrefix(previousUser, e);
+      previousUser = e;
       const ov = overheardPayload(e);
       if (ov) {
-        if (ov.text.trim() || ov.files?.length) raw.push(userMsg(renderOverheard(ov), e.createdAt));
+        if (ov.text.trim() || ov.files?.length) raw.push(userMsg(day + renderOverheard(ov), e.createdAt));
       } else {
         const p = (e.payload ?? {}) as Record<string, unknown>;
         const t = userPromptText(p);
@@ -368,7 +390,7 @@ export function reconstructMessagesFromHistory(
         if (t || images.length)
           raw.push({
             role: "user",
-            content: [{ type: "text", text: t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
+            content: [{ type: "text", text: day + t }, ...images.map((ref) => ({ type: "image" as const, ref }))],
             timestamp: e.createdAt,
           });
       }

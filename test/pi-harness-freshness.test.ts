@@ -49,8 +49,7 @@ test("every turn composes the freshly resolved system prompt", async () => {
   await runIgnoringPromptError(harness, recordingTurn(first, recorded, "fresh-prompt"));
   await runIgnoringPromptError(harness, recordingTurn(second, recorded, "fresh-prompt"));
 
-  assert.equal(recorded[0]!.inputTokens, countTokens(first) + countTokens("hi"));
-  assert.equal(recorded[1]!.inputTokens, countTokens(second) + countTokens("hi"));
+  assert.equal(recorded[1]!.inputTokens - recorded[0]!.inputTokens, countTokens(second) - countTokens(first));
 });
 
 test("the cwd pi appends to the system prompt is one constant path per harness", () => {
