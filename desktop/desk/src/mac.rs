@@ -265,6 +265,12 @@ struct Snapshot {
     ids: tree::Ids<El>,
 }
 
+impl Snapshot {
+    fn matches_window(&self, element: &El, id: u32, frame: Option<Rect>) -> bool {
+        self.window == id && &self.window_element == element && frame == Some(self.frame)
+    }
+}
+
 #[derive(Default)]
 pub struct Desk {
     cache: HashMap<i32, Snapshot>,
@@ -1661,8 +1667,8 @@ impl Desk {
         active()?;
         let (_, current) = window(app)?;
         let snapshot = self.cache.get(&app.pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
-        let current_frame = frame(&current);
-        if current != snapshot.window_element || current_frame != Some(snapshot.frame) || !on_current_space(window_id(&current)) {
+        let current_id = window_id(&current);
+        if !snapshot.matches_window(&current, current_id, frame(&current)) || !on_current_space(current_id) {
             return Err(fail(ErrorCode::BadIndex, "The window changed or moved; observe again before acting"));
         }
         Ok(())
@@ -2018,6 +2024,25 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observed_window_rejects_rebound_identity_with_same_element_and_frame() {
+        let element = app_element(10001);
+        let frame = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let snapshot = Snapshot {
+            window: 42,
+            window_element: element.clone(),
+            frame,
+            elements: vec![],
+            text: HashMap::new(),
+            markers: HashMap::new(),
+            lines: HashMap::new(),
+            ids: tree::Ids::default(),
+        };
+        assert!(snapshot.matches_window(&element, 42, Some(frame)));
+        assert!(!snapshot.matches_window(&element, 43, Some(frame)));
+        assert!(!snapshot.matches_window(&element, 0, Some(frame)));
+    }
+
     #[test]
     fn prefetched_children_keep_content_clipping_and_visit_budget() {
         let window = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
