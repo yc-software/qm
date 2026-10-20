@@ -207,7 +207,9 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       }
       const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug, network: appName });
       if (r.ok) return;
-      const found = await getApp(appName);
+      const found = await getApp(appName).catch((e: unknown) => {
+        throw new Error(failure(`create app ${appName}`, r).message, { cause: e });
+      });
       if (!found) throw failure(`create app ${appName}`, r);
       assertOwned(appName, orgSlug, found);
     },

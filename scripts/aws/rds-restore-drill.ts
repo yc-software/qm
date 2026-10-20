@@ -75,8 +75,7 @@ export function verifyScript(host: string): string {
   validateEndpoint(host);
   return [
     "set -eu",
-    'case "$DATABASE_URL" in *\\?*) QUERY="&" ;; *) QUERY="?" ;; esac',
-    'RESTORE_URL="$DATABASE_URL${QUERY}host=$RESTORE_HOST&sslmode=require"',
+    'RESTORE_URL="${DATABASE_URL%%\\?*}?host=$RESTORE_HOST&sslmode=require"',
     `pg_isready --dbname="$RESTORE_URL"`,
     `test "$(psql "$RESTORE_URL" -Atc 'SELECT COUNT(*) FROM sessions')" -gt 0`,
     `test "$(psql "$RESTORE_URL" -Atc "SELECT COUNT(*) FROM qm_schema_migrations")" -gt 0`,

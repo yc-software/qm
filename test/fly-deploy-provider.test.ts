@@ -39,6 +39,7 @@ interface FakeFlyOptions {
   createAppBody?: string;
   existingApp?: { name: string; network: string; organization: { slug: string } };
   racingApp?: { name: string; network: string; organization: { slug: string } };
+  rereadAppStatus?: number;
   ips?: string[];
   ingressNetwork?: string;
   networkPolicies?: unknown[];
@@ -68,6 +69,7 @@ function fakeFly(opts: FakeFlyOptions = {}) {
   const cordoned = new Set<string>();
   let app = opts.existingApp;
   let created = 0;
+  let reread: number | undefined;
   const fetchImpl = (async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(String(input));
     const method = init.method ?? "GET";
@@ -87,8 +89,10 @@ function fakeFly(opts: FakeFlyOptions = {}) {
         app = { name: body.app_name, network: body.network, organization: { slug: body.org_slug } };
       }
       if (opts.racingApp) app = opts.racingApp;
+      reread = opts.rereadAppStatus;
       return new Response(opts.createAppBody ?? "{}", { status: opts.createAppStatus ?? 201 });
     }
+    if (method === "GET" && segments.length === 3 && reread) return json(reread, { error: "unavailable" });
     if (method === "GET" && segments.length === 3) return app ? json(200, app) : json(404, { error: "not found" });
     if (method === "DELETE" && segments.length === 3) {
       app = undefined;
@@ -287,7 +291,7 @@ test("apply: keeps an always-on deployment running under Fly managed lifecycle",
 });
 
 test("apply: refuses a pre-existing public IP before creating a machine", async () => {
-  const unsafe = fakeFly({ createAppStatus: 422, existingApp: OWNED_APP, ips: ["2a09:8280:1::1"] });
+  const unsafe = fakeFly({ existingApp: OWNED_APP, ips: ["2a09:8280:1::1"] });
   await assert.rejects(
     provider(unsafe.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
     /public IP assignment; refusing to expose/,
@@ -333,6 +337,18 @@ test("apply: a rejected app creation still surfaces", async () => {
       new RegExp(`create app .*http ${status}`),
     );
   }
+});
+
+test("apply: a failed create whose app cannot be re-read reports the create failure", async () => {
+  const { fetchImpl } = fakeFly({ createAppStatus: 500, createAppBody: '{"error":"boom"}', rereadAppStatus: 503 });
+  await assert.rejects(
+    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+    (e: Error) => {
+      assert.match(e.message, /create app .*http 500.*boom/);
+      assert.match(String((e.cause as Error).message), /read app .*http 503/);
+      return true;
+    },
+  );
 });
 
 test("apply: the previous version stays up until its healthy replacement is ready", async () => {

@@ -241,7 +241,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   async function connectCore(net: string): Promise<void> {
     if (!opts.coreContainer) return;
     const r = await dexec(["network", "connect", net, opts.coreContainer]);
-    if (r.code !== 0 && !(net in ((await dockerContainerNetworks(dexec, opts.coreContainer)) ?? {}))) {
+    if (r.code !== 0 && !(await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(net)) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
     }
   }
@@ -481,7 +481,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         await remove(["rm", "-f", name]);
         if (opts.coreContainer) {
           const result = await dexec(["network", "disconnect", "-f", network, opts.coreContainer]);
-          if (result.code !== 0 && network in ((await dockerContainerNetworks(dexec, opts.coreContainer)) ?? {}))
+          if (result.code !== 0 && (await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(network))
             throw new Error(`docker network disconnect ${network}: ${result.stderr.trim()}`);
         }
         await remove(["network", "rm", "-f", network]);

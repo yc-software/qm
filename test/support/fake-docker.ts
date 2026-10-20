@@ -82,16 +82,12 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       case "inspect": {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
-        if (rest.includes("{{json .NetworkSettings.Networks}}")) {
-          if (!exists(name)) return fail(`Error: No such object: ${name}`);
-          return ok(JSON.stringify(Object.fromEntries(networksOf(name).map((net) => [net, {}]))));
-        }
         if (!c) return fail(`Error: No such object: ${name}`);
         return ok(`${c.running} ${c.imageId}`);
       }
       case "ps": {
         const name = rest.find((a) => a.startsWith("name=^/"))!.slice("name=^/".length, -1);
-        return ok(exists(name) ? `${name}-id\n` : "");
+        return ok(exists(name) ? `${name}-id ${networksOf(name).join(",")}\n` : "");
       }
       case "network": {
         const [sub, name, container] = positional(rest);

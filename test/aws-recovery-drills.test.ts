@@ -36,7 +36,7 @@ test("restore verification points the task's database URL at the restored host a
   for (const [databaseUrl, restoreUrl] of [
     [
       "postgres://qm:p%40ss@source.rds.amazonaws.com:5432/qm?sslmode=no-verify",
-      `postgres://qm:p%40ss@source.rds.amazonaws.com:5432/qm?sslmode=no-verify&host=${host}&sslmode=require`,
+      `postgres://qm:p%40ss@source.rds.amazonaws.com:5432/qm?host=${host}&sslmode=require`,
     ],
     [
       "postgresql://qm:secret@source.rds.amazonaws.com/qm",

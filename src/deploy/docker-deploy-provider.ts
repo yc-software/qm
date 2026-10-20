@@ -21,7 +21,6 @@ import {
 const APP_PORT = 8080;
 const APP_READY_WINDOW_SEC = 60;
 const RUN_TIMEOUT_MS = 300_000;
-const LEGACY_NETWORK = "agent-deploynet";
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
 export interface DockerDeployProviderOptions {
@@ -80,29 +79,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       dexec(["exec", name(d), "sh", "-c", script], timeoutSec * 1000);
   const checked = recentAppChecks();
   const network = (d: Deployment) => `${name(d)}-net`;
-  const migrateContainer = async (container: string): Promise<boolean> => {
-    const attached = await dockerContainerNetworks(dexec, container);
-    if (!attached) return false;
-    const target = `${container}-net`;
-    await ensureDockerNetwork(dexec, target);
-    if (!(target in attached)) {
-      const connected = await dexec(["network", "connect", target, container]);
-      if (connected.code !== 0) throw new Error(`docker network connect ${target} failed: ${connected.stderr.trim()}`);
-    }
-    if (LEGACY_NETWORK in attached) {
-      const disconnected = await dexec(["network", "disconnect", LEGACY_NETWORK, container]);
-      if (disconnected.code !== 0)
-        throw new Error(`docker network disconnect ${LEGACY_NETWORK} failed: ${disconnected.stderr.trim()}`);
-    }
-    return true;
-  };
-  const migrateTarget = async (container: string): Promise<boolean> => {
-    try {
-      return await migrateContainer(container);
-    } catch {
-      return migrateContainer(container);
-    }
-  };
+  const exists = async (d: Deployment): Promise<boolean> => (await dockerContainerNetworks(dexec, name(d))) !== null;
 
   return {
     profile: { managedScaleToZero: false },
@@ -161,7 +138,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
-      if (!(await migrateTarget(name(d)))) return null;
+      if (!(await exists(d))) return null;
       return appLogs(execIn(d), opts.tailLines);
     },
 
@@ -173,7 +150,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       if (checked.has(d.id)) return d.endpoint;
-      if (!(await migrateTarget(name(d)))) return null;
+      if (!(await exists(d))) return null;
       const report = appReporter(opts.onError, d, version.env);
       if (await appGone(execIn(d), { appPort: APP_PORT, report })) return null;
       checked.set(d.id, true);
