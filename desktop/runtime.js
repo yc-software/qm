@@ -289,7 +289,7 @@ app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift",
   If the foreground app changes or you interact with the target app, the action stops.
 app.drag([x, y], [x, y]) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels})
-app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) prefix/suffix pick among repeats.
+app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) Use native text or an exact observed Markdown body excerpt without tree indentation; prefix/suffix pick among repeats.
 app.setValue(id, value, {submit}) writes the element's value directly, as a number or true/false when the element holds one.
   It fails if the element is not settable or a text field keeps its old value. Only submit: true
   confirms the field or presses Return; omission and false never submit.
