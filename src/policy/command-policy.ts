@@ -2,16 +2,22 @@ import type { CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { compileSafeRegex } from "../util/safe-regex.ts";
 
-const ORG_FLOOR_RULES: CommandRule[] = [
+const PLAIN_COMMAND = /^[\w ./:=@%+,\n;|&"'-]*$/;
+
+type FloorRule = CommandRule & { plainCommandPattern?: string };
+
+const ORG_FLOOR_RULES: FloorRule[] = [
   {
     pattern: "\\brm\\b[^\\n]*(?:-[a-zA-Z]*r|--recursive)",
     decision: "require_approval",
     reason: "recursive delete",
+    plainCommandPattern: "\\brm\\b[^\\n;&|]*[\\s,](?:-[a-zA-Z]*r|--r[a-z-]*)",
   },
   {
-    pattern: "\\bgit\\s+push\\b.*(?:--force\\b|(?:^|\\s)-[a-zA-Z]*f\\b)",
+    pattern: "\\bgit(?:\\s+|\\$\\{?IFS\\}?)push\\b.*(?:--f[a-z-]*|(?:^|[\\s{,?*[]|IFS\\}?)-[a-zA-Z]*f\\b)",
     decision: "require_approval",
     reason: "force push",
+    plainCommandPattern: "\\bgit\\s+push\\b[^\\n;&|]*\\s(?:--f[a-z-]*|-[a-zA-Z]*f\\b)",
   },
   { pattern: "\\b(drop|truncate)\\s+table\\b", decision: "require_approval", reason: "destructive SQL" },
   { pattern: "\\bmkfs\\b|:\\(\\)\\s*\\{", decision: "deny", reason: "destructive / fork bomb" },
@@ -861,7 +867,12 @@ function pipedSqlPayloads(input: string): string[] {
   return payloads;
 }
 
-function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {
+function narrowedAway(rule: FloorRule, scannable: string): boolean {
+  if (!rule.plainCommandPattern || !PLAIN_COMMAND.test(scannable)) return false;
+  return !compileSafeRegex(rule.plainCommandPattern, "i").test(scannable);
+}
+
+function firstMatch(scannable: string, rules: readonly FloorRule[]): CommandEvaluation | null {
   for (const rule of rules) {
     let re: RegExp;
     try {
@@ -873,6 +884,7 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
       continue;
     }
     const hit = re.exec(scannable);
+    if (hit && narrowedAway(rule, scannable)) continue;
     if (hit) {
       return {
         decision: rule.decision,
