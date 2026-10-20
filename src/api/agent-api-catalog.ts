@@ -1,5 +1,7 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
+import { adminRoutes } from "./routes/admin.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
 
 interface AgentApiRoute {
   method: string;
@@ -14,24 +16,16 @@ interface AgentApiView {
 }
 
 interface AgentApiFamily {
-  match: (method: string, pathname: string) => boolean;
   when?: (view: AgentApiView) => boolean;
   guidance?: string;
   routes: AgentApiRoute[];
 }
-
-const onPath = (m: string, p: string) => (method: string, pathname: string) => method === m && pathname === p;
 
 const CONVERSATION_UPDATE =
   "update one of the asking person's conversations — body {archived?, pinned?, title?, color?}; archive/unarchive, pin/unpin, rename (null title clears), or set the sidebar color (#rrggbb; null clears). These are per-person.";
 
 const FAMILIES: AgentApiFamily[] = [
   {
-    match: (method, path) =>
-      (method === "POST" && path === "/v1/composio/twitter/media") ||
-      (method === "GET" &&
-        ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
-      (method === "POST" && ["authorize", "execute", "disconnect"].some((name) => path === `/v1/composio/${name}`)),
     guidance:
       "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
@@ -73,7 +67,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
       "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Only a parent can assign goals, to its own workers; send a goal again to replace a paused one.",
@@ -93,11 +86,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (m === "GET" && p === "/v1/files/upload-client") ||
-      (p === "/v1/files/uploads" && m === "POST") ||
-      (/^\/v1\/files\/uploads\/[^/]+$/.test(p) && (m === "GET" || m === "DELETE")) ||
-      (/^\/v1\/files\/uploads\/[^/]+\/(complete|parts\/[^/]+)$/.test(p) && m === "POST"),
     guidance:
       'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files.',
     routes: [
@@ -127,7 +115,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: onPath("POST", "/v1/search"),
     guidance:
       "Search uses this conversation's complete principal set as its visibility floor. Shared conversations without a complete roster fail closed.",
     routes: [
@@ -140,7 +127,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: onPath("GET", "/v1/apis"),
     routes: [
       {
         method: "GET",
@@ -150,27 +136,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => p === "/v1/runtime-config" && (m === "GET" || m === "PUT"),
-    when: () => false,
-    guidance:
-      "Runtime choice is scoped: changing it affects this personal or shared context, not the whole org. Confirm before changing a shared scope. An inherit reset follows future org defaults automatically.",
-    routes: [
-      {
-        method: "GET",
-        path: "/v1/runtime-config",
-        summary:
-          "read this scope's effective harness/model, approved choices, override, and whether the org recommends an upgrade",
-      },
-      {
-        method: "PUT",
-        path: "/v1/runtime-config",
-        summary:
-          "set this scope's default with {harnessId,modelId}, follow the org with {inherit:true}, or keep the current override while acknowledging the recommendation with {keep:true}",
-      },
-    ],
-  },
-  {
-    match: (m, p) => p === "/v1/channel-header-pin" && (m === "GET" || m === "PUT"),
     guidance:
       "The pinned Slack header (a small pinned message naming the model in use) follows an org-wide default (off unless an admin turned it on). Only override it for a channel scope when someone in that channel asks.",
     routes: [
@@ -188,12 +153,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/projects" && (m === "GET" || m === "POST")) ||
-      (/^\/v1\/projects\/[^/]+$/.test(p) && m === "PATCH") ||
-      (/^\/v1\/projects\/[^/]+\/members$/.test(p) && m === "POST") ||
-      (/^\/v1\/projects\/[^/]+\/members\/[^/]+$/.test(p) && m === "DELETE") ||
-      (/^\/v1\/projects\/[^/]+\/slack-channel$/.test(p) && (m === "PUT" || m === "DELETE")),
     guidance:
       "These act as the ASKING PERSON across every project they belong to, matching the web UI. Do not send principalId; the capability token always determines the person, and inaccessible projects return 404.",
     routes: [
@@ -232,8 +191,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      /^\/v1\/loops\/[^/]+\/items(\/[^/]+(\/(action|followup))?)?$/.test(p) && (m === "GET" || m === "POST"),
     guidance:
       "A loop's ledger is its durable queue of work items. Each entry carries an opaque sourcePayload the loop's own frontend understands, a proposal held for human review, and a follow-up chat thread. States run pending -> processed -> held -> actioned|dismissed. Ingest only what the loop's playbook tells you to; proposals are prepared, never executed — the person actions them from their review surface.",
     routes: [
@@ -269,14 +226,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/loops" && (m === "POST" || m === "GET")) ||
-      ((m === "POST" || m === "DELETE") &&
-        p.startsWith("/v1/loops/") &&
-        (p.endsWith("/fire") || p.endsWith("/autopilot") || p.includes("/grants") || p.includes("/outputs/"))) ||
-      (p.startsWith("/v1/loops/") &&
-        !p.slice("/v1/loops/".length).includes("/") &&
-        (m === "GET" || m === "PATCH" || m === "DELETE")),
     guidance:
       'A loop is standing autonomous work: a trigger plus a playbook plus a durable work ledger, with finished outputs HELD for a person to ship. Prefer the define-loop skill to author one (it interviews, shadow-runs one item, then creates the loop). New loops should declare every externally-visible ship action at gate "hold"; "auto" is earned through grants after real approvals. Work turns run without surface tools or addressed delivery; final external actions happen in the fenced ship stage. Broader work-stage tool restriction is a known limitation pending turn-runner tool policy.',
     routes: [
@@ -320,49 +269,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/crons" && (m === "POST" || m === "GET")) ||
-      (m === "POST" &&
-        p.startsWith("/v1/crons/") &&
-        (p.endsWith("/disable") || p.endsWith("/destination") || p.endsWith("/run") || p.endsWith("/note"))) ||
-      (m === "GET" && p.startsWith("/v1/crons/") && p.endsWith("/runs")) ||
-      (p.startsWith("/v1/crons/") &&
-        !p.slice("/v1/crons/".length).includes("/") &&
-        (m === "GET" || m === "PATCH" || m === "DELETE")),
-    when: () => false,
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/crons",
-        summary:
-          'schedule future or recurring work — a 2-5 word `title` naming what the cron is for (distinctive in a list, not the command) plus `task` (re-run at fire time) or exact `text`, optionally addressed by name to a teammate (`recipient`), a channel (`channel`), or a group DM (`participants`: its other members, which must already exist as a group DM — reach it once first, which opens it; same venue rule as /v1/reach — narrowest audience, a channel only when explicitly requested or genuinely room-wide), or run privately for whoever asked at their own scope (`scope:"personal"`, even from a channel); pass `unfurlLinks:false` to suppress Slack previews; the cron is tied to this conversation so it shows as ongoing work here unless `session:false` (to send now instead, use /v1/reach)',
-      },
-      { method: "GET", path: "/v1/crons", summary: "list your crons" },
-      {
-        method: "GET|PATCH|DELETE",
-        path: "/v1/crons/:id",
-        summary:
-          "inspect, rename, archive, edit, or delete a cron; create/patch accepts runtime: {harnessId, modelId, effortLevel?, fastMode?} for agent tasks, null clears the override; omitted preserves existing defaults",
-      },
-      {
-        method: "GET",
-        path: "/v1/crons/:id/runs",
-        summary: "read the retained fire log for a cron; use only when older run history is relevant",
-      },
-      { method: "POST", path: "/v1/crons/:id/disable", summary: "disable a cron" },
-      { method: "POST", path: "/v1/crons/:id/destination", summary: "retarget where a cron delivers" },
-      { method: "POST", path: "/v1/crons/:id/run", summary: "fire a cron now" },
-      {
-        method: "POST",
-        path: "/v1/crons/:id/note",
-        summary:
-          "at the end of a cron fire, leave a short shift-change note for the cron's next fire — body {note}: one or two sentences, outcome plus anything the next fire must know",
-      },
-    ],
-  },
-  {
-    match: (m, p) =>
-      ((m === "POST" || m === "GET") && p === "/v1/pins") || (m === "DELETE" && /^\/v1\/pins\/[^/]+$/.test(p)),
     guidance:
       "Pins are conversation-scoped bookmarks shown at the top of the web UI — for the handful of things worth keeping in view for a whole session: a decision, a link, a working answer, a key transcript entry. Use them SPARINGLY — a few pins that matter, not a running log (there is a hard cap, and every pin takes reader attention); durable facts belong in memory, working state in files. Pin a transcript entry by its seq, or a short free-text note. In a Slack DM, pinning a transcript entry also pins the underlying Slack message natively (and unpinning removes it). Keep them current — unpin what no longer matters.",
     routes: [
@@ -377,32 +283,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/ui/canvas" && ["GET", "POST", "DELETE"].includes(m)) || (m === "POST" && p === "/v1/ui/observe"),
-    when: () => false,
-    routes: [
-      { method: "GET", path: "/v1/ui/canvas", summary: "read this conversation's web UI canvas" },
-      { method: "POST", path: "/v1/ui/canvas", summary: "write, update, replace or pin the canvas (ui-canvas skill)" },
-      { method: "DELETE", path: "/v1/ui/canvas", summary: "dismiss the canvas" },
-      { method: "POST", path: "/v1/ui/observe", summary: "snapshot the person's open web UI (ui-state skill)" },
-    ],
-  },
-  {
-    match: onPath("POST", "/v1/share"),
-    when: () => false,
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/share",
-        summary:
-          'share or move one of YOUR artifacts to another context — body {type:"file"|"skill"|"deploy"|"cron", id, toScope:"org"|<scope id>|a teammate\'s name, permission?:"read"(default)|"write", move?:false}. For app sharing only, `email` may replace `toScope` to grant view access to an exact email outside the directory. Default (share) adds a grant — the artifact keeps its home and creator. move:true changes its home scope instead (skills only today). Frictionless into any context you belong to; allowed for anyone who manages the artifact\'s home (its owner, or a current member of its private-channel/group home), from any conversation; ceding a skill to the org is admin-gated (a live org admin only).',
-      },
-    ],
-  },
-  {
-    match: (m, p) =>
-      (m === "GET" && (p === "/v1/conversations" || /^\/v1\/conversations\/[^/]+$/.test(p))) ||
-      (m === "POST" && /^\/v1\/conversations\/[^/]+$/.test(p)),
     guidance:
       "These act on the ASKING PERSON's own conversation list (the web UI sidebar) — archiving, pinning, or renaming is a per-person view change, never a deletion, and never touches anyone else's list. Confirm before bulk-archiving.",
     routes: [
@@ -421,7 +301,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: () => false,
     routes: [
       {
         method: "POST",
@@ -431,7 +310,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => m === "GET" && (p === "/v1/files" || /^\/v1\/files\/[^/]+\/content$/.test(p)),
     guidance:
       "These show the ASKING PERSON's file library across every context they can reach. A file outside their visibility returns 404 without revealing whether it exists.",
     routes: [
@@ -449,7 +327,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: onPath("POST", "/v1/reach"),
     routes: [
       {
         method: "POST",
@@ -460,14 +337,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (m === "GET" && p === "/v1/deployments") ||
-      (m === "GET" && /^\/v1\/deployments\/[^/]+$/.test(p)) ||
-      (m === "GET" && /^\/v1\/deployments\/[^/]+\/fetch$/.test(p)) ||
-      (m === "GET" && /^\/v1\/deployments\/[^/]+\/logs$/.test(p)) ||
-      (m === "GET" && /^\/v1\/deployments\/[^/]+\/(git-url|share)$/.test(p)) ||
-      (m === "POST" &&
-        /^\/v1\/deployments\/[^/]+\/(share|archive|restore|name|display-name|always-on|embed-ancestors)$/.test(p)),
     guidance:
       'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
     routes: [
@@ -547,30 +416,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/webhooks" && (m === "POST" || m === "GET")) ||
-      (m === "GET" && /^\/v1\/webhooks\/[^/]+\/events$/.test(p)) ||
-      (m === "POST" && /^\/v1\/webhooks\/[^/]+\/(disable|enable|update)$/.test(p)),
-    when: () => false,
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/webhooks",
-        summary: "register an inbound webhook that runs a prompt when an external system calls it (secret shown once)",
-      },
-      { method: "GET", path: "/v1/webhooks", summary: "list your webhooks" },
-      { method: "GET", path: "/v1/webhooks/:id/events", summary: "recent webhook payloads and sessions" },
-      { method: "POST", path: "/v1/webhooks/:id/disable", summary: "disable a webhook" },
-      {
-        method: "POST",
-        path: "/v1/webhooks/:id/update",
-        summary: "update a webhook task in place (URL and secret unchanged)",
-      },
-      { method: "POST", path: "/v1/webhooks/:id/enable", summary: "re-enable a webhook" },
-    ],
-  },
-  {
-    match: (m, p) => p === "/v1/pinned-skills" && (m === "GET" || m === "PUT"),
     routes: [
       { method: "GET", path: "/v1/pinned-skills", summary: "list the skills pinned to this conversation's scope" },
       {
@@ -582,18 +427,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => p === "/v1/soul" && (m === "POST" || m === "GET"),
-    when: () => false,
-    routes: [
-      { method: "GET", path: "/v1/soul", summary: "read this scope's standing instructions (SOUL)" },
-      { method: "POST", path: "/v1/soul", summary: "update this scope's standing instructions (versioned, audited)" },
-    ],
-  },
-  {
-    match: (m, p) =>
-      (p === "/v1/memory/self" && m === "GET") ||
-      (p === "/v1/memory/facts" && (m === "PATCH" || m === "DELETE")) ||
-      (m === "POST" && (p === "/v1/memory/search" || p === "/v1/memory/facts")),
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
@@ -612,7 +445,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: () => false,
     when: (v) => !!v.claims.memory?.orgWrite,
     routes: [
       {
@@ -624,14 +456,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (p === "/v1/keychain/credentials" && (m === "POST" || m === "GET")) ||
-      (p === "/v1/keychain/overview" && m === "GET") ||
-      (m === "DELETE" && p.startsWith("/v1/keychain/credentials/")) ||
-      (p === "/v1/keychain/grants" && m === "GET") ||
-      (m === "POST" && p.startsWith("/v1/keychain/grants/") && p.endsWith("/revoke")) ||
-      (p === "/v1/keychain/asks" && (m === "POST" || m === "GET")) ||
-      (m === "POST" && p === "/v1/keychain/drops"),
     guidance:
       "The keychain ask→card approval→execute.credentials protocol is documented in your keychain manifest when one renders.",
     routes: [
@@ -664,7 +488,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => m === "POST" && (p === "/v1/surface-context" || p === "/v1/surface-file"),
     routes: [
       {
         method: "POST",
@@ -681,20 +504,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: onPath("GET", "/v1/directory/resolve"),
-    when: () => false,
-    routes: [
-      {
-        method: "GET",
-        path: "/v1/directory/resolve",
-        summary:
-          "resolve a teammate's name/handle to directory matches incl. their Slack mention id — ?q=<name> → {matches:[{principalId,displayName,type,slackId?}]}; write slackId as <@slackId> to @-mention them so Slack notifies them",
-      },
-    ],
-  },
-  {
-    match: (m, p) =>
-      (p === "/v1/environments" && (m === "POST" || m === "GET")) || (m === "POST" && p === "/v1/environments/attach"),
     routes: [
       {
         method: "GET",
@@ -714,11 +523,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) =>
-      (m === "POST" && p === "/v1/skills") ||
-      (m === "GET" && p.startsWith("/v1/skills/")) ||
-      ((m === "PUT" || m === "DELETE") && p.startsWith("/v1/skills/")) ||
-      (m === "POST" && /^\/v1\/skills\/[^/]+\/restore$/.test(p)),
     guidance:
       "Save a skill when you've worked out a repeatable procedure worth keeping (a checklist, a multi-step flow, a house style) — it is advertised in the skill index and loaded with the skills tool on future turns. The skill homes in THIS conversation's scope: in a 1:1 DM it's yours alone; in a private channel or group DM it's owned by that room and every member can edit or delete it (the audit trail records who changed what); a public channel stays owner-only. Write the `body` as a plain-step recipe addressed to your future self; edit or delete it as it goes stale.",
     routes: [
@@ -752,7 +556,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => m === "POST" && p === "/v1/emoji",
     guidance:
       "Pick or produce a square image under ~128KB, base64 it, then call this once. An upload error is a real result to relay, not a reason to ask the user to do it by hand.",
     routes: [
@@ -765,7 +568,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: onPath("POST", "/v1/connectors/oauth/revoke"),
     guidance:
       "Disconnect a user's OAuth connector (the reverse of connecting one). Defaults to you; to disconnect a teammate's, name them with principalId — they must share this conversation. Confirm before revoking someone else's.",
     routes: [
@@ -778,7 +580,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: () => false,
     routes: [
       {
         method: "POST",
@@ -795,7 +596,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (_m, p) => p.startsWith("/v1/admin/"),
     when: (v) => v.isAdmin && livePersonCapability(v.claims),
     guidance:
       "Admin plane: you act AS this org admin — live-authorized per call, audited under their name; confirm before any mutation (bodies/params in the admin skill). Enforced limits: content reads require a DM or effective Open sharing for the live admin (organization, personal, and conversation restrictions all apply); configuration mutations work anywhere; admin grant changes, impersonation, and identity links are portal-only. Open admin reads can expose private data to the conversation; retrieve and report only what the request needs.",
@@ -843,11 +643,6 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/volumes?scope=",
-        summary: "a scope's computer/backup contents (paths and sizes; DM or effective Open sharing)",
-      },
-      {
-        method: "GET",
         path: "/v1/admin/crons|deployments|skills?scope=",
         summary: "artifacts by owning scope (DM or effective Open sharing)",
       },
@@ -888,57 +683,26 @@ const FAMILIES: AgentApiFamily[] = [
       },
     ],
   },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.sessions.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [
-      { method: "GET", path: "/v1/admin/sessions", summary: "list conversation metadata" },
-      { method: "GET", path: "/v1/admin/sessions/:id", summary: "read a conversation transcript" },
-      { method: "GET", path: "/v1/admin/scopes", summary: "list the scope directory" },
-      { method: "GET", path: "/v1/admin/errors", summary: "read error telemetry" },
-      { method: "GET", path: "/v1/admin/runs", summary: "read queued, in-flight, and recent runs" },
-    ],
-  },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.audit.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [{ method: "GET", path: "/v1/admin/audit", summary: "read security audit events" }],
-  },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.egress.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [{ method: "GET", path: "/v1/admin/egress", summary: "read scope-labelled egress decisions" }],
-  },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.files.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [
-      { method: "GET", path: "/v1/admin/files", summary: "list a scope's document store" },
-      { method: "GET", path: "/v1/admin/files/read?id=", summary: "read a stored file" },
-      { method: "GET", path: "/v1/admin/files/download?id=", summary: "download a stored file" },
-    ],
-  },
 ];
 
+const unattendedFamilies = (): AgentApiFamily[] =>
+  UNATTENDED_ADMIN_GRANTS.map((grant) => ({
+    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes(grant) === true,
+    guidance:
+      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
+    routes: adminRoutes.flatMap((route) =>
+      "path" in route && route.admin?.unattended?.grant === grant
+        ? [{ method: route.method, path: route.path, summary: route.admin.unattended.summary }]
+        : [],
+    ),
+  }));
+
 const WHOAMI_FOR_ALL: AgentApiFamily = {
-  match: () => false,
   when: (v) => !(v.isAdmin && livePersonCapability(v.claims)),
   routes: [
     { method: "GET", path: "/v1/admin/whoami", summary: "this user's org capabilities: {permissions, isAdmin, role?}" },
   ],
 };
-
-export function agentApiMatches(method: string, pathname: string): boolean {
-  return FAMILIES.some((f) => f.match(method, pathname));
-}
 
 export interface AgentApiListing {
   actorId: string;
@@ -958,7 +722,7 @@ export function renderAgentApis(
     isAdmin: admin.isAdmin,
     swarmsEnabled: features.swarmsEnabled,
   };
-  const visible = [...FAMILIES, WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
+  const visible = [...FAMILIES, ...unattendedFamilies(), WHOAMI_FOR_ALL].filter((f) => f.when?.(view) ?? true);
   return {
     actorId: claims.actorId,
     scopeId: claims.scopeId,

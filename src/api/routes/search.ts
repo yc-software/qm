@@ -40,5 +40,5 @@ async function search(ctx: ApiCtx): Promise<void> {
   return sendJson(ctx.res, 200, result);
 }
 export const searchRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/search", auth: "either", handle: search },
+  { method: "POST", path: "/v1/search", auth: "either", allowedInStrict: true, handle: search },
 ];

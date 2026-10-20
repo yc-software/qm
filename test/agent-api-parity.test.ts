@@ -1,46 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
+import { renderAgentApis } from "../src/api/agent-api-catalog.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
+import { findRoute } from "../src/api/routes/route.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
-import type { BaseCtx, Route } from "../src/api/routes/route.ts";
+import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 
-const DEDICATED_AUDIENCE_EITHER = new Set<string>(["POST /v1/blobs", "GET /v1/blobs/:id"]);
+const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + 60_000 };
 
-const sample = (p: string) => p.replace(/:[A-Za-z]+/g, "x123");
-const hasPath = (r: Route<BaseCtx>): r is Route<BaseCtx> & { method: string; path: string } =>
-  "path" in r && "method" in r;
-
-const allRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  ...(rawRoutes as ReadonlyArray<Route<BaseCtx>>),
-  ...(apiRoutes as unknown as ReadonlyArray<Route<BaseCtx>>),
-];
-
-test("every auth:'either' route is admitted by the catalog gate (no parity drift)", () => {
-  const misses: string[] = [];
-  for (const r of allRoutes) {
-    if (r.auth !== "either" || !hasPath(r)) continue;
-    const key = `${r.method} ${r.path}`;
-    if (DEDICATED_AUDIENCE_EITHER.has(key)) continue;
-    for (const method of r.method.split("|")) {
-      if (!agentApiMatches(method, sample(r.path))) misses.push(`${method} ${r.path}`);
-    }
-  }
-  assert.deepEqual(
-    misses,
-    [],
-    `agent-callable routes the catalog gate rejects (add them to FAMILIES in agent-api-catalog.ts, ` +
-      `or, if they use a dedicated-audience token, to DEDICATED_AUDIENCE_EITHER here): ${misses.join(", ")}`,
+function advertised(): Array<{ method: string; path: string }> {
+  const listings = [
+    renderAgentApis(
+      { ...base, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
+      { isAdmin: true },
+      { swarmsEnabled: true },
+    ),
+    renderAgentApis({ ...base, grants: [...UNATTENDED_ADMIN_GRANTS] }, { isAdmin: false }, { swarmsEnabled: false }),
+  ];
+  return listings.flatMap((listing) =>
+    listing.endpoints.flatMap(({ method, path }) => {
+      const [route = ""] = path.split("?");
+      const paths = route
+        .split("/")
+        .slice(1)
+        .map((segment) => (segment.startsWith(":") ? ["x1"] : segment.split("|")))
+        .reduce<string[]>((acc, options) => acc.flatMap((prefix) => options.map((o) => `${prefix}/${o}`)), [""]);
+      return method.split("|").flatMap((m) => paths.map((p) => ({ method: m, path: p })));
+    }),
   );
-});
+}
 
-test("the catalog gate admits no source-only or public route (no over-exposure)", () => {
-  const leaks: string[] = [];
-  for (const r of allRoutes) {
-    if (!hasPath(r)) continue;
-    if (r.auth !== "source" && r.auth !== "public") continue;
-    for (const method of r.method.split("|")) {
-      if (agentApiMatches(method, sample(r.path))) leaks.push(`${method} ${r.path} (${String(r.auth)})`);
-    }
-  }
-  assert.deepEqual(leaks, [], `internal routes wrongly admitted to the agent surface: ${leaks.join(", ")}`);
+test("every endpoint the agent API catalog advertises is served by a route an agent token can call", () => {
+  const endpoints = advertised();
+  assert.ok(endpoints.length > 100, `expected a full listing, got ${endpoints.length}`);
+  const unreachable = endpoints.flatMap(({ method, path }) => {
+    const found = findRoute(rawRoutes, method, path) ?? findRoute(apiRoutes, method, path);
+    return found && (found.route.auth === "either" || typeof found.route.auth === "object")
+      ? []
+      : [`${method} ${path} (${found ? String(found.route.auth) : "no route"})`];
+  });
+  assert.deepEqual(unreachable, []);
 });

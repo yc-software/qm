@@ -255,7 +255,14 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
 }
 
 export const contextRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/surface-context", actor: "system", auth: "either", handle: createSurfaceContextRequest },
+  {
+    method: "POST",
+    path: "/v1/surface-context",
+    actor: "system",
+    auth: "either",
+    allowedInStrict: true,
+    handle: createSurfaceContextRequest,
+  },
   { method: "POST", path: "/v1/surface-file", actor: "system", auth: "either", handle: createSurfaceFileRequest },
   { method: "GET", path: "/v1/surface-context/pending", auth: "source", handle: listPendingContextRequests },
   {

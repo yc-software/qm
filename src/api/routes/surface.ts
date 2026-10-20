@@ -1,3 +1,4 @@
+import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
@@ -656,126 +657,137 @@ export function parseFacts(body: unknown): string[] | string {
   return facts;
 }
 
-async function agentMemory(ctx: ApiCtx): Promise<void> {
-  const memory = memoryForRequest(ctx);
-  const { res, deps, pathname, method, body, capability } = ctx;
-  if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
-  if (!memory) return sendJson(res, 404, { error: "not_found" });
+type AgentMemoryHandler = (
+  ctx: ApiCtx,
+  memory: NonNullable<ReturnType<typeof memoryForRequest>>,
+  capability: CapabilityClaims,
+) => Promise<void>;
 
-  if (isObj(body) && ["recipient", "channel", "participants"].some((key) => key in body)) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "memory can only be changed from its own conversation",
-    });
-  }
-
-  if (method === "POST" && pathname === "/v1/memory/search") {
-    const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
-    if (typeof b.query !== "string" || !b.query.trim()) {
-      return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
+const agentMemory =
+  (handle: AgentMemoryHandler) =>
+  async (ctx: ApiCtx): Promise<void> => {
+    const memory = memoryForRequest(ctx);
+    const { res, body, capability } = ctx;
+    if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
+    if (!memory) return sendJson(res, 404, { error: "not_found" });
+    if (isObj(body) && ["recipient", "channel", "participants"].some((key) => key in body)) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "memory can only be changed from its own conversation",
+      });
     }
-    const allowed = capability.memory?.read ?? [];
-    if (b.scope !== undefined && typeof b.scope !== "string")
-      return sendJson(res, 400, { error: "bad_request", message: "scope must be a string" });
-    if (typeof b.scope === "string" && !allowed.includes(b.scope))
-      return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
-    const scopes = typeof b.scope === "string" ? [b.scope] : allowed;
-    if (scopes.length === 0) {
-      return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
+    return handle(ctx, memory, capability);
+  };
+
+const searchMemory = agentMemory(async (ctx, memory, capability) => {
+  const { res, deps, body } = ctx;
+  const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
+  if (typeof b.query !== "string" || !b.query.trim()) {
+    return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
+  }
+  const allowed = capability.memory?.read ?? [];
+  if (b.scope !== undefined && typeof b.scope !== "string")
+    return sendJson(res, 400, { error: "bad_request", message: "scope must be a string" });
+  if (typeof b.scope === "string" && !allowed.includes(b.scope))
+    return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
+  const scopes = typeof b.scope === "string" ? [b.scope] : allowed;
+  if (scopes.length === 0) {
+    return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
+  }
+  const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
+    actorId: capability.actorId,
+  });
+  audit(deps, {
+    principalId: capability.actorId,
+    action: "memory.agent.search",
+    resource: "memory",
+    scopeLabel: scopes.join(","),
+  });
+  return sendJson(res, 200, { results });
+});
+
+const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
+  const { res, deps } = ctx;
+  const requested = ctx.url.searchParams.get("scope");
+  const read = capability.memory?.read ?? [];
+  const target =
+    requested === "org"
+      ? (capability.memory?.orgWrite ?? read.find((scope) => scope.startsWith("org:")))
+      : (requested ?? capability.memory?.write ?? capability.scopeId);
+  if (!target || !canReadNotebook({ ...capability.memory, read }, target)) {
+    return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
+  }
+  audit(deps, {
+    principalId: capability.actorId,
+    action: "memory.agent.read",
+    resource: "memory",
+    scopeLabel: target,
+  });
+  return sendJson(res, 200, { scopeId: target, facts: await memoryFacts(memory, target) });
+});
+
+const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
+  agentMemory(async (ctx, memory, capability) => {
+    const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
+    if (requestedScope !== undefined && requestedScope !== "org") {
+      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
     }
-    const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
-      actorId: capability.actorId,
-    });
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.search",
-      resource: "memory",
-      scopeLabel: scopes.join(","),
-    });
-    return sendJson(res, 200, { results });
-  }
-
-  if (method === "GET" && pathname === "/v1/memory/self") {
-    const requested = ctx.url.searchParams.get("scope");
-    const read = capability.memory?.read ?? [];
-    const target =
-      requested === "org"
-        ? (capability.memory?.orgWrite ?? read.find((scope) => scope.startsWith("org:")))
-        : (requested ?? capability.memory?.write ?? capability.scopeId);
-    if (!target || !canReadNotebook({ ...capability.memory, read }, target)) {
-      return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
+    const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
+    if (!write) {
+      return sendJson(ctx.res, 403, {
+        error: "forbidden",
+        message:
+          requestedScope === "org"
+            ? "org memory writes require an org admin"
+            : "memory capture is not enabled for this conversation",
+      });
     }
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.read",
-      resource: "memory",
-      scopeLabel: target,
-    });
-    return sendJson(res, 200, { scopeId: target, facts: await memoryFacts(memory, target) });
-  }
+    return handle(ctx, memory, capability, write);
+  });
 
-  const requestedScope =
-    method === "GET"
-      ? (ctx.url.searchParams.get("scope") ?? undefined)
-      : (body as { scope?: unknown } | undefined)?.scope;
-  if (requestedScope !== undefined && requestedScope !== "org") {
-    return sendJson(res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-  }
-  const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-  if (!write) {
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message:
-        requestedScope === "org"
-          ? "org memory writes require an org admin"
-          : "memory capture is not enabled for this conversation",
-    });
-  }
+const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+  const facts = parseFacts(body);
+  if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
+  const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
+    mode: "explicit",
+    actorId: capability.actorId,
+    conversationScopeId: capability.scopeId,
+    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
+  });
+  audit(deps, {
+    principalId: capability.actorId,
+    action: "memory.agent.capture",
+    resource: "memory",
+    scopeLabel: write,
+  });
+  return sendJson(res, 200, { ok: true, added, scopeId: write });
+});
 
-  if (method === "POST" && pathname === "/v1/memory/facts") {
-    const facts = parseFacts(body);
-    if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-    const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
-      mode: "explicit",
-      actorId: capability.actorId,
-      conversationScopeId: capability.scopeId,
-      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
-    });
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.capture",
-      resource: "memory",
-      scopeLabel: write,
-    });
-    return sendJson(res, 200, { ok: true, added, scopeId: write });
-  }
-  if (method === "PATCH" && pathname === "/v1/memory/facts") {
-    const edits = parseEdits(body);
-    if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-    await memory.edit?.(write, edits, capability.actorId, { conversationScopeId: capability.scopeId });
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.edit",
-      resource: "memory",
-      scopeLabel: write,
-    });
-    return sendJson(res, 200, { ok: true, scopeId: write });
-  }
-  if (method === "DELETE" && pathname === "/v1/memory/facts") {
-    const ids = parseIds(body);
-    if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-    await memory.delete?.(write, ids, capability.actorId);
-    audit(deps, {
-      principalId: capability.actorId,
-      action: "memory.agent.delete",
-      resource: "memory",
-      scopeLabel: write,
-    });
-    return sendJson(res, 200, { ok: true, scopeId: write });
-  }
+const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+  const edits = parseEdits(body);
+  if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
+  await memory.edit?.(write, edits, capability.actorId, { conversationScopeId: capability.scopeId });
+  audit(deps, {
+    principalId: capability.actorId,
+    action: "memory.agent.edit",
+    resource: "memory",
+    scopeLabel: write,
+  });
+  return sendJson(res, 200, { ok: true, scopeId: write });
+});
 
-  return sendJson(res, 404, { error: "not_found", message: `${method} ${pathname}` });
-}
+const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
+  const ids = parseIds(body);
+  if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
+  await memory.delete?.(write, ids, capability.actorId);
+  audit(deps, {
+    principalId: capability.actorId,
+    action: "memory.agent.delete",
+    resource: "memory",
+    scopeLabel: write,
+  });
+  return sendJson(res, 200, { ok: true, scopeId: write });
+});
 
 async function listSkills(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
@@ -1358,19 +1370,11 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
   { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
-  {
-    match: (m, p) =>
-      (p === "/v1/memory/self" && m === "GET") ||
-      (p === "/v1/memory/facts" && (m === "POST" || m === "PATCH" || m === "DELETE")) ||
-      (m === "POST" && p === "/v1/memory/search"),
-    auth: "either",
-    handle: agentMemory,
-  },
-  {
-    match: (_m, p) => p === "/v1/memory/self" || p === "/v1/memory/search" || p === "/v1/memory/facts",
-    auth: "source",
-    handle: agentMemory,
-  },
+  { method: "GET", path: "/v1/memory/self", auth: "either", handle: readOwnNotebook },
+  { method: "POST", path: "/v1/memory/facts", auth: "either", handle: captureFacts },
+  { method: "PATCH", path: "/v1/memory/facts", auth: "either", handle: editFacts },
+  { method: "DELETE", path: "/v1/memory/facts", auth: "either", handle: deleteFacts },
+  { method: "POST", path: "/v1/memory/search", auth: "either", allowedInStrict: true, handle: searchMemory },
   { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
@@ -1395,7 +1399,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
     { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
     { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
-    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
+    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", allowedInStrict: true, handle: restoreSkill },
   ]),
   ...withActor("query.principalId", [
     { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },
