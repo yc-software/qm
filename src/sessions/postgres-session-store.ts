@@ -902,6 +902,15 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `DROP SCHEMA IF EXISTS items_copy_ops CASCADE`,
         ],
       },
+      {
+        id: "sessions/store/0038-scoped-origin-pages",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_conversations_by_scope_activity
+        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC) WHERE origin = 'conversation'`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_other_background_by_scope_activity
+        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC) WHERE origin NOT IN ('conversation', 'cron')`,
+        ],
+      },
     ],
     [
       {

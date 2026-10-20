@@ -1433,17 +1433,26 @@ test("pg scopeSessionSummaries: the listing plan is an index walk with no per-ro
   const before = { lastActivity: Date.now() + 1e9, id: "~" };
   await s.scopeSessionSummaries(scope, false, { limit: 50, before, category: "conversation" });
   await s.scopeSessionSummaries(scope, true, { limit: 50, before, category: "conversation" });
+  await s.scopeSessionSummaries(scope, false, {
+    limit: 50,
+    before,
+    category: "background",
+    origin: "other_background",
+  });
   t.mock.restoreAll();
-  assert.equal(captured.length, 2);
+  assert.equal(captured.length, 3);
   const raw = await new pg.Pool({ connectionString: URL }).connect();
   try {
     await raw.query("BEGIN");
     await raw.query("SET LOCAL enable_seqscan = off");
     await raw.query("SET LOCAL enable_bitmapscan = off");
     await raw.query("SET LOCAL enable_sort = off");
-    for (const [query, index] of captured.map(
-      (c, i) => [c, i ? "sessions_by_activity" : "sessions_by_scope_activity"] as const,
-    )) {
+    const indexes = [
+      "sessions_conversations_by_scope_activity",
+      "sessions_by_activity",
+      "sessions_other_background_by_scope_activity",
+    ];
+    for (const [query, index] of captured.map((c, i) => [c, indexes[i]!] as const)) {
       const explained = await raw.query(`EXPLAIN (FORMAT JSON) ${query.text}`, query.values);
       const plan = JSON.stringify(explained.rows[0]["QUERY PLAN"]);
       assert.doesNotMatch(plan, /SubPlan|"Relation Name":"items"/, "no correlated subquery over items");
