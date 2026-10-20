@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createConfiguredMemoryService } from "../src/memory/provider-factory.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
-import type { McpFetch } from "../src/mcp/mcp-client.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const defaultMemory: MemoryService = {
@@ -21,38 +21,18 @@ const defaultMemory: MemoryService = {
   },
 };
 
-function response(body: unknown) {
-  return {
-    ok: true,
-    status: 200,
-    headers: { get: () => "application/json" },
-    async text() {
-      return JSON.stringify(body);
-    },
-  };
-}
-
-test("configured provider runs OAuth MCP recall and explicit capture end to end", async () => {
-  const calls: Array<{ url: string; body: string; authorization?: string }> = [];
-  const fetchImpl: McpFetch = async (url, init) => {
-    calls.push({ url, body: init.body, authorization: init.headers.authorization });
-    if (url.endsWith("/token")) {
-      const params = new URLSearchParams(init.body);
-      return response({ access_token: `${params.get("client_id")}-token`, expires_in: 300 });
-    }
-    const rpc = JSON.parse(init.body) as { id: number; params: { name: string; arguments: Record<string, unknown> } };
-    return response({
-      jsonrpc: "2.0",
-      id: rpc.id,
-      result: { content: [{ type: "text", text: rpc.params.name === "search_knowledge" ? "org knowledge" : "ok" }] },
-    });
-  };
+test("configured provider runs OAuth MCP recall and explicit capture end to end", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: ["search_knowledge", "write_knowledge"].map((name) => ({ name, inputSchema: { type: "object" as const } })),
+    clients: { ro: "x", rw: "y" },
+    call: (name) => ({ content: [{ type: "text", text: name === "search_knowledge" ? "org knowledge" : "ok" }] }),
+  });
   const raw = JSON.stringify({
     providers: [
       {
         id: "knowledge",
         type: "mcp",
-        url: "http://knowledge.internal:8080",
+        url: mcp.url,
         read: { tool: "search_knowledge", clientIdEnv: "RO_ID", clientSecretEnv: "RO_SECRET" },
         write: { tool: "write_knowledge", clientIdEnv: "RW_ID", clientSecretEnv: "RW_SECRET" },
       },
@@ -65,7 +45,6 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   const memory = createConfiguredMemoryService({
     defaultMemory,
     config: parseMemoryProviderConfig(raw, { RO_ID: "ro", RO_SECRET: "x", RW_ID: "rw", RW_SECRET: "y" }),
-    fetchImpl,
   });
 
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");
@@ -73,10 +52,12 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
-  assert.equal(calls[0]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[1]?.authorization, "Bearer ro-token");
-  assert.match(calls[1]?.body ?? "", /search_knowledge/);
-  assert.equal(calls[2]?.url, "http://knowledge.internal:8080/token");
-  assert.equal(calls[3]?.authorization, "Bearer rw-token");
-  assert.match(calls[3]?.body ?? "", /write_knowledge/);
+  assert.deepEqual(
+    mcp.tokenRequests.map((r) => r.clientId),
+    ["ro", "rw"],
+  );
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.authorization),
+    ["Bearer ro-token-1", "Bearer rw-token-2"],
+  );
 });

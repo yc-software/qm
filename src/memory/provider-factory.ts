@@ -1,4 +1,3 @@
-import type { McpFetch } from "../mcp/mcp-client.ts";
 import { createMcpClient } from "../mcp/mcp-client.ts";
 import { errMessage } from "../util/errors.ts";
 import { createMcpMemoryProvider, type McpMemoryOperation } from "./mcp-memory-provider.ts";
@@ -9,18 +8,9 @@ import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { SessionEntry } from "../types.ts";
 
-function operation(
-  url: string,
-  spec: McpMemoryOperationConfig,
-  timeoutMs: number,
-  fetchImpl?: McpFetch,
-): McpMemoryOperation {
+function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
   return {
-    client: createMcpClient({
-      url,
-      auth: { mode: "client-credentials", ...spec.auth },
-      ...(fetchImpl ? { fetchImpl } : {}),
-    }),
+    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth } }),
     tool: spec.tool,
     timeoutMs,
     ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),
@@ -39,7 +29,6 @@ function operation(
 export function createConfiguredMemoryService(opts: {
   defaultMemory: MemoryService;
   config?: MemoryProviderConfig;
-  fetchImpl?: McpFetch;
   /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
   sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
@@ -61,8 +50,8 @@ export function createConfiguredMemoryService(opts: {
       continue;
     }
     providers[provider.id] = createMcpMemoryProvider({
-      read: operation(provider.url, provider.read, provider.timeoutMs, opts.fetchImpl),
-      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs, opts.fetchImpl) } : {}),
+      read: operation(provider.url, provider.read, provider.timeoutMs),
+      ...(provider.write ? { write: operation(provider.url, provider.write, provider.timeoutMs) } : {}),
     });
   }
   return createRoutedMemoryService({

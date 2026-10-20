@@ -10,11 +10,10 @@ import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
-import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpFetch } from "./mcp-client.ts";
+import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const MAX_TOOLS_PER_SERVER = 64;
 const MAX_RESULT_CHARS = 60_000;
 
 export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
@@ -72,7 +71,6 @@ export function createMcpToolService(opts: {
   servers: McpServerStore;
   audit?: AuditLog;
   userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken">;
-  fetchImpl?: McpFetch;
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
@@ -103,12 +101,7 @@ export function createMcpToolService(opts: {
   function clientFor(server: McpServer): McpClient {
     const cached = clients.get(server.id);
     if (cached && JSON.stringify(cached.server) === JSON.stringify(server)) return cached.client;
-    const client = createMcpClient({
-      url: server.url,
-      auth: authOf(server),
-      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      now,
-    });
+    const client = createMcpClient({ url: server.url, auth: authOf(server) });
     clients.set(server.id, { client, server });
     return client;
   }
@@ -128,12 +121,7 @@ export function createMcpToolService(opts: {
       if (server.auth === "oauth-user") throw new SignInRequired(signInMessage(server));
       throw new Error(`Connect your account for MCP server ${server.id} before using this tool`);
     }
-    return createMcpClient({
-      url: server.url,
-      auth: { mode: "bearer", token },
-      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      now,
-    });
+    return createMcpClient({ url: server.url, auth: { mode: "bearer", token } });
   }
 
   async function refresh(): Promise<void> {
@@ -158,7 +146,7 @@ export function createMcpToolService(opts: {
             });
             continue;
           }
-        } else tools = (await clientFor(server).listTools()).slice(0, MAX_TOOLS_PER_SERVER);
+        } else tools = await clientFor(server).listTools();
         for (const tool of tools) {
           next.push({
             name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
@@ -197,7 +185,7 @@ export function createMcpToolService(opts: {
       try {
         const client = await callerClient(server, principalId);
         if (def.signIn) {
-          const tools = (await client.listTools()).slice(0, MAX_TOOLS_PER_SERVER);
+          const tools = await client.listTools();
           const current = await opts.servers.get(server.id);
           if (current) await opts.servers.put({ ...current, tools });
           await refresh();
@@ -219,13 +207,7 @@ export function createMcpToolService(opts: {
     },
     refresh,
     async probe(server) {
-      const client = createMcpClient({
-        url: server.url,
-        auth: authOf(server),
-        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-        now,
-      });
-      const tools = await client.listTools();
+      const tools = await createMcpClient({ url: server.url, auth: authOf(server) }).listTools();
       return tools.map((t) => t.name);
     },
     close() {
