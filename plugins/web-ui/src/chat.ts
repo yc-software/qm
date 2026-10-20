@@ -2016,7 +2016,7 @@ export function createChatSurface(
       const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
       const hasText = Boolean(text);
       const showWork =
-        shouldShowApprovalWork(msg, work, text) &&
+        (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
       const steeringOnly =
         !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
@@ -2350,17 +2350,6 @@ export function createChatSurface(
 
   function shouldShowWork(work: WorkBlock | null | undefined, finalText: string): work is WorkBlock {
     return Boolean(work && (messageWorkTimeline(work, finalText).length || work.pendingApprovals?.length));
-  }
-
-  function shouldShowApprovalWork(
-    message: AssistantMessage,
-    work: WorkBlock | null | undefined,
-    text: string,
-  ): boolean {
-    if ((message as AssistantWork & { approvalDecision?: "denied" }).approvalDecision === "denied") return false;
-    if (text === "Denied." && work?.activity.some((a) => a.type === "tool_call" || a.type === "approval_request"))
-      return false;
-    return true;
   }
 
   let readonlyRedraw: (() => void) | null = null;

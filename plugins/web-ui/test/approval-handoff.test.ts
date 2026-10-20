@@ -291,7 +291,12 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       await until(() => requests.some((r) => r.path === "/api/approvals/a2"));
       pending = [];
       continuation = deferredRun();
-      continuation.resolve(Response.json({ status: "done", result: { status: "refused", reason: "approval denied" } }));
+      continuation.resolve(
+        Response.json({
+          status: "done",
+          result: { status: "refused", refusalKind: "approval_denied", reason: "approval denied" },
+        }),
+      );
       decision.resolve(Response.json({ runId: "r1" }));
       await until(() => !chat.state.agent!.state.isStreaming && chat.state.resolvingApprovals.size === 0);
     });

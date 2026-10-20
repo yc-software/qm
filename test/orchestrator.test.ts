@@ -2923,6 +2923,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   });
   assert.equal(denied.status, "refused");
   assert.match(denied.reason ?? "", /approval denied/);
+  assert.equal(denied.refusalKind, "approval_denied");
   assert.deepEqual(
     (await deniedApp.sessions.getEntries(deniedPending.sessionId!)).filter((e) => e.type === "user"),
     [],
@@ -3688,6 +3689,7 @@ test("denying a pending approval clears it and does not run the command", async 
   );
   assert.equal(denied.status, "refused");
   assert.match(denied.reason ?? "", /approval denied/);
+  assert.equal(denied.refusalKind, "approval_denied");
 });
 
 test("collect-mode: a turn that finished after skipping an approval-gated command keeps its reply", async () => {

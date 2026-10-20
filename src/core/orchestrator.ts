@@ -2083,6 +2083,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               status: "refused",
               sessionId: session.id,
               reason: `approval denied for ${p.command}`,
+              refusalKind: "approval_denied",
             };
           } else {
             const scope = input.approval.scope ?? "once";
