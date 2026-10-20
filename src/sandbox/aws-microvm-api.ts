@@ -146,8 +146,18 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
 
   const api: AwsMicrovmApi = {
     async listImages() {
-      const { json } = await call<{ items?: MicrovmImageSummary[] }>("GET", `${API}/microvm-images`);
-      return json.items ?? [];
+      const items: MicrovmImageSummary[] = [];
+      let next: string | undefined;
+      do {
+        const query = next ? `?nextToken=${encodeURIComponent(next)}` : "";
+        const { json } = await call<{ items?: MicrovmImageSummary[]; nextToken?: string }>(
+          "GET",
+          `${API}/microvm-images${query}`,
+        );
+        items.push(...(json.items ?? []));
+        next = json.nextToken;
+      } while (next);
+      return items;
     },
     async findImage(name) {
       return (await api.listImages()).find((i) => i.name === name) ?? null;

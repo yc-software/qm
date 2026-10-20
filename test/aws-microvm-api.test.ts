@@ -273,3 +273,17 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
   const other = writes[0]!.path.replace(/\.part-0$/, "");
   assert.deepEqual(execs, [`rm -f '${other}'.part-* '${other}'.joined`]);
 });
+
+test("findImage follows nextToken past the first page of images", async () => {
+  const { fetchImpl, calls } = fakeFetch((rec) =>
+    rec.url.includes("nextToken=")
+      ? { status: 200, body: { items: [{ name: "b-qm-sandbox", imageArn: "arn:b" }] } }
+      : { status: 200, body: { items: [{ name: "a-qm-sandbox", imageArn: "arn:a" }], nextToken: "p/2" } },
+  );
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  assert.equal((await api.findImage("b-qm-sandbox"))?.imageArn, "arn:b");
+  assert.deepEqual(
+    calls.map((c) => new URL(c.url).search),
+    ["", "?nextToken=p%2F2"],
+  );
+});
