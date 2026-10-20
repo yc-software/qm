@@ -139,7 +139,7 @@ function jsdomGlobals(): JSDOM {
   return dom;
 }
 
-test("opening a conversation joins the list refresh already in flight instead of starting its own", async () => {
+test("opening a conversation joins the first list load and never refetches a loaded list", async () => {
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
@@ -162,13 +162,13 @@ test("opening a conversation joins the list refresh already in flight instead of
     await sessionsReady();
 
     refreshSessionsOnOpen();
+    refreshSessionsOnOpen();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(pending.length, 2, "once it has landed, opening a conversation freshens the list again");
-
-    refreshSessionsOnOpen();
-    refreshSessionsOnOpen();
-    assert.equal(pending.length, 2, "…and panes restored together still share one refresh, loaded list or not");
-    pending[1]!(Response.json({ sessions: [] }));
+    assert.equal(
+      pending.length,
+      1,
+      "once it has landed, opening a conversation leaves the list to the delivery stream",
+    );
   } finally {
     await vite.close();
     dom.window.close();

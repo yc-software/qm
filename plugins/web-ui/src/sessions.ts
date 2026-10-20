@@ -1684,6 +1684,9 @@ let listDiscards = 0;
 const LIST_STALL_MS = 10_000;
 
 export function refreshSessionsOnOpen(): void {
+  // Once the list has loaded, the delivery stream keeps it current; refetching every session on each
+  // open only competes with the transcript being drawn. Opens still retry a list that never loaded.
+  if (sessionsState.loaded) return;
   const joinable =
     sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
   if (!joinable) {
