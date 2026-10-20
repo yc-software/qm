@@ -605,46 +605,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return hits.slice(0, Math.max(1, Math.min(limit, 200)));
     },
 
-    async appendSearchEntries(lease, rows): Promise<void> {
-      const held = leases.get(lease.sessionId);
-      if (!held || held.token !== lease.token || now() >= held.expiresAt) {
-        throw new Error("search index append without a valid session lease");
-      }
-      held.expiresAt = now() + leaseTtlMs;
-      const index = searchIndex.get(lease.sessionId) ?? [];
-      const seen = new Set(index.map((row) => row.seq));
-      for (const row of rows) {
-        if (seen.has(row.seq)) continue;
-        seen.add(row.seq);
-        index.push({ ...row });
-      }
-      index.sort((a, b) => a.seq - b.seq);
-      searchIndex.set(lease.sessionId, index);
-    },
-
-    async searchIndexCoverage(sessionId): Promise<number> {
-      const index = searchIndex.get(sessionId);
-      return index?.length ? index[index.length - 1]!.seq : -1;
-    },
-
-    async missingSearchEntries(sessionId): Promise<number> {
-      const indexed = new Set((searchIndex.get(sessionId) ?? []).map((row) => row.seq));
-      return (entries.get(sessionId) ?? []).filter(
-        (entry) => searchEntryType(entry) && entrySearchText(entry.payload)?.trim() && !indexed.has(entry.seq),
-      ).length;
-    },
-
-    async lastSearchableEntrySeq(sessionId): Promise<number> {
-      const log = entries.get(sessionId) ?? [];
-      for (let i = log.length - 1; i >= 0; i--) {
-        const e = log[i]!;
-        if (!searchEntryType(e)) continue;
-        const text = entrySearchText(e.payload);
-        if (text && text.trim()) return e.seq;
-      }
-      return -1;
-    },
-
     async scanAll() {
       return [...sessions.values()];
     },

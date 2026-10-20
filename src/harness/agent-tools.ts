@@ -22,7 +22,7 @@ import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
-import { redactSecrets } from "./redact-secrets.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";

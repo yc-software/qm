@@ -43,8 +43,13 @@ retention also removes expired entries from the legacy table, preventing a later
 restart from importing them again. The legacy table remains available for older
 binaries.
 
-Upgrading from a release that still writes `session_tape` copies its step metadata
-into `legacy_tape_steps` during startup migrations, then drops the tape. Stop every
+Upgrading from a release that predates the `items` table copies session history
+into `items` during startup migrations, then drops `session_entries`, `session_tape`
+and the old search table. Stop every older core and worker first: they cannot run
+against the new schema. `src/sessions/legacy-history-migrations.ts` keeps those released
+migrations verbatim; delete it once every supported deployment has applied
+`sessions/store/0036-items-cutover`. Upgrading from a release that still writes `session_tape`
+first copies its step metadata into `legacy_tape_steps`, then drops the tape. Stop every
 older core and worker before starting the new release: a tape write after the copy
 starts makes the drop refuse, and that startup fails with the reset to run. The copy
 runs on the direct migration connection without a statement timeout and resumes

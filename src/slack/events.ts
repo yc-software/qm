@@ -364,7 +364,10 @@ export function registerSlackEvents(
     const e = parseLifecycleEvent(event);
     if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
     if (e.user === ids.botUserId) {
-      if (e.channel && deps.backfillHistory) await deps.backfillHistory(client, e.channel).catch(() => {});
+      if (e.channel && deps.backfillHistory)
+        await deps
+          .backfillHistory(client, e.channel)
+          .catch(swallowAs("slack: backfill history on bot join", undefined));
       if (allowActor) {
         await forceDirectorySync(client);
         return;

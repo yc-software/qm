@@ -10,6 +10,7 @@ import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
 import { icon } from "./icons";
+import { swallow } from "../../chassis/src/errors.ts";
 
 interface ChatSearchHit {
   sessionId: string;
@@ -163,8 +164,9 @@ async function runSearch(q: string): Promise<void> {
     }
     searchState.hits = hits;
     searchState.failed = false;
-  } catch {
+  } catch (e) {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
+    swallow("web-ui: chat search", e);
     searchState.hits = [];
     searchState.failed = true;
   }
@@ -190,8 +192,9 @@ async function runResourceSearch(q: string, ctl: AbortController, seq: number): 
     searchState.resources = result.hits;
     searchState.resourcesLimited = Boolean(response.limited?.length);
     searchState.resourceFailures = result.failed;
-  } catch {
+  } catch (e) {
     if (seq !== fetchSeq || ctl.signal.aborted) return;
+    swallow("web-ui: resource search", e);
     searchState.resourceFailures = ["resources"];
   }
   searchState.resourcesLoading = false;

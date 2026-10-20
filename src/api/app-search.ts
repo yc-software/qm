@@ -5,6 +5,7 @@ import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entr
 import type { Principal } from "../types.ts";
 import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";
+import { swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
@@ -73,7 +74,9 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
         if (searchableFile(file.mimetype, file.name)) {
           const opened = await app.openFileForViewer(file.id, request.principals[0]!.id);
           if (opened) {
-            const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(() => null);
+            const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
+              swallowAs("app search: read file contents", null),
+            );
             if (collected) text += `\n${collected.data.toString("utf8")}`;
           }
         }

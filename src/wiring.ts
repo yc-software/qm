@@ -1356,7 +1356,7 @@ export function buildApp(
   };
   const sessions: SessionStore =
     config.sessionStore === "postgres"
-      ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"), { stageItemsCutover: config.stageItemsCutover })
+      ? createPostgresSessionStore(requireDbUrl("SESSION_STORE"))
       : createMemorySessionStore();
   memorySessions.store = sessions;
   const toolOutput =
@@ -2365,7 +2365,10 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
+    requestFire: (loopId) =>
+      void loopFire
+        .fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`)
+        .catch(swallowAs("inbox loop: slack event fire", undefined)),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({

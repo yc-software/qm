@@ -43,7 +43,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -281,7 +281,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: async (deps, scope) => {
       const ref = channelContainer(scope);
       if (!deps.channelPolicy || !ref) return undefined;
-      const p = await deps.channelPolicy.get(ref).catch(() => undefined);
+      const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
         orders: p?.orders ?? "",

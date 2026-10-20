@@ -31,7 +31,7 @@ import {
 } from "../model/pi-models.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import type { ScopeId } from "../types.ts";
-import { swallow } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./pi-harness.ts";
@@ -497,7 +497,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       if (fromUser && reason) stopReason ??= reason;
       interrupted = true;
       queue.close();
-      await sdkQuery.interrupt().catch(() => undefined);
+      await sdkQuery.interrupt().catch(swallowAs("claude harness: interrupt query", undefined));
       controller.abort();
     };
     terminateProvider = () => {
@@ -858,19 +858,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       },
       resetSession: () => {},
       async shouldRespond(detect) {
-        try {
-          const out = await single(
-            buildDetectionPrompt(detect.reactionGuidance),
-            renderDetectPrompt(detect),
-            undefined,
-            { recordModelCall: detect.recordModelCall },
-            judgeModelId,
-          );
-          return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
-        } catch (error) {
-          swallow("claude: detect", error);
-          return { respond: false };
-        }
+        const out = await single(
+          buildDetectionPrompt(detect.reactionGuidance),
+          renderDetectPrompt(detect),
+          undefined,
+          { recordModelCall: detect.recordModelCall },
+          judgeModelId,
+        );
+        return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
       },
       async compactHistory(input) {
         const model = getRequiredModel(resolveModelId());

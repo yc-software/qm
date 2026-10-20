@@ -40,7 +40,7 @@ export function envSha(env: Record<string, string>): string {
   return sha256Hex(lines.join("\n")).slice(0, 16);
 }
 
-export { errMessage } from "../../../src/util/errors.ts";
+export { errMessage, swallowAs } from "../../../src/util/errors.ts";
 
 export function bestEffort(fn: () => void): unknown {
   try {

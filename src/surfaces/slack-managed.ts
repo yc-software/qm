@@ -11,6 +11,7 @@ import {
 } from "../slack/deferred-ack.ts";
 import { sendJson } from "../api/http.ts";
 import { isBearerSecret } from "../auth/source-auth.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 
 export function createManagedSlack(opts: {
   serviceUrl: string;
@@ -91,7 +92,7 @@ export function createManagedSlack(opts: {
       if ((req.url ?? "").split("?")[0] === "/v1/slack/managed/installation") {
         if (req.method === "DELETE") {
           await opts.store.disableManaged(input.installId);
-          void opts.reconcile?.().catch(() => undefined);
+          void opts.reconcile?.().catch(swallowAs("slack-managed: reconcile installation", undefined));
           return sendJson(res, 200, { ok: true });
         }
         if (
@@ -118,7 +119,7 @@ export function createManagedSlack(opts: {
           ...(typeof input.teamName === "string" ? { teamName: input.teamName } : {}),
         });
         if (!accepted) return sendJson(res, 409, { error: "installation_conflict" });
-        void opts.reconcile?.().catch(() => undefined);
+        void opts.reconcile?.().catch(swallowAs("slack-managed: reconcile installation", undefined));
         const ready = active?.installId === input.installId;
         return sendJson(res, ready ? 200 : 202, { ok: true, ready });
       }
@@ -158,7 +159,10 @@ export function createManagedSlack(opts: {
           })
           .then(
             () => gate.persisted(),
-            () => gate.failed("delivery failed"),
+            (e: unknown) => {
+              swallow("slack-managed: process event", e);
+              gate.failed("delivery failed");
+            },
           );
       });
     },

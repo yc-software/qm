@@ -385,7 +385,9 @@ export function createTurnHandler(deps: {
             try {
               await core.reportRunEditRef(queuedRunId, ts);
             } catch (error) {
-              await client.chat.delete({ channel: inc.channel, ts }).catch(() => {});
+              await client.chat
+                .delete({ channel: inc.channel, ts })
+                .catch(swallowAs("slack: delete status message after edit-ref failure", undefined));
               throw error;
             }
           }

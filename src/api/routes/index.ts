@@ -1,4 +1,3 @@
-import { itemsPromotionRoutes } from "./items-promotion.ts";
 import { browserModelRoutes } from "./browser-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
@@ -88,7 +87,6 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...searchRoutes,
   ...deploymentLayerRoutes,
   ...backgroundWorkRoutes,
-  ...itemsPromotionRoutes,
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,
   ...runEventRoutes,

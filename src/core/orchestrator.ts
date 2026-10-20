@@ -93,6 +93,7 @@ import {
 } from "../auth/capability-token.ts";
 import type {
   GapWork,
+  HarnessDetectResult,
   HarnessLlmRequestRecord,
   HarnessTurnInput,
   HarnessTurnResult,
@@ -609,8 +610,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!managedGroupRef) return true;
         const expected = new Set(input.sessionParticipantIds ?? []);
         const [current, version] = await Promise.all([
-          deps.managedGroups!.members(managedGroupRef).catch(() => undefined),
-          deps.managedGroups!.version(managedGroupRef).catch(() => undefined),
+          deps.managedGroups!.members(managedGroupRef).catch(swallowAs("managed group roster: members", undefined)),
+          deps.managedGroups!.version(managedGroupRef).catch(swallowAs("managed group roster: version", undefined)),
         ]);
         return (
           !!current &&
@@ -804,12 +805,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               hasUnscreenableAttachment = true;
               continue;
             }
-            const opened = await blobTransfer.open(attachment.blobId).catch(() => null);
+            const opened = await blobTransfer
+              .open(attachment.blobId)
+              .catch(swallowAs("attachment screening: open blob", null));
             if (!opened || opened.sizeBytes > MAX_AUTO_ATTACHMENT_SCREEN_BYTES) {
               hasUnscreenableAttachment = true;
               continue;
             }
-            const data = await collectBlob(opened.stream).catch(() => null);
+            const data = await collectBlob(opened.stream).catch(swallowAs("attachment screening: read blob", null));
             if (!data || data.length > MAX_AUTO_ATTACHMENT_SCREEN_BYTES || data.includes(0)) {
               hasUnscreenableAttachment = true;
               continue;
@@ -1166,7 +1169,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const snapshot = structuredClone(entry);
           const screenSkill = async () => {
             const bundles = structuredClone(
-              deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(() => null) : [],
+              deps.skillBundles
+                ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
+                    swallowAs("skill screening: load bundles", null),
+                  )
+                : [],
             );
             const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
             const key = hashId([skill.scopeId, skill.id, payload], 64);
@@ -2331,21 +2338,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         ) {
           const detectHistory = filterHistory((await historyWindow()).entries.slice(-DETECT_HISTORY_TAIL));
-          const decision = await deps.harness.models.shouldRespond({
-            session,
-            message: input.text,
-            recentContext: input.detectContext ?? "",
-            ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
-            systemPrompt: resolution.systemPrompt,
-            ...(input.gatewayContext?.reactionGuidance
-              ? { reactionGuidance: input.gatewayContext.reactionGuidance }
-              : {}),
-            history: detectHistory,
-            recordModelCall: (rec) => {
-              deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-            },
-          });
+          const decision = await deps.harness.models
+            .shouldRespond({
+              session,
+              message: input.text,
+              recentContext: input.detectContext ?? "",
+              ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
+              systemPrompt: resolution.systemPrompt,
+              ...(input.gatewayContext?.reactionGuidance
+                ? { reactionGuidance: input.gatewayContext.reactionGuidance }
+                : {}),
+              history: detectHistory,
+              recordModelCall: (rec) => {
+                deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
+                void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
+              },
+            })
+            .catch((e: unknown): HarnessDetectResult => {
+              deps.errors?.record(
+                {
+                  category: "turn",
+                  code: "detection_failed",
+                  message: errMessage(e),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                },
+                e,
+              );
+              return { respond: false, reason: `detection failed: ${errMessage(e)}` };
+            });
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;
             deps.auditLog.record({

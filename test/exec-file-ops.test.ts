@@ -134,3 +134,29 @@ test("concurrent imports keep separate archives through extraction and cleanup",
     await rm(rootDir, { recursive: true, force: true });
   }
 });
+
+test("listDir lists nothing for a missing directory but surfaces a failed listing", async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), "qm-list-"));
+  let failing = false;
+  const ops = createExecFileOps({
+    label: "test",
+    exec: async (_id, script) => {
+      if (failing) return { code: 124, stdout: "", stderr: "timed out" };
+      return exec("sh", ["-c", script]).then(
+        (r) => ({ ...r, code: 0 }),
+        (e: { code: number; stdout: string; stderr: string }) => ({ code: e.code, stdout: e.stdout, stderr: e.stderr }),
+      );
+    },
+    writeInline: async () => {},
+  });
+  try {
+    await mkdir(join(rootDir, "d"), { recursive: true });
+    await writeFile(join(rootDir, "d/f"), "x");
+    assert.deepEqual(await ops.listDir({ id: "test", rootDir }, "d"), ["d/f"]);
+    assert.deepEqual(await ops.listDir({ id: "test", rootDir }, "missing"), []);
+    failing = true;
+    await assert.rejects(ops.listDir({ id: "test", rootDir }, "d"), /test listDir failed \(exit 124\): timed out/);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});

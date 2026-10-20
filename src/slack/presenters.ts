@@ -1,3 +1,5 @@
+import { swallow } from "../util/errors.ts";
+
 export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
 
 export const CURATED_ACK_EMOJI = [
@@ -83,7 +85,7 @@ export function createAckPresenter(deps: {
   const randomEmoji = (): string =>
     candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]!;
   let pickResult: string | undefined;
-  void deps.emojiPick?.then((v) => (pickResult = v)).catch(() => undefined);
+  void deps.emojiPick?.then((v) => (pickResult = v)).catch((e) => swallow("slack: pick ack emoji", e));
   let emoji = "";
   let reactionApplied = false;
   let reactionCancelled = false;
@@ -92,7 +94,7 @@ export function createAckPresenter(deps: {
   let sawFirstBlock = false;
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (op: () => Promise<void>): void => {
-    chain = chain.then(op).catch(() => {});
+    chain = chain.then(op).catch((e) => swallow("slack: ack presenter step", e));
   };
   const timer = setTimeout(() => {
     if (deps.taskManaged || settled || ackPosted || reactionCancelled) return;

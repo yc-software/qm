@@ -187,11 +187,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
           bodies.delete(slug);
           await retirePorterBody(existing.sb, true);
         }
-        try {
-          onStatus?.("Starting your computer…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Starting your computer…");
         const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
         scopeByBody.set(ref.name, scope);
         return { name: ref.name, coldStart: volume.created };

@@ -6,7 +6,7 @@ import { join, relative, sep } from "node:path";
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { credentialRequestHeaders, type CredentialInjection } from "../credentials/keychain.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { isProbablyBinary } from "./seed.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
@@ -263,7 +263,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
         const files = await readTree(repoDir);
         return { commit, files };
       } finally {
-        await rm(work, { recursive: true, force: true }).catch(() => {});
+        await rm(work, { recursive: true, force: true }).catch(swallowAs("skill pack: remove temp clone", undefined));
       }
     },
 
@@ -285,7 +285,7 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
         if (!SHA_RE.test(sha)) throw new Error(`could not resolve ref "${target}" for skill pack`);
         return sha;
       } finally {
-        await rm(work, { recursive: true, force: true }).catch(() => {});
+        await rm(work, { recursive: true, force: true }).catch(swallowAs("skill pack: remove temp clone", undefined));
       }
     },
   };

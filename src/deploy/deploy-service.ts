@@ -25,7 +25,7 @@ import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { errMessage, reportFailure, swallow } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 
 export interface DeployFile {
   path: string;
@@ -372,7 +372,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
-      void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});
+      void deps
+        .appPublished?.(input.createdBy, d.id, d.versions[0]!.version)
+        .catch(swallowAs("deploy: app published hook", undefined));
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.createdBy,
@@ -403,7 +405,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
-        void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
+        void deps
+          .appPublished?.(before.createdBy, id, v.version)
+          .catch(swallowAs("deploy: app published hook", undefined));
         deps.auditLog.record({
           at: Date.now(),
           principalId: before.createdBy,
@@ -643,7 +647,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
-          void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
+          void deps
+            .appPublished?.(before.createdBy, id, v.version)
+            .catch(swallowAs("deploy: app published hook", undefined));
           deps.auditLog.record({
             at: Date.now(),
             principalId: before.createdBy,

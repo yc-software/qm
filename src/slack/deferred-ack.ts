@@ -130,7 +130,10 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
   const client = new SocketModeClient({
     appToken: opts.appToken,
     logLevel: parseLogLevel(opts.logLevel),
-    ...(opts.slackApiUrl ? { clientOptions: { slackApiUrl: opts.slackApiUrl } } : {}),
+    clientOptions: {
+      attachOriginalToWebAPIRequestError: false,
+      ...(opts.slackApiUrl ? { slackApiUrl: opts.slackApiUrl } : {}),
+    },
   });
   let app: BoltApp | undefined;
 

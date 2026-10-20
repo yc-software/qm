@@ -12,7 +12,7 @@ import { parseRef } from "../../acl/resource-ref.ts";
 import { orgId } from "../../config.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
 import { sendJson } from "../http.ts";
-import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";

@@ -406,7 +406,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       for (const groupId of groups) scopes.add(scopeId("group", groupId));
       for (const project of projects) scopes.add(project.scopeId);
     } catch (error) {
-      void error;
+      swallow("app: current resource scopes for viewer", error);
     }
     return [...scopes];
   }

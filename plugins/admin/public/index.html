@@ -6856,9 +6856,12 @@
           let data = null;
           try {
             data = text ? JSON.parse(text) : null;
-          } catch {}
+          } catch (error) {
+            console.warn("[swallowed] admin api: non-JSON response", method, path, res.status, error);
+          }
           return { ok: res.ok, status: res.status, data };
-        } catch {
+        } catch (error) {
+          console.warn("[swallowed] admin api: request failed", method, path, error);
           return { ok: false, status: 0, data: { message: "Network request failed." } };
         }
       }
@@ -8105,7 +8108,7 @@
               refreshModelChoices.forEach((refresh) => refresh());
               initCustomDropdowns($("view-governance"));
             })
-            .catch(() => {});
+            .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
         }
       }
       async function refreshSoulConflict() {

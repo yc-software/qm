@@ -13,7 +13,7 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage, reportFailureAs } from "../../util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
@@ -97,7 +97,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     method === "GET" &&
     String(req.headers["sec-fetch-dest"] ?? "") === "document"
   ) {
-    const d = await app.getDeployment(id).catch(() => null);
+    const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
     if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
       res.writeHead(302, {
@@ -843,7 +843,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     cleanUrlRedirect();
     return true;
   }
-  const deployment = await app.getDeployment(slug).catch(() => null);
+  const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
   const externalAllowed = deployment
     ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
     : false;
@@ -971,7 +971,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
           canManage || isPublic || session?.appOnly ? { bypassAcl: true } : undefined,
         );
   if (reach.status === "denied") {
-    const owner = (await app.getDeployment(slug).catch(() => null))?.ownerScopeId;
+    const owner = (await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null)))?.ownerScopeId;
     const ev = {
       at: Date.now(),
       principalId: viewer,
@@ -985,7 +985,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     else deps.auditLog?.record(ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
-    const d = await app.getDeployment(slug).catch(() => null);
+    const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
     if (!d) {
       sendJson(res, 404, { error: "not_found" });
       return true;

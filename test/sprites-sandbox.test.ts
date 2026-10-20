@@ -472,7 +472,7 @@ for (const submitted of [false, true]) {
   }
 }
 
-test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
+test("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
   const h = await sandbox.provision(layers);
   let reason = "";
   t.mock.method(SpriteCommand.prototype, "start", async () => {
@@ -483,7 +483,7 @@ test("exec diagnostics retain known transport reasons without raw error causes",
   for (reason of ["TypeError", "unclassified provider failure"]) {
     await assert.rejects(sandbox.run(h, "echo ignored"), (error: Error) => {
       assert.match(error.message, /script not submitted/);
-      assert.ok(error.message.endsWith(reason === "TypeError" ? "TypeError" : "unknown transport error"));
+      assert.ok(error.message.endsWith(`WebSocket error: ${reason}`));
       assert.doesNotMatch(inspect(error), /example-secret|example\.invalid|token=/);
       return true;
     });

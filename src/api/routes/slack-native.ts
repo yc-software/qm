@@ -1,5 +1,5 @@
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { errMessage } from "../../util/errors.ts";
 import { ErrorCode, type WebAPIPlatformError, type AuthTestResponse } from "@slack/web-api";
 import { slackWebClient } from "../../slack/web-client.ts";

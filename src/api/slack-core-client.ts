@@ -529,7 +529,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           ...(pick.latencyMs != null ? { latencyMs: pick.latencyMs } : {}),
           createdAt: Date.now(),
         })
-        .catch(() => {});
+        .catch(swallowAs("slack: record ack emoji pick", undefined));
     },
 
     async fulfillContextRequest(id, outcome) {
