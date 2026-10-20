@@ -154,6 +154,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'`,
         ],
       },
+      {
+        id: "runs/store/0010-drop-turn-metrics",
+        statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
+      },
     ],
     [
       {
