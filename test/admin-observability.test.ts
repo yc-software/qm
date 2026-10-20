@@ -295,7 +295,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
 
     const delivery = await s.built.deliveries.enqueue({
       destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "The script ran clean and posted the digest DM.\n\n[no-update]",
+      text: "The script ran clean and posted the digest DM.",
       attachments: [
         {
           name: "digest.gif",
@@ -333,7 +333,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivered output inline");
     const event = orgBody.deliveryEvents[0];
     assert.equal(event.type, "principal_delivery");
-    assert.equal(event.text, "The script ran clean and posted the digest DM.\n\n[no-update]");
+    assert.equal(event.text, "The script ran clean and posted the digest DM.");
     assert.equal(event.provenance.fireKey, "cron:c1:42");
     assert.equal(event.provenance.sourceSessionId, source.id);
     assert.equal(event.sourceSession.id, source.id);
@@ -363,7 +363,7 @@ test("recipient delivery rows expose origin provenance and gated origin context"
     const sourceBody = (await sourceRead.json()) as any;
     assert.equal(sourceBody.deliveryEvents.length, 1, "source transcript renders the outbound Slack delivery");
     assert.equal(sourceBody.deliveryEvents[0].type, "outbound_delivery");
-    assert.equal(sourceBody.deliveryEvents[0].text, "The script ran clean and posted the digest DM.\n\n[no-update]");
+    assert.equal(sourceBody.deliveryEvents[0].text, "The script ran clean and posted the digest DM.");
     assert.equal(sourceBody.deliveryEvents[0].recipientThreadRef, "dm:D-erica");
     assert.deepEqual(sourceBody.deliveryEvents[0].attachments, [
       {
