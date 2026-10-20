@@ -19,6 +19,7 @@ primary_region = "sjc"
   REQUIRE_SIGNED_PORTAL_IDENTITY = "1"
   FLY_ORG = "personal"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
+  SANDBOX_BACKEND = "sprites"
 [deploy]
   strategy = "bluegreen"
 

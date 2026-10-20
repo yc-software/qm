@@ -18,6 +18,7 @@ const ALL_SECRETS = [
   "FLY_API_TOKEN",
   "SLACK_BOT_TOKEN",
   "SLACK_APP_TOKEN",
+  "SPRITES_TOKEN",
 ];
 
 after(() => rmDir(join(repoRoot, "deploy", "stacks", ".generated", APP_PREFIX)));
