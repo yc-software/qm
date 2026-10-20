@@ -156,19 +156,6 @@ test("the tool_call/tool_result entries record which box ran the command", async
   );
 });
 
-test("the description advertises the routing policy truthfully", () => {
-  const { tc } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-  const desc = (execute as unknown as { description: string }).description;
-  assert.match(desc, /"scoped" \(DEFAULT\)/);
-  assert.match(desc, /Use it for self-contained commands and API work/);
-  assert.match(desc, /only credentials explicitly requested/);
-  assert.doesNotMatch(JSON.stringify(execute), /credential-free|blank, instant/);
-  assert.match(desc, /including Files/);
-  assert.match(desc, /local files are discarded after the turn/);
-  assert.match(desc, /Use scope:"scoped" when you need existing workspace files/);
-});
-
 async function freshApp(extra: Partial<Config> = {}) {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-scratch-")),

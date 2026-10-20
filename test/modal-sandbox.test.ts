@@ -38,13 +38,12 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
   });
 }
 
-function checkpointing(onCheckpoint: () => Promise<void>): ModalClient {
+type Checkpoint = Awaited<ReturnType<ModalSession["snapshotHome"]>>;
+
+function checkpointing(around: (snapshot: () => Promise<Checkpoint>) => Promise<Checkpoint>): ModalClient {
   const wrap = (session: ModalSession): ModalSession => ({
     ...session,
-    async snapshotHome() {
-      await onCheckpoint();
-      return session.snapshotHome();
-    },
+    snapshotHome: () => around(() => session.snapshotHome()),
   });
   return {
     ...fake.client,
@@ -458,8 +457,9 @@ test("persistHomeSnapshot writes the live home to the snapshot store on demand",
 test("rotation aborts and keeps the old box when the pre-rotation checkpoint fails", async () => {
   let fail = false;
   const store = createMemoryMap<StoredModalSandbox>();
-  const client = checkpointing(async () => {
+  const client = checkpointing(async (snapshot) => {
     if (fail) throw new Error("provider checkpoint unavailable");
+    return snapshot();
   });
   const s = make({ store, client, rotationHoldMs: 0 });
   const a = await s.provision(layers);
@@ -536,9 +536,10 @@ test("portable homes larger than the file chunk size export and restore through 
 test("teardown of a box the turn never used skips the checkpoint only while the stored home is clean", async () => {
   let checkpoints = 0;
   let fail = false;
-  const client = checkpointing(async () => {
+  const client = checkpointing(async (snapshot) => {
     if (fail) throw new Error("provider checkpoint unavailable");
     checkpoints++;
+    return snapshot();
   });
   const store = createMemoryMap<StoredModalSandbox>();
   const s = make({ store, client, nativeSnapshotIntervalMs: 0 });
@@ -606,19 +607,10 @@ test("expired native checkpoints block replacement without falling back to stale
 test("native checkpoint failure preserves the previous reference and keeps the source running", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   let fail = false;
-  const wrapped: ModalClient = {
-    ...fake.client,
-    async create(options) {
-      const session = await fake.client.create(options);
-      return {
-        ...session,
-        async snapshotHome() {
-          if (fail) throw new Error("provider checkpoint unavailable");
-          return session.snapshotHome();
-        },
-      };
-    },
-  };
+  const wrapped = checkpointing(async (snapshot) => {
+    if (fail) throw new Error("provider checkpoint unavailable");
+    return snapshot();
+  });
   const first = make({ store, client: wrapped, rotationHoldMs: 0 });
   const handle = await first.provision(layers);
   await first.teardown(handle);
@@ -659,22 +651,14 @@ test("a late checkpoint from another core cannot replace a newer committed check
     started = resolve;
   });
   let calls = 0;
-  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
-    ...session,
-    async snapshotHome() {
-      const snapshot = await session.snapshotHome();
-      if (++calls === 1) {
-        started();
-        await wait;
-      }
-      return snapshot;
-    },
+  const client = checkpointing(async (snapshot) => {
+    const checkpoint = await snapshot();
+    if (++calls === 1) {
+      started();
+      await wait;
+    }
+    return checkpoint;
   });
-  const client: ModalClient = {
-    ...fake.client,
-    create: async (options) => wrap(await fake.client.create(options)),
-    fromId: async (id) => wrap(await fake.client.fromId(id)),
-  };
   const first = make({ store, client });
   const second = make({ store, client });
   const one = await first.provision(layers);
@@ -832,9 +816,10 @@ test("warm commands and process controls do not wait for a checkpoint", { timeou
   const release = Promise.withResolvers<void>();
   const s = make({
     store: createMemoryMap<StoredModalSandbox>(),
-    client: checkpointing(async () => {
+    client: checkpointing(async (snapshot) => {
       entered.resolve();
       await release.promise;
+      return snapshot();
     }),
   });
   const handle = await s.provision(layers);
@@ -889,12 +874,13 @@ test("checkpoint writers from separate cores share the durable lifecycle lock", 
       };
     },
   };
-  const client = checkpointing(async () => {
+  const client = checkpointing(async (snapshot) => {
     writers++;
     maximum = Math.max(maximum, writers);
     entered.resolve();
     await release.promise;
     writers--;
+    return snapshot();
   });
   const first = make({ store, snapshots, advisoryLock, client });
   const second = make({ store, snapshots, advisoryLock, client });
@@ -919,19 +905,11 @@ test("failed native checkpoints wait for the interval across cleanup and mainten
   const store = createMemoryMap<StoredModalSandbox>();
   let attempts = 0;
   let fail = false;
-  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
-    ...session,
-    async snapshotHome() {
-      attempts++;
-      if (fail) throw new Error("Timeout expired");
-      return session.snapshotHome();
-    },
+  const client = checkpointing(async (snapshot) => {
+    attempts++;
+    if (fail) throw new Error("Timeout expired");
+    return snapshot();
   });
-  const client: ModalClient = {
-    ...fake.client,
-    create: async (options) => wrap(await fake.client.create(options)),
-    fromId: async (id) => wrap(await fake.client.fromId(id)),
-  };
   const s = make({ store, client });
   const h = await s.provision(layers);
   await s.teardown(h);
@@ -959,22 +937,14 @@ test("deep idle termination excludes writes from another core until recovery", {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let block = false;
-  const wrap = (session: Awaited<ReturnType<ModalClient["create"]>>) => ({
-    ...session,
-    async snapshotHome() {
-      const snapshot = await session.snapshotHome();
-      if (block) {
-        entered.resolve();
-        await release.promise;
-      }
-      return snapshot;
-    },
+  const client = checkpointing(async (snapshot) => {
+    const checkpoint = await snapshot();
+    if (block) {
+      entered.resolve();
+      await release.promise;
+    }
+    return checkpoint;
   });
-  const client: ModalClient = {
-    ...fake.client,
-    create: async (options) => wrap(await fake.client.create(options)),
-    fromId: async (id) => wrap(await fake.client.fromId(id)),
-  };
   const first = make({ store, client, advisoryLock });
   const second = make({ store, client, advisoryLock });
   const one = await first.provision(layers);
