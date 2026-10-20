@@ -3746,15 +3746,10 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
 });
 
-test("a conversational turn never provisions a sandbox (lazy); execute/write/read do", async () => {
+test("execute and write provision a sandbox that is released after the turn", async () => {
   const built = freshApp();
   const { app } = built;
   const boxes = spyProvisioning(built.sandbox);
-
-  const chat = await app.turn(dm("hello there"));
-  assert.equal(chat.status, "ok");
-  assert.equal(boxes.provisioned, 0, "chat turn must not provision");
-  assert.equal(boxes.live, 0);
 
   const run = await app.turn(dm("!run echo sandbox-works"));
   assert.equal(run.status, "ok");

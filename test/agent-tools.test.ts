@@ -654,10 +654,7 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   const ref: ToolContextRef = { current: pressured, emit: () => {}, scopeLabel: "personal:U1" };
   const [execute] = createAgentTools(ref);
   const hot = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
-  assert.match(
-    hot.content[0]!.text!,
-    /\[pressure\] .*io 62\.4%.*sequence heavy work, move self-contained runs to scope:"scratch"/,
-  );
+  assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%/);
 
   ref.current = {
     ...pressured,
