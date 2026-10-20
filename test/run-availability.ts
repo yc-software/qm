@@ -369,10 +369,26 @@ test(
     const direct = new pg.Pool({ connectionString: url });
     const claim = reader.runs.claim.bind(reader.runs);
     let claims = 0;
+    let claiming = 0;
     reader.runs.claim = async (...args) => {
       claims++;
-      return claim(...args);
+      claiming++;
+      try {
+        return await claim(...args);
+      } finally {
+        claiming--;
+      }
     };
+    let resyncs = 0;
+    const subscribe = reader.runs.subscribeAvailable!.bind(reader.runs);
+    reader.runs.subscribeAvailable = (listener, options) =>
+      subscribe(listener, {
+        ...options,
+        onResync: () => {
+          resyncs++;
+          options?.onResync?.();
+        },
+      });
     const handled: string[] = [];
     let releaseHeld!: () => void;
     const held = new Promise<void>((resolve) => {
@@ -400,7 +416,8 @@ test(
     try {
       await writer.runs.list();
       for (const worker of workers) worker.start();
-      await until(() => claims >= workers.length);
+      await until(() => resyncs === workers.length);
+      await until(() => claiming === 0);
       await sleep(100);
       let before = claims;
       await enqueue("single");
