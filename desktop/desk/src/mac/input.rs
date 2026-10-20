@@ -180,20 +180,66 @@ fn prepare_destination<T: PartialEq>(
     Ok(destination)
 }
 
-fn prepare_keyboard(host: &El, element: &El) -> Result<i32, Failure> {
-    let (owner, _, _) =
-        prepare_destination(|| resolved_window(host, element), |(owner, window, _)| crate::focus::activate_target(*owner, *window))?;
+fn keyboard_activation_window(host: &El, element: &El) -> Result<(i32, u32, Rect), Failure> {
+    let pid =
+        pid_of(host).filter(|pid| *pid > 0).ok_or_else(|| fail(ErrorCode::NoWindow, "The keyboard host is unavailable; observe again"))?;
+    let id = ancestor_window(
+        host,
+        element,
+        |element| attr(element, "AXParent"),
+        |ancestor| {
+            if !has_role(ancestor, &["AXWindow"]) {
+                return 0;
+            }
+            let id = window_id(ancestor);
+            if window_geometry(id).is_some_and(|(owner, _)| owner == pid) {
+                id
+            } else {
+                0
+            }
+        },
+    )
+    .ok_or_else(|| fail(ErrorCode::ActionFailed, "The keyboard target is no longer linked to its host; observe again"))?;
+    let (owner, bounds) = window_geometry(id)
+        .filter(|(owner, _)| *owner == pid)
+        .ok_or_else(|| fail(ErrorCode::NoWindow, "The keyboard host window is unavailable; observe again"))?;
+    Ok((owner, id, bounds))
+}
+
+fn prepare_keyboard_host(host: &El, element: &El) -> Result<(), Failure> {
+    register_target(host, element)?;
+    prepare_destination(|| keyboard_activation_window(host, element), |(owner, window, _)| crate::focus::activate_target(*owner, *window))
+        .map(|_| ())
+}
+
+fn keyboard_destination(host: &El, element: &El) -> Result<i32, Failure> {
+    let (owner, _, _) = prepare_destination(
+        || resolved_window(host, element),
+        |(owner, _, _)| {
+            crate::intervention::include_target(*owner);
+            active()
+        },
+    )?;
     Ok(owner)
 }
 
+fn prepare_keyboard(host: &El, element: &El) -> Result<i32, Failure> {
+    prepare_keyboard_host(host, element)?;
+    keyboard_destination(host, element)
+}
+
 pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
+    let activation_anchor = attr(ax, "AXFocusedUIElement")
+        .or_else(|| window_of(ax))
+        .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the keyboard host window; observe again"))?;
+    prepare_keyboard_host(ax, &activation_anchor)?;
     let focused = attr(ax, "AXFocusedUIElement");
     let element = focused
         .clone()
         .or_else(|| window_of(ax))
         .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the keyboard target; observe again"))?;
-    let owner = prepare_keyboard(ax, &element)?;
-    if focused.is_some() && attr(ax, "AXFocusedUIElement") != focused {
+    let owner = keyboard_destination(ax, &element)?;
+    if attr(ax, "AXFocusedUIElement") != focused {
         return Err(fail(ErrorCode::ActionFailed, "The focused element changed while preparing keyboard input; observe again"));
     }
     Ok((owner, ax.clone()))
