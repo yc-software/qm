@@ -1,34 +1,11 @@
-const SENSITIVE_KEYS = new Set([
-  "accesstoken",
-  "refreshtoken",
-  "idtoken",
-  "apikey",
-  "clientsecret",
-  "credential",
-  "credentials",
-  "password",
-  "passphrase",
-  "secret",
-  "token",
-  "authorization",
-  "proxyauthorization",
-  "cookie",
-  "setcookie",
-]);
-
-function diagnosticKeyIsSensitive(key: string): boolean {
-  return SENSITIVE_KEYS.has(key.toLowerCase().replace(/[^a-z]/g, ""));
-}
+import { isSensitiveKey } from "../../plugins/chassis/src/sensitive-keys.ts";
 
 function redactStructuredDiagnosticsValue(value: unknown, sensitive = false): unknown {
   if (sensitive) return "[redacted]";
   if (Array.isArray(value)) return value.map((item) => redactStructuredDiagnosticsValue(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      redactStructuredDiagnosticsValue(item, diagnosticKeyIsSensitive(key)),
-    ]),
+    Object.entries(value).map(([key, item]) => [key, redactStructuredDiagnosticsValue(item, isSensitiveKey(key))]),
   );
 }
 

@@ -215,7 +215,7 @@ test("error fields redact credential-shaped keys, including nested request heade
   });
   const detail = errDetail(error);
   assert.ok(!detail.includes("xoxb"));
-  assert.match(detail, /token=\[Redacted\]/);
-  assert.match(detail, /"Authorization":"\[Redacted\]","Accept":"application\/json"/);
+  assert.match(detail, /token=\[redacted\]/);
+  assert.match(detail, /"Authorization":"\[redacted\]","Accept":"application\/json"/);
   assert.match(detail, /code=slack_webapi_request_error/);
 });

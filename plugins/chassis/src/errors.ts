@@ -1,3 +1,5 @@
+import { isSensitiveKey } from "./sensitive-keys.ts";
+
 export function errMessage(e: unknown, fallback?: string): string {
   if (e instanceof Error) return e.message;
   if (fallback !== undefined) return fallback;
@@ -36,23 +38,20 @@ export function errChain(e: unknown): string {
   return parts.join(" <- ");
 }
 
-const SECRET_FIELD =
-  /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[-_]?key|(access|refresh|bot|user|id)?[-_]?token|client[-_]?secret|password|secret)$/i;
-
 function errorFields(e: unknown): string {
   try {
     if (typeof e !== "object" || e === null) return "";
     const fields = Object.entries(Object.getOwnPropertyDescriptors(e))
       .filter(([key, descriptor]) => key !== "cause" && descriptor.enumerable)
       .map(([key, descriptor]) => {
-        if (SECRET_FIELD.test(key)) return `${key}=[Redacted]`;
+        if (isSensitiveKey(key)) return `${key}=[redacted]`;
         try {
           const seen = new Set<object>();
           const value = descriptor.value;
           const text =
             typeof value === "object" && value !== null
               ? JSON.stringify(value, (itemKey, item) => {
-                  if (SECRET_FIELD.test(itemKey)) return "[Redacted]";
+                  if (isSensitiveKey(itemKey)) return "[redacted]";
                   if (typeof item === "bigint") return String(item);
                   if (typeof item === "object" && item !== null) {
                     if (seen.has(item)) return "[Circular]";
