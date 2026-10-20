@@ -508,7 +508,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           if (r.code === 24) {
             if (fresh) binariesMissingUntilMs = Date.now() + 10 * 60_000;
             msg =
-              "litestream/aws binaries missing from the MicroVM image — roll AWS_DEPLOY_IMAGE (aws/microvm-agent) before setting AWS_DEPLOY_DATA_ROLE_ARN";
+              "litestream/aws binaries missing from the MicroVM image — roll AWS_DEPLOY_IMAGE (cli/templates/aws/microvm-agent) before setting AWS_DEPLOY_DATA_ROLE_ARN";
           }
           if (fresh) {
             await store.delete(d.id).catch((e) => swallow("aws-deploy: litestream-fail clear pointer", e));

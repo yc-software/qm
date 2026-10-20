@@ -34,7 +34,7 @@ async function freePort(): Promise<number> {
 
 before(async () => {
   daemonPort = await freePort();
-  daemon = spawn(process.execPath, [join(process.cwd(), "aws/microvm-agent/agent.mjs")], {
+  daemon = spawn(process.execPath, [join(process.cwd(), "cli/templates/aws/microvm-agent/agent.mjs")], {
     env: { ...process.env, AGENT_PORT: String(daemonPort), HOME: guestHome },
     stdio: "ignore",
   });

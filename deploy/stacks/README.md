@@ -9,7 +9,7 @@ under [`../layers/`](../layers/), asks for the operator's Fly organization or AW
 account before mutation, and generates the optional bot manifest. It generates a
 separate Slack SSO manifest only when Slack is selected as the OIDC provider.
 
-The checked-in `deploy/<service>/fly.toml` files remain the service templates.
+The packaged `cli/templates/fly/<service>.toml` files are the service templates.
 The CLI derives per-deployment copies under the ignored
 `deploy/stacks/.generated/` directory. Secrets belong in the provider's encrypted
 secret store and never in these fixtures.

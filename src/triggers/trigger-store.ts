@@ -1,7 +1,7 @@
 import type { Destination, ScopeId, TriggerBase } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { samePerson } from "../directory/person.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 
 export interface CreateTriggerInput {
   ownerScopeId: ScopeId;

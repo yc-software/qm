@@ -11,7 +11,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow } from "../util/errors.ts";

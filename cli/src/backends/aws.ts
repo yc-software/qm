@@ -56,8 +56,8 @@ import {
   type ServiceName,
 } from "../services.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
+import { canonicalJson } from "../canonical-json.ts";
 import {
-  canonicalJson,
   capture,
   deploymentSecretValue,
   envNum,

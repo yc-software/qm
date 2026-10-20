@@ -6,7 +6,7 @@ import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
 import { isServiceName, serviceDef } from "./services.ts";
-import { canonicalJson } from "./util.ts";
+import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
   "org_id",

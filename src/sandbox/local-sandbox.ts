@@ -55,7 +55,7 @@ export interface LocalSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "aws/microvm-agent/agent.mjs"];
+const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "cli/templates/aws/microvm-agent/agent.mjs"];
 
 export async function computeSandboxImageFingerprint(repoRoot: string): Promise<string | null> {
   try {

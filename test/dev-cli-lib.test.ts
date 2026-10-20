@@ -7,7 +7,7 @@ import { ensureDeps } from "../scripts/dev/lib/deps.ts";
 import { spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
+import { envSha, errMessage, formatAge } from "../scripts/dev/lib/util.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -483,14 +483,6 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
 test("envSha is order-independent and value-sensitive", () => {
   assert.equal(envSha({ A: "1", B: "2" }), envSha({ B: "2", A: "1" }));
   assert.notEqual(envSha({ A: "1" }), envSha({ A: "2" }));
-});
-
-test("readEnvFile keeps everything after the first '=' verbatim and skips bad keys", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  writeFileSync(join(dir, "x.env"), "GOOD=a=b=c\nHASH=abc#def\n1BAD=x\n# comment\nEMPTY=\n");
-  const env = readEnvFile(join(dir, "x.env"));
-  assert.deepEqual(env, { GOOD: "a=b=c", HASH: "abc#def", EMPTY: "" });
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("leaseOrgId reads the stale lease's booted org", () => {

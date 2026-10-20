@@ -71,7 +71,7 @@ test("fly derives the portal's whole OIDC block from the broker, over the privat
   assert.match(core, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "core refuses in-domain external invites");
 
   const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
-  assert.equal(auth, readFileSync(join(repoRoot, "deploy", "auth", "fly.toml"), "utf8"));
+  assert.equal(auth, readFileSync(join(repoRoot, "cli", "templates", "fly", "auth.toml"), "utf8"));
   assert.match(auth, /AUTH_ISSUER = "https:\/\/agent\.example\.com\/idp"/);
   assert.match(auth, /AUTH_REDIRECT_URI = "https:\/\/agent\.example\.com\/auth\/callback"/);
 });

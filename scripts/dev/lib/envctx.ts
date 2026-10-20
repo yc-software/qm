@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { liveEnvPath } from "./pool.ts";
-import { bestEffort, readEnvFile, sha256Hex } from "./util.ts";
+import { readEnvFile } from "../../../cli/src/util.ts";
+import { bestEffort, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
 import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
 
@@ -68,8 +69,8 @@ export function seedEnvFromMain(worktree: string, log: (msg: string) => void): v
   const existing = readEnvFile(wtEnvPath);
   const main = readEnvFile(mainEnv);
   const added: string[] = [];
-  for (const [k, v] of Object.entries(main)) {
-    if (k in existing) continue;
+  for (const [k, v] of main) {
+    if (existing.has(k)) continue;
     appendFileSync(wtEnvPath, `${k}=${v}\n`);
     added.push(k);
   }
@@ -99,10 +100,10 @@ export async function assembleEnv(opts: {
   const warnings: string[] = [];
   const liveEnvFile = liveEnvPath();
   const env: Record<string, string> = { ...opts.callerEnv };
-  for (const [k, v] of Object.entries(readEnvFile(liveEnvFile))) {
+  for (const [k, v] of readEnvFile(liveEnvFile)) {
     if (!env[k]) env[k] = v;
   }
-  const wtEnv = readEnvFile(join(opts.worktree, ".env"));
+  const wtEnv = Object.fromEntries(readEnvFile(join(opts.worktree, ".env")));
 
   let anthropicKeySource = "";
   if (opts.callerEnv.ANTHROPIC_API_KEY) anthropicKeySource = "your shell export";
@@ -166,7 +167,7 @@ export async function assembleEnv(opts: {
 }
 
 export function envFileGet(path: string, key: string): string {
-  return readEnvFile(path)[key] ?? "";
+  return readEnvFile(path).get(key) ?? "";
 }
 
 export function callerEnvSnapshot(): Record<string, string> {

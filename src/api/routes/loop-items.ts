@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
-import { canonicalJson } from "../../util/objects.ts";
+import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
