@@ -342,7 +342,7 @@ test("a resume snapshot replaces whitespace-normalized transcript seeds", async 
   assert.deepEqual((await stream.result()).content, [{ type: "text", text: "\nChecking.\n\nNext part" }]);
 });
 
-test("reasoning frames build live thinking blocks beside, never inside, the streamed reply", async (t) => {
+test("reasoning frames and snapshots build live thinking blocks, deduped by per-block offset", async (t) => {
   const state = streamingFetch(t);
   const stream = await makeRunResumeStreamFn("r")(model, {} as Context, {});
   await flush();
@@ -381,7 +381,7 @@ test("reasoning frames build live thinking blocks beside, never inside, the stre
   ]);
 });
 
-test("a stale run drops live reasoning so a retried attempt never shows the dead attempt's blocks", async (t) => {
+test("a new step's reasoning replaces unpersisted blocks, so a retried attempt never shows the dead attempt's", async (t) => {
   const state = streamingFetch(t);
   const stream = await makeRunResumeStreamFn("r")(model, {} as Context, {});
   await flush();
@@ -390,11 +390,26 @@ test("a stale run drops live reasoning so a retried attempt never shows the dead
     name: "reasoning",
     value: { step: "dead", index: 0, offset: 0, delta: "half a thought" },
   });
-  state.send({ type: "CUSTOM", name: "run", value: { status: "running", result: null, stale: true } });
   state.send({ type: "CUSTOM", name: "reasoning", value: { step: "retry", index: 0, offset: 0, delta: "fresh" } });
   state.send({ type: "CUSTOM", name: "run", value: { status: "done", result: { status: "ok", reply: "ok" } } });
   const message = await stream.result();
   assert.deepEqual((message as unknown as { work: { reasoning: unknown } }).work.reasoning, [
     { step: "retry", index: 0, text: "fresh" },
   ]);
+});
+
+test("a new run attempt drops the previous attempt's unpersisted reasoning", async (t) => {
+  const state = streamingFetch(t);
+  const stream = await makeRunResumeStreamFn("r")(model, {} as Context, {});
+  await flush();
+  state.send({ type: "CUSTOM", name: "run", value: { status: "running", result: null, attempt: 1 } });
+  state.send({
+    type: "CUSTOM",
+    name: "reasoning",
+    value: { step: "dead", index: 0, offset: 0, delta: "half a thought" },
+  });
+  state.send({ type: "CUSTOM", name: "run", value: { status: "running", result: null, attempt: 2 } });
+  state.send({ type: "CUSTOM", name: "run", value: { status: "done", result: { status: "ok", reply: "ok" } } });
+  const message = await stream.result();
+  assert.deepEqual((message as unknown as { work: { reasoning: unknown } }).work.reasoning, []);
 });

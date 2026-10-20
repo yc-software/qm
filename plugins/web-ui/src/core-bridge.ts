@@ -446,12 +446,13 @@ export interface WorkBlock {
   stale?: boolean;
   activity: ToolActivity[];
   reasoning?: LiveReasoning[];
+  attempt?: number;
   pendingApprovals?: PendingApproval[];
   goal?: GoalStripState;
   runtime?: TurnRuntime;
 }
 
-export interface LiveReasoning {
+interface LiveReasoning {
   step: string;
   index: number;
   text: string;
@@ -535,6 +536,7 @@ export interface RunPoll {
   replyComplete?: boolean;
   activity?: unknown[];
   reasoning?: LiveReasoning[];
+  attempt?: number;
   startedAt?: number | null;
   finishedAt?: number | null;
 }
@@ -1473,7 +1475,8 @@ function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offse
   const text = current.slice(0, offset) + block.text;
   if (text.length <= current.length) return false;
   const next = { step: block.step, index: block.index, text };
-  work.reasoning = at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks, next].slice(-8);
+  work.reasoning =
+    at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks.filter((b) => b.step === block.step), next];
   return true;
 }
 
@@ -1515,13 +1518,13 @@ function applyRun(
     if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
     notify?.();
   }
+  if (work && typeof run.attempt === "number" && work.attempt !== run.attempt) {
+    if (work.attempt !== undefined && work.reasoning?.length) work.reasoning = [];
+    work.attempt = run.attempt;
+  }
   if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
     notify?.();
   setWorkStale(work, run.stale === true, notify);
-  if (work?.reasoning?.length && run.stale === true) {
-    work.reasoning = [];
-    notify?.();
-  }
   if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
     work.goal = run.goal;
     notify?.();

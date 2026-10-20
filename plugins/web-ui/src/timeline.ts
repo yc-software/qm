@@ -256,14 +256,13 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   return collapsed;
 }
 
+export function thinkingStepKey(payload: unknown): string | null {
+  const step = (payload as { step?: { id?: unknown; index?: unknown } } | null)?.step;
+  return step ? `${String(step.id)}:${String(step.index)}` : null;
+}
+
 function liveReasoning(work: WorkBlock): NonNullable<WorkBlock["reasoning"]> {
-  const persisted = new Set(
-    work.activity.flatMap((a) => {
-      const step =
-        a.type === "thinking" ? (a.payload as { step?: { id?: unknown; index?: unknown } } | null)?.step : null;
-      return step ? [`${String(step.id)}:${String(step.index)}`] : [];
-    }),
-  );
+  const persisted = new Set(work.activity.map((a) => (a.type === "thinking" ? thinkingStepKey(a.payload) : null)));
   return (work.reasoning ?? []).filter((b) => b.text.trim() && !persisted.has(`${b.step}:${b.index}`));
 }
 

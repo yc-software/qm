@@ -1,11 +1,12 @@
 import { sendJson } from "../http.ts";
+import { LRUCache } from "lru-cache";
 import { reasoningKey } from "../../runs/run-stream-events.ts";
+import { REASONING_MAX_BLOCKS } from "../../runs/turn-stream.ts";
 import type { SessionEntry } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
-const MAX_REASONING_BLOCKS = 8;
 
 function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unknown> } | null {
   const payload = (entry.payload ?? {}) as Record<string, unknown>;
@@ -45,12 +46,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   let refreshing = false;
   let refreshAgain = false;
   const sentToolEvents = new Set<string>();
-  const sentReasoning = new Map<string, number>();
-  const noteReasoning = (key: string, sent: number): void => {
-    sentReasoning.delete(key);
-    sentReasoning.set(key, sent);
-    if (sentReasoning.size > MAX_REASONING_BLOCKS) sentReasoning.delete(sentReasoning.keys().next().value!);
-  };
+  const sentReasoning = new LRUCache<string, number>({ max: REASONING_MAX_BLOCKS });
   let toolCursor: number | undefined;
   const cleanup = (): void => {
     closed = true;
@@ -79,7 +75,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     if (syncing || closed) return;
     syncing = true;
     queueMicrotask(() => {
-      if (!closed) app.syncRunStream(runId, offset, Object.fromEntries(sentReasoning));
+      if (!closed) app.syncRunStream(runId, offset, Object.fromEntries(sentReasoning.entries()));
     });
   };
   const sendDrained = async (data: unknown, id?: string): Promise<void> => {
@@ -92,7 +88,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     offset = Math.max(offset, (run.partialStartOffset ?? 0) + (run.partial?.length ?? 0));
     for (const block of run.reasoning ?? []) {
       const key = reasoningKey(block);
-      noteReasoning(key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
+      sentReasoning.set(key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
     }
     for (const entry of toolEntries) {
       const event = toolEvent(entry);
@@ -163,7 +159,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
           name: "reasoning",
           value: { step: event.step, index: event.index, offset: sent, delta },
         });
-        noteReasoning(key, sent + delta.length);
+        sentReasoning.set(key, sent + delta.length);
         return;
       }
       if (event.kind !== "delta" || refreshing) return;

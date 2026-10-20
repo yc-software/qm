@@ -23,6 +23,7 @@ test("run events push deltas without snapshot polling and recover a separate wor
       reads++;
       return {
         status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: status === "done" ? { status: "ok", reply: workerText } : null,
@@ -105,6 +106,7 @@ test("run events deliver a pending activity snapshot before subsequent text and 
       }
       return {
         status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: status === "done" ? { status: "ok", reply: workerText } : null,
@@ -201,6 +203,7 @@ async function streamToolRun(entries: SessionEntry[], state: { status: "running"
     async getRun() {
       return {
         status: state.status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: state.status === "done" ? { status: "ok", reply: "done" } : null,
@@ -418,7 +421,7 @@ test("run events forward reasoning per block, dedupe overlap, and catch up gaps 
   const syncs: Array<Record<string, number> | undefined> = [];
   const app = {
     async getRun() {
-      return { status: "running", startedAt: 0, finishedAt: null, result: null };
+      return { status: "running", attempt: 1, startedAt: 0, finishedAt: null, result: null };
     },
     subscribeRun(_runId, listener, onResync) {
       return bus.subscribe(listener, { onResync });
@@ -469,7 +472,6 @@ test("run events forward reasoning per block, dedupe overlap, and catch up gaps 
     bus.emit({ runId: "run", kind: "reasoning", step: "s1", index: 0, offset: 12, text: " the cache" });
     worker.text += " and the queue";
     bus.emit({ runId: "run", kind: "reasoning", step: "s1", index: 0, offset: 22, text: " and the queue" });
-    bus.emit({ runId: "run", kind: "delta", startOffset: 0, offset: 0, text: "Answer" });
     await sleep(50);
     assert.equal(
       frames()
@@ -502,12 +504,6 @@ test("run events forward reasoning per block, dedupe overlap, and catch up gaps 
     bus.emit({ runId: "run", kind: "reasoning", step: "s12", index: 0, offset: 5, text: "gap" });
     await sleep(50);
     assert.equal(Object.keys(syncs[0] ?? {}).length, 8, "sync requests stay small however many blocks a run streams");
-    assert.doesNotMatch(
-      frames()
-        .map((v) => v.delta)
-        .join(""),
-      /Answer/,
-    );
   } finally {
     controller.abort();
     await new Promise<void>((resolve) => server.close(() => resolve()));

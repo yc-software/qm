@@ -72,7 +72,7 @@ const DEFAULT_MAX_CHARS = 200_000;
 const DEFAULT_GRACE_MS = 30_000;
 const FIRST_BLOCK_MAX_CHARS = 20_000;
 const BLOCK_JOIN = "\n\n";
-const REASONING_MAX_BLOCKS = 8;
+export const REASONING_MAX_BLOCKS = 8;
 const REASONING_MAX_CHARS = 20_000;
 
 function makeEntry(partial: Partial<Entry> = {}): Entry {

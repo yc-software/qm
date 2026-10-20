@@ -745,6 +745,7 @@ export function createTurnMethods(
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
+        attempt: run.attempts,
         result: run.result ? await withAdminLink(run.result) : run.result,
         ...(run.request.surface === "web" &&
         !run.request.approval &&

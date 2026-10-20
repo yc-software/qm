@@ -289,6 +289,7 @@ export interface App {
     viewer?: string,
   ): Promise<{
     status: Run["status"];
+    attempt: number;
     result: TurnResult | null;
     input?: {
       runId: string;
