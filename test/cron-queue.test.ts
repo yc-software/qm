@@ -9,6 +9,7 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
@@ -41,6 +42,7 @@ function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { sc
     return { status: "ok", reply: "QUEUE-OUTPUT" };
   };
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),

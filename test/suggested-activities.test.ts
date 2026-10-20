@@ -9,6 +9,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const activities = ["app", "brief", "deck"].map((id) => ({
   id,
@@ -27,6 +28,7 @@ function fixture() {
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries,
     identity: createIdentityService(),

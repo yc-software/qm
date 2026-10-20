@@ -14,6 +14,7 @@ import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function fakeIdentity() {
   return {
@@ -623,6 +624,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
     const loop = await makeLoop(s.loops);
     const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });
     const scheduler = createScheduler({
+      ...singleProcessDeps(),
       crons: s.crons,
       deliveries: s.deliveries.store as never,
       idempotency: s.idempotency,

@@ -114,8 +114,7 @@ import {
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
-import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
+import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
@@ -255,13 +254,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
-  const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
+  const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
-  const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
+  const approvalGrants = deps.approvalGrants;
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
-  const blobTransfer = deps.blobTransfer ?? createMemoryBlobTransferStore();
+  const blobTransfer = deps.blobTransfer;
 
   const pendingCaptures = new Map<ScopeId, Promise<void>>();
 

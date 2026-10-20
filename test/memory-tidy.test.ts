@@ -10,6 +10,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
@@ -35,6 +36,7 @@ function fixture() {
   };
   const service = createMemoryTidyService(deps);
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     identity: createIdentityService(),

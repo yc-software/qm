@@ -11,6 +11,7 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -62,6 +63,7 @@ async function make(): Promise<{ provider: DeployProvider; store: DurableMap<Sto
   fake = installFakeE2b({ info: true });
   const store = createMemoryMap<StoredE2bDeployBody>();
   const provider = createE2bDeployProvider({
+    ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
     appPort,

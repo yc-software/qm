@@ -19,6 +19,7 @@ import { scopeId } from "../src/types.ts";
 
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -29,6 +30,7 @@ function appServingUpstream(upstreamPort: number) {
   const acl = createAclStore();
   const directory = createDirectoryStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

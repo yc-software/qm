@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
@@ -131,8 +131,8 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore?: DurableMap<{ pending: boolean }>;
-  advisoryLock?: AdvisoryLock;
+  initializationStore: DurableMap<{ pending: boolean }>;
+  advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   connectorSdk?: () => Promise<ConnectorSdkBundle>;
@@ -146,13 +146,13 @@ interface RawExec {
   stderr: Buffer;
 }
 
-export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions = {}): Sandbox {
+export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSandboxOptions): Sandbox {
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
   const prefix = opts.namePrefix ?? "qm";
-  const initializationStore = opts.initializationStore ?? createMemoryMap<{ pending: boolean }>();
-  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const initializationStore = opts.initializationStore;
+  const advisoryLock = opts.advisoryLock;
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock(`sprites-lifecycle:${name}`, fn);
   const requireInitialized = async (name: string): Promise<void> => {

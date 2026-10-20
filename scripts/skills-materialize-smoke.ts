@@ -8,6 +8,8 @@ import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");
@@ -26,7 +28,11 @@ function assert(cond: unknown, msg: string): void {
 
 const scope = scopeId("personal", "qm-skills-smoke");
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "skills-smoke-")));
-const sb = createSpritesSandbox(ws, loadConfig().spritesSandbox);
+const sb = createSpritesSandbox(ws, {
+  ...loadConfig().spritesSandbox,
+  initializationStore: createMemoryMap(),
+  advisoryLock: createMemoryAdvisoryLock(),
+});
 
 let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
 try {

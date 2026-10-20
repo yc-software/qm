@@ -15,6 +15,7 @@ import {
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -323,6 +324,7 @@ test("pg map: original folded-index migration upgrades without changing its ledg
 test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
     grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
     asks: factory.map<KeychainAsk>("map_keychain_asks"),
@@ -360,6 +362,7 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
   const key = deriveConnectorKey("postgres-keychain-test-key");
   const build = (factory: ReturnType<typeof createPostgresMapFactory>) =>
     createKeychain({
+      lock: createMemoryAdvisoryLock(),
       creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
       grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
       asks: factory.map<KeychainAsk>("map_keychain_asks"),

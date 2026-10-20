@@ -14,6 +14,7 @@ import {
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const REGION = "us-west-2";
 
@@ -182,6 +183,7 @@ function provider(
   extra: Record<string, unknown> = {},
 ) {
   return createAwsDeployProvider({
+    ...singleProcessDeps(),
     region: REGION,
     imageIdentifier: "qm-microvm-sandbox",
     appPort: 8081,

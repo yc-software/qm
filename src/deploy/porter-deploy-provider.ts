@@ -29,7 +29,7 @@ import {
   type PorterSandboxLike,
 } from "../sandbox/porter-client.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { execFailure, swallow, swallowAs } from "../util/errors.ts";
@@ -72,7 +72,7 @@ export interface PorterDeployProviderOptions {
   resolveCacheMs?: number;
   client?: PorterClientLike;
   store?: DurableMap<StoredPorterDeployBody>;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }
 
@@ -85,7 +85,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const readyWindowSec = opts.readyWindowSec ?? APP_READY_WINDOW_SEC_DEFAULT;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
   const store = opts.store ?? createMemoryMap<StoredPorterDeployBody>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const client: PorterClientLike =
     opts.client ??

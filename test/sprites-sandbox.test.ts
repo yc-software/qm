@@ -33,6 +33,8 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,

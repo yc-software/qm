@@ -35,6 +35,7 @@ import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -138,6 +139,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     config,
     runtime: createRuntimeService(
       { config, harnessId: "pi", baseModelDefault: "claude-opus-5" },
@@ -156,6 +158,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "subagent-parity-deploy"),

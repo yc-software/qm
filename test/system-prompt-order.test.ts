@@ -33,6 +33,7 @@ import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts"
 import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -106,6 +107,7 @@ function buildOrchestrator(
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
   const memory = createMemoryService(workspace);
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "spo-deploy"),
@@ -115,6 +117,7 @@ function buildOrchestrator(
   const sessions = createMemorySessionStore();
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions,

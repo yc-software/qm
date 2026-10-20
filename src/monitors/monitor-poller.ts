@@ -8,7 +8,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -43,7 +43,7 @@ export interface MonitorPollerDeps {
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
   maxFiresPerTick?: number;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
@@ -131,7 +131,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const maxFiresPerTick = deps.maxFiresPerTick ?? 20;
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
-  const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
+  const leaderLease = deps.leaderLease;
 
   const triggerDeps: TriggerDeps = {
     deliveries: deps.deliveries,

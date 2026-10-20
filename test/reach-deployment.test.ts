@@ -15,11 +15,13 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore();
   const acl: AclStore = createAclStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

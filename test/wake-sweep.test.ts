@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWakeSweep, type SweepSource } from "../src/wake/sweep.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource; swept: string[] } {
   const swept: string[] = [];
@@ -20,7 +21,7 @@ function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource
 
 test("a pass sweeps every engaged session", async () => {
   const { source, swept } = recordingSource();
-  const sweep = createWakeSweep(source, { intervalMs: 10_000 });
+  const sweep = createWakeSweep(source, { ...singleProcessDeps(), intervalMs: 10_000 });
   const res = await sweep.sweep();
   assert.deepEqual(swept, ["A"]);
   assert.equal(res.swept, 1);
@@ -32,7 +33,7 @@ test("a per-session sweep error is caught, not thrown (a flaky pull must not kil
       throw new Error("surface pull failed");
     },
   });
-  const sweep = createWakeSweep(source, { intervalMs: 10_000 });
+  const sweep = createWakeSweep(source, { ...singleProcessDeps(), intervalMs: 10_000 });
   await assert.rejects(() => sweep.sweep());
 });
 
@@ -53,7 +54,7 @@ test("nothing engaged ⇒ a pass does no work", async () => {
       return [];
     },
   });
-  const sweep = createWakeSweep(source, { intervalMs: 10_000 });
+  const sweep = createWakeSweep(source, { ...singleProcessDeps(), intervalMs: 10_000 });
   const res = await sweep.sweep();
   assert.deepEqual(swept, []);
   assert.equal(res.swept, 0);

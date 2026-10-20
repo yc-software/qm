@@ -26,6 +26,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import type { Harness } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -95,6 +96,7 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mca-")));
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "mca-deploy"),
@@ -102,6 +104,7 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
     acl,
   });
   return createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions: createMemorySessionStore(),

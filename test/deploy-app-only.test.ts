@@ -18,6 +18,7 @@ import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -45,6 +46,7 @@ test("app-only gateway checks exact current personal read grants without inherit
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   const acl = createAclStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
     deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
     provider: {

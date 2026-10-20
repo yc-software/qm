@@ -36,12 +36,15 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
 
 function kcAt(now: () => number): Keychain {
   return createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -303,6 +306,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const swept: number[] = [];
   const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: createCronStore(createMemoryMap()),
     deliveries: createDeliveryStore(),
     idempotency: idStore,

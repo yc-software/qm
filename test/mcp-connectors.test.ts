@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -175,6 +176,7 @@ test("unknown tool call rejects", async () => {
 
 function tokenStore() {
   return createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap<KeychainCredential>(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
