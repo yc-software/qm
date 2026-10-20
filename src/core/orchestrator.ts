@@ -1285,15 +1285,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
-      const retryUserSeq =
-        isRetry && input.runId && deps.runs ? ((await deps.runs.get(input.runId))?.turnUserSeq ?? null) : null;
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
-        if (retryUserSeq === null) return null;
+        if (!input.runId || !deps.runs) return null;
+        const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
+        if (seq == null) return null;
         const entries = memoryBoundedEntries(await deps.sessions.getEntries(session.id));
-        if (!entries.some((entry) => entry.seq === retryUserSeq)) return null;
+        if (!entries.some((entry) => entry.seq === seq)) return null;
         return turnAtSeq(
-          entries.filter((entry) => entry.seq >= retryUserSeq),
-          retryUserSeq,
+          entries.filter((entry) => entry.seq >= seq),
+          seq,
         );
       };
       const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
@@ -2361,8 +2361,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             isRetry &&
             (recordedTurn ??
               (!memoryContextChanged &&
-                retryUserSeq !== null &&
-                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, retryUserSeq)))
+                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.runId)))
           )
         ) {
           const detectHistory = filterHistory(
@@ -2870,8 +2869,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const recallMs = Date.now() - recallStart;
-        const partial =
-          recordedTurn ?? (retryUserSeq === null ? null : findTrailingPartialTurn(visibleHistory, retryUserSeq));
+        const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
           const settle = resumePlan;

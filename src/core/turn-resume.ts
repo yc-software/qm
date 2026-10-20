@@ -22,7 +22,11 @@ function isTurnStoppedEntry(e: SessionEntry): boolean {
   return e.type === "system" && (e.payload as { kind?: unknown } | null)?.kind === TURN_STOPPED_KIND;
 }
 
-export function findTrailingPartialTurn(entries: readonly SessionEntry[], userSeq: number): PartialTurn | null {
+export function findTrailingPartialTurn(
+  entries: readonly SessionEntry[],
+  runId: string | undefined,
+): PartialTurn | null {
+  if (!runId) return null;
   let workEntries = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i]!;
@@ -34,7 +38,9 @@ export function findTrailingPartialTurn(entries: readonly SessionEntry[], userSe
     if (e.type !== "user") continue;
     if (isOverheardEntry(e)) continue;
     if (isResumeNote(e)) continue;
-    return e.seq === userSeq ? { userSeq, workEntries } : null;
+    return (e.payload as { runId?: unknown } | null)?.runId === runId && !isSteerEntry(e)
+      ? { userSeq: e.seq, workEntries }
+      : null;
   }
   return null;
 }

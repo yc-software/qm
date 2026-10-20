@@ -842,7 +842,10 @@ for (const shutdown of [false, true]) {
       entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
       shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "system"],
     );
-    const partial = findTrailingPartialTurn(entries, entries[0]!.seq);
+    const partial = findTrailingPartialTurn(
+      entries.map((entry) => (entry.type === "user" ? { ...entry, payload: { runId: "run-1" } } : entry)),
+      "run-1",
+    );
     if (shutdown) {
       assert.ok(partial);
       assert.notEqual(resumeStrategy(entries, partial).kind, "restart");

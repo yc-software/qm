@@ -351,3 +351,27 @@ test("a first attempt and a no-work retry are never asked to continue", async ()
   await orchestrator.handleTurn(input(ASK, { runId: again.id, attempt: 2 }));
   assert.deepEqual(continued, [undefined, undefined]);
 });
+
+test("a retry resumes its own interrupted turn even when the run never recorded its boundary", async () => {
+  const { orchestrator, runs, continued, input, asks } = buildScenario(true);
+  runs.noteTurnUserSeq = async () => false;
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })), /interrupted/);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, true]);
+  assert.equal((await asks()).length, 1);
+});
+
+test("a retry does not resume another run's interrupted turn that asked the same thing", async () => {
+  const { orchestrator, runs, continued, input, asks } = buildScenario(true);
+  const first = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(orchestrator.handleTurn(input(ASK, { runId: first.id, attempt: 1 })), /interrupted/);
+
+  const second = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: second.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, undefined]);
+  assert.equal((await asks()).length, 2);
+});
