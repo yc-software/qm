@@ -5,7 +5,7 @@ import {
   type CoreSession,
   type SessionBackgroundView,
 } from "./core-bridge.ts";
-import { subagentCounts } from "./subagent-activity.ts";
+import { descendantsOf, subagentCounts } from "./subagent-activity.ts";
 import { goalFloorLabel, goalWorkedLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
 
@@ -150,17 +150,51 @@ export function bumpActivity(list: CoreSession[], threadRef: string, at: number)
   return list.map((s) => (s.threadRef === threadRef ? { ...s, lastActivityAt: at } : s));
 }
 
-export function reconcileSessions(
-  server: CoreSession[],
+export function upsertSessions(prev: CoreSession[], rows: readonly CoreSession[]): CoreSession[] {
+  if (!rows.length) return prev;
+  const incoming = new Map(rows.map((row) => [row.id, row]));
+  const threads = new Set(rows.map((row) => row.threadRef));
+  const kept = prev.filter((row) => !incoming.has(row.id) && !threads.has(row.threadRef));
+  return [...kept, ...rows];
+}
+
+export interface PageWindow {
+  archived: boolean;
+  pinnedSeparately: boolean;
+  surface?: string;
+  floor: number | null;
+}
+
+function inPageClass(row: CoreSession, window: PageWindow): boolean {
+  if (!row.id || row.parentSessionId || automationRunLabel(row)) return false;
+  if (Boolean(row.archived) !== window.archived) return false;
+  if (window.surface && row.surface !== window.surface) return false;
+  return true;
+}
+
+export function mergeFirstPage(
   prev: CoreSession[],
+  page: { sessions: readonly CoreSession[]; pinned?: readonly CoreSession[] },
+  window: PageWindow,
   openIds: readonly string[] = [],
 ): CoreSession[] {
-  const known = new Set(server.map((s) => s.threadRef));
-  const pending = prev.filter((s) => !s.id && !known.has(s.threadRef));
-  const served = new Set(server.map((s) => s.id));
-  const dropped = new Set(openIds.filter((id) => !served.has(id)));
-  const stillOpen = dropped.size ? prev.filter((s) => dropped.has(s.id) && !known.has(s.threadRef)) : [];
-  return [...pending, ...stillOpen, ...server];
+  const served = new Set([...page.sessions, ...(page.pinned ?? [])].map((row) => row.id));
+  const open = new Set(openIds);
+  const kept = prev.filter((row) => {
+    if (served.has(row.id) || open.has(row.id) || !inPageClass(row, window)) return true;
+    if (window.pinnedSeparately && row.pinned && !window.archived) return false;
+    return window.floor !== null && activityOf(row) < window.floor;
+  });
+  return upsertSessions(kept, [...(page.pinned ?? []), ...page.sessions]);
+}
+
+export function mergeChildren(prev: CoreSession[], rootId: string, children: readonly CoreSession[]): CoreSession[] {
+  const below = new Set(descendantsOf(prev, rootId).map(({ session }) => session.id));
+  const served = new Set(children.map((row) => row.id));
+  return upsertSessions(
+    prev.filter((row) => !below.has(row.id) || served.has(row.id)),
+    children,
+  );
 }
 
 export function markWorking(list: CoreSession[], threadRef: string): CoreSession[] {
@@ -248,7 +282,7 @@ export function rowIndicators(
   list: readonly CoreSession[] = [],
 ): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
-  const children = subagentCounts(list, s.id);
+  const children = !s.subagents || descendantsOf(list, s.id).length ? subagentCounts(list, s.id) : s.subagents;
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
     awaiting: Boolean(s.awaitingInput) || children.waiting > 0,

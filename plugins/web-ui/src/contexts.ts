@@ -25,13 +25,13 @@ import {
   fileContentUrl,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState } from "./sessions";
+import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -172,7 +172,11 @@ export async function renderContexts(): Promise<void> {
   contextsLoading = true;
   drawContexts();
   try {
-    await Promise.all([fetchContexts(), refreshSessions({ silent: true })]);
+    await Promise.all([
+      fetchContexts(),
+      refreshSessions({ silent: true }),
+      contextsState.selected ? loadScopeSessions(contextsState.selected) : null,
+    ]);
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
   } catch (e) {
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
@@ -1420,6 +1424,7 @@ function selectContext(scopeId: string | null): void {
   syncUrlFromState();
   drawContexts();
   if (scopeId) {
+    void loadScopeSessions(scopeId).then(drawContexts).catch(swallowAs("web-ui: load context chats", undefined));
     void loadScopeResources(scopeId);
     void loadAmbientPolicy(scopeId, drawContexts);
     void loadContextModel(scopeId, drawContexts);

@@ -364,6 +364,28 @@ export interface DistinctScope {
   channelName?: string;
 }
 
+export interface ParticipantPageQuery {
+  limit: number;
+  before?: { activity: number; id: string };
+  archived?: boolean;
+  pinned?: boolean;
+  surface?: string;
+  scopeId?: ScopeId;
+  titleQuery?: string;
+  sessionIds?: readonly string[];
+}
+
+export interface ParticipantPage {
+  sessions: Session[];
+  next: { activity: number; id: string } | null;
+}
+
+export interface SessionDescendant {
+  id: string;
+  rootId: string;
+  threadRef: string;
+}
+
 export interface ParticipantScope {
   scopeId: ScopeId;
   channelName?: string;
@@ -587,6 +609,9 @@ export interface SessionStore {
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
   participantScopes(principalId: string): Promise<ParticipantScope[]>;
+  listParticipantPage(principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage>;
+  descendantsOf(rootIds: readonly string[]): Promise<SessionDescendant[]>;
+  listDescendantsForParticipant(rootId: string, principalId: string, limit: number): Promise<Session[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;

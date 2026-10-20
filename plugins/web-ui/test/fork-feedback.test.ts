@@ -69,7 +69,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
         forkedFrom: { sessionId: source.id, title: source.title },
         forkBoundarySeq: 0,
       };
-      const refreshes = h.requests.filter((path) => path === "/api/sessions").length;
+      const refreshes = h.requests.filter((path) => path.startsWith("/api/sessions?")).length;
       finish(
         outcome === "failure"
           ? Response.json({ error: "Could not copy history" }, { status: 500 })
@@ -87,7 +87,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
         assert.match(h.mainText(), /Could not copy history/);
       } else {
         assert.equal(h.sessionsState.list.filter((session) => session.id === fork.id).length, 1);
-        assert.equal(h.requests.filter((path) => path === "/api/sessions").length, refreshes);
+        assert.equal(h.requests.filter((path) => path.startsWith("/api/sessions?")).length, refreshes);
         if (outcome === "navigate") assert.equal(conv.state.threadRef, newThread);
         else assert.equal(conv.state.sessionId, fork.id);
       }

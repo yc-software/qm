@@ -3209,3 +3209,64 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
     await raw.end();
   }
 });
+
+test(
+  "pg session pages sort by the person's last message, which appends keep and the migration backfills",
+  { skip },
+  async () => {
+    const s = createPostgresSessionStore(URL!);
+    const me = `paging-${randomUUID()}`;
+    const personal = scopeId("personal", me);
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const session = await s.getOrCreateByThread(`web:${me}:${i}`, "dm", personal, undefined, "web");
+      await s.addParticipant(session.id, me, `Chat ${i}`);
+      ids.push(session.id);
+    }
+    const say = async (sessionId: string, type: "user" | "assistant") => {
+      const { lease } = await s.acquireLease(sessionId);
+      assert.ok(lease);
+      await s.append(lease, { type, payload: { text: type }, scopeLabel: personal });
+      await s.releaseLease(lease);
+    };
+    await say(ids[0]!, "user");
+    await say(ids[2]!, "assistant");
+    const order = async () => {
+      const first = await s.listParticipantPage(me, { limit: 2 });
+      const rest = first.next ? await s.listParticipantPage(me, { limit: 2, before: first.next }) : null;
+      assert.equal(rest?.next, null);
+      return [...first.sessions, ...(rest?.sessions ?? [])].map((row) => row.id);
+    };
+    assert.deepEqual(await order(), [ids[0], ids[2], ids[1]], "a reply doesn't move a chat; the person's message does");
+
+    const pg = (await import("pg")).default;
+    const raw = new pg.Pool({ connectionString: URL });
+    try {
+      const stored = await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [
+        ids,
+      ]);
+      await raw.query("UPDATE sessions SET last_user_activity = NULL WHERE id = ANY($1)", [ids]);
+      await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0040-last-user-activity-backfill'");
+      await applyPgMigrations(raw, registeredPgMigrations(URL!));
+      assert.deepEqual(
+        (await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [ids])).rows,
+        stored.rows,
+        "the backfill derives what appends wrote",
+      );
+    } finally {
+      await raw.end();
+    }
+
+    const child = await s.getOrCreateByThread(`subagent:${me}:1`, "dm", personal, undefined, "web");
+    await s.setParentSession(child.id, ids[0]!);
+    const grandchild = await s.getOrCreateByThread(`subagent:${me}:2`, "dm", personal, undefined, "web");
+    await s.setParentSession(grandchild.id, child.id);
+    assert.deepEqual(
+      (await s.descendantsOf([ids[0]!])).map((d) => [d.id, d.rootId]).sort(),
+      [
+        [child.id, ids[0]],
+        [grandchild.id, ids[0]],
+      ].sort(),
+    );
+  },
+);

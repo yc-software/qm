@@ -36,7 +36,7 @@ test("session refresh bursts share one trailing read and observe its fresh list"
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
     const path = String(input);
-    if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
+    if (path.startsWith("/api/sessions?")) return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };
@@ -144,7 +144,7 @@ test("opening a conversation joins the first list load and leaves a current list
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
     const path = String(input);
-    if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
+    if (path.startsWith("/api/sessions?")) return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };
@@ -239,7 +239,7 @@ test("an open that joined a refresh whose answer was discarded asks again itself
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
     const path = String(input);
-    if (path === "/api/sessions") return new Promise<Response>((resolve) => pending.push(resolve));
+    if (path.startsWith("/api/sessions?")) return new Promise<Response>((resolve) => pending.push(resolve));
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };

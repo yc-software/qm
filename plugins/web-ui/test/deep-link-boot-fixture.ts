@@ -18,6 +18,7 @@ export interface Harness {
   switchView: (view: "chats" | "settings") => void;
   renderList: () => void;
   drawChatsPage: () => void;
+  renderChatsPage: () => Promise<void>;
   appState: { currentView: string };
   sessionsState: { list: Array<{ id: string }>; loaded: boolean; openingKey: string | null };
   visibleConversation: () => Conversation;
@@ -173,6 +174,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       const sessionId = decodeURIComponent(path.split("/")[3] ?? "");
       return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
+    if (path.startsWith("/api/sessions/") && path.endsWith("/children")) return Response.json({ sessions: [] });
     if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;
       if (failuresLeft > 0) {
@@ -195,9 +197,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       }
       return Response.json({ session, entries: opts.entries ?? [] });
     }
-    if (path === "/api/sessions") {
+    if (path.startsWith("/api/sessions?")) {
       await sessionsHeld;
-      return Response.json({ sessions: opts.listSessions ?? [] });
+      return Response.json(sessionPage(opts.listSessions ?? [], new URL(path, "http://test").searchParams));
     }
     return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };
@@ -228,6 +230,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     switchView: shell.switchView as Harness["switchView"],
     renderList: sessions.renderList as () => void,
     drawChatsPage: sessions.drawChatsPage as () => void,
+    renderChatsPage: sessions.renderChatsPage as () => Promise<void>,
     appState: shell.appState as Harness["appState"],
     sessionsState: sessions.sessionsState as Harness["sessionsState"],
     visibleConversation: () =>
@@ -250,5 +253,33 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       }
       await env.close();
     },
+  };
+}
+
+function sessionPage(all: CoreSession[], params: URLSearchParams) {
+  const activity = (row: CoreSession): number => row.lastActivityAt ?? row.createdAt ?? 0;
+  const archived = params.get("archived") === "1";
+  const pinnedSeparately = params.get("pinned") === "1";
+  const before = params.get("before");
+  const limit = Number(params.get("limit") ?? 50);
+  let rows = all
+    .filter((row) => !row.parentSessionId && Boolean(row.archived) === archived)
+    .filter((row) => !params.get("q") || (row.title ?? "").toLowerCase().includes(params.get("q")!.toLowerCase()))
+    .filter((row) => !params.get("scope") || row.scopeId === params.get("scope"))
+    .filter((row) => params.get("waiting") !== "1" || row.awaitingInput)
+    .sort((a, b) => activity(b) - activity(a) || (b.id < a.id ? -1 : 1));
+  const pinned = pinnedSeparately && !before && !archived ? rows.filter((row) => row.pinned) : undefined;
+  if (pinnedSeparately) rows = rows.filter((row) => !row.pinned);
+  if (before) {
+    const dot = before.indexOf(".");
+    const [at, id] = [Number(before.slice(0, dot)), before.slice(dot + 1)];
+    rows = rows.filter((row) => activity(row) < at || (activity(row) === at && row.id < id));
+  }
+  const sessions = rows.slice(0, limit);
+  const last = sessions[sessions.length - 1];
+  return {
+    sessions,
+    ...(pinned ? { pinned, hasArchived: all.some((row) => row.archived) } : {}),
+    nextCursor: rows.length > limit && last ? `${activity(last)}.${last.id}` : null,
   };
 }

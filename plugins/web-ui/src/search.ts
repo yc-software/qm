@@ -1,11 +1,11 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import { CornerDownLeft, Search } from "lucide";
-import { api, userSendMessage, type CoreSession } from "./core-bridge";
+import { api, fetchSessionRow, userSendMessage, type CoreSession } from "./core-bridge";
 import { startNewChat } from "./sessions";
 import { recencyGroup } from "./session-list";
 import { searchGroup } from "./search-group";
 import { slackWireToPlain, stripSlackDirectives } from "./slack-text";
-import { openSession, refreshSessions, sessionsState, sessionTitle } from "./sessions";
+import { openSession, sessionsState, sessionTitle } from "./sessions";
 import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
@@ -258,11 +258,7 @@ function scrollSelectedIntoView(): void {
 
 async function openHit(hit: ChatSearchHit): Promise<void> {
   const find = (): CoreSession | undefined => sessionsState.list.find((s) => s.id === hit.sessionId);
-  let session = find();
-  if (!session) {
-    await refreshSessions({ silent: true });
-    session = find();
-  }
+  const session = find() ?? (await fetchSessionRow({ id: hit.sessionId }).catch(() => null));
   if (!session) return;
   closeChatSearch();
   await openSession(session);

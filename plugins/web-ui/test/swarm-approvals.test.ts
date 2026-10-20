@@ -92,7 +92,7 @@ test("worker transcripts allow approvals without enabling the composer", async (
     if (path.startsWith("/api/sessions/s1")) {
       return Response.json({ session: row, entries, earlierEntries: 0 });
     }
-    if (path === "/api/sessions") return Response.json({ sessions: [row] });
+    if (path.startsWith("/api/sessions?")) return Response.json({ sessions: [row] });
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };

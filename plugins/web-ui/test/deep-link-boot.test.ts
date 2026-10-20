@@ -16,7 +16,7 @@ test("a share link paints its conversation from the transcript, without waiting 
     );
     assert.match(h.mainText(), /Deep linked chat/);
     assert.equal(
-      h.requests.filter((p) => p === "/api/sessions").length,
+      h.requests.filter((p) => p.startsWith("/api/sessions?")).length,
       1,
       "boot must not stampede the expensive list route",
     );
@@ -194,9 +194,12 @@ test("the sidebar request overlaps runtime settings and paints if it finishes fi
   const h = await harness({ path: "/settings", holdRuntimeConfig: true, listSessions: [SESSION] });
   const booted = h.boot();
   try {
-    for (let i = 0; i < 100 && !h.requests.includes("/api/sessions"); i++)
+    for (let i = 0; i < 100 && !h.requests.some((p) => p.startsWith("/api/sessions?")); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.ok(h.requests.includes("/api/sessions"), "the list must start while runtime settings are pending");
+    assert.ok(
+      h.requests.some((p) => p.startsWith("/api/sessions?")),
+      "the list must start while runtime settings are pending",
+    );
     h.releaseSessions();
     await h.sessionsReady();
     h.releaseRuntimeConfig();

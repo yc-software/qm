@@ -1533,9 +1533,37 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/sessions",
     handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const p of ["limit", "before", "archived", "waiting", "pinned", "surface", "scope", "q"] as const) {
+        const v = url.searchParams.get(p);
+        if (v !== null) qs.set(p, v.slice(0, 500));
+      }
+      return relayCore(res, "GET", `/v1/sessions?${qs.toString()}`);
     },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/row",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const p of ["id", "threadRef"] as const) {
+        const v = url.searchParams.get(p);
+        if (v !== null) qs.set(p, v);
+      }
+      return relayCore(res, "GET", `/v1/sessions/row?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/children",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/children?principalId=${encodeURIComponent(c.user)}`,
+      ),
   },
   {
     method: "GET",

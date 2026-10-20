@@ -13,7 +13,10 @@ import type {
   EntrySearchHit,
   ScopeActivity,
   DistinctScope,
+  ParticipantPage,
+  ParticipantPageQuery,
   ParticipantScope,
+  SessionDescendant,
   GetEntriesOptions,
   Lease,
   LeaseAttempt,
@@ -203,6 +206,32 @@ const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
+const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
+
+const LAST_USER_ACTIVITY_BACKFILL_SQL = `DO $last_user_activity_backfill$
+DECLARE
+  batch text[];
+  after text := '';
+BEGIN
+  LOOP
+    SELECT array_agg(id ORDER BY id) INTO batch
+      FROM (SELECT id FROM sessions WHERE id > after ORDER BY id LIMIT 2000) candidates;
+    EXIT WHEN batch IS NULL;
+    WITH latest AS MATERIALIZED (
+      SELECT b.id, (SELECT ${msOf("MAX(e.created_at)")} FROM items e
+                     WHERE e.tenant_id = ${TENANT} AND e.session_id = b.id AND e.kind IN ${USER_KINDS}) AS at
+        FROM unnest(batch) AS b(id))
+    UPDATE sessions s
+       SET last_user_activity = latest.at
+      FROM latest
+     WHERE s.id = latest.id AND latest.at IS NOT NULL
+       AND (s.last_user_activity IS NULL OR s.last_user_activity < latest.at);
+    after := batch[cardinality(batch)];
+    COMMIT;
+    PERFORM pg_sleep(0.1);
+  END LOOP;
+END $last_user_activity_backfill$`;
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
 function rowToSpendRow(r: Record<string, unknown>): SpendRow {
@@ -282,17 +311,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          THEN COALESCE(s.messages, 0) > p.valid_from_seq
          ELSE EXISTS (${participantPresenceSql}) END`;
   const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
-  const latestUserItem = (kind: string): string =>
-    `(SELECT ${msOf("e.created_at")} FROM items e WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id
-       AND e.kind = '${kind}' ORDER BY e.created_at DESC LIMIT 1)`;
-  const USER_ACTIVITY = `GREATEST(s.created_at, ${latestUserItem("UserMessage")}, ${latestUserItem("SteeringMessage")})`;
   const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
     `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
             p.read_at AS p_read_at,
             (SELECT ${msOf("MAX(e.created_at)")} FROM items e
               WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND ${AGENT_REPLY_ITEM("e")}) AS agent_last_reply,
-            COALESCE((SELECT ${msOf("MAX(e.created_at)")} FROM items e
-                       WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND e.kind IN ${USER_KINDS}), s.created_at) AS user_last_activity,
+            ${USER_ACTIVITY} AS user_last_activity,
             ${SEES_ITEMS} AS has_entries
        FROM sessions s
        JOIN participants p ON p.session_id = s.id
@@ -323,6 +347,62 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       sessionCount: Number(r.session_count),
       lastActivityAt: r.last_activity == null ? null : Number(r.last_activity),
     }));
+  };
+  const participantPage = async (principalId: string, query: ParticipantPageQuery): Promise<ParticipantPage> => {
+    const params: unknown[] = [principalId];
+    const where: string[] = [
+      "p.principal_id = $1",
+      "s.parent_session_id IS NULL",
+      `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
+      HAS_CONTENT,
+    ];
+    const param = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    where.push(`COALESCE(p.archived, false) = ${param(query.archived === true)}`);
+    if (query.pinned !== undefined) where.push(`COALESCE(p.pinned, false) = ${param(query.pinned)}`);
+    if (query.surface !== undefined) where.push(`s.surface = ${param(query.surface)}`);
+    if (query.scopeId !== undefined) where.push(`s.scope_id = ${param(query.scopeId)}`);
+    if (query.sessionIds !== undefined) where.push(`s.id = ANY(${param([...query.sessionIds])}::text[])`);
+    if (query.titleQuery?.trim()) {
+      const pattern = param(`%${query.titleQuery.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+      where.push(`(COALESCE(p.title, s.title) ILIKE ${pattern} OR s.channel_name ILIKE ${pattern})`);
+    }
+    if (query.before)
+      where.push(`(${USER_ACTIVITY}, s.id) < (${param(query.before.activity)}::bigint, ${param(query.before.id)})`);
+    const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
+    const page = await q(
+      `SELECT s.id, ${USER_ACTIVITY} AS activity
+         FROM participants p JOIN sessions s ON s.id = p.session_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY ${USER_ACTIVITY} DESC, s.id DESC
+        LIMIT ${param(limit + 1)}`,
+      params,
+    );
+    const more = page.length > limit;
+    const ids = page.slice(0, limit).map((row) => row.id as string);
+    if (!ids.length) return { sessions: [], next: null };
+    const rows = await q(participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS), [principalId, ids]);
+    const byId = new Map(rows.map((row) => [row.id as string, rowToParticipantSession(row)]));
+    const last = page[limit - 1];
+    return {
+      sessions: ids.flatMap((id) => byId.get(id) ?? []),
+      next: more && last ? { activity: Number(last.activity), id: last.id as string } : null,
+    };
+  };
+  const descendantsOf = async (rootIds: readonly string[]): Promise<SessionDescendant[]> => {
+    if (!rootIds.length) return [];
+    const rows = await q(
+      `WITH RECURSIVE tree(id, root_id, thread_ref) AS (
+         SELECT id, parent_session_id, thread_ref FROM sessions WHERE parent_session_id = ANY($1::text[])
+         UNION
+         SELECT s.id, t.root_id, s.thread_ref FROM sessions s JOIN tree t ON s.parent_session_id = t.id
+       )
+       SELECT id, root_id, thread_ref FROM tree`,
+      [[...rootIds]],
+    );
+    return rows.map((r) => ({ id: r.id as string, rootId: r.root_id as string, threadRef: r.thread_ref as string }));
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
@@ -971,6 +1051,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
              ON llm_prompt_envelopes(created_at)`,
         ],
       },
+      {
+        id: "sessions/store/0043-last-user-activity",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_user_activity BIGINT`,
+        ],
+      },
+      {
+        id: "sessions/store/0044-last-user-activity-backfill",
+        prepare: [LAST_USER_ACTIVITY_BACKFILL_SQL],
+        statements: [],
+      },
     ],
     [
       {
@@ -1076,7 +1168,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                            ELSE turns + $4 END,
               first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
                                         THEN $6 ELSE first_user_preview END,
-              last_user_preview = COALESCE($7, last_user_preview)
+              last_user_preview = COALESCE($7, last_user_preview),
+              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
+                                        ELSE last_user_activity END
         WHERE id = $1`,
       [
         sessionId,
@@ -1086,6 +1180,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         startSeq,
         firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
         lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
+        items.some((item) => item.kind === "UserMessage" || item.kind === "SteeringMessage"),
       ],
     );
     return full;
@@ -1577,6 +1672,24 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async participantScopes(principalId): Promise<ParticipantScope[]> {
       return participantScopes(principalId);
+    },
+
+    async listParticipantPage(principalId, query): Promise<ParticipantPage> {
+      return participantPage(principalId, query);
+    },
+
+    async descendantsOf(rootIds): Promise<SessionDescendant[]> {
+      return descendantsOf(rootIds);
+    },
+
+    async listDescendantsForParticipant(rootId, principalId, limit): Promise<Session[]> {
+      const ids = (await descendantsOf([rootId])).map((d) => d.id).slice(0, Math.max(0, Math.floor(limit)));
+      if (!ids.length) return [];
+      const rows = await q(
+        participantSessionsSql(" AND s.id = ANY($2::text[])", LIST_COLUMNS) + " ORDER BY s.created_at, s.id",
+        [principalId, ids],
+      );
+      return rows.map(rowToParticipantSession);
     },
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {

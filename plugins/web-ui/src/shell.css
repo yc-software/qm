@@ -461,16 +461,12 @@ a.chat-row-open {
   white-space: nowrap;
   font-size: var(--font-12-5);
 }
-.recent-project-count,
 .archived-toggle .archived-count {
   flex: 0 0 auto;
   min-width: 16px;
   font-size: 10.5px;
   font-weight: 400;
   text-align: center;
-}
-.recent-project-count {
-  color: var(--muted-foreground);
 }
 .recent-project-new-chat {
   display: inline-flex;
@@ -502,22 +498,9 @@ a.chat-row-open {
   width: 26px;
   height: 26px;
 }
-.recent-project-head .recent-project-count {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: opacity 0.12s ease;
-}
 .recent-project-head .session-menu-btn {
   position: absolute;
   inset: 0;
-}
-.recent-project-head:hover .recent-project-count,
-.recent-project-head .session-menu.menu-open .recent-project-count,
-.recent-project-head .session-menu:focus-within .recent-project-count {
-  opacity: 0;
 }
 .recent-project-head:hover .session-menu-btn,
 .recent-project-head .session-menu.menu-open .session-menu-btn {
@@ -5228,9 +5211,6 @@ a.connector-widget:focus-visible {
 @media (max-width: 860px) and (hover: none) {
   .sidebar .session-menu-btn {
     opacity: 1;
-  }
-  .recent-project-head .recent-project-count {
-    opacity: 0;
   }
 }
 

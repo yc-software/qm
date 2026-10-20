@@ -151,6 +151,56 @@ export interface CoreSession {
   forkBoundarySeq?: number;
   parentSessionId?: string;
   surface?: string;
+  subagents?: { running: number; waiting: number };
+}
+
+export interface SessionPageQuery {
+  limit: number;
+  before?: string | null;
+  archived?: boolean;
+  waiting?: boolean;
+  pinned?: boolean;
+  surface?: string;
+  scope?: string | null;
+  q?: string;
+}
+
+export interface SessionPage {
+  sessions: CoreSession[];
+  pinned?: CoreSession[];
+  nextCursor: string | null;
+  hasArchived?: boolean;
+}
+
+export function fetchSessionPage(query: SessionPageQuery): Promise<SessionPage> {
+  const qs = new URLSearchParams({ limit: String(query.limit) });
+  if (query.before) qs.set("before", query.before);
+  if (query.archived) qs.set("archived", "1");
+  if (query.waiting) qs.set("waiting", "1");
+  if (query.pinned) qs.set("pinned", "1");
+  if (query.surface) qs.set("surface", query.surface);
+  if (query.scope) qs.set("scope", query.scope);
+  if (query.q?.trim()) qs.set("q", query.q.trim());
+  return api<SessionPage>(`/api/sessions?${qs.toString()}`);
+}
+
+export async function fetchSessionChildren(id: string): Promise<CoreSession[] | null> {
+  try {
+    return (await api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/children`)).sessions;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function fetchSessionRow(ref: { id: string } | { threadRef: string }): Promise<CoreSession | null> {
+  const qs = new URLSearchParams("id" in ref ? { id: ref.id } : { threadRef: ref.threadRef });
+  try {
+    return (await api<{ session: CoreSession }>(`/api/sessions/row?${qs.toString()}`)).session;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export function inheritedTranscript(

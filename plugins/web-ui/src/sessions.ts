@@ -34,8 +34,10 @@ import {
   type IconNode,
 } from "lucide";
 import {
-  api,
   fetchSessionApprovals,
+  fetchSessionChildren,
+  fetchSessionPage,
+  fetchSessionRow,
   fetchTranscript,
   currentEarlierCount,
   detachSession,
@@ -61,10 +63,12 @@ import {
   groupProjectSessions,
   recencyGroup,
   recentProjectSeeds,
-  reconcileSessions,
+  mergeChildren,
+  mergeFirstPage,
   rowIndicators,
   surfaceOf,
   splitPinned,
+  upsertSessions,
   withPendingSession,
   withoutUnsentPending,
   type RecentItem,
@@ -114,6 +118,7 @@ export const sessionsState = {
   renamingId: null as string | null,
   openingKey: null as string | null,
   webOnly: false,
+  hasArchived: false,
   collapsedProjectScopes: new Set<string>(),
 };
 
@@ -177,9 +182,16 @@ let renameDraft = "";
 const refreshingTitleIds = new Set<string>();
 let showArchived = false;
 const SESSION_BATCH_SIZE = 50;
-let recentLimit = SESSION_BATCH_SIZE;
-let archivedLimit = SESSION_BATCH_SIZE;
-let chatsPageLimit = SESSION_BATCH_SIZE;
+let activeCursor: string | null = null;
+let activePaged = false;
+let archivedCursor: string | null = null;
+let archivedLoaded = false;
+let pageLoading: "active" | "archived" | null = null;
+let chatsPageRows: CoreSession[] = [];
+let chatsPageCursor: string | null = null;
+let chatsPageLoading = false;
+let chatsPageSeq = 0;
+let chatsPageQueryTimer: ReturnType<typeof setTimeout> | null = null;
 
 let chatsPageScope: string | null = null;
 let chatsPageQuery = "";
@@ -208,9 +220,18 @@ export function resetSessionsState(): void {
   renameDraft = "";
   refreshingTitleIds.clear();
   showArchived = false;
-  recentLimit = SESSION_BATCH_SIZE;
-  archivedLimit = SESSION_BATCH_SIZE;
-  chatsPageLimit = SESSION_BATCH_SIZE;
+  sessionsState.hasArchived = false;
+  activeCursor = null;
+  activePaged = false;
+  archivedCursor = null;
+  archivedLoaded = false;
+  pageLoading = null;
+  chatsPageRows = [];
+  chatsPageCursor = null;
+  chatsPageLoading = false;
+  chatsPageSeq++;
+  if (chatsPageQueryTimer) clearTimeout(chatsPageQueryTimer);
+  chatsPageQueryTimer = null;
   chatsPageScope = null;
   chatsPageQuery = "";
   chatsPageStatus = "active";
@@ -315,20 +336,7 @@ export function renderList(): void {
   const active = visible.filter((s) => !s.archived);
   const archived = visible.filter((s) => s.archived);
   const { pinned, rest } = splitPinned(active);
-  const keptIds = new Set([
-    ...openConversationIds(),
-    ...selection.ids,
-    selection.anchor,
-    sessionsState.openMenuId,
-    sessionsState.renamingId,
-  ]);
-  const shownThreads = new Set(
-    [
-      ...rest.slice(0, recentLimit),
-      ...archived.slice(0, archivedLimit),
-      ...visible.filter((session) => !session.id || keptIds.has(session.id)),
-    ].map((session) => session.threadRef),
-  );
+  const shownThreads = new Set(visible.map((session) => session.threadRef));
   const activeItems = recentItemsFor(rest);
   const archivedItems: RecentItem[] = archived.map((session) => ({
     kind: "session",
@@ -356,42 +364,37 @@ export function renderList(): void {
       }
       ${groupedRows(activeItems, shownThreads)}
       ${
-        rest.some((session) => !shownThreads.has(session.threadRef))
+        activeCursor
           ? html`<button
               class="archived-toggle"
               type="button"
-              @click=${() => {
-                recentLimit += SESSION_BATCH_SIZE;
-                renderList();
-              }}
+              ?disabled=${pageLoading === "active"}
+              @click=${() => void loadMoreSessions("active")}
             >
-              Show more conversations
+              ${pageLoading === "active" ? "Loading…" : "Show more conversations"}
             </button>`
           : nothing
       }
       ${
-        archived.length
+        archived.length || sessionsState.hasArchived
           ? html`
               <button class="archived-toggle ${showArchived ? "open" : ""}" @click=${toggleShowArchived}>
                 ${icon(showArchived ? ChevronDown : ChevronRight, 14)}
                 <span>Archived</span>
-                <span class="archived-count">${archived.length}</span>
               </button>
               ${
                 showArchived
                   ? html`<div class="archived-children">
                       ${groupedRows(archivedItems, shownThreads)}
                       ${
-                        archived.some((session) => !shownThreads.has(session.threadRef))
+                        archivedCursor || pageLoading === "archived"
                           ? html`<button
                               class="archived-toggle"
                               type="button"
-                              @click=${() => {
-                                archivedLimit += SESSION_BATCH_SIZE;
-                                renderList();
-                              }}
+                              ?disabled=${pageLoading === "archived"}
+                              @click=${() => void loadMoreSessions("archived")}
                             >
-                              Show more archived conversations
+                              ${pageLoading === "archived" ? "Loading…" : "Show more archived conversations"}
                             </button>`
                           : nothing
                       }
@@ -464,7 +467,6 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 <span class="recent-project-name" dir="auto">${name.replace(/^#/, "")}</span>
               </button>
               <div class="session-menu recent-project-menu ${menuOpen ? "menu-open" : ""}">
-                <span class="recent-project-count">${item.sessions.length}</span>
                 <button
                   class="session-menu-btn"
                   data-menu-id=${menuKey}
@@ -593,12 +595,48 @@ export async function renderChatsPage(): Promise<void> {
   if (appState.currentView !== "chats") return;
   await ensureContexts();
   drawChatsPage();
-  await refreshSessions({ showLoading: sessionsState.list.length === 0, silent: sessionsState.list.length > 0 });
-  if (appState.currentView === "chats") drawChatsPage();
+  await loadChatsPage(false);
 }
 
 function chatsPageShowing(): boolean {
   return Boolean(chatsPageHost && appState.mainEl && chatsPageHost.parentElement === appState.mainEl);
+}
+
+async function loadChatsPage(append: boolean): Promise<void> {
+  if (append && !chatsPageCursor) return;
+  const seq = ++chatsPageSeq;
+  chatsPageLoading = true;
+  if (!append) chatsPageCursor = null;
+  drawChatsPage();
+  try {
+    const page = await fetchSessionPage({
+      limit: SESSION_BATCH_SIZE,
+      before: append ? chatsPageCursor : null,
+      archived: chatsPageStatus === "archived",
+      waiting: chatsPageStatus === "waiting",
+      scope: chatsPageScope,
+      q: chatsPageQuery,
+      ...(chatsPageSurface === "all" ? {} : { surface: chatsPageSurface }),
+    });
+    if (seq !== chatsPageSeq) return;
+    chatsPageRows = append ? [...chatsPageRows, ...page.sessions] : page.sessions;
+    chatsPageCursor = page.nextCursor;
+    sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
+    sessionsNotice = "";
+  } catch (e) {
+    if (seq !== chatsPageSeq) return;
+    sessionsNotice = errMessage(e, "Failed to load conversations.");
+  } finally {
+    if (seq === chatsPageSeq) {
+      chatsPageLoading = false;
+      drawChatsPage();
+    }
+  }
+}
+
+function reloadChatsPage(): void {
+  chatsPageRows = [];
+  void loadChatsPage(false);
 }
 
 export function drawChatsPage(): void {
@@ -609,32 +647,22 @@ export function drawChatsPage(): void {
     chatsPageHost.className = "pane chats-page";
     appState.mainEl.replaceChildren(chatsPageHost);
   }
-  const q = chatsPageQuery.trim().toLowerCase();
-  const matches = sidebarSessions(sessionsState.list)
+  const cached = new Map(sessionsState.list.map((s) => [s.id, s]));
+  const rows = chatsPageRows
+    .map((s) => cached.get(s.id) ?? s)
     .filter((s) => chatBrowseStatusMatches(s, chatsPageStatus))
-    .filter((s) => chatsPageSurface === "all" || surfaceOf(s) === chatsPageSurface)
-    .filter((s) => (chatsPageScope ? s.scopeId === chatsPageScope : true))
-    .filter((s) => !q || chatMatches(s, q))
-    .sort((a, b) => activityOf(b) - activityOf(a));
-  const rows = matches.slice(0, chatsPageLimit).map((s) => chatPageRow(s));
-  if (matches.length > chatsPageLimit)
+    .map((s) => chatPageRow(s));
+  if (chatsPageCursor)
     rows.push(
       html`<div class="list-footer">
-        <button
-          class="btn"
-          type="button"
-          @click=${() => {
-            chatsPageLimit += SESSION_BATCH_SIZE;
-            drawChatsPage();
-          }}
-        >
-          Show more conversations
+        <button class="btn" type="button" ?disabled=${chatsPageLoading} @click=${() => void loadChatsPage(true)}>
+          ${chatsPageLoading ? "Loading…" : "Show more conversations"}
         </button>
       </div>`,
     );
   let empty = "No conversations yet. Start a new chat.";
-  if (sessionsLoading && sessionsState.list.length === 0) empty = "Loading conversations…";
-  else if (chatsPageScope || q || chatsPageStatus !== "active" || chatsPageSurface !== "all") {
+  if (chatsPageLoading && chatsPageRows.length === 0) empty = "Loading conversations…";
+  else if (chatsPageScope || chatsPageQuery.trim() || chatsPageStatus !== "active" || chatsPageSurface !== "all") {
     empty = "No conversations match.";
   }
   render(
@@ -643,8 +671,7 @@ export function drawChatsPage(): void {
       scope: chatsPageScope,
       onScope: (s) => {
         chatsPageScope = s;
-        chatsPageLimit = SESSION_BATCH_SIZE;
-        drawChatsPage();
+        reloadChatsPage();
       },
       action: { label: "New chat", onClick: () => startNewChat() },
       search: {
@@ -652,7 +679,11 @@ export function drawChatsPage(): void {
         placeholder: "Search chats…",
         onInput: (v) => {
           chatsPageQuery = v;
-          chatsPageLimit = SESSION_BATCH_SIZE;
+          if (chatsPageQueryTimer) clearTimeout(chatsPageQueryTimer);
+          chatsPageQueryTimer = setTimeout(() => {
+            chatsPageQueryTimer = null;
+            reloadChatsPage();
+          }, 250);
           drawChatsPage();
         },
       },
@@ -673,13 +704,10 @@ export function drawChatsPage(): void {
                 class=${chatsPageStatus === value ? "active" : ""}
                 @click=${() => {
                   chatsPageStatus = value;
-                  chatsPageLimit = SESSION_BATCH_SIZE;
-                  drawChatsPage();
+                  reloadChatsPage();
                 }}
               >
-                ${label}<span
-                  >${sidebarSessions(sessionsState.list).filter((session) => chatBrowseStatusMatches(session, value)).length}</span
-                >
+                ${label}
               </button>`,
           )}
         </div>
@@ -689,8 +717,7 @@ export function drawChatsPage(): void {
             ariaLabel: "Filter by surface",
             onSelect: (value) => {
               chatsPageSurface = (value ?? "all") as typeof chatsPageSurface;
-              chatsPageLimit = SESSION_BATCH_SIZE;
-              drawChatsPage();
+              reloadChatsPage();
             },
             options: [
               { value: "all", label: "All surfaces" },
@@ -705,11 +732,6 @@ export function drawChatsPage(): void {
     }),
     chatsPageHost,
   );
-}
-
-function chatMatches(s: CoreSession, q: string): boolean {
-  const context = sharedContextLabel(s.scopeId, s.channelName ?? null) ?? "Personal";
-  return [sessionTitle(s), s.channelName ?? "", context].join(" ").toLowerCase().includes(q);
 }
 
 export const syncWorkingPulse = (el?: Element): void => {
@@ -1292,17 +1314,57 @@ function renameInput(menuKey: string, ariaLabel: string, commit: () => Promise<v
 
 function toggleShowArchived(): void {
   showArchived = !showArchived;
+  if (showArchived && !archivedLoaded) void loadMoreSessions("archived");
   renderList();
 }
 
+async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
+  if (pageLoading) return;
+  const archived = kind === "archived";
+  const before = archived ? archivedCursor : activeCursor;
+  if (!archived && !before) return;
+  pageLoading = kind;
+  const epoch = sessionPatchEpoch;
+  renderList();
+  try {
+    const page = await fetchSessionPage({
+      limit: SESSION_BATCH_SIZE,
+      before,
+      archived,
+      ...(sessionsState.webOnly ? { surface: "web" } : {}),
+    });
+    if (epoch !== sessionPatchEpoch) return;
+    sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
+    if (archived) {
+      archivedCursor = page.nextCursor;
+      archivedLoaded = true;
+    } else {
+      activeCursor = page.nextCursor;
+      activePaged = true;
+    }
+  } catch (e) {
+    sessionsNotice = errMessage(e, "Failed to load conversations.");
+  } finally {
+    pageLoading = null;
+    renderList();
+  }
+}
+
 export function setWebOnly(webOnly: boolean): void {
+  if (sessionsState.webOnly === webOnly) return;
   sessionsState.webOnly = webOnly;
   try {
     localStorage.setItem(WEB_ONLY_KEY, webOnly ? "1" : "0");
   } catch {
     void 0;
   }
+  activeCursor = null;
+  activePaged = false;
+  archivedCursor = null;
+  archivedLoaded = false;
+  if (showArchived) void loadMoreSessions("archived");
   renderList();
+  void refreshSessions({ silent: true });
 }
 
 export function revealSessionSurface(s: CoreSession): void {
@@ -1725,13 +1787,37 @@ async function runSessionsRefresh(
   }
   listRequestedAt = Date.now();
   try {
-    const r = await api<{ sessions: CoreSession[] }>("/api/sessions");
+    const surface = sessionsState.webOnly ? "web" : undefined;
+    const roots = [...new Set(openConversationIds())];
+    const [page, children] = await Promise.all([
+      fetchSessionPage({ limit: SESSION_BATCH_SIZE, pinned: true, ...(surface ? { surface } : {}) }),
+      Promise.all(
+        roots.map(
+          async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
+        ),
+      ),
+    ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (patchEpoch !== sessionPatchEpoch) {
       listDiscards++;
       return false;
     }
-    sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list, openConversationIds());
+    const last = page.sessions[page.sessions.length - 1];
+    let list = mergeFirstPage(
+      sessionsState.list,
+      page,
+      {
+        archived: false,
+        pinnedSeparately: true,
+        ...(surface ? { surface } : {}),
+        floor: page.nextCursor && last ? activityOf(last) : null,
+      },
+      openConversationIds(),
+    );
+    for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
+    sessionsState.list = list;
+    sessionsState.hasArchived = Boolean(page.hasArchived);
+    if (!activePaged) activeCursor = page.nextCursor;
     sessionsState.loaded = true;
     listCurrent = true;
     sessionsNotice = "";
@@ -1750,6 +1836,29 @@ async function runSessionsRefresh(
       for (const conversation of allConversations()) conversation.redraw();
     }
   }
+}
+
+export async function loadScopeSessions(scopeId: string): Promise<void> {
+  const page = await fetchSessionPage({ limit: SESSION_BATCH_SIZE, scope: scopeId });
+  sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
+}
+
+async function loadSessionNeighbors(s: CoreSession): Promise<void> {
+  const parentId = s.parentSessionId;
+  const needsParent = Boolean(parentId) && !sessionsState.list.some((row) => row.id === parentId);
+  const [children, parent] = await Promise.all([
+    fetchSessionChildren(s.id).catch(swallowAs("web-ui: load subagents", null)),
+    needsParent && parentId
+      ? fetchSessionRow({ id: parentId }).catch(swallowAs("web-ui: load parent chat", null))
+      : Promise.resolve(null),
+  ]);
+  let list = sessionsState.list;
+  if (children) list = mergeChildren(list, s.id, children);
+  if (parent) list = upsertSessions(list, [parent]);
+  if (list === sessionsState.list) return;
+  sessionsState.list = list;
+  renderList();
+  for (const conversation of allConversations()) conversation.redraw();
 }
 
 export async function openSession(
@@ -1793,6 +1902,7 @@ export async function openSessionInto(
   if (s.id === conv.state.sessionId && !entriesPrefetch) return;
 
   refreshSessionsOnOpen();
+  void loadSessionNeighbors(s);
 
   const opening = s.id;
   if (tracked) {

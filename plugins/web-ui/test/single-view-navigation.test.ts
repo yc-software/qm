@@ -23,7 +23,7 @@ const env = await browserEnv({
         effective: { harnessId: "pi", modelId: "m" },
       });
     if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
-    if (path === "/api/sessions") return Response.json({ sessions: known });
+    if (path.startsWith("/api/sessions?")) return Response.json({ sessions: known });
     const id = path.match(/^\/api\/sessions\/([^/?]+)/)?.[1];
     if (id) return Response.json({ session: known.find((s) => s.id === id), entries: [] });
     return Response.json({ contexts: [], items: [], crons: [] });

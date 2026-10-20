@@ -15,7 +15,9 @@ import type {
   NewLlmRequest,
   NewSearchEntry,
   NewSessionPin,
+  ParticipantPage,
   ParticipantScope,
+  SessionDescendant,
   ParticipantWindow,
   SessionPage,
   SessionStore,
@@ -519,6 +521,77 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         byScope.set(row.scopeId, scope);
       }
       return [...byScope.values()];
+    },
+
+    async listParticipantPage(principalId, query): Promise<ParticipantPage> {
+      const automation = new Set(["cron", "webhook", "loop"]);
+      const title = query.titleQuery?.trim().toLowerCase();
+      const ids = query.sessionIds ? new Set(query.sessionIds) : null;
+      const key = (s: Session): [number, string] => [s.lastActivityAt ?? s.createdAt, s.id];
+      const after = (s: Session): boolean => {
+        if (!query.before) return true;
+        const [activity, id] = key(s);
+        return activity < query.before.activity || (activity === query.before.activity && id < query.before.id);
+      };
+      const rows = [...(participants.get(principalId) ?? [])]
+        .map((id) => participantSession(id, principalId))
+        .filter((s): s is Session => s !== null)
+        .filter(
+          (s) =>
+            !s.parentSessionId &&
+            !(s.surface && automation.has(s.surface)) &&
+            ((entries.get(s.id)?.length ?? 0) > 0 || Boolean(s.title?.trim())) &&
+            Boolean(s.archived) === (query.archived === true) &&
+            (query.pinned === undefined || Boolean(s.pinned) === query.pinned) &&
+            (query.surface === undefined || s.surface === query.surface) &&
+            (query.scopeId === undefined || s.scopeId === query.scopeId) &&
+            (!ids || ids.has(s.id)) &&
+            (!title || `${s.title ?? ""} ${s.channelName ?? ""}`.toLowerCase().includes(title)) &&
+            after(s),
+        )
+        .sort((a, b) => {
+          const [aa, ai] = key(a);
+          const [ba, bi] = key(b);
+          if (ba !== aa) return ba - aa;
+          if (bi === ai) return 0;
+          return bi < ai ? -1 : 1;
+        })
+        .map(({ spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed }) => listed);
+      const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        sessions: page,
+        next: rows.length > limit && last ? { activity: key(last)[0], id: last.id } : null,
+      };
+    },
+
+    async descendantsOf(rootIds): Promise<SessionDescendant[]> {
+      const out: SessionDescendant[] = [];
+      const seen = new Set(rootIds);
+      let frontier = rootIds.map((id) => ({ id, rootId: id }));
+      while (frontier.length) {
+        const next: { id: string; rootId: string }[] = [];
+        for (const s of sessions.values()) {
+          const parent = frontier.find((f) => f.id === s.parentSessionId);
+          if (!parent || seen.has(s.id)) continue;
+          seen.add(s.id);
+          out.push({ id: s.id, rootId: parent.rootId, threadRef: s.threadRef });
+          next.push({ id: s.id, rootId: parent.rootId });
+        }
+        frontier = next;
+      }
+      return out;
+    },
+
+    async listDescendantsForParticipant(rootId, principalId, limit) {
+      const ids = (await this.descendantsOf([rootId])).map((d) => d.id).slice(0, Math.max(0, Math.floor(limit)));
+      return ids
+        .filter((id) => participants.get(principalId)?.has(id))
+        .map((id) => participantSession(id, principalId))
+        .filter((s): s is Session => s !== null)
+        .map(({ spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed }) => listed)
+        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
     },
 
     async getForParticipant(sessionId, principalId) {
