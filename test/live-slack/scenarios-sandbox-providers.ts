@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { SandboxBackendName } from "../../src/sandbox/sandbox-routing.ts";
 import { redactSecrets } from "../../src/harness/redact-secrets.ts";
 import { isObj } from "../../src/util/objects.ts";
+import { headSlice, tailSlice } from "../../src/util/text.ts";
 import type { Scenario } from "./harness.ts";
 
 const providerCoverage: Record<SandboxBackendName, true> = {
@@ -30,7 +31,7 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
 function describeExecuteResult(p: Record<string, unknown>): string {
   const result = typeof p.result === "string" ? redactSecrets(p.result) : p.result;
   const shown =
-    typeof result === "string" && result.length > 400 ? `${result.slice(0, 150)}…${result.slice(-250)}` : result;
+    typeof result === "string" && result.length > 400 ? `${headSlice(result, 150)}…${tailSlice(result, 250)}` : result;
   return JSON.stringify({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: shown });
 }
 

@@ -69,7 +69,7 @@ test("projected sandbox results require exact successful execution evidence", ()
 });
 
 test("a failed provider execution reports what the execute call returned", () => {
-  const token = "eyJvcmdJZCI6InFhIiwic2NvcGUiOiJlZ3Jlc3MifQ1.c2lnbmF0dXJlMTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1u";
+  const token = "eyJhbGciOiJIUzI1NiIsImtpZCI6ImsxIn0.eyJvcmdJZCI6InFhIn0.c2lnbmF0dXJlMTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1u";
   const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
   Object.assign(entries[1]!.payload, {
     code: 1,
@@ -82,6 +82,7 @@ test("a failed provider execution reports what the execute call returned", () =>
       error.message.includes("@proxy.example.com refused") &&
       error.message.includes("[exit 1]") &&
       !error.message.includes("x".repeat(151)) &&
+      !error.message.includes("eyJvcmdJZCI6InFhIn0") &&
       !error.message.includes("c2lnbmF0dXJl") &&
       !error.message.includes("eDpzZWNyZXQ"),
   );
