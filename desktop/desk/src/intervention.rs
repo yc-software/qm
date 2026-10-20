@@ -498,7 +498,7 @@ impl RetainedState {
             let (send, _) = mpsc::sync_channel(1);
             if self.registrations.send((owner, send)).is_err() {
                 if let Ok(mut failure) = self.failure.lock() {
-                    *failure = Some("Menu protection stopped".into());
+                    failure.get_or_insert_with(|| "Menu protection stopped".into());
                 }
             }
         } else {
@@ -529,7 +529,7 @@ impl RetainedState {
         }
         if kind.0 >= u32::MAX - 1 {
             if let Ok(mut failure) = self.failure.lock() {
-                *failure = Some("Retained app event tap was disabled".into());
+                failure.get_or_insert_with(|| "Retained app event tap was disabled".into());
             }
             return original;
         }
@@ -634,7 +634,7 @@ impl Retained {
                     };
                     if let Err(error) = &result {
                         if let Ok(mut failure) = callback.failure.lock() {
-                            *failure = Some(error.clone());
+                            failure.get_or_insert_with(|| error.clone());
                         }
                     } else {
                         let _ = callback.menu.compare_exchange(-owner, owner, Ordering::AcqRel, Ordering::Acquire);
