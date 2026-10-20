@@ -9,7 +9,12 @@ import { createLocalDurableByteStore } from "../src/files/durable-byte-store.ts"
 import { applyPgMigrations, createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { DuplicateCallError } from "../src/sessions/session-store.ts";
-import { createPostgresToolOutputStore, DEFAULT_INLINE_TOKENS } from "../src/sessions/tool-output.ts";
+import {
+  createPostgresToolOutputStore,
+  cutToolOutput,
+  DEFAULT_INLINE_TOKENS,
+  parkedOutputKey,
+} from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -192,15 +197,22 @@ test(
           scopeLabel: scope,
         });
         await assert.rejects(store.append(lease, call), DuplicateCallError);
+        await store.append(lease, {
+          type: "tool_result",
+          payload: { tool: "execute", callId: "toolu_short", result: "head…tail", output: { blob } },
+          scopeLabel: scope,
+        });
         await store.releaseLease(lease);
         const entries = await store.getEntries(session.id);
         assert.deepEqual(
           entries.map((entry) => (entry.payload as { callId?: string }).callId),
-          [callId, callId],
+          [callId, callId, "toolu_short"],
         );
-        assert.deepEqual(await outputs.read(session.id, callId), { text: full });
-        assert.equal(await outputs.read(session.id, "missing"), null);
-        assert.equal(await outputs.read("other-session", callId), null);
+        const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey(markerPath)!), { text: full });
+        assert.deepEqual(await outputs.read(session.id, parkedOutputKey("tool-output/toolu_short")!), { text: full });
+        assert.equal(await outputs.read(session.id, parkedOutputKey("tool-output/missing")!), null);
+        assert.equal(await outputs.read("other-session", parkedOutputKey(markerPath)!), null);
         const row = (
           await raw.query(
             "SELECT size, storage_key, (extract(epoch FROM expires_at - created_at) / 86400)::int AS days FROM blobs",

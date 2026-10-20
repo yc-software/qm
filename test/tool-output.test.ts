@@ -5,7 +5,7 @@ import {
   createMemoryToolOutputStore,
   DEFAULT_INLINE_TOKENS,
   inlineTokensFrom,
-  toolOutputCallId,
+  parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import type { SessionEntry } from "../src/types.ts";
 
@@ -26,14 +26,19 @@ test("cutToolOutput keeps text within the budget untouched and halves the rest b
   assert.equal(cut.shownChars, 200);
   assert.ok(cut.text.startsWith("H".repeat(100)));
   assert.ok(cut.text.endsWith("T".repeat(100)));
-  assert.match(cut.text, /tool-output\/c1/);
+  const path = /tool-output\/\S+(?=;)/.exec(cut.text)![0];
+  assert.equal(path.length, "tool-output/md5/".length + 32);
+  assert.equal(parkedOutputKey(path)?.callId, undefined);
 });
 
 test("tool-output paths name one call", () => {
-  assert.equal(toolOutputCallId("tool-output/toolu_1"), "toolu_1");
-  assert.equal(toolOutputCallId("tool-output/"), null);
-  assert.equal(toolOutputCallId("tool-output/a/b"), null);
-  assert.equal(toolOutputCallId("notes/tool-output/a"), null);
+  assert.equal(parkedOutputKey("tool-output/toolu_1")?.callId, "toolu_1");
+  assert.equal(parkedOutputKey(`tool-output/md5/${"ab".repeat(16)}`)?.digest, "ab".repeat(16));
+  assert.equal(parkedOutputKey("tool-output/"), null);
+  assert.equal(parkedOutputKey("tool-output/a/b"), null);
+  assert.equal(parkedOutputKey(`tool-output/md5/${"AB".repeat(16)}`), null);
+  assert.equal(parkedOutputKey("tool-output/md5/abc"), null);
+  assert.equal(parkedOutputKey("notes/tool-output/a"), null);
 });
 
 test("a parked result reads back only through its own session's tool result", async () => {
@@ -49,7 +54,12 @@ test("a parked result reads back only through its own session's tool result", as
     scopeLabel: "personal:u",
     createdAt: 1,
   });
-  assert.deepEqual(await store.read("s1", "c1"), { text: "the whole thing" });
-  assert.equal(await store.read("s2", "c1"), null);
-  assert.equal(await store.read("s1", "c2"), null);
+  const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput("x".repeat(100), 1, "c1")!.text)![0];
+  for (const path of ["tool-output/c1", markerPath]) {
+    assert.deepEqual(await store.read("s1", parkedOutputKey(path)!), { text: "the whole thing" });
+    assert.equal(await store.read("s2", parkedOutputKey(path)!), null);
+  }
+  assert.equal(await store.read("s1", parkedOutputKey("tool-output/c2")!), null);
+  entries.push({ ...entries[0]!, seq: 1 });
+  await assert.rejects(store.read("s1", parkedOutputKey(markerPath)!), /more than one call matches/);
 });

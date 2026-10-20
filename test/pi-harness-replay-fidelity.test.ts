@@ -588,7 +588,7 @@ test(
       const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
       const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
       assert.ok(!JSON.stringify(before).includes(bigResult.trim()));
-      assert.match(JSON.stringify(before), /tool-output\/toolu_1/);
+      assert.match(JSON.stringify(before), /tool-output\/md5\/[0-9a-f]{32}/);
       assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
       assert.deepEqual(after.slice(before.length), [
         {

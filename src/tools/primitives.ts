@@ -1,5 +1,5 @@
 import type { AdminToolAccess } from "./admin.ts";
-import { toolOutputCallId, type ToolOutputStore } from "../sessions/tool-output.ts";
+import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import {
@@ -988,12 +988,12 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         };
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
-      const parkedCallId = toolOutputCallId(path);
-      if (parkedCallId && deps.toolOutput && deps.sessionId) {
-        const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedCallId), signal);
+      const parkedKey = parkedOutputKey(path);
+      if (parkedKey && deps.toolOutput && deps.sessionId) {
+        const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedKey), signal);
         if (parked && "expired" in parked)
           return {
-            content: `[the full output of ${parkedCallId} expired after 30 days; only the cut shown in the transcript remains]`,
+            content: `[the full output in ${path} expired after 30 days; only the cut shown in the transcript remains]`,
             sourceScopeId: writableScopeId,
           };
         if (parked) {

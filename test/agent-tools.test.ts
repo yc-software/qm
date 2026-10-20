@@ -13,7 +13,7 @@ import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import { createMemoryToolOutputStore } from "../src/sessions/tool-output.ts";
+import { createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
@@ -732,9 +732,12 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   assert.equal(payload.stderr, undefined, "raw stderr is not stored beside the result");
 });
 
-test("a result over the inline cap keeps its head and tail and parks the full text as tool-output/<call_id>", async () => {
+test("a result over the inline cap keeps its head and tail and parks the full text where its marker points", async () => {
   const emitted: Emitted[] = [];
-  const outputs = createMemoryToolOutputStore({ inlineTokens: 100 });
+  const outputs = createMemoryToolOutputStore({
+    inlineTokens: 100,
+    sessions: { getEntries: async () => emitted as unknown as SessionEntry[] },
+  });
   const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {
     ...fakeToolContext(),
@@ -755,7 +758,12 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.equal(payload.result, seen, "the item stores exactly what the model saw");
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
-  assert.ok(seen.includes(`tool-output/${payload.callId}`), "the marker names the parked file");
+  const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
+  assert.deepEqual(
+    await outputs.read("s1", marker),
+    { text: outputs.parked.get(payload.output.blob) },
+    "the marker names the parked file",
+  );
   assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
   assert.equal(outputs.parked.get(payload.output.blob)!.length, payload.output.chars);
   assert.ok(outputs.parked.get(payload.output.blob)!.includes("line 1999"));
