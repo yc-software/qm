@@ -28,6 +28,63 @@ test("detaching a subagent session requires current channel membership", async (
   assert.deepEqual(await built.app.detachSession(child.id, "U1"), { detached: true });
 });
 
+test("listing shared-scope subagents checks current write permission once per scope", async (t) => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-list-permissions-")) }));
+  try {
+    await built.app.upsertDirectory([{ principalId: "U1", displayName: "User One", type: "internal" }]);
+    const scopes = [
+      { kind: "channel", id: "C-list-permissions" },
+      { kind: "group", id: "G-list-permissions" },
+    ] as const;
+    const childrenPerScope = 24;
+    for (const { kind, id } of scopes) {
+      for (let i = 0; i <= childrenPerScope; i++) {
+        const threadRef = i === 0 ? `web:U1:${id}` : `agent:main:subagent:${id}:${i}`;
+        const session = await built.sessions.getOrCreateByThread(threadRef, kind, `${kind}:${id}`);
+        await built.sessions.addParticipant(session.id, "U1", `Shared session ${i}`);
+      }
+    }
+    const reads = t.mock.method(built.directory, "get");
+    const channelChecks = t.mock.method(built.directory, "channelMember");
+    const groupChecks = t.mock.method(built.directory, "groupMember");
+    const counts = [];
+    for (const channelMember of [false, true, false]) {
+      const groupMember = !channelMember;
+      await built.directory.replaceChannels(
+        [{ channelId: scopes[0].id, name: "public", isPrivate: false }],
+        channelMember ? [{ channelId: scopes[0].id, principalId: "U1" }] : [],
+      );
+      await built.directory.replaceGroups(
+        groupMember ? [{ groupId: scopes[1].id, principalId: "U1" }] : [],
+        undefined,
+        [scopes[1].id],
+        [scopes[1].id],
+      );
+      reads.mock.resetCalls();
+      channelChecks.mock.resetCalls();
+      groupChecks.mock.resetCalls();
+      const sessions = await built.app.listSessions("U1");
+      assert.equal(sessions.length, scopes.length * (childrenPerScope + 1));
+      for (const session of sessions) {
+        const inChannel = session.scopeId === `channel:${scopes[0].id}`;
+        const expected = inChannel ? session.threadRef.startsWith("web:") || channelMember : groupMember;
+        assert.equal(session.canContinue, expected, `${session.threadRef} uses this request's membership`);
+      }
+      counts.push({
+        reads: reads.mock.callCount(),
+        channelChecks: channelChecks.mock.callCount(),
+        groupChecks: groupChecks.mock.callCount(),
+      });
+    }
+    assert.ok(
+      counts.every(({ reads, channelChecks, groupChecks }) => reads <= 4 && channelChecks <= 2 && groupChecks <= 2),
+      `ordinary web and subagent checks stay bounded per scope on every request: ${JSON.stringify(counts)}`,
+    );
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
 test("direct child enqueues share the tree cap across concurrent callers", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "session-cap-")) }));
   const root = await built.sessions.getOrCreateByThread("web:U1:root", "dm", "personal:U1");

@@ -436,9 +436,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const { kind, ref } = parseScopeId(session.scopeId);
     if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
     if (kind !== "channel" && kind !== "group") return false;
-    if (isSubagentThreadRef(session.threadRef)) return principalCanWriteScope(actor.id, session.scopeId);
-    if (!sharedAccess.has(session.scopeId)) sharedAccess.set(session.scopeId, mayUseSharedScope(kind, ref, actor));
-    return sharedAccess.get(session.scopeId)!;
+    const subagent = isSubagentThreadRef(session.threadRef);
+    const key = subagent ? `write:${session.scopeId}` : session.scopeId;
+    if (!sharedAccess.has(key))
+      sharedAccess.set(
+        key,
+        subagent ? principalCanWriteScope(actor.id, session.scopeId) : mayUseSharedScope(kind, ref, actor),
+      );
+    return sharedAccess.get(key)!;
   }
 
   async function canContinueOnWeb(
