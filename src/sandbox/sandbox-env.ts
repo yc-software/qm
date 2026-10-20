@@ -9,13 +9,6 @@ export const NONINTERACTIVE_ENV: ReadonlyArray<readonly [string, string]> = [
   ["AWS_PAGER", ""],
 ];
 
-export function nonInteractiveShellPrefix(): string {
-  const exports = NONINTERACTIVE_ENV.map(([name, def]) =>
-    def === "" ? `export ${name}="\${${name}-}"` : `export ${name}="\${${name}:-${def}}"`,
-  ).join("; ");
-  return `exec </dev/null; ${exports}; `;
-}
-
 export const DROPPED_PROXY_ENV = new Set([
   "http_proxy",
   "https_proxy",
@@ -26,6 +19,19 @@ export const DROPPED_PROXY_ENV = new Set([
   "no_proxy",
   "NO_PROXY",
 ]);
+
+const SUDO_KEPT_ENV = [...NONINTERACTIVE_ENV.map(([name]) => name), ...DROPPED_PROXY_ENV, "GIT_HTTP_PROXY_AUTHMETHOD"];
+
+const SUDO_KEEPING_ENV =
+  'sudo() { case "${1-}" in -[hKkVve]|--help|--version|--edit|--validate|--reset-timestamp|--remove-timestamp) command sudo "$@" ;; ' +
+  `*) command sudo --preserve-env=${SUDO_KEPT_ENV.join(",")} "$@" ;; esac; }`;
+
+export function nonInteractiveShellPrefix(): string {
+  const exports = NONINTERACTIVE_ENV.map(([name, def]) =>
+    def === "" ? `export ${name}="\${${name}-}"` : `export ${name}="\${${name}:-${def}}"`,
+  ).join("; ");
+  return `exec </dev/null; ${exports}; ${SUDO_KEEPING_ENV}; `;
+}
 
 export function forceThroughProxyEnv(
   egressProxyUrl: string,
