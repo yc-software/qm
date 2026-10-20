@@ -9,7 +9,9 @@ use objc2::msg_send;
 use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_foundation::NSPoint;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -55,9 +57,41 @@ fn frontmost() -> Option<i32> {
     crate::mac::system_focused_pid()
 }
 
-pub struct Focus {
+thread_local! {
+    static ACTIVATION: RefCell<Weak<Activation>> = const { RefCell::new(Weak::new()) };
+}
+
+struct Activation {
     target: i32,
-    activated: bool,
+    window: u32,
+    background: bool,
+    activated: Cell<bool>,
+}
+
+impl Activation {
+    fn ensure(&self, send: impl FnOnce(i32, u32, i16) -> Result<(), Failure>) -> Result<(), Failure> {
+        if !self.background || self.activated.get() {
+            return Ok(());
+        }
+        if self.window == 0 {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Background window has no ID; observe again"));
+        }
+        send(self.target, self.window, 1)?;
+        self.activated.set(true);
+        Ok(())
+    }
+}
+
+pub fn activate_current() -> Result<(), Failure> {
+    check_current()?;
+    if let Some(activation) = ACTIVATION.with(|current| current.borrow().upgrade()) {
+        activation.ensure(synthetic_focus)?;
+    }
+    check_current()
+}
+
+pub struct Focus {
+    activation: Rc<Activation>,
     intervention: Option<crate::intervention::Intervention>,
 }
 
@@ -72,15 +106,9 @@ impl Focus {
         if keyboard_owner != crate::intervention::keyboard_focus_pid()? || frontmost() != Some(original) {
             return Err(Failure::new(ErrorCode::ActionFailed, "Focus changed while starting input; stopped"));
         }
-        if original == target {
-            EXPECTED_FOREGROUND.store(original, Ordering::Release);
-            return Ok(Self { target, activated: false, intervention: Some(intervention) });
-        }
-        if window == 0 {
-            return Err(Failure::new(ErrorCode::ActionFailed, "Background window has no ID; observe again"));
-        }
-        synthetic_focus(target, window, 1)?;
-        let guard = Self { target, activated: true, intervention: Some(intervention) };
+        let activation = Rc::new(Activation { target, window, background: original != target, activated: Cell::new(false) });
+        ACTIVATION.with(|current| *current.borrow_mut() = Rc::downgrade(&activation));
+        let guard = Self { activation, intervention: Some(intervention) };
         EXPECTED_FOREGROUND.store(original, Ordering::Release);
         guard.check()?;
         Ok(guard)
@@ -88,15 +116,16 @@ impl Focus {
 
     pub fn finish(&mut self) -> Result<(), Failure> {
         EXPECTED_FOREGROUND.store(0, Ordering::Release);
-        if !std::mem::replace(&mut self.activated, false) {
+        ACTIVATION.with(|current| *current.borrow_mut() = Weak::new());
+        if !self.activation.activated.replace(false) {
             return Ok(());
         }
         let until = Instant::now() + Duration::from_millis(80);
         while Instant::now() < until && !crate::cancellation::cancelled() {
             std::thread::sleep(Duration::from_millis(8));
         }
-        if frontmost() != Some(self.target) {
-            synthetic_focus(self.target, 0, 2)?;
+        if frontmost() != Some(self.activation.target) {
+            synthetic_focus(self.activation.target, 0, 2)?;
         }
         Ok(())
     }
@@ -130,5 +159,37 @@ impl Drop for Focus {
         if let Err(error) = self.finish() {
             eprintln!("Background focus cleanup failed: {}", error.message);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_activation_waits_for_synthetic_dispatch_and_runs_once() {
+        let state = Activation { target: 41, window: 7, background: true, activated: Cell::new(false) };
+        assert!(!state.activated.get());
+        state
+            .ensure(|pid, window, subtype| {
+                assert_eq!((pid, window, subtype), (41, 7, 1));
+                assert!(!state.activated.get());
+                Ok(())
+            })
+            .unwrap();
+        state.ensure(|_, _, _| panic!("duplicate activation")).unwrap();
+        assert!(state.activated.get());
+    }
+
+    #[test]
+    fn foreground_and_failed_activation_need_no_deactivation() {
+        let mut state = Activation { target: 41, window: 0, background: false, activated: Cell::new(false) };
+        state.ensure(|_, _, _| panic!("foreground activation")).unwrap();
+        assert!(!state.activated.get());
+        state.background = true;
+        assert!(state.ensure(|_, _, _| panic!("missing window activation")).is_err());
+        state.window = 7;
+        assert!(state.ensure(|_, _, _| Err(Failure::new(ErrorCode::ActionFailed, "failed"))).is_err());
+        assert!(!state.activated.get());
     }
 }

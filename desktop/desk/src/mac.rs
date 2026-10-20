@@ -476,6 +476,7 @@ fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, cl
         crate::intervention::include_target(pid);
         active()?;
         validate_input_window(at)?;
+        crate::focus::activate_current()?;
     }
     let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
     e.set_flags(flags);
@@ -530,6 +531,9 @@ fn send_key_events(pid: i32, steps: Vec<crate::keys::Event>, text: Option<&str>,
     crate::intervention::include_target(pid);
     active()?;
     let prepared = steps.into_iter().map(|step| key_event(step, text)).collect::<Result<Vec<_>, _>>()?;
+    if prepared.iter().any(|(step, _)| !step.release) {
+        crate::focus::activate_current()?;
+    }
     let mut failure = None;
     let mut releasing = false;
     let mut pressed = crate::keys::Pressed::default();
@@ -582,6 +586,7 @@ fn with_modifiers(pid: i32, flags: CGEventFlags, action: impl FnOnce() -> Result
     let mut pressed = crate::keys::Pressed::default();
     let result = (|| {
         for (step, event) in down {
+            crate::focus::activate_current()?;
             active()?;
             pressed.record(step);
             post(event, pid);
