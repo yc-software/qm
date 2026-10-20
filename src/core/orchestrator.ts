@@ -56,7 +56,7 @@ import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
-import { isPollSurface, isSilentPollReply } from "../triggers/run-trigger.ts";
+import { isPollSurface } from "../triggers/run-trigger.ts";
 import { envKey } from "../credentials/connector-token.ts";
 import {
   credentialHandle,
@@ -3751,8 +3751,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
           // text, which surfaces that render assistant entries show twice).
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
-          const silentPollNarration = isPollFire && isSilentPollReply(primaryReply);
-          if (primaryReply && !silentPollNarration && defaultDestination && deps.deliveries) {
+          if (primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
               await reachEnqueue({
@@ -3768,7 +3767,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reportFailure("orchestrator: direct reply delivery", e, `session=${session.id}`);
             }
           }
-          if (spine.surfaceOutboundCount === 0 && !silentPollNarration) {
+          if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).entries));
             result = await runHarnessTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
@@ -4025,7 +4024,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ...(sourceAssistantEntrySeq !== undefined ? { sourceAssistantEntrySeq } : {}),
               }
             : { status: "pending_approval", sessionId: session.id, pendingApprovals: approvals };
-        } else if (isPollFire && !stagedAttachments.length && isSilentPollReply(reply)) {
+        } else if (isPollFire && !stagedAttachments.length && !reply.trim()) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (input.surfaceTools && surfaceToolDeps && !strictReadOnly) {
           finalResult = { status: "silent", sessionId: session.id, ...(result.stopped ? { stopped: true } : {}) };

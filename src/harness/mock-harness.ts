@@ -324,19 +324,6 @@ export function createMockHarness(): Harness {
           usedTool = true;
           silent = turn.pollFire === true;
           reply = turn.pollFire ? "" : preamble;
-        } else if (command0.startsWith("!narrate-no-update")) {
-          const narration =
-            cmd.slice(cmd.indexOf("!narrate-no-update") + "!narrate-no-update".length).trim() || "Nothing new.";
-          if (turn.onDelta) for (const chunk of streamChunks(narration)) turn.onDelta(chunk);
-          await turn.emit({ type: "text", payload: { text: narration }, scopeLabel: turn.scopeLabel });
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command: "check" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
-          usedTool = true;
-          reply = `${narration}\n\n[no-update]`;
         } else if (command0.startsWith("!phased-reply")) {
           await turn.onTextBlockStart?.("commentary");
           turn.onDelta?.("Checking.");

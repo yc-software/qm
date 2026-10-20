@@ -282,7 +282,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
   const built = freshApp();
   const cron = await built.app.createCron({
     schedule: { firstFireAt: Date.now() },
-    action: "!run printf 'Posted the digest DM\\n\\n[no-update]\\n'",
+    action: "!preamble-then-quiet Posted the digest DM",
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -291,7 +291,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
 
   await runNowSettled(built.scheduler, cron.id);
 
-  assert.equal((await built.deliveries.pending("principal")).length, 0, "final silent marker means no delivery");
+  assert.equal((await built.deliveries.pending("principal")).length, 0, "finish_silently means no delivery");
   const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
   const sourceEntries = await built.sessions.getEntries(source!.id);
@@ -1966,16 +1966,25 @@ test("a poll fire that ends with no message resolves to silent, not a delivered 
   assert.ok(res.sessionId, "the turn still ran — it's silent, not skipped");
 });
 
-test("a poll fire whose final line is a bare silence token resolves to silent", async () => {
+test("a poll fire whose reply is a bracketed token is an ordinary reply; only finish_silently silences it", async () => {
   const { app } = freshApp();
   const res = await app.turn({
     surface: "cron",
     actor: internalActor,
     conversation: { kind: "dm", threadRef: "dm:U1:cron2" },
-    text: "!run printf %s '[no-update]'",
+    text: "!run printf %s 'Nothing changed.\n\n[no-update]'",
     triggered: true,
   });
-  assert.equal(res.status, "silent");
+  assert.equal(res.status, "ok");
+  assert.equal(res.reply, "Nothing changed.\n\n[no-update]");
+  const silenced = await app.turn({
+    surface: "cron",
+    actor: internalActor,
+    conversation: { kind: "dm", threadRef: "dm:U1:cron2b" },
+    text: "!finish-silent",
+    triggered: true,
+  });
+  assert.equal(silenced.status, "silent");
 });
 
 test("a poll fire with a real reply still delivers (status ok), and a non-triggered empty reply is not silenced", async () => {
