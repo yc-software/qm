@@ -260,6 +260,40 @@ pub(super) fn scroll_pages(host: &El, area: &El, direction: Direction, pages: f6
     }
 }
 
+fn date_value(before: &core_foundation::date::CFDate, value: &str, mask: u64) -> Option<CFType> {
+    use objc2_foundation::{NSCalendar, NSCalendarUnit as Unit, NSDate, NSDateFormatter, NSDateFormatterStyle as Style};
+    if mask == 0 || mask & !0xee != 0 {
+        return None;
+    }
+    let formatter = NSDateFormatter::new();
+    formatter.setLenient(false);
+    match mask {
+        0xe0 => formatter.setDateStyle(Style::ShortStyle),
+        0xc | 0xe => formatter.setTimeStyle(Style::ShortStyle),
+        0xc0 => formatter.setDateFormat(Some(&NSString::from_str("MMMM yyyy"))),
+        _ => {
+            formatter.setDateStyle(Style::ShortStyle);
+            formatter.setTimeStyle(Style::ShortStyle);
+        }
+    }
+    let parsed = formatter.dateFromString(&NSString::from_str(value))?;
+    let calendar = NSCalendar::currentCalendar();
+    let units = [(0x80, Unit::Year), (0x40, Unit::Month), (0x20, Unit::Day), (8, Unit::Hour), (4, Unit::Minute), (2, Unit::Second)];
+    let all = units.iter().fold(Unit::Era | Unit::Nanosecond, |all, (_, unit)| all | *unit);
+    let original = NSDate::dateWithTimeIntervalSinceReferenceDate(before.abs_time());
+    let components = calendar.components_fromDate(all, &original);
+    for (bit, unit) in units {
+        if mask & bit != 0 {
+            components.setValue_forComponent(calendar.component_fromDate(unit, &parsed), unit);
+        }
+    }
+    let date = calendar.dateFromComponents(&components)?;
+    if units.iter().any(|(_, unit)| calendar.component_fromDate(*unit, &date) != components.valueForComponent(*unit)) {
+        return None;
+    }
+    Some(core_foundation::date::CFDate::new(date.timeIntervalSinceReferenceDate()).as_CFType())
+}
+
 pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Option<bool>) -> Result<(), Failure> {
     if !settable(e, "AXValue") {
         return Err(fail(
@@ -282,7 +316,9 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
             }
         }
         Some(v) if v.downcast::<core_foundation::date::CFDate>().is_some() => {
-            return Err(fail(ErrorCode::ActionFailed, format!("element {index} holds a date; type it or use its controls")))
+            let mask = attr(e, "AXDateTimeComponents").and_then(|v| v.downcast::<CFNumber>()).and_then(|v| v.to_i64()).unwrap_or(0xee);
+            date_value(&v.downcast::<core_foundation::date::CFDate>().unwrap(), value, mask as u64)
+                .ok_or_else(|| bad("valid date/time in the system's format"))?
         }
         _ => cfs(value).as_CFType(),
     };
@@ -337,6 +373,58 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn date_values_preserve_components_outside_the_control() {
+        use core_foundation::date::CFDate;
+        use objc2_foundation::{NSCalendar, NSCalendarUnit as Unit, NSDate, NSDateFormatter, NSDateFormatterStyle as Style};
+        let calendar = NSCalendar::currentCalendar();
+        let original = NSDate::dateWithTimeIntervalSinceReferenceDate(737_985_757.0);
+        let target = NSDate::dateWithTimeIntervalSinceReferenceDate(738_165_123.0);
+        let before = CFDate::new(original.timeIntervalSinceReferenceDate());
+        for (mask, changed, preserved) in [
+            (0xe0, vec![Unit::Year, Unit::Month, Unit::Day], vec![Unit::Hour, Unit::Minute, Unit::Second]),
+            (0xc, vec![Unit::Hour, Unit::Minute], vec![Unit::Year, Unit::Month, Unit::Day, Unit::Second]),
+        ] {
+            let formatter = NSDateFormatter::new();
+            if mask == 0xe0 {
+                formatter.setDateStyle(Style::ShortStyle);
+            } else {
+                formatter.setTimeStyle(Style::ShortStyle);
+            }
+            let value = formatter.stringFromDate(&target).to_string();
+            let result = date_value(&before, &value, mask).unwrap().downcast::<CFDate>().unwrap();
+            let result = NSDate::dateWithTimeIntervalSinceReferenceDate(result.abs_time());
+            for unit in changed {
+                assert_eq!(calendar.component_fromDate(unit, &result), calendar.component_fromDate(unit, &target));
+            }
+            for unit in preserved {
+                assert_eq!(calendar.component_fromDate(unit, &result), calendar.component_fromDate(unit, &original));
+            }
+        }
+        assert!(date_value(&before, "not a date", 0xe0).is_none());
+        assert!(date_value(&before, "not a time", 0xc).is_none());
+    }
+
+    #[test]
+    fn date_values_reject_normalization_of_hidden_day() {
+        use core_foundation::date::CFDate;
+        use objc2_foundation::{NSCalendar, NSCalendarUnit as Unit, NSDate, NSDateFormatter};
+        let calendar = NSCalendar::currentCalendar();
+        let components =
+            calendar.components_fromDate(Unit::Year | Unit::Month | Unit::Day, &NSDate::dateWithTimeIntervalSinceReferenceDate(0.0));
+        components.setValue_forComponent(2024, Unit::Year);
+        components.setValue_forComponent(1, Unit::Month);
+        components.setValue_forComponent(31, Unit::Day);
+        let original = calendar.dateFromComponents(&components).unwrap();
+        components.setValue_forComponent(2, Unit::Month);
+        components.setValue_forComponent(1, Unit::Day);
+        let target = calendar.dateFromComponents(&components).unwrap();
+        let formatter = NSDateFormatter::new();
+        formatter.setDateFormat(Some(&NSString::from_str("MMMM yyyy")));
+        let value = formatter.stringFromDate(&target).to_string();
+        assert!(date_value(&CFDate::new(original.timeIntervalSinceReferenceDate()), &value, 0xc0).is_none());
+    }
 
     #[test]
     fn index_click_requires_a_positive_target_hit() {
