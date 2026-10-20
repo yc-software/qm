@@ -464,9 +464,18 @@ pub struct RetainedState {
     menu: AtomicI32,
     failure: Mutex<Option<String>>,
     registrations: mpsc::Sender<(i32, mpsc::SyncSender<Result<(), String>>)>,
+    runloop: Mutex<Option<CFRunLoop>>,
 }
 
 impl RetainedState {
+    fn wake(&self) {
+        if let Ok(runloop) = self.runloop.lock() {
+            if let Some(runloop) = runloop.as_ref() {
+                runloop.stop();
+            }
+        }
+    }
+
     pub fn same_process(&self) -> bool {
         objc2::rc::autoreleasepool(|_| {
             objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(self.pid)
@@ -501,6 +510,7 @@ impl RetainedState {
                     failure.get_or_insert_with(|| "Menu protection stopped".into());
                 }
             }
+            self.wake();
         } else {
             self.menu.store(owner, Ordering::Release);
         }
@@ -570,6 +580,15 @@ impl RetainedState {
     }
 }
 
+fn stop_retained(stop: &AtomicBool, state: &RetainedState, thread: JoinHandle<()>) {
+    stop.store(true, Ordering::Release);
+    while !thread.is_finished() {
+        state.wake();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let _ = thread.join();
+}
+
 pub struct Retained {
     pub state: Arc<RetainedState>,
     stop: Arc<AtomicBool>,
@@ -592,12 +611,16 @@ impl Retained {
             menu: AtomicI32::new(0),
             failure: Mutex::new(None),
             registrations,
+            runloop: Mutex::new(None),
         });
         let callback = Arc::clone(&state);
         let stop = Arc::new(AtomicBool::new(false));
         let quit = Arc::clone(&stop);
         let (send, ready) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
+            if let Ok(mut runloop) = callback.runloop.lock() {
+                *runloop = Some(CFRunLoop::get_current());
+            }
             let create =
                 |pid| Tap::create(TapContext { context: None, retained: Some(Arc::clone(&callback)), kind: TapKind::Retained(pid) });
             let Some(_observer) = crate::mac::menu_observer(pid, Arc::clone(&callback)) else {
@@ -641,7 +664,7 @@ impl Retained {
                     }
                     let _ = ack.send(result);
                 }
-                CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(20), false);
+                CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_secs(1), true);
             }
             if let Ok(mut failure) = callback.failure.lock() {
                 if failure.is_none() {
@@ -651,8 +674,7 @@ impl Retained {
         });
         let result = ready.recv_timeout(Duration::from_millis(350)).map_err(|e| e.to_string()).and_then(|result| result);
         if let Err(error) = result {
-            stop.store(true, Ordering::Release);
-            let _ = thread.join();
+            stop_retained(&stop, &state, thread);
             return Err(Failure::new(ErrorCode::ActionFailed, error));
         }
         Ok(Self { state, stop, thread: Some(thread) })
@@ -662,9 +684,8 @@ impl Retained {
 impl Drop for Retained {
     fn drop(&mut self) {
         self.state.menu(None);
-        self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            stop_retained(&self.stop, &self.state, thread);
         }
     }
 }
