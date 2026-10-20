@@ -17,7 +17,7 @@ import {
   safeModelMetadata,
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { validateCustomProviderSpec } from "../src/model/custom-providers.ts";
+import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 
 const config = {
@@ -209,7 +209,7 @@ test("malformed and oversized catalogs cannot grant access", async () => {
   }
 });
 
-test("gateway namespace cannot be registered by custom providers even before discovery", () => {
+test("custom provider models live in their own namespace, never the gateway one", () => {
   assert.doesNotThrow(() =>
     validateCustomProviderSpec({
       id: "gateway",
@@ -227,7 +227,11 @@ test("gateway namespace cannot be registered by custom providers even before dis
     baseUrl: config.url,
     models: [{ id: "gateway/future" }],
   };
-  assert.throws(() => validateCustomProviderSpec(spec), /already registered/);
+  assert.doesNotThrow(() => validateCustomProviderSpec(spec));
+  setCustomProviders([spec]);
+  assert.equal(resolveModel("custom/custom/gateway/future")?.provider, "custom");
+  assert.equal(resolveModel("gateway/future"), undefined);
+  setCustomProviders([]);
   assert.throws(
     () => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }),
     /must match/,

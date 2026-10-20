@@ -62,6 +62,11 @@ pub enum Action {
     TypeText {
         text: String,
     },
+    Paste {
+        text: String,
+        #[serde(default)]
+        format: PasteFormat,
+    },
     PressKey {
         key: String,
         #[serde(default)]
@@ -91,6 +96,8 @@ pub enum Action {
     SetValue {
         index: u32,
         value: String,
+        #[serde(default)]
+        submit: Option<bool>,
     },
     Perform {
         index: u32,
@@ -149,6 +156,15 @@ impl Default for Amount {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum PasteFormat {
+    #[default]
+    Text,
+    Markdown,
+    Html,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Selection {
     #[default]
     Text,
@@ -199,6 +215,7 @@ pub struct Observation {
     pub bundle_id: Option<String>,
     pub pid: i32,
     pub window: String,
+    pub window_id: u32,
     pub frame: Rect,
     pub elements: u32,
     pub truncated: bool,
@@ -208,7 +225,7 @@ pub struct Observation {
     pub screenshot: Option<Screenshot>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rect {
     pub x: f64,
@@ -224,6 +241,7 @@ pub struct Screenshot {
     pub width: u32,
     pub height: u32,
     pub pixels_per_point: f64,
+    pub frame: Rect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +263,7 @@ pub enum ErrorCode {
     BadIndex,
     UnknownKey,
     ActionFailed,
+    PasteConflict,
 }
 
 impl Failure {

@@ -24,6 +24,7 @@ test(
       const sessionId = randomUUID();
       const scope = scopeId("personal", "alice");
       const runId = randomUUID();
+      const longCallId = `call__thought__${"x".repeat(1100)}`;
       const legacy: [EntryType, Record<string, unknown>][] = [
         ["user", { text: "hello", name: "Alice", principalId: "alice", runId }],
         ["thinking", { text: "hmm", thinkingSignature: "sig" }],
@@ -40,6 +41,8 @@ test(
         ["soul" as EntryType, { text: "you are" }],
         ["text_start" as EntryType, { phase: "final_answer" }],
         ["system", { kind: "goal_cancelled", objective: "Example goal", cancelledBy: "alice" }],
+        ["tool_call", { tool: "execute", callId: longCallId, input: { command: "pwd" } }],
+        ["tool_call", { tool: "execute", callId: "c1", input: { command: "ls" } }],
       ];
       await raw.query(
         "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, messages) VALUES ($1, 'dm', $2, 'web:cutover', 1, $3)",
@@ -72,7 +75,7 @@ test(
 
       const store = createPostgresSessionStore(URL!);
       const copied = await store.getEntries(sessionId);
-      assert.deepEqual(copied.at(-1)?.payload, {
+      assert.deepEqual(copied.at(-3)?.payload, {
         kind: "goal_cancelled",
         cause: "system",
         objective: "Example goal",
@@ -81,7 +84,13 @@ test(
       assert.equal((copied[0]!.payload as { text: string }).text, "hello");
       assert.equal((copied.find((entry) => entry.seq === 5)!.payload as { text: string }).text, "final answer");
       assert.equal((copied.find((entry) => entry.seq === 4)!.payload as { result: string }).result, "out\n");
-      assert.equal((copied.find((entry) => entry.seq === 3)!.payload as { callId: string }).callId, "c1");
+      assert.deepEqual(
+        copied
+          .filter((entry) => entry.type === "tool_call")
+          .map((entry) => (entry.payload as { callId: string }).callId),
+        ["c1", longCallId, "c1"],
+        "call ids too long or repeated for the call_id column stay in the copied body",
+      );
       assert.deepEqual(
         copied.map((entry) => [entry.seq, entry.type, entry.createdAt]),
         legacyEntries

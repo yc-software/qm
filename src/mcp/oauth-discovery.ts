@@ -1,3 +1,4 @@
+import { buildDiscoveryUrls } from "@modelcontextprotocol/sdk/client/auth.js";
 import { errMessage } from "../util/errors.ts";
 
 export function httpsUrl(v: unknown): string | undefined {
@@ -59,13 +60,8 @@ export async function discoverOAuth(resource: URL): Promise<DiscoveredOAuth> {
       continue;
     }
     const scopes = parseScopes(meta?.scopes_supported);
-    const base = new URL(issuer);
-    const path = base.pathname.replace(/\/+$/, "");
-    for (const candidate of [
-      `${base.origin}/.well-known/oauth-authorization-server${path}`,
-      `${base.origin}/.well-known/openid-configuration${path}`,
-      ...(path ? [`${base.origin}${path}/.well-known/openid-configuration`] : []),
-    ]) {
+    for (const { url } of buildDiscoveryUrls(issuer)) {
+      const candidate = url.href;
       const server = await fetchMeta(candidate, errors);
       if (!server) continue;
       const authorize = httpsUrl(server.authorization_endpoint);

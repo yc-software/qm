@@ -1,5 +1,7 @@
+import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
+import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -60,23 +62,6 @@ function titleOf(item: LoopItem): string {
   return clip(item.sourcePayload?.title, 300) ?? "";
 }
 
-function b64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
-}
-
-function isAscii(s: string): boolean {
-  return /^[\x20-\x7e]*$/.test(s);
-}
-
-function headerValue(s: string): string {
-  if (isAscii(s)) return s;
-  return `=?UTF-8?B?${b64(new TextEncoder().encode(s))}?=`;
-}
-
-function wrap76(s: string): string {
-  return s.replace(/(.{76})/g, "$1\r\n").replace(/\r\n$/, "");
-}
-
 export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   const explicit = draft.subject?.trim();
   if (explicit) return explicit;
@@ -85,28 +70,24 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): string | null {
+export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
   if (!parsed) return null;
-  draft = parsed;
-  const to = draft.to ?? meta.to ?? [];
+  const to = parsed.to ?? meta.to ?? [];
   if (to.length === 0) return null;
-  const cc = draft.cc ?? meta?.cc ?? [];
-  const rfcId = meta?.rfcMessageId;
-  const lines = [
-    `To: ${to.join(", ")}`,
-    ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
-    `Subject: ${headerValue(replySubject(item, draft))}`,
-    ...(rfcId ? [`In-Reply-To: ${rfcId}`, `References: ${rfcId}`] : []),
-    "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    "",
-    wrap76(b64(new TextEncoder().encode(draft.body))),
-  ];
-  return lines.join("\r\n");
+  const rfcId = meta.rfcMessageId;
+  return new MailComposer({
+    to,
+    cc: parsed.cc ?? meta.cc ?? [],
+    subject: replySubject(item, parsed),
+    ...(rfcId ? { inReplyTo: rfcId, references: rfcId } : {}),
+    text: parsed.body,
+    textEncoding: "base64",
+  })
+    .compile()
+    .build();
 }
 
 async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
@@ -118,21 +99,20 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
     ? await deps.tokens.connectorAccessToken(GMAIL_HOST, deps.owner, accountType)
     : await tokenFor(deps.tokens, GMAIL_HOST, deps.owner);
   if (!token) return { ok: false, reason: "not_connected", message: "Google is not connected for this account" };
-  const mime = buildGmailReplyMime(item, draft);
+  const mime = await buildGmailReplyMime(item, draft);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
-  const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {
-    method: "POST",
-    signal: AbortSignal.timeout(30000),
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      raw: Buffer.from(mime, "utf8").toString("base64url"),
-      ...(threadId ? { threadId } : {}),
-    }),
-  });
-  if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 300);
-    return { ok: false, reason: "upstream", message: `Gmail refused the send (${res.status}): ${text}` };
+  try {
+    await gmailApi(token, fetchImpl)("messages/send", {
+      timeoutMs: 30_000,
+      body: {
+        raw: mime.toString("base64url"),
+        ...(threadId ? { threadId } : {}),
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof GmailApiError)) throw error;
+    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }

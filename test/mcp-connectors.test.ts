@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMcpClient, mcpResultText, type McpFetch } from "../src/mcp/mcp-client.ts";
+import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
@@ -9,39 +9,8 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-
-function jsonResponse(body: unknown, status = 200, contentType = "application/json") {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
-    headers: { get: (n: string) => (n.toLowerCase() === "content-type" ? contentType : null) },
-  };
-}
-
-const TOOLS = [
-  { name: "query", description: "Run a query", inputSchema: { type: "object", properties: { q: { type: "string" } } } },
-  { name: "update", description: "Write a record", inputSchema: { type: "object", properties: {} } },
-];
-
-function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): { fetch: McpFetch; calls: string[] } {
-  const calls: string[] = [];
-  const fetch: McpFetch = async (url, init) => {
-    calls.push(url);
-    if (opts?.requireBearer && init.headers.authorization !== `Bearer ${opts.requireBearer}`) {
-      return jsonResponse({ error: "unauthorized" }, 401);
-    }
-    const req = JSON.parse(init.body) as { id: number; method: string; params: { name?: string } };
-    const result =
-      req.method === "tools/list" ? { tools: TOOLS } : { content: [{ type: "text", text: `ran ${req.params.name}` }] };
-    const envelope = { jsonrpc: "2.0", id: req.id, result };
-    if (opts?.sse) {
-      return jsonResponse(`event: message\ndata: ${JSON.stringify(envelope)}\n\n`, 200, "text/event-stream");
-    }
-    return jsonResponse(envelope);
-  };
-  return { fetch, calls };
-}
+import { settle } from "./support/settle.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -57,76 +26,109 @@ function server(partial?: Partial<McpServer>): McpServer {
   };
 }
 
-test("mcp client lists tools and calls one over plain JSON", async () => {
-  const { fetch } = fakeServerFetch();
-  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
-  const tools = await client.listTools();
-  assert.deepEqual(
-    tools.map((t) => t.name),
-    ["query", "update"],
-  );
-  const result = await client.callTool("query", { q: "hi" });
-  assert.equal(mcpResultText(result), "ran query");
-});
-
-test("mcp client parses SSE-framed responses", async () => {
-  const { fetch } = fakeServerFetch({ sse: true });
-  const client = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
-  const tools = await client.listTools();
-  assert.equal(tools.length, 2);
-});
-
-test("mcp client sends bearer auth", async () => {
-  const { fetch } = fakeServerFetch({ requireBearer: "sekret" });
-  const client = createMcpClient({
-    url: "https://mcp.example.com/mcp",
-    auth: { mode: "bearer", token: "sekret" },
-    fetchImpl: fetch,
-  });
-  assert.equal((await client.listTools()).length, 2);
-  const bad = createMcpClient({ url: "https://mcp.example.com/mcp", auth: { mode: "none" }, fetchImpl: fetch });
-  await assert.rejects(() => bad.listTools(), /HTTP 401/);
-});
-
-test("mcp client posts to the configured endpoint path", async () => {
-  const cases: Array<[string, string]> = [
-    ["https://api.example.com/mcp/consumer", "https://api.example.com/mcp/consumer"],
-    ["https://api.example.com/mcp/consumer/", "https://api.example.com/mcp/consumer"],
-    ["https://mcp.example.com/mcp", "https://mcp.example.com/mcp"],
-    ["https://mcp.example.com/mcp/", "https://mcp.example.com/mcp"],
-    ["https://mcp.example.com", "https://mcp.example.com/mcp"],
-    ["http://memory.internal:8080/", "http://memory.internal:8080/mcp"],
-  ];
-  for (const [url, expected] of cases) {
-    const seen: string[] = [];
-    const fetchImpl: McpFetch = async (target) => {
-      seen.push(target);
-      return {
-        ok: true,
-        status: 200,
-        text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }),
-      };
-    };
-    await createMcpClient({ url, auth: { mode: "none" }, fetchImpl }).listTools();
-    assert.deepEqual(seen, [expected], url);
+test("mcp client lists every page of tools and calls one over JSON and SSE responses", async (t) => {
+  const tools = ["a", "b", "c"].map((name) => ({
+    name,
+    description: `tool ${name}`,
+    inputSchema: { type: "object" as const },
+  }));
+  for (const json of [true, false]) {
+    const mcp = await startMcpTestServer(t, { tools, pageSize: 1, json });
+    const client = createMcpClient({ url: `${mcp.url}/mcp`, auth: { mode: "none" } });
+    assert.deepEqual(await client.listTools(), [
+      { name: "a", description: "tool a", inputSchema: { type: "object" } },
+      { name: "b", description: "tool b", inputSchema: { type: "object" } },
+      { name: "c", description: "tool c", inputSchema: { type: "object" } },
+    ]);
+    assert.equal(mcpResultText(await client.callTool("b", {})), "ran b");
+    assert.equal(mcp.openSessions(), 0, "each operation ends its session");
   }
 });
 
-test("mcp client mints client-credentials tokens beside the endpoint", async () => {
-  const seen: string[] = [];
-  const fetchImpl: McpFetch = async (target) => {
-    seen.push(target);
-    const body = target.endsWith("/token")
-      ? { access_token: "minted", expires_in: 3600 }
-      : { jsonrpc: "2.0", id: 1, result: { tools: [] } };
-    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
-  };
-  await createMcpClient({
-    url: "https://mcp.example.com/mcp",
+test("mcp client caps a server's tool list", async (t) => {
+  const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
+  const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
+  const listed = await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools();
+  assert.equal(listed.length, 64);
+  assert.equal(listed.at(-1)?.name, "t63");
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
+});
+
+test("mcp client surfaces tool errors and protocol errors", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    call: (name) => ({ isError: true, content: [{ type: "text", text: `${name} exploded` }] }),
+  });
+  const client = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
+  await assert.rejects(client.callTool("query", {}), /^Error: mcp tool query error: query exploded$/);
+  await assert.rejects(
+    client.callTool("missing", {}),
+    (e: Error) => e.message === "mcp tools/call failed" && /Unknown tool: missing/.test(String(e.cause)),
+  );
+});
+
+test("mcp client starts a fresh session after the server forgets its sessions", async (t) => {
+  const mcp = await startMcpTestServer(t);
+  const client = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  await mcp.dropSessions();
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  assert.equal(mcp.requests.filter((r) => r.rpc === "initialize").length, 2);
+});
+
+test("mcp client sends bearer auth", async (t) => {
+  const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer sekret" });
+  const good = createMcpClient({ url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
+  assert.equal((await good.listTools()).length, 2);
+  const bad = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
+  await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
+});
+
+test("mcp client posts to the configured endpoint path", async (t) => {
+  const mcp = await startMcpTestServer(t);
+  const cases: Array<[string, string]> = [
+    [`${mcp.url}/mcp/consumer`, "/mcp/consumer"],
+    [`${mcp.url}/mcp/consumer/`, "/mcp/consumer"],
+    [`${mcp.url}/mcp`, "/mcp"],
+    [`${mcp.url}/mcp/`, "/mcp"],
+    [mcp.url, "/mcp"],
+    [`${mcp.url}/`, "/mcp"],
+  ];
+  for (const [url, expected] of cases) {
+    mcp.requests.length = 0;
+    await createMcpClient({ url, auth: { mode: "none" } }).listTools();
+    assert.deepEqual([...new Set(mcp.requests.map((r) => r.path))], [expected], url);
+  }
+});
+
+test("mcp client mints client-credentials tokens on the server's origin and reuses them until rejected", async (t) => {
+  const mcp = await startMcpTestServer(t, { clients: { id: "secret" } });
+  const client = createMcpClient({
+    url: `${mcp.url}/mcp`,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
-    fetchImpl,
-  }).listTools();
-  assert.deepEqual(seen, ["https://mcp.example.com/token", "https://mcp.example.com/mcp"]);
+  });
+  assert.equal((await client.listTools()).length, 2);
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  assert.deepEqual(mcp.tokenRequests, ["id"]);
+  mcp.revokeTokens();
+  assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
+  assert.equal(mcp.tokenRequests.length, 2);
+  const wrong = createMcpClient({
+    url: mcp.url,
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "guess" },
+  });
+  await assert.rejects(wrong.listTools());
+});
+
+test("mcp client never sends client credentials to an authorization server on another origin", async (t) => {
+  const elsewhere = await startMcpTestServer(t, { clients: { id: "secret" } });
+  const mcp = await startMcpTestServer(t, { clients: { id: "secret" }, authorizationServer: elsewhere.url });
+  const client = createMcpClient({
+    url: mcp.url,
+    auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
+  });
+  await assert.rejects(client.listTools(), (e: Error) => /not presented to/.test(String(e.cause)));
+  assert.deepEqual(elsewhere.tokenRequests, []);
+  assert.deepEqual(mcp.tokenRequests, []);
 });
 
 test("server id validation", () => {
@@ -137,11 +139,11 @@ test("server id validation", () => {
   assert.ok(!isValidMcpServerId("has space"));
 });
 
-test("tool service exposes namespaced tools and calls through", async () => {
+test("tool service exposes namespaced tools and calls through", async (t) => {
+  const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const { fetch } = fakeServerFetch();
-  const service = createMcpToolService({ servers: store, fetchImpl: fetch, refreshIntervalMs: 3600_000 });
-  await store.put(server());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
   const defs = service.toolDefs();
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
@@ -151,14 +153,14 @@ test("tool service exposes namespaced tools and calls through", async () => {
   service.close();
 });
 
-test("disabled server's tools disappear and calls fail", async () => {
+test("disabled server's tools disappear and calls fail", async (t) => {
+  const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const { fetch } = fakeServerFetch();
-  const service = createMcpToolService({ servers: store, fetchImpl: fetch, refreshIntervalMs: 3600_000 });
-  await store.put(server());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ url: mcp.url }));
   await service.refresh();
   assert.equal(service.toolDefs().length, 2);
-  await store.put(server({ enabled: false }));
+  await store.put(server({ url: mcp.url, enabled: false }));
   await service.refresh();
   assert.equal(service.toolDefs().length, 0);
   service.close();
@@ -181,34 +183,30 @@ function tokenStore() {
 }
 
 test("per-user calls resolve only the caller's fresh token while discovery uses catalog auth", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    call: (_name, args) => ({ content: [{ type: "text", text: String(args.q) }] }),
+  });
   const store = createMcpServerStore(createMemoryMap<McpServer>());
   const users = tokenStore();
   const host = "accounts.example.com";
   await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-token" });
   await users.setConnectorToken(host, "internal:bob", { accessToken: "bob-token" });
-  const catalogAuth: string[] = [];
-  const callAuth: string[] = [];
-  const service = createMcpToolService({
-    servers: store,
-    userTokens: users,
-    fetchImpl: async (_url, init) => {
-      const rpc = JSON.parse(init.body);
-      if (rpc.method === "tools/list") {
-        catalogAuth.push(init.headers.authorization!);
-        return jsonResponse({ result: { tools: TOOLS } });
-      }
-      callAuth.push(init.headers.authorization!);
-      return jsonResponse({ result: { content: [{ type: "text", text: rpc.params.arguments.q }] } });
-    },
-  });
+  const authFor = (rpc: string) => mcp.requests.filter((r) => r.rpc === rpc).map((r) => r.authorization);
+  const service = createMcpToolService({ servers: store, userTokens: users });
   t.after(() => service.close());
   await store.put(
-    server({ auth: "bearer", bearerToken: "catalog-only", credentialScope: "per-user", credentialHost: host }),
+    server({
+      url: mcp.url,
+      auth: "bearer",
+      bearerToken: "catalog-only",
+      credentialScope: "per-user",
+      credentialHost: host,
+    }),
   );
   await service.refresh();
   assert.deepEqual(await service.probe((await store.get("crm"))!), ["query", "update"]);
-  assert.ok(catalogAuth.length > 0);
-  assert.ok(catalogAuth.every((auth) => auth === "Bearer catalog-only"));
+  assert.ok(authFor("tools/list").length > 0);
+  assert.ok(authFor("tools/list").every((auth) => auth === "Bearer catalog-only"));
   assert.deepEqual(
     await Promise.all([
       service.call("crm_query", { q: "alice" }, "internal:alice"),
@@ -216,10 +214,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     ]),
     ["alice", "bob"],
   );
-  assert.deepEqual(callAuth.sort(), ["Bearer alice-token", "Bearer bob-token"]);
+  assert.deepEqual(authFor("tools/call").sort(), ["Bearer alice-token", "Bearer bob-token"]);
   await users.setConnectorToken(host, "internal:alice", { accessToken: "rotated-alice" });
   await service.call("crm_query", { q: "rotated" }, "internal:alice");
-  assert.equal(callAuth.at(-1), "Bearer rotated-alice");
+  assert.equal(authFor("tools/call").at(-1), "Bearer rotated-alice");
   await users.deleteConnectorToken(host, "internal:alice");
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
   await assert.rejects(service.call("crm_query", {}), /requires a connected user/);
@@ -229,16 +227,17 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
   );
   await users.setConnectorToken(host, "internal:bob", { accessToken: "expired", expiresAt: 1 });
   await assert.rejects(service.call("crm_query", {}, "internal:bob"), /Connect your account/);
-  assert.equal(callAuth.length, 3);
+  assert.equal(authFor("tools/call").length, 3);
 });
 
 test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
+  const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer shared-token" });
   const store = createMcpServerStore(createMemoryMap<McpServer>());
-  const { fetch, calls } = fakeServerFetch({ requireBearer: "shared-token" });
-  const service = createMcpToolService({ servers: store, fetchImpl: fetch });
+  const service = createMcpToolService({ servers: store });
   t.after(() => service.close());
   await store.put(
     server({
+      url: mcp.url,
       auth: "bearer",
       bearerToken: "shared-token",
       credentialScope: "per-user",
@@ -246,10 +245,10 @@ test("per-user mode fails closed without a keychain and shared mode preserves ex
     }),
   );
   await service.refresh();
-  const count = calls.length;
+  const count = mcp.requests.length;
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /requires a connected user/);
-  assert.equal(calls.length, count);
-  await store.put(server({ auth: "bearer", bearerToken: "shared-token", credentialScope: "shared" }));
+  assert.equal(mcp.requests.length, count);
+  await store.put(server({ url: mcp.url, auth: "bearer", bearerToken: "shared-token", credentialScope: "shared" }));
   await service.refresh();
   assert.equal(await service.call("crm_query", {}), "ran query");
 });
@@ -286,11 +285,12 @@ test("per-user connectors select an explicit account slot without falling back t
   const host = "accounts.example.com";
   await users.setConnectorToken(host, "internal:alice", { accessToken: "default-token" });
   await users.setConnectorToken(host, "internal:alice", { accessToken: "company-token" }, "company");
-  const { fetch } = fakeServerFetch({ requireBearer: "company-token" });
-  const service = createMcpToolService({ servers: store, userTokens: users, fetchImpl: fetch });
+  const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer company-token" });
+  const service = createMcpToolService({ servers: store, userTokens: users });
   t.after(() => service.close());
   await store.put(
     server({
+      url: mcp.url,
       auth: "bearer",
       bearerToken: "company-token",
       credentialScope: "per-user",
@@ -308,27 +308,27 @@ test("background MCP refresh contains registry failures at startup, on change, a
   t.mock.timers.enable({ apis: ["setInterval"] });
   const backing = createMemoryMap<McpServer>();
   const store = createMcpServerStore(backing);
-  const { fetch } = fakeServerFetch();
+  const mcp = await startMcpTestServer(t);
   const list = t.mock.method(store, "list", async () => {
     throw new Error("registry unavailable");
   });
   const errors = t.mock.method(console, "error", () => {});
-  const service = createMcpToolService({ servers: store, fetchImpl: fetch, refreshIntervalMs: 100 });
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 100 });
   t.after(() => service.close());
-  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-  await settle();
+  const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await tick();
   assert.equal(list.mock.callCount(), 1);
-  await store.put(server());
-  await settle();
+  await store.put(server({ url: mcp.url }));
+  await tick();
   assert.equal(list.mock.callCount(), 2);
   t.mock.timers.tick(100);
-  await settle();
+  await tick();
   assert.equal(list.mock.callCount(), 3);
   assert.equal(errors.mock.callCount(), 3);
   await assert.rejects(service.refresh(), /registry unavailable/);
   list.mock.restore();
   t.mock.timers.tick(100);
-  await settle();
+  await settle(async () => service.toolDefs().length > 0);
   assert.deepEqual(
     service.toolDefs().map((tool) => tool.name),
     ["crm_query", "crm_update"],

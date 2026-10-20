@@ -415,12 +415,7 @@ export function modelIdReserved(id: string): boolean {
 
 export function validateModelOverlay(value: unknown): RegisteredModel {
   const spec = parseRegisteredModel(value);
-  if (
-    REGISTRY_BY_ID.has(spec.id) ||
-    builtinModel(spec.id) ||
-    isCustomModelId(spec.id) ||
-    OPENROUTER_CATALOG_MODELS.has(spec.id)
-  )
+  if (REGISTRY_BY_ID.has(spec.id) || builtinModel(spec.id) || OPENROUTER_CATALOG_MODELS.has(spec.id))
     throw new Error("model id is already registered");
   if (isEmbeddingModel(spec)) return spec;
   const template = resolveBuiltinModel(spec.template);
@@ -450,7 +445,7 @@ export function setModelOverlays(
       }
       if (isEmbeddingModel(spec)) {
         if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
-        else if (!isCustomModelId(id)) next.set(id, spec);
+        else next.set(id, spec);
         continue;
       }
       const template = resolveBuiltinModel(spec.template);
@@ -459,7 +454,7 @@ export function setModelOverlays(
           id,
           "Builtin template is unavailable or has a different provider; ask an administrator to repair this model",
         );
-      } else if (isCustomModelId(id) || OPENROUTER_CATALOG_MODELS.has(id)) {
+      } else if (OPENROUTER_CATALOG_MODELS.has(id)) {
         unavailable.set(id, "Model id conflicts with another provider; ask an administrator to repair this model");
       } else if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
       else next.set(id, spec);

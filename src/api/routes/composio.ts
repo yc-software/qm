@@ -18,7 +18,7 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
+export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -30,7 +30,7 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
 }
 
-async function activeRun(ctx: ApiCtx): Promise<boolean> {
+export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const cap = ctx.capability;
   if (!cap) return true;
   const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
@@ -301,7 +301,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
-async function ownedAccount(
+export async function ownedAccount(
   ctx: ApiCtx,
   access: { key: string; principal: string },
   accountId: string,

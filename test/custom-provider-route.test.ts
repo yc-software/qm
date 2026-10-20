@@ -72,7 +72,7 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
     assert.equal(JSON.stringify(putBody).includes("sk-acme-secret"), false);
 
     // The runtime registry serves the model immediately.
-    assert.equal(String(resolveModel("acme-large")?.provider), "acme-gateway");
+    assert.equal(String(resolveModel("custom/acme-gateway/acme-large")?.provider), "acme-gateway");
 
     // List never leaks the key.
     const list = await fetch(`${srv.base}/v1/admin/custom-providers`, { headers: ADMIN });
@@ -91,7 +91,7 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
       headers: ADMIN,
     });
     assert.equal(del.status, 200);
-    assert.equal(resolveModel("acme-large"), undefined);
+    assert.equal(resolveModel("custom/acme-gateway/acme-large"), undefined);
   } finally {
     await srv.close();
   }

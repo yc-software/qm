@@ -11,6 +11,7 @@ import {
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const HOST = "mcp.example.com";
 
@@ -87,33 +88,28 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
 test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", async (t) => {
   const store = createMcpServerStore(createMemoryMap<McpServer>());
   const tokens = new Map<string, string>();
-  const auth: string[] = [];
+  const mcp = await startMcpTestServer(t, {
+    tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
+    call: (_name, args) => ({ content: [{ type: "text", text: `found ${String(args.q)}` }] }),
+  });
+  const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
   const service = createMcpToolService({
     servers: store,
     userTokens: { connectorAccessToken: async (_host, principalId) => tokens.get(principalId) ?? null },
     signInUrl: (id) => `https://qm.example/connect/${id}/self-connect`,
-    fetchImpl: async (_url, init) => {
-      auth.push(init.headers.authorization ?? "");
-      const rpc = JSON.parse(init.body) as { id: number; method: string; params: { arguments?: { q?: string } } };
-      const result =
-        rpc.method === "tools/list"
-          ? { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }
-          : { content: [{ type: "text", text: `found ${rpc.params.arguments?.q}` }] };
-      return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }) };
-    },
   });
   t.after(() => {
     service.close();
     setPublicOAuthClients([]);
   });
-  await store.put(oauthServer());
+  await store.put(oauthServer({ url: `${mcp.url}/mcp` }));
   await service.refresh();
   assert.ok(oauthProvider("orders")?.pkce, "refresh registers the server's OAuth client");
   assert.deepEqual(
     service.toolDefs().map((d) => d.name),
     ["orders_sign_in"],
   );
-  assert.equal(auth.length, 0, "no unauthenticated discovery");
+  assert.equal(mcp.requests.length, 0, "no unauthenticated discovery");
   assert.match(
     await service.call("orders_sign_in", {}, "internal:alice"),
     /\[Connect Orders\]\(https:\/\/qm\.example\/connect\/orders\/self-connect\)/,
@@ -132,5 +128,5 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   );
   assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
   assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
-  assert.deepEqual(auth, ["Bearer alice-token", "Bearer alice-token"]);
+  assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);
 });

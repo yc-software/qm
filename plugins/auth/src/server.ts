@@ -11,7 +11,8 @@ import { claimOnce, withinRateLimit, ClaimStoreUnavailableError, type ClaimStore
 import { coreEmailAllowed } from "../../chassis/src/external-members.ts";
 import { mintIdToken, pkceMatches, safeEqual, subjectFor, TokenSigner, type AuthRequest } from "./tokens.ts";
 import { ID_TOKEN_ALG, type SigningKey } from "./keys.ts";
-import { renderSignInEmail, type Mailer } from "./email.ts";
+import type { Mailer } from "../../chassis/src/resend.ts";
+import { renderSignInEmail } from "./email.ts";
 import { confirmSignInPage, signInPage, linkSentPage, problemPage, CONFIRM_PAGE_CSP, PAGE_CSP } from "./pages.ts";
 
 const MAX_FORM_BYTES = 8 * 1024;

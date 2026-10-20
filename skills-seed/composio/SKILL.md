@@ -72,4 +72,15 @@ The API checks active account ownership and toolkit on every execution. Personal
 
 Do not call Composio's callback completion API from the computer. Callback identity verification belongs to the signed-in browser and trusted QM backend. If verification setup is missing, ask the operator to fix it.
 
-Automatic file transfer is unsupported. A local filename does not upload bytes. When Composio is unavailable, use direct OAuth only if independently configured and authorized; do not use it to bypass a denial.
+Tools don't transfer files: a local filename passed as an argument uploads nothing. The one exception is X images, below. When Composio is unavailable, use direct OAuth only if independently configured and authorized; do not use it to bypass a denial.
+
+### Images for X posts
+
+X's post tool attaches media by ID but can't upload it. Upload the image from the computer first, then post with the returned ID:
+
+```js
+const data = (await import("node:fs")).readFileSync("chart.png").toString("base64");
+const { mediaId } = await apps("twitter/media", { accountId: account.id, data });
+```
+
+Pass `mediaId` in the post tool's media IDs argument (discover its exact name with `tools`). Only the caller's own active X connection works. It accepts one PNG, JPEG or WebP image of up to 5 MB per call; for several images, upload each and pass all IDs. GIFs and video aren't supported. Uploading posts nothing and is safe to retry; unattached media expires within a day. A `403` from X (`providerStatus`) usually means the connection lacks media permission, so offer to reconnect X.
