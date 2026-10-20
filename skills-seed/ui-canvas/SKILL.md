@@ -33,7 +33,9 @@ can do in QM, with no sandbox. That is why it exists, and why you must hold to t
    to `document.head` or editing DOM nodes, and undo them in `canvas.onDispose` so
    dismissing the canvas restores the page. Don't change their account, conversations or
    other data that the request didn't ask for.
-4. Load nothing from other origins: no remote scripts, no `fetch` to third parties.
+4. Load nothing from other origins: no remote scripts, no `fetch` to third parties. The one
+   exception is showing a whole page in an iframe window, and only through the `ui-frame`
+   skill.
 5. If the task needs any of that, do that part with your ordinary tools or ask the person
    to do it in the normal UI, and say why.
 6. Dismiss the canvas when it is no longer useful.
