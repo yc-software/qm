@@ -717,7 +717,7 @@ test("a send carrying the draft it saw is refused when the agent redrafted in be
     body: { kind: "send", args: { proposal: { body: "what I saw" }, expectedProposalAt: seenAt } },
   });
   assert.equal(stale.status, 409);
-  assert.match((stale.body as { message: string }).message, /draft changed/);
+  assert.equal((stale.body as { error: string }).error, "draft_changed");
   assert.equal(w.sent.length, 0, "nothing reached Slack");
   const fresh = (await w.loops.items.get(item.id))!.proposal!;
   assert.equal(fresh.by, "agent", "the stale edit did not overwrite the newer draft");
@@ -754,7 +754,7 @@ test("an edit carrying the draft it was based on is refused when the agent redra
     body: { kind: "edit", args: { proposal: { body: "typed over the old one" }, expectedProposalAt: basedOn } },
   });
   assert.equal(stale.status, 409);
-  assert.match((stale.body as { message: string }).message, /draft changed/);
+  assert.equal((stale.body as { error: string }).error, "draft_changed");
   assert.deepEqual((await w.loops.items.get(item.id))!.proposal!.data, { body: "newer agent draft" });
 });
 
@@ -842,6 +842,7 @@ test("a conversational send refuses a stale draft before starting an agent turn"
     body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
   });
   assert.equal(out.status, 409);
+  assert.equal((out.body as { error: string }).error, "draft_changed");
   assert.deepEqual(w.followUps, []);
   assert.deepEqual(w.sent, []);
   const accepted = await call(w, {

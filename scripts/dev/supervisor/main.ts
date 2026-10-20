@@ -24,7 +24,15 @@ import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/uti
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";
-import type { BootPhaseEvent, BootResult, BootSpec, ChildName, SlackHealth, StatusReport } from "../lib/types.ts";
+import type {
+  BootPhaseEvent,
+  BootResult,
+  BootSpec,
+  CanaryReply,
+  ChildName,
+  SlackHealth,
+  StatusReport,
+} from "../lib/types.ts";
 import { CHILD_ORDER, EXIT } from "../lib/types.ts";
 
 const HEALTH_INTERVAL_MS = 10_000;
@@ -157,17 +165,14 @@ async function fetchSlackHealth(): Promise<SlackHealth | null> {
   }
 }
 
-async function runCanary(
-  channel: string,
-  timeoutMs = 15_000,
-): Promise<{ ok: boolean; rttMs?: number; reason?: string }> {
+async function runCanary(channel: string, timeoutMs = 15_000): Promise<CanaryReply> {
   try {
     const res = await fetch(`http://127.0.0.1:${ports.slackHealth}/canary`, {
       method: "POST",
       body: JSON.stringify({ channel, timeoutMs }),
       signal: AbortSignal.timeout(timeoutMs + 5000),
     });
-    return (await res.json()) as { ok: boolean; rttMs?: number; reason?: string };
+    return (await res.json()) as CanaryReply;
   } catch (err) {
     return { ok: false, reason: `canary endpoint unreachable: ${errMessage(err)}` };
   }
@@ -662,7 +667,12 @@ function serveApi(): Server {
       if (req.method === "POST" && req.url === "/canary") {
         if (!canaryChannel) await resolveCanaryChannel(readBootSpec());
         const channel = String(body.channel || canaryChannel || "");
-        respond(200, channel ? await runCanary(channel) : { ok: false, reason: "no canary channel configured" });
+        respond(
+          200,
+          channel
+            ? await runCanary(channel)
+            : ({ ok: false, code: "unconfigured", reason: "no canary channel configured" } satisfies CanaryReply),
+        );
         return;
       }
       if (req.method === "POST" && req.url === "/shutdown") {

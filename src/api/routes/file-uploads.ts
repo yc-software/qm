@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { sendJson } from "../http.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
-import { FileUploadError } from "../../files/direct-file-upload.ts";
+import { FileUploadError } from "../../files/file-upload-store.ts";
 import { isObj, audit } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -70,9 +70,7 @@ async function handleUpload(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { ok: true });
   } catch (error) {
     if (error instanceof FileUploadError)
-      return sendJson(res, error.status, { error: "upload_error", message: error.message });
-    if (error instanceof Error && error.message === "active upload quota exceeded")
-      return sendJson(res, 429, { error: "upload_quota", message: error.message });
+      return sendJson(res, error.status, { error: error.code, message: error.message });
     throw error;
   }
 }

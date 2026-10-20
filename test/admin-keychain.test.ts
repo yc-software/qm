@@ -157,8 +157,6 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   t.mock.method(s.keychain, "listAsks", fail);
   t.mock.method(s.built.sessions, "distinctParticipants", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
-  if (s.built.auditLog.tallyByResource)
-    t.mock.method(s.built.auditLog as Required<typeof s.built.auditLog>, "tallyByResource", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?principal=Alice%40example.com", {
     headers: { "x-admin-actor": "admin-alice@default-org" },
   });

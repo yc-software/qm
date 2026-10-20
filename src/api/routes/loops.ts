@@ -109,9 +109,9 @@ export async function requireLoopAuthority(ctx: ApiCtx, deps: LoopServiceDeps, l
   const principal = ctx.capability ?? (ctx.actor?.p ? { actorId: ctx.actor.p, liveActor: true } : undefined);
   const refusal = principal
     ? await unattendedGrantRefusal(ctx.app, ctx.deps.admin, cron, principal)
-    : "a privileged loop requires a live turn started by its owner";
+    : { message: "a privileged loop requires a live turn started by its owner" };
   if (!refusal) return true;
-  sendJson(ctx.res, 403, { error: "forbidden", message: refusal });
+  sendJson(ctx.res, 403, { error: "forbidden", message: refusal.message });
   return false;
 }
 

@@ -299,7 +299,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
   const draftChanged = (): void =>
     sendJson(ctx.res, 409, {
-      error: "conflict",
+      error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
 
@@ -478,7 +478,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
-    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+    return sendJson(ctx.res, 409, {
+      error: "draft_changed",
+      message: "the draft changed; review it before continuing",
+    });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {

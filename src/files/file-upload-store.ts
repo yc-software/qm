@@ -25,6 +25,17 @@ export interface FileUploadStore {
   expired(now: number): Promise<FileUpload[]>;
 }
 
+export class FileUploadError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(message: string, status = 400, code = "upload_error") {
+    super(message);
+    this.name = "FileUploadError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 export const MAX_ACTIVE_UPLOADS = 4;
 const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
 
@@ -69,7 +80,7 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
           Number(result.rows[0].count) >= MAX_ACTIVE_UPLOADS ||
           Number(result.rows[0].bytes) + upload.sizeBytes > MAX_ACTIVE_UPLOAD_BYTES
         )
-          throw new Error("active upload quota exceeded");
+          throw new FileUploadError("active upload quota exceeded", 429, "upload_quota");
         await client.query(
           "INSERT INTO file_uploads(id,actor_id,state,size_bytes,expires_at,data) VALUES($1,$2,$3,$4,$5,$6)",
           [upload.id, upload.actorId, upload.state, upload.sizeBytes, upload.expiresAt, JSON.stringify(upload)],

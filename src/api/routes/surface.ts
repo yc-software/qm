@@ -18,6 +18,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
+import { SoulUpdateDeniedError } from "../app-types.ts";
 import { parsePinnedSkills } from "../../skills/materialize.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -1313,9 +1314,9 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     );
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
-    const message = errMessage(e);
-    const denied = message === "not authorized to update SOUL for this scope";
-    return sendJson(res, denied ? 403 : 500, { error: denied ? "soul_update_denied" : "soul_update_failed", message });
+    if (e instanceof SoulUpdateDeniedError)
+      return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }
 

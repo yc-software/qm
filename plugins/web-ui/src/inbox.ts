@@ -910,7 +910,7 @@ function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
 }
 
 function isDraftConflict(e: unknown): boolean {
-  return e instanceof ApiError && e.status === 409 && /draft changed/i.test(e.message);
+  return e instanceof ApiError && (e.body as { error?: unknown } | null)?.error === "draft_changed";
 }
 
 async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {

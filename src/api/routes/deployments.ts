@@ -1,5 +1,9 @@
-import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
-import { PublicLinksUnavailableError } from "../../deploy/deploy-service.ts";
+import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import {
+  DeployAccessError,
+  PublicLinksUnavailableError,
+  type DeployAccessErrorCode,
+} from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -1619,23 +1623,9 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         grantees: await app.deploymentGrantees(deployment.id),
       });
     } catch (e) {
-      const msg = errMessage(e);
-      let status = 400;
-      let error = "share_failed";
-      if (/no such app/.test(msg)) {
-        status = 404;
-        error = "not_found";
-      } else if (/only the owner/.test(msg)) {
-        status = 403;
-        error = "forbidden";
-      } else if (msg === EXTERNAL_APP_SHARING_OFF) {
-        status = 403;
-        error = "external_sharing_disabled";
-      } else if (e instanceof PublicLinksUnavailableError) {
-        status = 409;
-        error = "public_links_unavailable";
-      }
-      return sendJson(res, status, { error, message: msg });
+      if (e instanceof PublicLinksUnavailableError)
+        return sendJson(res, 409, { error: "public_links_unavailable", message: e.message });
+      return sendShareFailure(res, e);
     }
   }
   if (b.email !== undefined && typeof b.email !== "string")
@@ -1691,16 +1681,20 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       grantees,
     });
   } catch (e) {
-    const msg = errMessage(e);
-    let status = 400;
-    if (/no such app/.test(msg)) status = 404;
-    else if (/only the owner/.test(msg) || msg === EXTERNAL_APP_SHARING_OFF) status = 403;
-    let error = "share_failed";
-    if (status === 404) error = "not_found";
-    else if (msg === EXTERNAL_APP_SHARING_OFF) error = "external_sharing_disabled";
-    else if (status === 403) error = "forbidden";
-    return sendJson(res, status, { error, message: msg });
+    return sendShareFailure(res, e);
   }
+}
+
+const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
+  not_found: 404,
+  forbidden: 403,
+  external_sharing_disabled: 403,
+};
+
+function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
+  if (e instanceof DeployAccessError)
+    return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
+  return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

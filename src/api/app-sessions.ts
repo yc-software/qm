@@ -26,7 +26,13 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { toFileItem, type ScopeDeployment, type SessionPinView, type SessionSearchHit } from "./app-types.ts";
+import {
+  SoulUpdateDeniedError,
+  toFileItem,
+  type ScopeDeployment,
+  type SessionPinView,
+  type SessionSearchHit,
+} from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 const MAX_SESSION_PINS = 50;
@@ -1213,7 +1219,7 @@ export function createSessionMethods(
       const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
-        throw new Error("not authorized to update SOUL for this scope");
+        throw new SoulUpdateDeniedError();
       }
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;

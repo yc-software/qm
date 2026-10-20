@@ -16,6 +16,7 @@ import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
+import { SoulUpdateDeniedError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
@@ -176,7 +177,7 @@ export interface ControlService {
     content: string,
     claims: CapabilityClaims,
     expectedVersion?: number,
-  ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied">>;
+  ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied" | "soul_update_failed">>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
 }
 
@@ -449,10 +450,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           { owner: capability.actorId, ownerScopeId },
           capability,
         );
-        if (refusal) {
-          const code = refusal.includes("personal-scope") ? "bad_request" : "forbidden";
-          return { ok: false, code, message: refusal };
-        }
+        if (refusal) return { ok: false, ...refusal };
       }
 
       if (req.unfurlLinks !== undefined && !destination) {
@@ -539,10 +537,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
       if ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined) {
         const refusal = await unattendedGrantRefusal(app, admin, before, capability);
-        if (refusal) {
-          const code = refusal.includes("personal-scope") ? "bad_request" : "forbidden";
-          return { ok: false, code, message: refusal };
-        }
+        if (refusal) return { ok: false, ...refusal };
       }
       try {
         const cron = await app.updateCron(id, patch);
@@ -606,7 +601,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;
       if (!ownFire && (cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       const fireEntry = ownFire ? await app.latestCronFireForThread(id, capability.threadRef!) : undefined;
       const outcome = await app.setCronFireNote(id, {
@@ -636,7 +631,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return { ok: false, code: "forbidden", message: "not your cron" };
       if (enabled && (cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (cron.enabled === enabled) return { ok: true, cron };
       await app.setCronEnabled(id, enabled);
@@ -652,7 +647,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return { ok: false, code: "forbidden", message: "not your cron" };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (!scheduler)
         return {
@@ -681,7 +676,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return { ok: false, code: "forbidden", message: "not your cron" };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal };
+        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
@@ -775,7 +770,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         });
         return { ok: true, version };
       } catch (e) {
-        return { ok: false, code: "soul_update_denied", message: errMessage(e) };
+        return {
+          ok: false,
+          code: e instanceof SoulUpdateDeniedError ? "soul_update_denied" : "soul_update_failed",
+          message: errMessage(e),
+        };
       }
     },
 

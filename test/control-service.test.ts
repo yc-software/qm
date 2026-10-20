@@ -778,6 +778,15 @@ test("soul write in a shared (channel) scope is allowed (allowSharedScope, like 
   assert.equal(after.soul, "Channel standing note.");
 });
 
+test("soul write separates a refused scope from a failed write", async () => {
+  const { control } = setup();
+  const denied = await control.writeSoul("Not my scope.", claims("U1", scopeId("personal", "U2")));
+  assert.equal(denied.ok ? "" : denied.code, "soul_update_denied");
+
+  const stale = await control.writeSoul("Stale edit.", claims("U1"), 41);
+  assert.equal(stale.ok ? "" : stale.code, "soul_update_failed");
+});
+
 test("noteCron stores a flattened shift-change note, overwriting the previous one, with owner authz", async () => {
   const { control } = setup();
   const created = await control.createCron(

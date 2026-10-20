@@ -3,7 +3,7 @@ import { createMemoryAdvisoryLock } from "../persistence/advisory-lock.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../admin/invite-email.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { errMessage } from "../util/errors.ts";
-import type { Reach } from "../deploy/deploy-service.ts";
+import { DeployAccessError, type Reach } from "../deploy/deploy-service.ts";
 import { mintDeployGitAccess } from "../deploy/access-token.ts";
 
 import type { App, AppDeps, ViewerDeployment } from "./app-types.ts";
@@ -70,9 +70,12 @@ export function createDeploymentMethods(
       if (!validEmail(email)) throw new Error("a valid email address is required");
       const grantee = await deploymentShareScope(`personal:${email}`, "read");
       const deployment = await deps.deploy.getDeployment(idOrName);
-      if (!deployment) throw new Error(`no such app: ${idOrName}`);
+      if (!deployment) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       if (deployment.ownerScopeId !== `personal:${actorId}`)
-        throw new Error(`only the owner can change who can reach "${deployment.name ?? deployment.id}"`);
+        throw new DeployAccessError(
+          "forbidden",
+          `only the owner can change who can reach "${deployment.name ?? deployment.id}"`,
+        );
       return invitationLock.withLock(`deployment-invite:${deployment.id}:${email}`, async () => {
         const previous = await deps.deploy.deploymentGrantees(deployment.id);
         const alreadyShared = previous.some((g) => g.scope === grantee);

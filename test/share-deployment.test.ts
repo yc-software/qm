@@ -307,12 +307,18 @@ test("share endpoint: only the owner can share (non-owner capability → 403)", 
   });
   const r = await callShare(app, cap("U2"), "owned", { scope: "org" });
   assert.equal(r.status, 403);
+  assert.equal(r.body.error, "forbidden");
   assert.match(r.body.message, /only the owner/);
 });
 
 test("share endpoint: unknown app → 404; no capability → 403; bad/ambiguous/missing args → 400", async () => {
   const { app } = apiHarness();
-  assert.equal((await callShare(app, cap("U1"), "ghost", { scope: "org" })).status, 404);
+  const ghost = await callShare(app, cap("U1"), "ghost", { scope: "org" });
+  assert.equal(ghost.status, 404);
+  assert.equal(ghost.body.error, "not_found");
+  const ghostPublic = await callShare(app, cap("U1"), "ghost", { public: true });
+  assert.equal(ghostPublic.status, 404);
+  assert.equal(ghostPublic.body.error, "not_found");
   assert.equal((await callShare(app, null, "ghost", { scope: "org" })).status, 403);
   await app.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name: "a" });
   assert.equal(
@@ -554,6 +560,7 @@ test("deployment public access is explicit, owner-only, and reversible", async (
 
   const denied = await callShare(app, cap("U2"), "public-toggle", { public: true });
   assert.equal(denied.status, 403, "only the owner may make an app public");
+  assert.equal(denied.body.error, "forbidden");
 
   const enabled = await callShare(app, cap("U1"), "public-toggle", { public: true });
   assert.equal(enabled.status, 200);
