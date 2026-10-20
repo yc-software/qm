@@ -8,7 +8,7 @@
 
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "../util/errors.ts";
 import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
@@ -49,6 +49,7 @@ export interface McpToolDescriptor {
 export interface McpToolService {
   /** Current snapshot of injectable tools across enabled servers. */
   toolDefs(): McpToolDescriptor[];
+  toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
   call(name: string, args: Record<string, unknown>, principalId?: string): Promise<string>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
@@ -70,7 +71,7 @@ function authOf(server: McpServer): McpAuth {
 export function createMcpToolService(opts: {
   servers: McpServerStore;
   audit?: AuditLog;
-  userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken">;
+  userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken" | "connectorTokenStatus">;
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
@@ -78,6 +79,7 @@ export function createMcpToolService(opts: {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
+  let perUserServers = new Map<string, McpServer>();
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -129,23 +131,23 @@ export function createMcpToolService(opts: {
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
     const next: McpToolDescriptor[] = [];
+    const nextPerUser = new Map<string, McpServer>();
     for (const server of servers) {
       try {
         let tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
         if (server.auth === "oauth-user") {
+          nextPerUser.set(server.id, server);
+          next.push({
+            name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+            serverId: server.id,
+            remoteName: "sign_in",
+            signIn: true,
+            description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
+            inputSchema: { type: "object", properties: {} },
+            readOnly: true,
+          });
           tools = server.tools ?? [];
-          if (!tools.length) {
-            next.push({
-              name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
-              serverId: server.id,
-              remoteName: "sign_in",
-              signIn: true,
-              description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
-              inputSchema: { type: "object", properties: {} },
-              readOnly: true,
-            });
-            continue;
-          }
+          if (!tools.length) continue;
         } else tools = await clientFor(server).listTools();
         for (const tool of tools) {
           next.push({
@@ -165,6 +167,29 @@ export function createMcpToolService(opts: {
     // De-duplicate on the namespaced name; first server wins deterministically.
     const seen = new Set<string>();
     snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
+    perUserServers = nextPerUser;
+  }
+
+  async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
+    if (!principalId || !server.credentialHost || !opts.userTokens) return false;
+    const status = await opts.userTokens
+      .connectorTokenStatus(server.credentialHost, principalId, server.credentialAccountType)
+      .catch(swallowAs("mcp: connector status", null));
+    return Boolean(status?.connected && !status.needsReconnect);
+  }
+
+  async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
+    const current = snapshot;
+    const gated = perUserServers;
+    if (!gated.size) return current;
+    const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
+    const ready = new Set<string>();
+    await Promise.all(
+      [...withTools].map(async (id) => {
+        if (await connected(gated.get(id)!, principalId)) ready.add(id);
+      }),
+    );
+    return current.filter((t) => !gated.has(t.serverId) || Boolean(t.signIn) !== ready.has(t.serverId));
   }
 
   const refreshInBackground = (): void => {
@@ -177,6 +202,7 @@ export function createMcpToolService(opts: {
 
   return {
     toolDefs: () => snapshot,
+    toolDefsFor,
     async call(name, args, principalId) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);

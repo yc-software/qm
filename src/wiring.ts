@@ -1338,7 +1338,6 @@ export function buildApp(
         }
       : {}),
   });
-  const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
@@ -1487,7 +1486,6 @@ export function buildApp(
         resolveProviderKeys: resolvePiProviderKeys,
         ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
         signals: runSignals,
-        mcpTools,
       }),
     ],
     [
@@ -1503,7 +1501,6 @@ export function buildApp(
             }
           : {}),
         signals: runSignals,
-        mcpTools,
       }),
     ],
     ["mock", createMockHarness()],

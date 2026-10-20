@@ -152,7 +152,6 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   ])
     assert.throws(call, /private access/);
   assert.equal(tools.sessionSyscalls, undefined);
-  assert.deepEqual(tools.mcpToolDefs(), []);
   assert.equal(runs, 1);
 });
 
