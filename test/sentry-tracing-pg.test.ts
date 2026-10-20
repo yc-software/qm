@@ -134,6 +134,7 @@ test("a truncated run keeps every sent span's parent even when parent and child 
     start_timestamp: start + offset,
     timestamp: start + offset + 0.5,
     status: "ok",
+    data: {},
   });
   const earlier = Array.from({ length: 499 }, (_, i) => span(i + 2, 1, i / 1000));
   const tied = [span(1002, 1001, 1), span(1003, 1002, 1), span(1001, 1, 1)];
