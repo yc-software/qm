@@ -36,6 +36,7 @@ import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -169,6 +170,21 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     deliveries: createDeliveryStore(),
     featureFlags,
     sessionSyscalls,
+    mcp: {
+      toolDefsFor: async (principalId?: string) =>
+        principalId === actor.id
+          ? [
+              {
+                name: "orders_search",
+                serverId: "orders",
+                remoteName: "search",
+                description: "Search orders",
+                inputSchema: { type: "object", properties: {} },
+                readOnly: true,
+              },
+            ]
+          : [],
+    } as unknown as McpToolService,
   });
   const execute = async (run: Run) => {
     const result = await orchestrator.handleTurn({ ...run.request, runId: run.id });
@@ -223,6 +239,11 @@ for (const [surface, flags] of [
     const omit = (options: AgentToolsOptions) =>
       Object.fromEntries(Object.entries(options).filter(([key]) => !(key in SUBAGENT_EXCEPTIONS)));
     assert.deepEqual(omit(child.options), omit(parent.options));
+    assert.deepEqual(
+      parent.options.mcpTools?.map((tool) => tool.name),
+      ["orders_search"],
+      "the turn's actor gets the MCP tools resolved for them",
+    );
     assert.equal(parent.ref.current?.humanTurn, true);
     assert.equal(child.ref.current?.humanTurn, undefined);
     assert.equal(parent.requestedRuntime?.fastMode, true);

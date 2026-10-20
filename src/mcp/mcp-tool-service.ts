@@ -8,7 +8,7 @@
 
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
@@ -174,7 +174,7 @@ export function createMcpToolService(opts: {
     if (!principalId || !server.credentialHost || !opts.userTokens) return false;
     const status = await opts.userTokens
       .connectorTokenStatus(server.credentialHost, principalId, server.credentialAccountType)
-      .catch(swallowAs("mcp: connector status", null));
+      .catch(reportFailureAs("mcp: connector status", null));
     return Boolean(status?.connected && !status.needsReconnect);
   }
 
