@@ -363,7 +363,6 @@ export interface DistinctScope {
   channelName?: string;
 }
 
-/** One scope a person has sessions in: how many have content, and when the newest of those was last active. */
 export interface ParticipantScope {
   scopeId: ScopeId;
   channelName?: string;

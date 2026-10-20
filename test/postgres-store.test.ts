@@ -3158,3 +3158,23 @@ test("pg session lists leave out spawn metadata and group scopes per participant
 test("pg participantScopes leaves out sessions whose content predates the participant", { skip }, async () => {
   await assertLateJoinerScopes(createPostgresSessionStore(URL!), "pg-late");
 });
+
+test("pg late joiners start after any stored sequence gap", { skip }, async () => {
+  const store = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", "gap-C1");
+  const session = await store.getOrCreateByThread("slack:gap-C1:1", "channel", scope, "eng");
+  await store.addParticipant(session.id, "gap-early");
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await store.append(lease, { type: "user", payload: { text: "before" }, scopeLabel: scope });
+  await store.releaseLease(lease);
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL });
+  await pool.query("UPDATE sessions SET messages = messages + 3 WHERE id = $1", [session.id]);
+  await pool.end();
+  await store.addParticipant(session.id, "gap-late");
+  assert.equal((await store.getForParticipant(session.id, "gap-late"))?.hasEntries, false);
+  assert.deepEqual(await store.participantScopes("gap-late"), [
+    { scopeId: scope, channelName: "eng", sessionCount: 0, lastActivityAt: null },
+  ]);
+});

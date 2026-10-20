@@ -24,7 +24,6 @@ export interface MonitorStore {
   get(id: string): Promise<Monitor | null>;
   list(): Promise<Monitor[]>;
   enabled(): Promise<Monitor[]>;
-  /** Enabled, unexpired watches on any of these threads. */
   enabledFor(threadRefs: readonly string[], now?: number): Promise<Monitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;

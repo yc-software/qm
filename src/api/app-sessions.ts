@@ -455,7 +455,6 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      // Whether a row can be continued here depends only on its thread kind and scope, so each pair is checked once.
       const continueChecks = new Map<string, Promise<boolean>>();
       const continueAccess = (s: Session): Promise<boolean> => {
         const key = `${isSubagentThreadRef(s.threadRef)} ${s.threadRef.startsWith("web:")} ${s.scopeId}`;

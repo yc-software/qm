@@ -45,7 +45,6 @@ export interface ProcessRegistry {
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
-  /** Running, unexpired processes started from any of these threads. */
   liveForSessions(sessionRefs: readonly string[], now?: number): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;

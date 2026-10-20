@@ -54,7 +54,6 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
-  /** Crons that post to or are tied to any of these threads. */
   tiedTo(threadRefs: readonly string[]): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;

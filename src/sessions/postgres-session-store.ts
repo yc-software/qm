@@ -199,8 +199,6 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
-// Session columns a list row needs. Spawn metadata, client tool schemas, previews and status stay out:
-// nothing that lists sessions reads them, and spawn metadata alone is most of a large list's bytes.
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
@@ -278,14 +276,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ),
     )
     .join(" UNION ALL ");
-  // Whether the participant sees anything in the session: a title, or an item inside their window. An open
-  // window that starts at a sequence number sees an item exactly when the session has stored past that number,
-  // so the message count answers it without touching items.
   const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR
     CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
          THEN COALESCE(s.messages, 0) > p.valid_from_seq
          ELSE EXISTS (${participantPresenceSql}) END)`;
-  // When the person last wrote in the session, or its creation: the newest user or steering item, one index seek each.
   const latestUserItem = (kind: string): string =>
     `(SELECT ${msOf("e.created_at")} FROM items e WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id
        AND e.kind = '${kind}' ORDER BY e.created_at DESC LIMIT 1)`;
@@ -1465,7 +1459,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const includeHistory = opts?.includeHistory === true;
       await q(
         `WITH boundary AS (
-           SELECT CASE WHEN $5 THEN 0 ELSE COALESCE(MAX(seq) + 1, 0) END AS seq
+           SELECT CASE WHEN $5 THEN 0
+                       ELSE GREATEST(COALESCE(MAX(seq) + 1, 0),
+                                     COALESCE((SELECT messages FROM sessions WHERE id = $1), 0)) END AS seq
              FROM items WHERE tenant_id = ${TENANT} AND session_id = $1
          )
          INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq, title)

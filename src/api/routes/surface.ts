@@ -490,7 +490,6 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { sessions: (await app.listSessions(principalId)).map(sidebarRow) });
 }
 
-/** A session as the sidebar lists it, without the entry flag only the server's filtering uses. */
 function sidebarRow(session: Session): Omit<Session, "hasEntries"> {
   const { hasEntries: _hasEntries, ...row } = session;
   return row;

@@ -11,7 +11,6 @@ export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
 
 export interface DurableMap<T> {
   all(): Promise<T[]>;
-  /** The values that satisfy the predicate; copies only those, where all() copies every value. */
   allMatching(predicate: (value: T) => boolean): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
   select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
