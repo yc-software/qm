@@ -52,7 +52,7 @@ import {
 } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
-import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
+import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
 export interface AutoFlaggerDraft {
@@ -346,7 +346,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     readKey: "featureFlags",
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
-    get: (deps) => deps.featureFlags?.list(),
+    get: async (deps) => {
+      if (!deps.featureFlags) return undefined;
+      const rows = await deps.featureFlags.list();
+      return FEATURE_NAMES.map((featureName) => ({
+        ...FEATURES[featureName],
+        ...(rows.find((row) => row.featureName === featureName) ?? { featureName, enabledScopes: [] }),
+      }));
+    },
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
       const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };

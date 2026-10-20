@@ -233,3 +233,19 @@ test("webhook history is relayed with the authenticated viewer, not a query-stri
   const stranger = await fetch(`${path}?viewer=history-owner`, asUser("stranger"));
   assert.equal(stranger.status, 404);
 });
+
+test("create accepts every scheme core verifies, including Linear, and core rejects unknown schemes", async () => {
+  const create = (scheme: string) =>
+    fetch(
+      `${webBase}/api/webhooks`,
+      asUser("linear-user", {
+        method: "POST",
+        body: JSON.stringify({ action: "triage Linear issues", verification: { scheme } }),
+      }),
+    );
+  const linear = await create("linear");
+  assert.equal(linear.status, 200);
+  const created = (await linear.json()) as { webhook: { verification: { scheme: string } } };
+  assert.equal(created.webhook.verification.scheme, "linear");
+  assert.equal((await create("bitbucket")).status, 400);
+});

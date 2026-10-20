@@ -3016,7 +3016,7 @@ const apiRoutes: readonly WebRoute[] = [
           ) {
             return json(res, 400, {
               error: "unsupported_verification",
-              message: "verification requires a scheme (HMAC-SHA256, GitHub, Slack, or Stripe)",
+              message: "verification requires a scheme",
             });
           }
           verification = {
@@ -3060,12 +3060,6 @@ const apiRoutes: readonly WebRoute[] = [
           error: "action_required",
           message: "an action (the agent's instructions) is required",
         });
-      if (!["hmac-sha256", "github", "slack", "stripe"].includes(verification.scheme)) {
-        return json(res, 400, {
-          error: "unsupported_verification",
-          message: "choose HMAC-SHA256, GitHub, Slack, or Stripe signature verification",
-        });
-      }
       if (!verification.secret) {
         verification = { ...verification, secret: randomBytes(32).toString("hex") };
       }

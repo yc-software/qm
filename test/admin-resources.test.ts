@@ -339,8 +339,16 @@ test("feature flag table changes one scope live without restart", async () => {
     assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C1"), true);
     assert.equal(await srv.built.featureFlags.enabled("inbox_loops", "channel:C2"), false);
     const read = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
-    const flags = ((await read.json()) as { featureFlags: Array<{ enabledScopes: string[] }> }).featureFlags;
-    assert.deepEqual(flags[0]?.enabledScopes, ["channel:C1"]);
+    const flags = (
+      (await read.json()) as {
+        featureFlags: Array<{ featureName: string; label: string; personalOnly?: boolean; enabledScopes: string[] }>;
+      }
+    ).featureFlags;
+    assert.deepEqual(flags.find((flag) => flag.featureName === "inbox_loops")?.enabledScopes, ["channel:C1"]);
+    const swarms = flags.find((flag) => flag.featureName === "swarms");
+    assert.equal(swarms?.label, "Swarms");
+    assert.equal(swarms?.personalOnly, true);
+    assert.deepEqual(swarms?.enabledScopes, []);
   } finally {
     await srv.close();
   }

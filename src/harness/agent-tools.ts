@@ -25,6 +25,8 @@ import { redactCommand } from "../sandbox/exec-process-session.ts";
 import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
+import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
+import { HARNESS_IDS } from "../model/pi-models.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
@@ -204,6 +206,7 @@ interface CronLike {
 }
 
 const LIST_PAGE_SIZE = 25;
+const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
 const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
@@ -2477,18 +2480,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union([Type.Literal("pi"), Type.Literal("claude")]),
-              modelId: Type.String(),
-              effortLevel: Type.Optional(
-                Type.Union([
-                  Type.Literal("low"),
-                  Type.Literal("medium"),
-                  Type.Literal("high"),
-                  Type.Literal("xhigh"),
-                  Type.Literal("max"),
-                  Type.Literal("ultracode"),
-                ]),
+              harnessId: Type.Union(
+                HARNESS_IDS.filter((harnessId) => harnessId !== "mock").map((harnessId) => Type.Literal(harnessId)),
               ),
+              modelId: Type.String(),
+              effortLevel: Type.Optional(Type.String()),
               fastMode: Type.Optional(Type.Boolean()),
             }),
           ],
@@ -2795,8 +2791,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=create takes `action` (what to do on each event; the event payload is appended " +
       "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
       'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      "`destinationKey` (same delivery menu as crons). verification.scheme is one of github | slack | " +
-      "stripe | hmac-sha256: for github/slack/stripe the USER gives you the signing secret from the " +
+      `\`destinationKey\` (same delivery menu as crons). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
+      `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
       "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
       "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +
       "relay BOTH to the user verbatim — the `url` is already the full public inbound URL (hand it over as-is) " +
@@ -2822,12 +2818,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Object(
           {
             scheme: Type.Union(
-              [Type.Literal("github"), Type.Literal("slack"), Type.Literal("stripe"), Type.Literal("hmac-sha256")],
+              WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme)),
               { description: "how the inbound request is authenticated." },
             ),
             secret: Type.String({
-              description:
-                "the signing secret (from the sender for github/slack/stripe; self-generated for hmac-sha256).",
+              description: `the signing secret (from the sender for ${SENDER_WEBHOOK_SCHEMES.join("/")}; self-generated for hmac-sha256).`,
             }),
           },
           { description: "create only: the inbound authentication scheme + secret." },

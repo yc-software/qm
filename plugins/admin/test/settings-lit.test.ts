@@ -70,6 +70,40 @@ test("feature flag entries use a compact row that cannot inherit the card grid",
   }
 });
 
+test("feature flag picker offers every server feature and limits personal-only features to people", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`settingsUI.configureFlags({
+      loadChoices: async () => [{ scopeId: "personal:ada" }, { scopeId: "channel:C1" }],
+      buildSelector: (choices) => Object.assign(document.createElement("ul"), { id: "offered", textContent: choices.map((c) => c.scopeId).join() }),
+      save: async () => ({ ok: true }),
+    })`);
+    await dom.window.eval(`settingsUI.loadFlags(
+      { featureFlags: [
+        { featureName: "persistent_subagents", label: "Persistent subagents", personalOnly: true, hint: "People only.", enabledScopes: [] },
+        { featureName: "swarms", label: "Swarms", personalOnly: true, enabledScopes: [] },
+        { featureName: "team_scopes", label: "Team scopes", enabledScopes: [] },
+      ] },
+      "org:test",
+    )`);
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    const doc = dom.window.document;
+    const select = doc.getElementById("feature-flag-name") as HTMLSelectElement;
+    assert.deepEqual(
+      [...select.options].map((option) => option.textContent),
+      ["Persistent subagents", "Swarms", "Team scopes"],
+    );
+    assert.equal(select.value, "persistent_subagents");
+    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada");
+    assert.equal(doc.querySelector("#card-feature-flags .hint:not(#feature-flag-list)")!.textContent, "People only.");
+    select.value = "team_scopes";
+    select.dispatchEvent(new dom.window.Event("change"));
+    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada,channel:C1");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("SOUL conflict keeps draft while replacing saved revision and version", () => {
   const dom = setup();
   try {

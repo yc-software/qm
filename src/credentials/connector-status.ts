@@ -1,6 +1,7 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
 import {
+  ACCOUNT_TYPES,
   oauthProviderEntries,
   PROVIDERS,
   type OAuthClientResolver,
@@ -33,8 +34,6 @@ export function createConnectorStatusCache(map: DurableMap<ConnectorStatusRecord
     put: (record) => map.put(record.principalId, record),
   };
 }
-
-export const CONNECTOR_STATUS_ACCOUNT_TYPES: ReadonlyArray<string | undefined> = [undefined, "personal", "company"];
 
 const CONNECTOR_STATUS_MAX_TTL_MS = 15 * 60_000;
 
@@ -89,9 +88,7 @@ export async function providerTokenStatuses(
       const hosts = await Promise.all(
         provider.hosts.map(async (host) => {
           const statuses = await Promise.all(
-            CONNECTOR_STATUS_ACCOUNT_TYPES.map((accountType) =>
-              tokens.connectorTokenStatus(host, principalId, accountType),
-            ),
+            ACCOUNT_TYPES.map((accountType) => tokens.connectorTokenStatus(host, principalId, accountType)),
           );
           return { host, ...bestOAuthTokenStatus(statuses) };
         }),
@@ -115,17 +112,8 @@ export async function refreshConnectorStatus(
   return { principalId, checkedAt: now, providers };
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  google: "Google",
-  slack: "Slack",
-  notion: "Notion",
-  linear: "Linear",
-  github: "GitHub",
-  dropbox: "Dropbox",
-};
-
 export function connectorLabel(name: string): string {
-  return PROVIDER_LABELS[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
+  return PROVIDERS[name]?.label ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export async function configuredConnectorProviders(resolveClient: OAuthClientResolver): Promise<string[]> {

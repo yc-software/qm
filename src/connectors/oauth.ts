@@ -5,7 +5,10 @@ import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
 
-export type AccountType = "default" | "personal" | "company";
+export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
+export type AccountType = (typeof ACCOUNT_TYPES)[number];
+export const isAccountType = (value: unknown): value is AccountType =>
+  typeof value === "string" && (ACCOUNT_TYPES as readonly string[]).includes(value);
 
 export function generateCodeVerifier(): string {
   return randomBytes(32).toString("base64url");
@@ -38,6 +41,7 @@ type OAuthExchangeAdapter = (
 type OAuthRefreshAdapter = (args: OAuthAdapterArgs & { token: OAuthToken }) => Promise<OAuthToken>;
 
 export interface OAuthProviderConfig {
+  label: string;
   hosts: string[];
   authUrl: string;
   tokenUrl: string;
@@ -220,6 +224,7 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
 
 export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   google: {
+    label: "Google",
     hosts: [
       "gmail.googleapis.com",
       "www.googleapis.com",
@@ -269,6 +274,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   slack: {
+    label: "Slack",
     hosts: ["slack.com"],
     authUrl: "https://slack.com/oauth/v2/authorize",
     tokenUrl: "https://slack.com/api/oauth.v2.access",
@@ -315,6 +321,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   notion: {
+    label: "Notion",
     hosts: ["api.notion.com"],
     authUrl: "https://api.notion.com/v1/oauth/authorize",
     tokenUrl: "https://api.notion.com/v1/oauth/token",
@@ -341,6 +348,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   linear: {
+    label: "Linear",
     hosts: ["api.linear.app"],
     authUrl: "https://linear.app/oauth/authorize",
     tokenUrl: "https://api.linear.app/oauth/token",
@@ -364,6 +372,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   dropbox: {
+    label: "Dropbox",
     hosts: ["api.dropboxapi.com", "content.dropboxapi.com"],
     authUrl: "https://www.dropbox.com/oauth2/authorize",
     tokenUrl: "https://api.dropboxapi.com/oauth2/token",
@@ -396,6 +405,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   github: {
+    label: "GitHub",
     hosts: ["api.github.com"],
     authUrl: "https://github.com/login/oauth/authorize",
     tokenUrl: "https://github.com/login/oauth/access_token",
@@ -421,6 +431,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   x: {
+    label: "X",
     hosts: ["api.x.com"],
     authUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
@@ -469,6 +480,7 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
     if (PROVIDERS[c.name]) continue;
     publicClients.set(c.name, c);
     publicProviders.set(c.name, {
+      label: c.label,
       hosts: [c.host],
       authUrl: c.authUrl,
       tokenUrl: c.tokenUrl,
@@ -540,8 +552,6 @@ export interface OAuthState {
   consentLinkId?: string;
 }
 
-const ACCOUNT_TYPES: readonly AccountType[] = ["default", "personal", "company"];
-
 function isOAuthState(v: unknown): v is OAuthState {
   if (typeof v !== "object" || v === null) return false;
   const s = v as OAuthState;
@@ -553,7 +563,7 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
     (s.orgId === undefined || typeof s.orgId === "string") &&
-    (s.accountType === undefined || (typeof s.accountType === "string" && ACCOUNT_TYPES.includes(s.accountType))) &&
+    (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
     (s.consentLinkId === undefined || typeof s.consentLinkId === "string")
