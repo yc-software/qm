@@ -513,6 +513,7 @@ export function createTurnHandler(deps: {
               ...(deps.externalAccess
                 ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
+              ...(replyThreadTs ? { replyThreadTs } : {}),
             },
           }
         : {}),

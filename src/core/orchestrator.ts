@@ -571,7 +571,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
 
       if (!deps.identity.isInternal(actor)) {
-        return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
+        return {
+          status: "refused",
+          refusalKind: "internal_only",
+          reason: "internal-only: non-internal principals cannot interact",
+        };
       }
       const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
         ? await deps.sessions.getByThread(conversation.threadRef)
@@ -674,6 +678,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!externalAllowed) {
           return {
             status: "refused",
+            refusalKind: "internal_only",
             reason: "internal-only: shared audience includes a non-internal participant",
           };
         }

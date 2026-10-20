@@ -1,4 +1,4 @@
-export { isBoundaryRefusal, refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
+export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
 export { inlineCode, clip, sleep } from "./util.ts";
 export { safeChunks } from "./safe-cut.ts";
 export {

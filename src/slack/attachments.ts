@@ -217,12 +217,9 @@ export async function uploadAttachments(
 }
 
 export function uploadFailureNote(err: unknown): string {
-  const e = err as { data?: { needed?: string }; message?: string };
+  const e = err as { data?: { needed?: string } };
   const code = slackErrorCode(err) ?? "";
-  const msg = e?.message ?? String(err);
-  const isPermission =
-    code === "missing_scope" || code === "not_allowed_token_type" || code === "access_denied" || /scope/i.test(msg);
-  if (isPermission) {
+  if (code === "missing_scope" || code === "not_allowed_token_type" || code === "access_denied") {
     const needed = e?.data?.needed ?? "files:write";
     return `⚠️ I couldn't attach the file(s) — check my upload permission (${needed}).`;
   }

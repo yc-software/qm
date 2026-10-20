@@ -450,6 +450,7 @@ test("a guest actor is refused (internal-only, input side)", async () => {
     text: "hi",
   });
   assert.equal(res.status, "refused");
+  assert.equal(res.refusalKind, "internal_only");
   assert.match(res.reason ?? "", /internal-only/);
 });
 
@@ -467,6 +468,7 @@ test("a channel with a non-internal audience member is refused (internal-only, o
     text: "hello channel",
   });
   assert.equal(res.status, "refused");
+  assert.equal(res.refusalKind, "internal_only");
   assert.match(res.reason ?? "", /internal-only/);
 });
 

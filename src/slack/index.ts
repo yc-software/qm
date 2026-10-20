@@ -385,7 +385,7 @@ export async function startSlackPlugin(
       threadTs?: string;
       text?: string;
       senderSlackId?: string;
-      isDirectMessage?: boolean;
+      isDirectMessage: boolean;
     },
   ): void => {
     void (async () => {
@@ -401,7 +401,7 @@ export async function startSlackPlugin(
       await core.inboxSlackMessage({
         channel: msg.channel,
         ts: msg.ts,
-        ...(msg.isDirectMessage !== undefined ? { isDirectMessage: msg.isDirectMessage } : {}),
+        isDirectMessage: msg.isDirectMessage,
         ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),

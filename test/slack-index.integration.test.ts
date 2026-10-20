@@ -612,6 +612,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
+    assert.equal(f.core.turns[0].slackSource.replyThreadTs, undefined);
     assert.equal(f.core.turns[0].liveActor, true);
     assert.equal(f.core.turns[0].triggerTs, "100.1");
     assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
@@ -1227,6 +1228,25 @@ test("a blocked-thread result without approval details tells only the sender ins
     assert.equal(f.client.ephemerals.length, 1);
     assert.match(f.client.ephemerals[0].text, /waiting for someone else/);
     assert.equal(f.client.ephemerals[0].blocks, undefined);
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a DM thread reply carries its reply thread as a typed Slack source field", async () => {
+  const f = await fixture();
+  try {
+    await f.app.emitMessage({
+      channel: "D1",
+      channel_type: "im",
+      user: "U1",
+      text: "and this?",
+      ts: "100.2",
+      thread_ts: "100.1",
+    });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].conversation.kind, "dm");
+    assert.equal(f.core.turns[0].slackSource.replyThreadTs, "100.1");
   } finally {
     await f.stop();
   }

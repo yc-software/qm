@@ -131,7 +131,7 @@ export interface SlackCoreClient {
     threadTs?: string;
     text?: string;
     senderEmail?: string;
-    isDirectMessage?: boolean;
+    isDirectMessage: boolean;
   }): Promise<void>;
 }
 

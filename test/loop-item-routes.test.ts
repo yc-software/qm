@@ -95,7 +95,11 @@ function slackClientFor(w: World): (token: string) => SlackUserClient {
     }
     return { ok: true };
   };
-  return () => ({ chat: { postMessage: call("chat.postMessage") }, reactions: { add: call("reactions.add") } });
+  return () => ({
+    chat: { postMessage: call("chat.postMessage") },
+    reactions: { add: call("reactions.add") },
+    conversations: { info: async () => ({ channel: {} }) },
+  });
 }
 
 async function call(
@@ -177,7 +181,7 @@ const ITEM = {
   snippet: "can you review my launch post?",
   receivedAt: 1234,
   draft: { body: "Looking now — back to you within the hour." },
-  slack: { channelId: "C1", ts: "1.2" },
+  slack: { channelId: "C1", ts: "1.2", isDirectMessage: false },
 };
 
 async function inboxLoop(w: World): Promise<Loop> {
@@ -347,7 +351,7 @@ test("listing returns the ledger view with per-state counts and filters", async 
   assert.equal(body.items.length, 1);
   assert.equal(body.items[0]!.state, "held");
   assert.equal(body.items[0]!.dedupeKey, "C1:1.2");
-  assert.deepEqual(body.items[0]!.sourcePayload.slack, { channelId: "C1", ts: "1.2" });
+  assert.deepEqual(body.items[0]!.sourcePayload.slack, { channelId: "C1", ts: "1.2", isDirectMessage: false });
   assert.deepEqual(body.counts, { held: 1 });
   const heldOnly = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items?state=held` });
   assert.equal((heldOnly.body as { items: unknown[] }).items.length, 1);
@@ -769,7 +773,11 @@ test("a person's own typed mention stays live, while a capability caller's is di
   });
   assert.equal(human.status, 200, JSON.stringify(human.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Heads up <!channel>");
-  const second = await seed(w, { ...ITEM, sourceKey: "t2", slack: { channelId: "C1", ts: "9.9" } });
+  const second = await seed(w, {
+    ...ITEM,
+    sourceKey: "t2",
+    slack: { channelId: "C1", ts: "9.9", isDirectMessage: false },
+  });
   const agent = await call(w, {
     method: "POST",
     path: `/v1/loops/${second.loop.id}/items/${second.item.id}/action`,
@@ -918,7 +926,7 @@ test("Slack thread keys reuse a legacy item's identity, edits, and replied water
             ...ITEM,
             sourceKey: "D1:1.0",
             receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
+            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0", isDirectMessage: true },
             draft: { body: "Agent replacement" },
           },
         ],
@@ -1135,7 +1143,7 @@ test("only a person overrides triage, and archiving a whole group resolves its m
   await call(w, {
     method: "POST",
     path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3" } }] },
+    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3", isDirectMessage: false } }] },
   });
   await w.loops.store.update(loop.id, {
     triage: { prioritize: { enabled: true }, consolidate: { enabled: true } },

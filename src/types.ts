@@ -654,7 +654,13 @@ export interface ClientToolResult {
 
 export interface TurnRequest {
   desktopClientId?: string;
-  slackSource?: { accountId: string; teamId: string; userId: string; externalPolicyNamespace?: string };
+  slackSource?: {
+    accountId: string;
+    teamId: string;
+    userId: string;
+    externalPolicyNamespace?: string;
+    replyThreadTs?: string;
+  };
   externalSlack?: {
     accountId: string;
     teamId: string;
@@ -794,7 +800,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
   adminUrl?: string;
   runId?: string;
   steered?: true;

@@ -320,10 +320,11 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         const at = Number(event.ts) * 1000;
         if (!Number.isFinite(at) || at <= 0) return { status: 400, body: "Invalid Slack timestamp" };
         const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
+        const isDirectMessage = event.channel_type === "im" || event.channel_type === "mpim";
         entry = {
           loopId: source.loopId,
           source: "slack",
-          dedupeKey: slackConversationRef(event.channel, event.ts, threadTs),
+          dedupeKey: slackConversationRef(event.channel, event.ts, threadTs, isDirectMessage),
           summary: event.text.slice(0, 500),
           sourceAt: at,
           sourcePayload: {
@@ -332,7 +333,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
             from: event.user,
             snippet: event.text.slice(0, 10_000),
             receivedAt: at,
-            slack: { channelId: event.channel, ts: event.ts, ...(threadTs ? { threadTs } : {}) },
+            slack: { channelId: event.channel, ts: event.ts, isDirectMessage, ...(threadTs ? { threadTs } : {}) },
           },
         };
       } else {

@@ -116,7 +116,11 @@ export function createTurnMethods(
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {
-        return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
+        return {
+          status: "refused",
+          refusalKind: "internal_only",
+          reason: "internal-only: non-internal principals cannot interact",
+        };
       }
       let projectAudience: Principal[] | undefined;
       let projectName: string | undefined;

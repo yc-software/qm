@@ -1,5 +1,6 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
+import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
 
 interface ActiveSlackInstallation {
   serviceBlocked?: boolean;
@@ -312,7 +313,7 @@ export async function validateSlackInstallation(
     }
     const payload = (await response.json()) as SlackValidationResponse;
     if (!response.ok || !payload.ok) {
-      if (["invalid_auth", "token_revoked", "not_authed", "account_inactive"].includes(payload.error ?? ""))
+      if (SLACK_AUTH_ERRORS.has(payload.error ?? ""))
         throw new Error(
           `${label} was rejected by Slack. Copy a current token from the same installed Slack app and try again.`,
         );

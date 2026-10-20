@@ -9,6 +9,9 @@ export interface SlackUserClient {
     postMessage(args: { channel: string; text: string; thread_ts?: string; parse?: "none" | "full" }): Promise<unknown>;
   };
   reactions: { add(args: { channel: string; timestamp: string; name: string }): Promise<unknown> };
+  conversations: {
+    info(args: { channel: string }): Promise<{ channel?: { is_im?: boolean; is_mpim?: boolean } }>;
+  };
 }
 
 export interface SourceActionDeps {
