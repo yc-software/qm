@@ -311,6 +311,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
 
     async list({ limit = 200, threadRef }: { limit?: number; threadRef?: string } = {}) {
       return [...runs.values()]
+        .reverse()
         .filter(
           (run) =>
             !threadRef ||
