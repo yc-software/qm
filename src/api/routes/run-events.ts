@@ -5,6 +5,7 @@ import type { ApiCtx, Route } from "./route.ts";
 
 const HEARTBEAT_MS = 15_000;
 const MAX_BUFFER_BYTES = 1_048_576;
+const MAX_REASONING_BLOCKS = 8;
 
 function toolEvent(entry: SessionEntry): { id: string; data: Record<string, unknown> } | null {
   const payload = (entry.payload ?? {}) as Record<string, unknown>;
@@ -44,7 +45,12 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   let refreshing = false;
   let refreshAgain = false;
   const sentToolEvents = new Set<string>();
-  const sentReasoning: Record<string, number> = {};
+  const sentReasoning = new Map<string, number>();
+  const noteReasoning = (key: string, sent: number): void => {
+    sentReasoning.delete(key);
+    sentReasoning.set(key, sent);
+    if (sentReasoning.size > MAX_REASONING_BLOCKS) sentReasoning.delete(sentReasoning.keys().next().value!);
+  };
   let toolCursor: number | undefined;
   const cleanup = (): void => {
     closed = true;
@@ -73,7 +79,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     if (syncing || closed) return;
     syncing = true;
     queueMicrotask(() => {
-      if (!closed) app.syncRunStream(runId, offset, { ...sentReasoning });
+      if (!closed) app.syncRunStream(runId, offset, Object.fromEntries(sentReasoning));
     });
   };
   const sendDrained = async (data: unknown, id?: string): Promise<void> => {
@@ -84,8 +90,10 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     const toolEntries = await app.getRunToolEntries(runId, actor?.p, toolCursor);
     if (closed) return;
     offset = Math.max(offset, (run.partialStartOffset ?? 0) + (run.partial?.length ?? 0));
-    for (const block of run.reasoning ?? [])
-      sentReasoning[reasoningKey(block)] = Math.max(sentReasoning[reasoningKey(block)] ?? 0, block.text.length);
+    for (const block of run.reasoning ?? []) {
+      const key = reasoningKey(block);
+      noteReasoning(key, Math.max(sentReasoning.get(key) ?? 0, block.text.length));
+    }
     for (const entry of toolEntries) {
       const event = toolEvent(entry);
       if (event && !sentToolEvents.has(event.id)) {
@@ -140,8 +148,9 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
         return;
       }
       if (event.kind === "reasoning") {
+        if (refreshing) return;
         const key = reasoningKey(event);
-        const sent = sentReasoning[key] ?? 0;
+        const sent = sentReasoning.get(key) ?? 0;
         if (event.offset > sent) {
           sync();
           return;
@@ -154,7 +163,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
           name: "reasoning",
           value: { step: event.step, index: event.index, offset: sent, delta },
         });
-        sentReasoning[key] = sent + delta.length;
+        noteReasoning(key, sent + delta.length);
         return;
       }
       if (event.kind !== "delta" || refreshing) return;

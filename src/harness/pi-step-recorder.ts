@@ -138,6 +138,9 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
       pending = { step, parts };
       if (message.content.some((block) => block.type === "toolCall")) flush();
     },
+    startStreaming(): void {
+      streamingStep = undefined;
+    },
     streamingStepId(): string {
       return (streamingStep ??= randomUUID());
     },

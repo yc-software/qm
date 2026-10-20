@@ -283,7 +283,7 @@ export interface App {
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
-  syncRunStream(runId: string, offset: number, reasoning?: Record<string, number>): void;
+  syncRunStream(runId: string, offset: number, reasoning: Record<string, number>): void;
   getRun(
     runId: string,
     viewer?: string,

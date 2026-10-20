@@ -1473,7 +1473,7 @@ function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offse
   const text = current.slice(0, offset) + block.text;
   if (text.length <= current.length) return false;
   const next = { step: block.step, index: block.index, text };
-  work.reasoning = at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks, next];
+  work.reasoning = at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks, next].slice(-8);
   return true;
 }
 
@@ -1518,6 +1518,10 @@ function applyRun(
   if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
     notify?.();
   setWorkStale(work, run.stale === true, notify);
+  if (work?.reasoning?.length && run.stale === true) {
+    work.reasoning = [];
+    notify?.();
+  }
   if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
     work.goal = run.goal;
     notify?.();

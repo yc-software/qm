@@ -3776,7 +3776,13 @@ test("thinking always reaches the run activity feed, with the model-bound signat
   const onView = await runViewFor("!think open plan");
   const published = (onView?.activity ?? []).filter((a) => a.type === "thinking");
   assert.equal(published.length, 1, "thinking is in the live feed");
-  assert.deepEqual(published[0]!.payload, { thinking: "open plan" }, "signature stripped from the published payload");
+  const step = (entries[0]!.payload as { step: { id: string; index: number } }).step;
+  assert.deepEqual(
+    published[0]!.payload,
+    { thinking: "open plan", step },
+    "signature stripped; the step identifies the live block it replaces",
+  );
+  assert.equal(onView?.reasoning, undefined, "the streamed block is settled once its entry is published");
 });
 
 test("channel session for an all-internal audience runs and is channel-scoped", async () => {

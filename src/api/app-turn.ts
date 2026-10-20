@@ -723,7 +723,7 @@ export function createTurnMethods(
     },
 
     syncRunStream(runId, offset, reasoning) {
-      deps.runStreamEvents?.emit({ runId, kind: "sync", offset, ...(reasoning ? { reasoning } : {}) });
+      deps.runStreamEvents?.emit({ runId, kind: "sync", offset, reasoning });
     },
 
     async getRun(runId, viewer) {

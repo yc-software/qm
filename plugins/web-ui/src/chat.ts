@@ -2965,6 +2965,8 @@ export function createChatSurface(
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
     if (item.kind === "approval") return `approval:${item.approval.requestId}`;
+    const step = (item.activity.payload as { step?: { id?: unknown; index?: unknown } } | null)?.step;
+    if (item.kind === "thinking" && step) return `thinking:${String(step.id)}:${String(step.index)}`;
     return `${item.kind}:${item.activity.seq}`;
   }
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   defineHarness,
   type Harness,
@@ -383,9 +384,12 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!surfacename") {
           reply = `surface:${turn.surfaceName ?? "none"}`;
         } else if (command0.startsWith("!think ")) {
+          const thinking = command0.slice("!think ".length);
+          const step = { id: randomUUID(), index: 0 };
+          for (const chunk of streamChunks(thinking)) turn.onReasoningDelta?.(step.id, step.index, chunk);
           await turn.emit({
             type: "thinking",
-            payload: { thinking: command0.slice("!think ".length), thinkingSignature: "OPAQUE-SIG-BYTES" },
+            payload: { thinking, thinkingSignature: "OPAQUE-SIG-BYTES", step },
             scopeLabel: turn.scopeLabel,
           });
           reply = "thought about it";

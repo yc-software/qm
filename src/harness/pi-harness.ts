@@ -1915,6 +1915,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
+              steps.startStreaming();
               curStart = Date.now();
               curFirst = undefined;
               try {

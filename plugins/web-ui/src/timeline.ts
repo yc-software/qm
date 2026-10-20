@@ -233,7 +233,13 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
     liveReasoning(work).forEach((block, i) =>
       items.push({
         kind: "thinking",
-        activity: { seq: -1 - i, parentSeq: null, type: "thinking", payload: { thinking: block.text }, createdAt: 0 },
+        activity: {
+          seq: -1 - i,
+          parentSeq: null,
+          type: "thinking",
+          payload: { thinking: block.text, step: { id: block.step, index: block.index } },
+          createdAt: 0,
+        },
       }),
     );
   }

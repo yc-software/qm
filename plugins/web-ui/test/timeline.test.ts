@@ -553,3 +553,36 @@ test("recorded commentary is not repeated after its live window is trimmed", () 
   });
   assert.equal(streamedAnswer("ipped word here", work), "");
 });
+
+test("live reasoning renders as a trailing thinking row until its persisted entry arrives or work ends", () => {
+  const reasoning = [
+    { step: "s1", index: 0, text: "**Checking** the cache" },
+    { step: "s1", index: 2, text: "   " },
+  ];
+  const work: WorkBlock = {
+    status: "working",
+    activity: [act(1, "thinking", { thinking: "earlier", step: { id: "s0", index: 0 } })],
+    reasoning,
+  };
+  const live = buildTimeline(work);
+  assert.deepEqual(
+    live.map((item) =>
+      item.kind === "thinking" ? (item.activity.payload as { thinking: string }).thinking : item.kind,
+    ),
+    ["earlier", "**Checking** the cache"],
+  );
+  const persisted: WorkBlock = {
+    ...work,
+    activity: [
+      ...work.activity,
+      act(2, "thinking", { thinking: "**Checking** the cache", step: { id: "s1", index: 0 } }),
+    ],
+  };
+  assert.equal(buildTimeline(persisted).length, 2, "the persisted entry replaces the live row instead of doubling it");
+  const otherBlock: WorkBlock = {
+    ...work,
+    activity: [...work.activity, act(2, "thinking", { thinking: "other", step: { id: "s1", index: 1 } })],
+  };
+  assert.equal(buildTimeline(otherBlock).length, 3, "a different block of the same step does not hide this one");
+  assert.equal(buildTimeline({ ...work, status: "complete" }).length, 1, "finished work shows only durable rows");
+});
