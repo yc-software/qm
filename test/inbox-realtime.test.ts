@@ -20,7 +20,7 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
       title: "DM with Mark",
       from: "Mark",
       snippet: "any update?",
-      slack: { channelId: "D123", ts: "1000.100" },
+      slack: { channelId: "D123", ts: "1000.100", isDirectMessage: true },
     },
     sourceAt: 1_000_100,
     ...over,

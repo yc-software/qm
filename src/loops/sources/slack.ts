@@ -194,7 +194,7 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return (slack.isDirectMessage === false ? [false] : [true, false]).some(
+    return (slack.isDirectMessage ? [true, false] : [false]).some(
       (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
     );
   },
