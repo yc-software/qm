@@ -168,7 +168,6 @@ export interface SessionPage {
   signal?: AbortSignal;
 }
 
-/** Per-scope session counts for the admin directory; computed off the request path and served stale. */
 export interface ScopeActivity {
   scopeId: ScopeId;
   conversations: number;

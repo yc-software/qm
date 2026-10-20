@@ -70,7 +70,29 @@ export function history(root: HTMLElement, d: any, s: Record<string, any>) {
   let errorsOpen = false;
   const draw = () =>
     paint(
-      html`${environment && !cron ? card("Attached scopes", s.plural(attached.length, "scope") + " share this environment's computer and working memory.", html`<div class="history-empty-scopes">${attached.length ? attached.map((id: string) => html`<button type="button" class="history-empty-scope" title=${id} @click=${() => s.selectScope(id)}>${s.shortName(id)}</button>`) : html`<p class="empty">No scopes attached.</p>`}</div>`) : nothing}${bareCard(
+      html`${
+        orgWide && !cron && !s.cursor && s.environments?.length
+          ? card(
+              "Named environments",
+              "Named computers and working memory that scopes can share.",
+              denseList(
+                s.environments,
+                (e: any) => {
+                  const names = (e.attachedScopes || []).map((id: string) => s.shortName(id));
+                  return {
+                    name: e.name || s.shortName(e.id),
+                    preview: html`<span title=${names.join(", ")}
+                      >${names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? " +" + s.plural(names.length - 4, "more scope") : "") : "no scopes attached"}</span
+                    >`,
+                    href: s.stateToUrl(route({ scope: e.id })),
+                  };
+                },
+                (e) => s.selectScope(e.id),
+                "No named environments.",
+              ),
+            )
+          : nothing
+      }${environment && !cron ? card("Attached scopes", s.plural(attached.length, "scope") + " share this environment's computer and working memory.", html`<div class="history-empty-scopes">${attached.length ? attached.map((id: string) => html`<button type="button" class="history-empty-scope" title=${id} @click=${() => s.selectScope(id)}>${s.shortName(id)}</button>`) : html`<p class="empty">No scopes attached.</p>`}</div>`) : nothing}${bareCard(
         denseList(
           sessions,
           (row: any) => {

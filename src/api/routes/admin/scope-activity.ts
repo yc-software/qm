@@ -10,12 +10,6 @@ export interface ScopeActivitySnapshot {
 
 const snapshots = new WeakMap<SessionStore, { snapshot?: ScopeActivitySnapshot; refreshing?: Promise<void> }>();
 
-/**
- * Per-scope session counts for admin tabs and the scope directory. Counting needs a full
- * scan of `sessions`, so it never runs on the request path: this returns whatever was
- * last computed (null until the first refresh lands) and, when that is older than
- * REFRESH_MS, starts one refresh in the background.
- */
 export function scopeActivity(store: SessionStore | undefined): ScopeActivitySnapshot | null {
   if (!store) return null;
   let entry = snapshots.get(store);
@@ -35,7 +29,6 @@ export function scopeActivity(store: SessionStore | undefined): ScopeActivitySna
   return state.snapshot ?? null;
 }
 
-/** Tab counts for one scope, or summed across the org. */
 export function activityCounts(
   snapshot: ScopeActivitySnapshot,
   scope: string,

@@ -1,26 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
-import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
 import { pgTextSafe } from "../util/text.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
-const SOURCE_CRON_ID_EXPR = threadRefCronIdExpr("provenance->>'sourceThreadRef'");
-
-export async function backfillDeliverySourceCronIdBatch(q: PgPool["q"], limit: number): Promise<number> {
-  const updated = await q(
-    `UPDATE deliveries
-        SET source_cron_id = ${SOURCE_CRON_ID_EXPR}
-      WHERE id IN (SELECT id FROM deliveries
-                    WHERE source_cron_id IS NULL AND ${SOURCE_CRON_ID_EXPR} IS NOT NULL
-                    LIMIT $1)
-      RETURNING 1`,
-    [limit],
-  );
-  return updated.length;
-}
-
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
@@ -119,14 +103,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   return {
     async enqueue(input) {
       const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, source_cron_id, created_at, shadow)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
-               source_cron_id = EXCLUDED.source_cron_id,
                created_at = EXCLUDED.created_at,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
@@ -140,7 +123,6 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           pgTextSafe(input.text),
           input.attachments?.length ? JSON.stringify(input.attachments) : null,
           input.provenance ? JSON.stringify(input.provenance) : null,
-          cronIdOf(input.provenance?.sourceThreadRef),
           Date.now(),
           input.shadow === true,
         ],

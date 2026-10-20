@@ -13,7 +13,6 @@
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
-        "scripts/backfill-delivery-source-cron-id.ts",
         "scripts/e2b-live-smoke.mjs",
         "scripts/modal-live-smoke.mjs",
         "scripts/dev/cli.ts",
