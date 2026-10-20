@@ -261,9 +261,9 @@ test("a sandbox that dies mid-turn is revived transparently for the next command
   assert.equal(fake.createdCount(scopeName()), 2);
 });
 
-test("a sandbox older than rotateAfterMs is rotated at provision with files intact", async () => {
+test("a sandbox older than rotateAfterMs is rotated at provision with files intact, without a portable store", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
-  const s = make({ store });
+  const s = make({ store, snapshots: undefined });
   const a = await s.provision(layers);
   await s.writeFile(a, "keep.txt", "survives rotation\n");
   await s.teardown(a);
