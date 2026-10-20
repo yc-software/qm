@@ -170,6 +170,7 @@ impl Intervention {
             };
             let port = unsafe { CFMachPort::wrap_under_get_rule((&*tap as *const objc2_core_foundation::CFMachPort).cast_mut().cast()) };
             let Ok(source) = port.create_runloop_source(0) else {
+                tap.invalidate();
                 let _ = ready_tx.send(Err("Could not create the focus-protection run-loop source"));
                 return;
             };
@@ -183,6 +184,7 @@ impl Intervention {
             }
             CGEvent::tap_enable(&tap, false);
             runloop.remove_source(&source, unsafe { kCFRunLoopDefaultMode });
+            tap.invalidate();
         });
         let ready = ready_rx.recv_timeout(Duration::from_millis(350));
         if matches!(ready, Ok(Ok(()))) {
