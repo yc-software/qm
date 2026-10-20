@@ -27,8 +27,6 @@ export const DROPPED_PROXY_ENV = new Set([
   "NO_PROXY",
 ]);
 
-const PROXY_GIT_CONFIG: ReadonlyArray<readonly [string, string]> = [["http.proxyAuthMethod", "basic"]];
-
 export function forceThroughProxyEnv(
   egressProxyUrl: string,
   token: string,
@@ -46,13 +44,11 @@ export function forceThroughProxyEnv(
     http_proxy: url,
     no_proxy: noProxy,
   };
-  const existing = Number(base.GIT_CONFIG_COUNT);
-  const start = Number.isSafeInteger(existing) && existing > 0 ? existing : 0;
-  PROXY_GIT_CONFIG.forEach(([key, value], i) => {
-    env[`GIT_CONFIG_KEY_${start + i}`] = key;
-    env[`GIT_CONFIG_VALUE_${start + i}`] = value;
-  });
-  env.GIT_CONFIG_COUNT = String(start + PROXY_GIT_CONFIG.length);
+  const count = Number(base.GIT_CONFIG_COUNT);
+  const index = Number.isSafeInteger(count) && count > 0 ? count : 0;
+  env[`GIT_CONFIG_KEY_${index}`] = "http.proxyAuthMethod";
+  env[`GIT_CONFIG_VALUE_${index}`] = "basic";
+  env.GIT_CONFIG_COUNT = String(index + 1);
   return env;
 }
 
