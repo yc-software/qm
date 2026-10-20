@@ -5,12 +5,14 @@ import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
+import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 function fakeIdentity() {
@@ -43,6 +45,8 @@ function service(
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
+    directory?: ReturnType<typeof createDirectoryStore>;
+    resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
   const loops = createLoopStore();
@@ -66,6 +70,8 @@ function service(
       deliveries: deliveries.store as never,
       idempotency,
       identity: fakeIdentity() as never,
+      ...(overrides?.directory ? { directory: overrides.directory } : {}),
+      ...(overrides?.resolveRecipient ? { resolveRecipient: overrides.resolveRecipient } : {}),
       run: async (req): Promise<TurnResult> => {
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
@@ -343,6 +349,32 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
   await s.fire.sweepStale(loop.createdAt + 1_001);
   assert.equal(s.deliveries.sent.length, 1);
   assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
+});
+
+test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
+  const directory = createDirectoryStore();
+  await directory.replace([
+    { principalId: "josh", displayName: "Josh", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "internal" },
+  ]);
+  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  const s = service(HAPPY, { directory });
+  const loop = await makeLoop(s.loops, {
+    governor: { staleFireMs: 1_000 },
+    destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
+  });
+  await s.fire.sweepStale(loop.createdAt + 1_001);
+  assert.equal(s.deliveries.sent.length, 0);
+});
+
+test("a stale-loop ping still reaches the owner's web conversation", async () => {
+  const s = service(HAPPY, { directory: createDirectoryStore(), resolveRecipient: async () => ({ kind: "none" }) });
+  const loop = await makeLoop(s.loops, {
+    governor: { staleFireMs: 1_000 },
+    destination: { type: "web", target: "web:josh:t1", audienceScopeId: base.ownerScopeId },
+  });
+  await s.fire.sweepStale(loop.createdAt + 1_001);
+  assert.equal(s.deliveries.sent.length, 1);
 });
 
 test("review saturation pings once and recovers after outputs drain", async () => {
@@ -981,16 +1013,17 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
 });
 
 test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
-  const s = service((req) => {
+  const s = service(async (req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
-      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      const open = await s.items.byLoop(loop.id);
+      const representative = open.find((item) => item.sourceKey === "SENTRY-1")!;
       return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: index === 0 ? "urgent" : "low",
+        items: open.map((item) => ({
+          id: item.id,
+          priority: item.id === representative.id ? "urgent" : "low",
           reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
+          ...(item.id !== representative.id ? { groupWith: representative.id } : {}),
         })),
       })}\n\`\`\``;
     }

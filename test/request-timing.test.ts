@@ -13,6 +13,7 @@ import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassi
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { withTraceCarrier } from "../src/runs/run-store.ts";
 
 const captured: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
@@ -35,83 +36,86 @@ after(async () => {
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
-test("core request timings keep raw URLs alongside route templates and runs report queue wait", async () => {
+async function settle(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 60 && !predicate(); i++) {
+    await flushErrorReporting();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+test("core requests are named by route template and carry no URL, query or header values", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-")) }));
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     await fetch(`${base}/healthz`);
-    await fetch(`${base}/v1/sessions/private-session-id?token=private-token`);
-    await fetch(`${base}/v1/no-such-route/private-segment-9f3a/deep`, { method: "POST" });
-    await fetch(`${base}/v1/blobs/private-blob-id`);
-    const settle = async (expected: number) => {
-      for (let i = 0; i < 40 && captured.length < expected; i++) {
-        await flushErrorReporting();
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    };
-    await settle(3);
-    const requests = captured.filter((event) => event.contexts?.trace?.op === "http.server");
-    assert.equal(requests.length, 3);
-    assert.deepEqual(
-      requests.map((event) => event.contexts.trace.data.url),
-      [
-        "/v1/sessions/private-session-id?token=private-token",
-        "/v1/no-such-route/private-segment-9f3a/deep",
-        "/v1/blobs/private-blob-id",
-      ],
-    );
-    assert.deepEqual(
-      requests.map((event) => [
-        event.transaction,
-        event.contexts?.trace?.status,
-        event.contexts?.trace?.data?.http_status,
-      ]),
-      [
-        ["GET /v1/sessions/:id", "invalid_argument", "400"],
-        ["POST /*", "not_found", "404"],
-        ["GET /v1/blobs/:id", "internal_error", "501"],
-      ],
-    );
-    for (const event of requests) {
-      assert.equal(event.type, "transaction");
-      assert.equal(event.tags?.service, "core");
-      assert.ok(event.timestamp! >= event.start_timestamp!);
-      assert.match(event.contexts!.trace!.trace_id!, /^[a-f0-9]{32}$/);
-      assert.deepEqual(event.spans, []);
-    }
-    const { run } = await built.runs.enqueue({
-      sessionId: "private-thread",
-      request: {
-        actor: { id: "private-person", type: "internal" },
-        conversation: { kind: "dm", threadRef: "private-thread", audience: [] },
-        origin: { kind: "human" },
-        surface: "web",
-        text: "private prompt",
-      },
+    await fetch(`${base}/v1/sessions/private-session-id?token=private-token`, {
+      headers: { "x-qm-signature": "private-signature", cookie: "private-cookie" },
     });
-    const claimed = await built.runs.claim("worker", 10_000);
-    assert.equal(claimed?.id, run.id);
-    await built.runs.complete(run.id, claimed!.leaseToken!, { status: "ok" });
-    await settle(4);
-    const runs = captured.filter((event) => event.contexts?.trace?.op === "queue.task");
-    assert.equal(runs.length, 1);
-    assert.equal(runs[0]!.transaction, "run");
-    assert.deepEqual(runs[0]!.tags, { service: "core" });
-    assert.equal(runs[0]!.contexts.trace.data.surface, "web");
-    assert.equal(runs[0]!.contexts.trace.data.origin, "human");
-    assert.equal(runs[0]!.contexts?.trace?.status, "ok");
-    assert.equal(runs[0]!.measurements?.queue_wait?.unit, "millisecond");
-    assert.ok(runs[0]!.measurements!.queue_wait!.value >= 0);
-    const stopped = await built.runs.enqueue({ sessionId: "private-thread-2", request: run.request });
-    const stoppedClaim = await built.runs.claim("worker", 10_000);
-    assert.equal(stoppedClaim?.id, stopped.run.id);
-    await built.runs.complete(stopped.run.id, stoppedClaim!.leaseToken!, { status: "silent", stopped: true });
-    await settle(5);
-    const cancelled = captured.filter((event) => event.contexts?.trace?.op === "queue.task").at(-1)!;
-    assert.equal(cancelled.contexts.trace.status, "cancelled");
+    await fetch(`${base}/v1/no-such-route/private-segment-9f3a/deep`, { method: "POST" });
+    const coreRequests = () =>
+      captured.filter(
+        (event) => event.contexts?.trace?.op === "http.server" && event.contexts.trace.data["http.route"] !== undefined,
+      );
+    await settle(() => coreRequests().length >= 2);
+    const requests = coreRequests();
+    assert.deepEqual(
+      requests.map((event) => event.transaction),
+      ["GET /v1/sessions/:id"],
+      "health checks and 404s are not traced",
+    );
+    assert.doesNotMatch(JSON.stringify(requests), /private/);
+    for (const event of requests) {
+      assert.equal(event.tags?.service, "core");
+      assert.equal(event.request, undefined);
+      assert.match(event.contexts.trace.trace_id, /^[a-f0-9]{32}$/);
+    }
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+test("a queued run continues the producer's trace and records time to first token", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "timing-run-")) }));
+  captured.length = 0;
+  let producerTrace = "";
+  const result = await Sentry.startSpan({ name: "producer", op: "test" }, (span) => {
+    producerTrace = span.spanContext().traceId;
+    return built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "dm:U1:timing" },
+      text: "private prompt",
+    });
+  });
+  assert.equal(result.status, "ok");
+  await settle(() => captured.some((event) => event.contexts?.trace?.op === "queue.process"));
+  const run = captured.find((event) => event.contexts?.trace?.op === "queue.process")!;
+  assert.ok(run, "the run attempt is its own transaction");
+  assert.equal(run.transaction, "run");
+  assert.equal(run.contexts.trace.trace_id, producerTrace);
+  assert.equal(run.contexts.trace.data["qm.surface"], "test");
+  assert.equal(run.contexts.trace.data["qm.origin"], "direct");
+  assert.equal(typeof run.contexts.trace.data["messaging.message.id"], "string");
+  assert.equal(run.measurements?.time_to_first_token?.unit, "millisecond");
+  assert.doesNotMatch(JSON.stringify(run), /private prompt/);
+  const stored = await built.runs.get(run.contexts.trace.data["messaging.message.id"]);
+  assert.equal(stored?.request.trace?.sentryTrace.split("-")[0], producerTrace);
+});
+
+test("a run stores the request's trace context, and never a swarm's", async () => {
+  const request = {
+    actor: { id: "U1", type: "internal" as const },
+    conversation: { kind: "dm" as const, threadRef: "dm:U1:carrier", audience: [] },
+    origin: { kind: "human" as const },
+    surface: "test",
+    text: "hello",
+    trace: { sentryTrace: "0123456789abcdef0123456789abcdef-0123456789abcdef-1" },
+  };
+  assert.equal(withTraceCarrier(request).trace, undefined, "a copied trace is dropped outside a request");
+  await Sentry.startSpan({ name: "producer", op: "test" }, (span) => {
+    assert.equal(withTraceCarrier(request).trace?.sentryTrace.split("-")[0], span.spanContext().traceId);
+    assert.equal(withTraceCarrier({ ...request, swarm: { id: "s" } } as never).trace, undefined);
+  });
 });

@@ -15,7 +15,7 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
-import { createGrindMeter } from "./grind.ts";
+import { createGrindMeter, meterGrindSpend } from "./grind.ts";
 import {
   bankGoalTurn,
   enforceGoal,
@@ -44,8 +44,15 @@ async function runTurnEnforcingGoal(
 ): Promise<HarnessTurnResult> {
   const emitted: SessionEntry[] = [];
   let saved: GoalRecord | undefined;
+  const startedAt = Date.now();
+  const meter = createGrindMeter(startedAt);
   const dispatched: HarnessTurnInput = {
     ...input,
+    goalMeter: meter,
+    recordLlmRequest: (rec, signal) => {
+      meterGrindSpend(meter, rec.usage ?? null);
+      return input.recordLlmRequest?.(rec, signal);
+    },
     emit: async (entry) => {
       const stored = await input.emit(entry);
       emitted.push(stored);
@@ -56,8 +63,6 @@ async function runTurnEnforcingGoal(
       await input.saveGoal?.(goal);
     },
   };
-  const startedAt = Date.now();
-  const meter = createGrindMeter(startedAt);
   let result = await adapter.turns.runTurn(dispatched);
   const goal: GoalRecord | null = saved ?? input.goal ?? null;
   if (!goal) return result;

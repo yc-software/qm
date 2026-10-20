@@ -1,3 +1,4 @@
+import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
@@ -39,7 +40,6 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -74,6 +74,7 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
 import type { ChannelPolicyStore } from "../surface-cache/channel-policy-store.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
+import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
@@ -106,6 +107,7 @@ export interface ServerDeps {
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
   slackInstallationFetch?: typeof fetch;
+  slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
@@ -154,11 +156,11 @@ export interface ServerDeps {
   screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
   errors?: ErrorLog;
-  metrics?: MetricsSink;
   crons?: CronStore;
   loops?: LoopServiceDeps;
   runs?: RunStore;
   signals?: RunSignalStore;
+  sessionStateBus?: SessionStateBus;
   workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   fileUploads?: DirectFileUploads;

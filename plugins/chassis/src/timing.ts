@@ -21,7 +21,7 @@ export interface TimingResult {
 
 export type TimingSdk = Pick<typeof Sentry, "setMeasurement">;
 const SPAN_STATUS_OK = 1;
-const SPAN_STATUS_ERROR = 2;
+export const SPAN_STATUS_ERROR = 2;
 
 export function parseSampleRate(value: string | undefined): number {
   const rate = Number(value ?? 0);

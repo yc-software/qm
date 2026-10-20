@@ -187,11 +187,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
           bodies.delete(slug);
           await retirePorterBody(existing.sb, true);
         }
-        try {
-          onStatus?.("Starting your computer…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Starting your computer…");
         const ref = await createBody(slug, egressMode, { mountPath: homeDir, id: volume.id });
         scopeByBody.set(ref.name, scope);
         return { name: ref.name, coldStart: volume.created };
@@ -301,10 +297,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
+      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,

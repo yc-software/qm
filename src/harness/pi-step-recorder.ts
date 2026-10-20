@@ -16,11 +16,21 @@ type TurnEntry = Parameters<HarnessTurnInput["emit"]>[0];
 type Persist = (write: () => Promise<unknown>) => void;
 type Positioned = { index: number; block: TextContent };
 
+function jsonbKeyOrder(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonbKeyOrder);
+  if (!value || typeof value !== "object") return value;
+  const keys = Object.keys(value).sort(
+    (a, b) => Buffer.byteLength(a) - Buffer.byteLength(b) || Buffer.compare(Buffer.from(a), Buffer.from(b)),
+  );
+  return Object.fromEntries(keys.map((key) => [key, jsonbKeyOrder((value as Record<string, unknown>)[key])]));
+}
+
 function toolCallWire(payload: Record<string, unknown>, block: ToolCall): { wire?: ToolCallWire } {
   const { type: _type, id: _id, name, arguments: args, ...extra } = block;
   const recorded = recordedToolArguments(payload);
   const argumentsJson = JSON.stringify(args);
-  const reproducible = argumentsJson === JSON.stringify(recorded);
+  const reproducible =
+    argumentsJson === JSON.stringify(recorded) && argumentsJson === JSON.stringify(jsonbKeyOrder(recorded));
   const wire: ToolCallWire = {
     ...extra,
     ...(name !== payload.tool ? { name } : {}),
@@ -61,12 +71,13 @@ function resultText(content: ToolResultMessage["content"]): string {
 
 export type StepRecorder = ReturnType<typeof createStepRecorder>;
 
-export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeLabel">, persist: Persist) {
+export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeLabel" | "shutdown">, persist: Persist) {
   const calls = new Map<string, { step: ReplayStep; block: ToolCall }>();
   const called = new Set<string>();
   const executing = new Map<string, RecordedEntry>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
+  let streamingStep: string | undefined;
   const write = (entry: RecordedEntry) => persist(() => turn.emit(entry as TurnEntry));
   const flush = (): void => {
     if (!pending) return;
@@ -122,7 +133,8 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
     assistant(message: AssistantMessage): void {
       flush();
       const { api, provider, model, stopReason } = message;
-      const step: ReplayStep = { id: randomUUID(), api, provider, model, stopReason };
+      const step: ReplayStep = { id: streamingStep ?? randomUUID(), api, provider, model, stopReason };
+      streamingStep = undefined;
       last = step;
       const parts: Positioned[] = [];
       message.content.forEach((block, index) => {
@@ -135,6 +147,12 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
       });
       pending = { step, parts };
       if (message.content.some((block) => block.type === "toolCall")) flush();
+    },
+    startStreaming(): void {
+      streamingStep = undefined;
+    },
+    streamingStepId(): string {
+      return (streamingStep ??= randomUUID());
     },
     toolReturned: recordResult,
     toolResult(message: ToolResultMessage): void {

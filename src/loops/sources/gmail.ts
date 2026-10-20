@@ -1,4 +1,5 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import { isAccountType } from "../../connectors/oauth.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -32,11 +33,7 @@ function parseGmailMeta(v: unknown): GmailMeta | undefined {
   if (!isObj(v)) return undefined;
   const threadId = clip(v.threadId, 200);
   if (!threadId) return undefined;
-  if (
-    v.accountType !== undefined &&
-    (typeof v.accountType !== "string" || !["default", "personal", "company"].includes(v.accountType))
-  )
-    return undefined;
+  if (v.accountType !== undefined && !isAccountType(v.accountType)) return undefined;
   const accountType = v.accountType as GmailMeta["accountType"];
   const messageId = clipOpt(v.messageId, 200);
   const rfcMessageId = clipOpt(v.rfcMessageId, 400);

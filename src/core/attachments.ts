@@ -225,21 +225,8 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
   return `${lead}\n${list}`;
 }
 
-const FILE_EVENT_KIND = "file_event";
-
-export interface FileEventPayload {
-  kind: typeof FILE_EVENT_KIND;
-  direction: FileDirection;
-  issues: string[];
-  text: string;
-}
-
-export function fileEventPayload(direction: FileDirection, issues: string[]): FileEventPayload {
-  const lead =
-    direction === "in"
-      ? `Files received this turn that did not reach ./${INBOX_DIR}/`
-      : "Files the agent tried to send that did not go out";
-  return { kind: FILE_EVENT_KIND, direction, issues, text: `${lead}: ${issues.join("; ")}` };
+export function inboundIssuesNote(issues: readonly string[]): string {
+  return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
 
 export function inboundIssueList(opts: {

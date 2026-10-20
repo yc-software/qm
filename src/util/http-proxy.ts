@@ -1,4 +1,4 @@
-const HOP_BY_HOP = new Set([
+export const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
   "keep-alive",
   "proxy-authenticate",

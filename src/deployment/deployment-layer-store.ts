@@ -562,7 +562,12 @@ export function createDeploymentLayerStore(opts: {
           }
           for (const [path, owner] of await activeBundleClaims(existing)) claimed.set(path, owner);
           for (const manifest of manifests) {
-            const clash = foreignSkillCollision(existing, opts.scopeId, manifest.name, LAYER_CREATED_BY);
+            const clash = foreignSkillCollision(
+              existing,
+              opts.scopeId,
+              manifest.name,
+              (skill) => skill.createdBy === LAYER_CREATED_BY,
+            );
             if (clash) {
               throw new DeploymentLayerValidationError(
                 `deployment layer skill "${manifest.name}" collides with an existing skill created by ${clash.createdBy} — rename it or remove the colliding skill`,

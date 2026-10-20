@@ -84,5 +84,5 @@ async function backgroundWork(ctx: ApiCtx): Promise<void> {
 
 export const backgroundWorkRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/background-work", auth: "source", handle: backgroundWork },
-  { method: "POST", path: "/v1/background-work", auth: "source", handle: backgroundWork },
+  { method: "POST", path: "/v1/background-work", actor: "system", auth: "source", handle: backgroundWork },
 ];

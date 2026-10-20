@@ -95,6 +95,7 @@ export interface ChatSurface {
     anchorSeq?: number | null,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
   ): void;
+  attachApprovalsWhenLoaded(sessionId: string, approvals: Promise<{ approvals: PendingApproval[] } | null>): void;
   mountLoadingPane(): () => boolean;
   mountLoadError(retry: () => void): void;
   scrollToBottom(): void;
@@ -137,6 +138,7 @@ export interface ComposerSurface {
   state: ComposerState;
   composerForm(agent: Agent, header?: TemplateResult | typeof nothing): TemplateResult;
   queuedStrip(agent: Agent): TemplateResult | typeof import("lit").nothing;
+  waitingSteers(agent: Agent): QueuedRun[];
   queuedRunsFor(threadRef: string | null): QueuedRun[];
   setQueuedRuns(threadRef: string, runs: QueuedRun[]): void;
   resetComposer(): void;

@@ -21,7 +21,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   environmentNote,
   inboundIssueList,
-  fileEventPayload,
+  inboundIssuesNote,
   inboundManifest,
   materializeInbound,
   withoutAlreadyIngested,
@@ -120,16 +120,11 @@ test("inboundIssueList is empty when nothing failed, and names each problem othe
   assert.doesNotMatch(joined, /your own words|NOT received|⚠️|\(note:/);
 });
 
-test("fileEventPayload tags direction and renders admin-readable text via the kind", () => {
-  const inbound = fileEventPayload("in", ["x.png — too many files in one message"]);
-  assert.equal(inbound.kind, "file_event");
-  assert.equal(inbound.direction, "in");
-  assert.match(inbound.text, /did not reach \.\/inbox\//);
-  assert.match(inbound.text, /x\.png/);
-  const outbound = fileEventPayload("out", ["chart.png was too large to send"]);
-  assert.equal(outbound.direction, "out");
-  assert.match(outbound.text, /did not go out/);
-  assert.match(outbound.text, /chart\.png/);
+test("inboundIssuesNote names the files that did not reach the inbox and is empty without issues", () => {
+  assert.equal(inboundIssuesNote([]), "");
+  const text = inboundIssuesNote(["x.png — too many files in one message"]);
+  assert.match(text, /did not reach \.\/inbox\//);
+  assert.match(text, /x\.png/);
 });
 
 test("inboundManifest attributes each file to its poster when the author is known", () => {

@@ -146,3 +146,43 @@ test("stopping a steered run preserves earlier singleton tools and labels only i
     await h.close();
   }
 });
+
+test("a steer the model has not read shows once in the transcript, then once inside the work", async () => {
+  const entries = [
+    { seq: 0, type: "user", createdAt: 0, payload: { text: "Original request" } },
+    { seq: 1, type: "tool_call", createdAt: 1000, payload: { tool: "execute", callId: "a", command: "echo a" } },
+    { seq: 2, type: "tool_result", createdAt: 2000, payload: { tool: "execute", callId: "a", code: 0 } },
+  ];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const conv = h.visibleConversation();
+    let waiting = [{ runId: "q1", text: "Use the smaller sample" }];
+    conv.composer.waitingSteers = () => waiting;
+    conv.drawActiveChat();
+    const row = document.querySelector(".message-stack > .waiting-steer")!;
+    assert.ok(row);
+    assert.equal(document.querySelectorAll(".inline-steer").length, 1);
+    assert.ok(row.querySelector(".steered-row .user-bubble"));
+    assert.equal(
+      row.querySelector<HTMLElement & { content: string }>("qm-markdown")?.content,
+      "Use the smaller sample",
+    );
+    assert.equal(document.querySelector(".queued-chip"), null);
+    waiting = [];
+    conv.state.agent!.state.messages.push({
+      role: "user",
+      content: "Use the smaller sample",
+      steered: true,
+      entrySeq: 3,
+      timestamp: 3000,
+    } as never);
+    conv.drawActiveChat();
+    assert.equal(document.querySelectorAll(".waiting-steer").length, 0);
+    assert.equal(document.querySelectorAll(".message-stack > .steered-row").length, 0);
+  } finally {
+    await h.close();
+  }
+});

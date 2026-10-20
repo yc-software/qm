@@ -1,46 +1,62 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { filterEmoji, groupEmoji, matchesQuery } from "../src/emoji-picker.ts";
-import { EMOJI_GROUPS, EMOJI_ROWS } from "../src/emoji-data.ts";
+import { charForName, EMOJI_ROWS, filterEmoji } from "../src/emoji-picker.ts";
+import { createServer } from "vite";
 
-test("the curated emoji map is built with short names, unicode chars, and known groups", () => {
-  assert.ok(EMOJI_ROWS.length > 500, "the curated set is substantial");
-  const groups = new Set(EMOJI_GROUPS);
-  for (const row of EMOJI_ROWS.slice(0, 200)) {
-    assert.equal(typeof row.n, "string");
-    assert.ok(row.n.length > 0);
-    assert.equal(typeof row.c, "string");
-    assert.ok(row.c.length > 0);
-    assert.ok(groups.has(row.g), `every row belongs to a known group (${row.g})`);
-  }
-  const eyes = EMOJI_ROWS.find((r) => r.n === "eyes");
-  assert.ok(eyes, "a common emoji resolves by short name");
-  assert.equal(eyes!.c, "👀");
+test("Slack shortcodes resolve to the emoji users see in Slack", () => {
+  const expected: Record<string, string> = {
+    "+1": "👍",
+    thumbsup: "👍",
+    "-1": "👎",
+    eyes: "👀",
+    white_check_mark: "✅",
+    heavy_check_mark: "✔️",
+    x: "❌",
+    warning: "⚠️",
+    heart: "❤️",
+    tada: "🎉",
+    fire: "🔥",
+    rocket: "🚀",
+    joy: "😂",
+    sweat_smile: "😅",
+    "sweat-smile": "😅",
+    pray: "🙏",
+    raised_hands: "🙌",
+    clap: "👏",
+    hourglass_flowing_sand: "⏳",
+    thinking_face: "🤔",
+    "100": "💯",
+    us: "🇺🇸",
+    "flag-us": "🇺🇸",
+    "flag-england": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+    calendar: "📆",
+    email: "✉️",
+  };
+  for (const [name, char] of Object.entries(expected)) assert.equal(charForName(name), char, `:${name}:`);
+  assert.equal(charForName("not_an_emoji"), null);
+  assert.equal(charForName("skin-tone-2"), null);
 });
 
-test("search filters by short-name substring and tolerates surrounding colons", () => {
-  const smile = filterEmoji(EMOJI_ROWS, "smile");
-  assert.ok(smile.length > 0);
-  assert.ok(smile.every((r) => matchesQuery(r, "smile")));
+test("search matches names and aliases in Slack's order, ignoring colons", () => {
+  const smile = filterEmoji(EMOJI_ROWS, "smile").map((r) => r.n);
+  assert.deepEqual(smile.slice(0, 3), ["smiley", "smile", "sweat_smile"]);
   assert.deepEqual(
     filterEmoji(EMOJI_ROWS, ":smile:").map((r) => r.n),
-    smile.map((r) => r.n),
+    smile,
   );
-  assert.equal(filterEmoji(EMOJI_ROWS, "   ").length, EMOJI_ROWS.length, "a blank query keeps everything");
+  assert.ok(filterEmoji(EMOJI_ROWS, "thumbsup").some((r) => r.c === "👍"));
   assert.equal(filterEmoji(EMOJI_ROWS, "zzzznotanemoji").length, 0);
 });
 
-test("aliases are searchable", () => {
-  const withAlias = EMOJI_ROWS.find((r) => (r.a?.length ?? 0) > 0);
-  assert.ok(withAlias, "the dataset carries aliases");
-  const alias = withAlias!.a![0]!;
-  assert.ok(filterEmoji(EMOJI_ROWS, alias).some((r) => r.n === withAlias!.n));
-});
-
-test("grouping keeps the configured group order and drops empty groups", () => {
-  const grouped = groupEmoji(filterEmoji(EMOJI_ROWS, "smile"), EMOJI_GROUPS);
-  const order = grouped.map((g) => g.group);
-  const expected = EMOJI_GROUPS.filter((g) => order.includes(g));
-  assert.deepEqual(order, expected);
-  for (const g of grouped) assert.ok(g.rows.length > 0);
+test("the web bundle's prebuilt emoji table resolves every shortcode exactly as the full dataset does", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
+  try {
+    const bundled = await server.ssrLoadModule("/src/emoji-picker.ts");
+    const table = await server.transformRequest("/src/emoji-table.ts", { ssr: true });
+    assert.ok(!table!.code.includes("emoji-datasource"));
+    assert.deepEqual(bundled.EMOJI_ROWS, EMOJI_ROWS);
+    for (const row of EMOJI_ROWS) for (const name of [row.n, ...row.a]) assert.equal(bundled.charForName(name), row.c);
+  } finally {
+    await server.close();
+  }
 });

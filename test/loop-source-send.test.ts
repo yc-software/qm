@@ -146,10 +146,22 @@ test("a missing connector reads as not_connected, not an exception", async () =>
   if (!slackResult.ok) assert.equal(slackResult.reason, "not_connected");
 });
 
-test("slack replies thread on channel messages and stay inline in DMs", () => {
+test("slack replies thread on channel messages and stay inline in DMs and group DMs", () => {
   assert.equal(slackReplyThreadTs(slackItem), "111.222");
-  assert.equal(slackReplyThreadTs(item("slack", { slack: { channelId: "D9", ts: "3.4" } })), undefined);
-  assert.equal(slackReplyThreadTs(item("slack", { slack: { channelId: "D9", ts: "3.4", threadTs: "1.2" } })), "1.2");
+  assert.equal(
+    slackReplyThreadTs(item("slack", { slack: { channelId: "G9", ts: "3.4", isDirectMessage: true } })),
+    undefined,
+  );
+  assert.equal(
+    slackReplyThreadTs(item("slack", { slack: { channelId: "D9", ts: "3.4", isDirectMessage: false } })),
+    "3.4",
+  );
+  assert.equal(
+    slackReplyThreadTs(
+      item("slack", { slack: { channelId: "D9", ts: "3.4", threadTs: "1.2", isDirectMessage: true } }),
+    ),
+    "1.2",
+  );
 });
 
 test("slack send posts as the user through the slack client", async () => {
@@ -268,7 +280,7 @@ test("adapters reject items missing the fields their send path needs", () => {
   );
   assert.deepEqual(
     slackAdapter.parse({ source: "slack", sourceKey: "k", title: "t", from: "f", snippet: "s", receivedAt: 1 }),
-    { error: "slack items need slack.channelId and slack.ts" },
+    { error: "slack items need slack.channelId, slack.ts and slack.isDirectMessage" },
   );
   assert.deepEqual(slackAdapter.parse({ source: "slack", title: "t" }), { error: "from required" });
 });

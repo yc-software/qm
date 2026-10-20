@@ -401,7 +401,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
       deliveries,
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
-      run: async () => ({ status: "ok", reply: "The keychain ask was approved.\n\n[SILENT]" }) as TurnResult,
+      run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
       owner: "U_ALICE",

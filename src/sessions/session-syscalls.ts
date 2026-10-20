@@ -1,5 +1,4 @@
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { memoryContextPayload, type MemoryContextSnapshot } from "../memory/context-boundary.ts";
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -10,10 +9,9 @@ import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
@@ -186,7 +184,6 @@ type SessionReadResult =
   | { ok: false; message: string };
 
 interface SessionSyscallBinding {
-  memoryContext?: MemoryContextSnapshot;
   session: Session;
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
@@ -516,9 +513,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   return {
     rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
-      const callerTitle = binding.memoryContext
-        ? binding.session.id
-        : binding.session.title?.trim() || "this conversation";
+      const callerTitle = binding.session.title?.trim() || "this conversation";
 
       async function resolveTarget(ref: string): Promise<Session | null> {
         const trimmed = ref.trim();
@@ -566,12 +561,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           ),
         );
         const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
-        return filterHistoryForAudience(
-          (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq))),
-          audience,
-          binding.scopeId,
-          binding.orgScopeId ?? binding.scopeId,
-        );
+        return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {
@@ -612,14 +602,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
                   caller,
                 );
-                if (binding.memoryContext) {
-                  const history = await visibleHistory(sender);
-                  if (
-                    message.sourceEntrySeq !== undefined &&
-                    !history.some((entry) => entry.seq === message.sourceEntrySeq)
-                  )
-                    continue;
-                }
                 if (message.sourceEntrySeq !== undefined) {
                   const viewers = new Set([
                     caller.actor.id,
@@ -1021,16 +1003,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           if (!input.fork && !text)
             return { ok: false, message: "new requires `text`: the new session's first message." };
           if (text && text.length > 16_000) return { ok: false, message: "text exceeds 16000 characters" };
-          if (input.fork && binding.memoryContext) {
-            const entries = await deps.sessions.getEntries(binding.session.id);
-            const checkpoint = entries.map(memoryContextPayload).findLast(Boolean);
-            if (checkpoint?.snapshot.audience !== binding.memoryContext.audience || checkpoint.throughSeq >= 0)
-              return {
-                ok: false,
-                message:
-                  "this conversation's earlier history was shared with a different audience, so it can't be forked from here.",
-              };
-          }
           const out = await conversations
             .start(binding.request.actor.id, {
               scopeId: binding.scopeId,
@@ -1100,8 +1072,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         },
         unattendedGrants: undefined,
       };
-  const memoryContext = (await deps.sessions.getEntries(child.id)).findLast((entry) => memoryContextPayload(entry));
-  const title = memoryContext ? child.id : child.title?.trim() || child.id;
+  const title = child.title?.trim() || child.id;
   const result = run.result;
   let kind: SubagentMailKind;
   let body: string;
@@ -1157,7 +1128,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "background",
     "cancel",
     "shutdown",
-    "queueMs",
     "modelAccount",
     "privateSessionMessage",
     "sessionMessageDepth",
@@ -1166,8 +1136,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "approval",
     "proactiveOpener",
     "redeliveryKey",
-    "intakePreambleMs",
-    "clientSentAt",
     "attachments",
     "inboundNotes",
     "priorTurns",
@@ -1184,7 +1152,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
       const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq && entry.scopeLabel === child.scopeId))
+      if (!visible.some((entry) => entry.seq === outputSeq))
         throw new Error("the current parent audience cannot read this child result");
     }
   }

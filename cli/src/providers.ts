@@ -5,7 +5,19 @@ export type Target = (typeof HOSTING_PROVIDER_IDS)[number];
 export const isTarget = (value: unknown): value is Target =>
   typeof value === "string" && (HOSTING_PROVIDER_IDS as readonly string[]).includes(value);
 
-export type SandboxBackendId = "local" | "sprites" | "aws" | "agent37" | "superserve" | "e2b";
+export const SANDBOX_BACKENDS = {
+  local: "Docker containers on the deployment host",
+  sprites: "Fly Sprites",
+  aws: "Lambda MicroVM sandboxes",
+  agent37: "",
+  superserve: "Superserve sandboxes",
+  e2b: "E2B sandboxes",
+} as const;
+
+export type SandboxBackendId = keyof typeof SANDBOX_BACKENDS;
+
+export const isSandboxBackendId = (value: unknown): value is SandboxBackendId =>
+  typeof value === "string" && Object.hasOwn(SANDBOX_BACKENDS, value);
 
 export interface SandboxBackendPolicy {
   /** Sandbox backends this hosting target can run. */

@@ -119,7 +119,6 @@ export const adminOperations = {
     limit,
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
-  metrics: operation("Read turn metrics.", "GET", "/metrics", scope),
   egress: operation("Read outbound-destination audit.", "GET", "/egress", scope),
   retention: operation("Read usage and retention.", "GET", "/retention"),
   spend: operation("Read spend for a date range.", "GET", "/spend", {

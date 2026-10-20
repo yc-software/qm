@@ -403,41 +403,6 @@ test("session reads hide history outside the viewer's participant tenure", async
   assert.doesNotMatch(view.rendered, /hidden-before-membership/);
 });
 
-test("shared session reads require every audience member to see each entry", async () => {
-  const r = await rig();
-  const other: Principal = { id: "U2", type: "internal" };
-  const sharedScope = scopeId("group", "G1");
-  const shared = await r.sessions.getOrCreateByThread("group:G1", "group", sharedScope);
-  await r.sessions.addParticipant(shared.id, actor.id);
-  await r.sessions.addParticipant(shared.id, other.id);
-  const { lease } = await r.sessions.acquireLease(shared.id);
-  assert.ok(lease);
-  await r.sessions.append(lease, { type: "assistant", payload: { text: "private-only" }, scopeLabel: scope });
-  await r.sessions.append(lease, { type: "assistant", payload: { text: "shared-visible" }, scopeLabel: sharedScope });
-  await r.sessions.releaseLease(lease);
-  const factory = createSessionSyscalls({
-    mailbox: r.mailbox,
-    sessions: r.sessions,
-    runs: r.runs,
-    signals: r.signals,
-    maxAttempts: 3,
-  });
-  const tool = factory.forTurn({
-    session: shared,
-    scopeId: sharedScope,
-    orgScopeId: scopeId("org", "example"),
-    request: {
-      surface: "web",
-      actor,
-      conversation: { kind: "group", threadRef: shared.threadRef, audience: [actor, other] },
-    },
-  });
-  const view = await tool.read({ target: shared.id });
-  assert.ok(view.ok && view.mode === "transcript");
-  assert.doesNotMatch(view.rendered, /private-only/);
-  assert.match(view.rendered, /shared-visible/);
-});
-
 test("child runs retain the managed roster and read-only floor", async () => {
   const r = await rig();
   const tool = createSessionSyscalls({
@@ -1463,12 +1428,9 @@ for (const addressed of [true, false]) {
       runLeaseToken: "old-lease",
       runStartedAt: 10,
       finalAttempt: true,
-      queueMs: 50,
       approval: { requestId: "old-approval", approved: true },
       redeliveryKey: "old-envelope",
       proactiveOpener: true,
-      intakePreambleMs: 20,
-      clientSentAt: 5,
       attachments: [{ name: "old.txt", mimetype: "text/plain", sizeBytes: 1, blobId: "old-blob" }],
       inboundNotes: ["old input"],
       priorTurns: [],
@@ -1860,38 +1822,6 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
     assert.equal(out.ok, true, JSON.stringify(out));
-  const unshareable =
-    "this conversation's earlier history was shared with a different audience, so it can't be forked from here.";
-  const checkpoint = async (audience: string, throughSeq: number) => {
-    const { lease } = await sessions.acquireLease(room.id);
-    assert.ok(lease);
-    await sessions.append(lease, {
-      type: "user",
-      scopeLabel: scope,
-      payload: { text: "hi", memoryContext: { kind: "memory_context", snapshot: { audience }, throughSeq } },
-    });
-    await sessions.releaseLease(lease);
-  };
-  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
-    ok: false,
-    message: unshareable,
-  });
-  await checkpoint("before", 0);
-  assert.deepEqual(await forTurn(true, { memory: "before" }).start!({ fork: true }), {
-    ok: false,
-    message: unshareable,
-  });
-  await checkpoint("before", -1);
-  const sameAudience = forTurn(true, { memory: "before" });
-  assert.equal((await sameAudience.start!({ fork: true })).ok, true);
-  const listedTitles = await sameAudience.list!();
-  assert.ok(listedTitles.ok);
-  assert.ok(listedTitles.sessions.some((s) => s.title === "room"));
-  const newAudience = forTurn(true, { memory: "after" });
-  assert.deepEqual(await newAudience.start!({ fork: true }), { ok: false, message: unshareable });
-  const hidden = await newAudience.list!();
-  assert.ok(hidden.ok);
-  assert.ok(hidden.sessions.some((s) => s.title === "room"));
   const slack = forTurn(true, { surface: "slack" });
   for (const out of [
     await slack.list!(),
@@ -1903,7 +1833,7 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 4);
+  assert.equal(started.length, 3);
 });
 
 test("stopping a session tree tells every stopped run who stopped it", async () => {

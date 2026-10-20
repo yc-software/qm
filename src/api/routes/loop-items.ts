@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
-import { canonicalJson } from "../../util/objects.ts";
+import { isAccountType } from "../../connectors/oauth.ts";
+import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   canAdministerLoop,
@@ -26,7 +27,6 @@ import {
   INBOX_LEDGER_MAX_ITEMS,
   INBOX_LEDGER_RETENTION_MS,
   INBOX_SYNC_DEFAULT_EVERY_MS,
-  INBOX_SYNC_TASK_VERSION,
 } from "../../loops/inbox-loop.ts";
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
@@ -299,7 +299,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
   const draftChanged = (): void =>
     sendJson(ctx.res, 409, {
-      error: "conflict",
+      error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
 
@@ -478,7 +478,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
-    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+    return sendJson(ctx.res, 409, {
+      error: "draft_changed",
+      message: "the draft changed; review it before continuing",
+    });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
@@ -495,18 +498,11 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
 }
 
-function syncTaskVersionOf(cron: Cron | null): number | null {
-  const m = /Inbox sync v(\d+)\./.exec(cron?.action ?? "");
-  return m ? Number(m[1]) : null;
-}
-
 export function cronSummary(cron: Cron | null): {
   id: string;
   enabled: boolean;
   schedule: Cron["schedule"];
   lastFiredAt?: number;
-  taskVersion: number | null;
-  currentTaskVersion: number;
 } | null {
   if (!cron) return null;
   return {
@@ -514,8 +510,6 @@ export function cronSummary(cron: Cron | null): {
     enabled: cron.enabled,
     schedule: cron.schedule,
     ...(cron.lastFiredAt !== undefined ? { lastFiredAt: cron.lastFiredAt } : {}),
-    taskVersion: syncTaskVersionOf(cron),
-    currentTaskVersion: INBOX_SYNC_TASK_VERSION,
   };
 }
 
@@ -547,12 +541,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const accountType = body.accountType === undefined ? "default" : body.accountType;
   const to = addressList(body.to === undefined ? [] : [body.to]);
   const cc = addressList(body.cc === undefined ? [] : [body.cc]);
-  if (
-    typeof accountType !== "string" ||
-    !["default", "personal", "company"].includes(accountType) ||
-    to === null ||
-    cc === null
-  )
+  if (!isAccountType(accountType) || to === null || cc === null)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
   const payload = {
     title: text("subject", 300),
@@ -624,6 +613,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
         const source = current.sources![0]!;
+        const task = renderSourceInboxTask(loop.id, source);
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({
@@ -634,14 +624,14 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
             destination: principalDestination(owner, owner),
             schedule: { everyMs },
             title: `${loop.name} sync`,
-            action: renderSourceInboxTask(loop.id, source),
+            action: task,
           });
           await deps.store.update(loop.id, { cronId: cron.id });
         }
         if (cron) {
-          if (enable && syncTaskVersionOf(cron) !== INBOX_SYNC_TASK_VERSION)
+          if (enable && cron.action !== task)
             await ctx.app.updateCron(cron.id, {
-              action: renderSourceInboxTask(loop.id, source),
+              action: task,
               title: `${loop.name} sync`,
             });
           await ctx.app.setCronEnabled(cron.id, enable);
@@ -678,22 +668,24 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-  { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-  { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
-  { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
   { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/action",
-    auth: "either",
-    handle: serializeItemAction(actOnItem),
-  },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/followup",
-    auth: "either",
-    handle: serializeItemAction(followUpOnItem),
-  },
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
+    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+    { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
+    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/action",
+      auth: "either",
+      handle: serializeItemAction(actOnItem),
+    },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/followup",
+      auth: "either",
+      handle: serializeItemAction(followUpOnItem),
+    },
+  ]),
 ];

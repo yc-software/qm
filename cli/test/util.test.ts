@@ -3,15 +3,8 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  canonicalJson,
-  capture,
-  runInheritAsync,
-  flyBin,
-  isInvalidSecret,
-  readEnvFile,
-  writeEnvValue,
-} from "../src/util.ts";
+import { canonicalJson } from "../src/canonical-json.ts";
+import { capture, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
 
 test("capture accepts CLI output larger than Node's one-megabyte default", () => {
   const output = capture(process.execPath, ["-e", 'process.stdout.write("x".repeat(2 * 1024 * 1024))']);
@@ -52,6 +45,16 @@ test("canonicalJson sorts keys and matches JSON.stringify's undefined semantics"
   for (const value of [null, 0, "s", true, [], {}]) {
     assert.equal(canonicalJson(value), JSON.stringify(value));
   }
+  assert.equal(canonicalJson(undefined), "");
+  assert.equal(canonicalJson({ b: new Date(0), a: 1 }), '{"a":1,"b":"1970-01-01T00:00:00.000Z"}');
+});
+
+test("readEnvFile keeps everything after the first '=' verbatim and skips bad keys", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, "x.env");
+  writeFileSync(file, "GOOD=a=b=c\n1BAD=x\n# comment\nEMPTY=\n");
+  assert.deepEqual(Object.fromEntries(readEnvFile(file)), { GOOD: "a=b=c", EMPTY: "" });
 });
 
 test("readEnvFile preserves hashes in unquoted values", (t) => {

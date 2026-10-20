@@ -1,8 +1,7 @@
 import { html, nothing, render } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
-import { EMOJI_ROWS, type EmojiRow } from "./emoji-data";
-import { filterEmoji, rowForName } from "./emoji-picker";
+import { EMOJI_ROWS, filterEmoji, rowForName, type EmojiRow } from "./emoji-picker";
 
 export function emojiToken(
   value: string,

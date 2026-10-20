@@ -135,9 +135,8 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const config = createMemoryConfigStore("org");
-  config.setApprovedHarnesses(["pi", "claude"]);
-  config.setInteractiveFastMode(true);
-  await config.flushScope("org:org");
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
     config,
     runtime: createRuntimeService(

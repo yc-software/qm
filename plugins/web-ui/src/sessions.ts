@@ -35,7 +35,6 @@ import {
 } from "lucide";
 import {
   api,
-  attachPendingApprovals,
   fetchSessionApprovals,
   fetchTranscript,
   currentEarlierCount,
@@ -72,8 +71,9 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
@@ -196,6 +196,7 @@ export function resetSessionsState(): void {
   sessionPatchVersions.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
+  listCurrent = false;
   listRequestedAt = 0;
   sessionsRefreshRunning = false;
   queuedSessionsRefresh = null;
@@ -298,31 +299,6 @@ export function groupDmTitle(s: CoreSession): TemplateResult | string {
 
 export function sessionTitle(s: CoreSession): string {
   return s.title && s.title.trim() ? s.title : defaultSessionTitle(s);
-}
-
-export function slackLogo(size = 13): TemplateResult {
-  return html`<svg
-    class="slack-logo"
-    width=${size}
-    height=${size}
-    viewBox="0 0 122.8 122.8"
-    fill="currentColor"
-    aria-hidden="true"
-    focusable="false"
-  >
-    <path
-      d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"
-    />
-    <path
-      d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z"
-    />
-    <path
-      d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"
-    />
-    <path
-      d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"
-    />
-  </svg>`;
 }
 
 function visibleSessions(): CoreSession[] {
@@ -801,7 +777,7 @@ function isActiveRow(s: CoreSession): boolean {
 }
 
 function chatPageRow(s: CoreSession): TemplateResult {
-  const readOnly = !s.canContinue;
+  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const color = displaySessionColor(s.color);
   return html`
     <div class="list-row chat-row ${color ? "colored" : ""}" style=${color ? `--session-color:${color}` : nothing}>
@@ -817,7 +793,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
         <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
-          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : nothing}
+          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
           <span class="chat-row-arrow" aria-hidden="true">${icon(ChevronRight, 16)}</span>
@@ -958,7 +934,7 @@ function armMidnightRefresh(): void {
 
 function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   const surface = surfaceOf(s);
-  if (surface === "slack") return html`<span class="surface-glyph">${slackLogo(12)}</span>`;
+  if (surface === "slack") return html`<span class="surface-glyph">${slackMark(12, true)}</span>`;
   if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
   return nothing;
 }
@@ -978,7 +954,7 @@ function sessionRow(s: CoreSession, projectChild = false): TemplateResult {
   const untitledProjectChild = projectChild && !s.title?.trim();
   let title = sessionTitle(s);
   if (untitledProjectChild) title = surfaceOf(s) === "web" ? "Web chat" : "New chat";
-  const readOnly = !s.canContinue;
+  const readOnly = surfaceOf(s) !== "slack" && !s.canContinue;
   const surface = surfaceOf(s);
   const context = projectChild ? null : rowContext(s);
   const working = sessionWorking(s);
@@ -1605,8 +1581,8 @@ async function refreshSessionTitle(s: CoreSession): Promise<void> {
       );
     }
     renderList();
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("web-ui: regenerate session title", e);
   } finally {
     await refreshSessions({ silent: true });
     refreshingTitleIds.delete(s.id);
@@ -1622,7 +1598,8 @@ async function persistSessionPatch(id: string, patch: SessionPatch): Promise<voi
   try {
     await request;
     renderList();
-  } catch {
+  } catch (e) {
+    swallow("web-ui: save session change", e);
     if (sessionPatchGeneration === generation) await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
   }
 }
@@ -1682,9 +1659,11 @@ let queuedSessionsRefresh: SessionsRefreshOptions | null = null;
 let sessionsRefreshRunning = false;
 let listRequestedAt = 0;
 let listDiscards = 0;
+let listCurrent = false;
 const LIST_STALL_MS = 10_000;
 
 export function refreshSessionsOnOpen(): void {
+  if (listCurrent) return;
   const joinable =
     sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
   if (!joinable) {
@@ -1754,10 +1733,12 @@ async function runSessionsRefresh(
     }
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list, openConversationIds());
     sessionsState.loaded = true;
+    listCurrent = true;
     sessionsNotice = "";
     return true;
   } catch (e) {
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
+    listCurrent = false;
     if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
@@ -1822,12 +1803,12 @@ export async function openSessionInto(
   const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
-    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
+    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
-  const [entriesRes, approvalsRes] = await Promise.all([
-    entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries(),
-    continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : Promise.resolve(null),
-  ]);
+  // Approvals load alongside the transcript but never hold up the first draw:
+  // the chat mounts as soon as entries arrive, and cards attach when this settles.
+  const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
+  const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
@@ -1851,9 +1832,9 @@ export async function openSessionInto(
   const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
   const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
   if (continuable) {
-    attachPendingApprovals(messages, approvalsRes?.approvals ?? [], transcriptModel());
     conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
     conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
+    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
   } else {
     conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
   }

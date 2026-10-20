@@ -1,4 +1,5 @@
 import { html, nothing, render } from "lit";
+import { swallowAs } from "../../chassis/src/errors.ts";
 type Data = Record<string, any>;
 const providerLabels: Record<string, string> = {
   anthropic: "Anthropic",
@@ -151,7 +152,7 @@ export class Onboarding {
     const token = ++this.request,
       view = this.context.view();
     const selection = { provider: this.provider, model: this.model, apiKey: this.apiKey };
-    void this.loadRegistry().catch(() => {});
+    void this.loadRegistry().catch(swallowAs("admin: load model registry", undefined));
     const [models, slack, catalog, config] = await Promise.all([
       this.context.api("GET", "/api/model-providers?catalog=cached"),
       this.context.api("GET", "/api/slack-installation"),

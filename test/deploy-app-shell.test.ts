@@ -295,6 +295,32 @@ test("app shell: non-HTML responses stream through untouched even for the owner"
   }
 });
 
+test("app proxy: trace context never reaches a published app", async () => {
+  let seen: Record<string, unknown> = {};
+  const f = await widgetFixture((req, res) => {
+    seen = req.headers;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end("{}");
+  });
+  try {
+    const r = await httpGet(f.port, "/api/data", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      "sentry-trace": "0123456789abcdef0123456789abcdef-0123456789abcdef-1",
+      baggage: "sentry-trace_id=0123456789abcdef0123456789abcdef",
+      traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+      tracestate: "vendor=value",
+      "x-app-header": "kept",
+    });
+    assert.equal(r.status, 200);
+    assert.equal(seen["x-app-header"], "kept");
+    for (const name of ["sentry-trace", "baggage", "traceparent", "tracestate"])
+      assert.equal(seen[name], undefined, name);
+  } finally {
+    await f.close();
+  }
+});
+
 test("app shell: an app cannot plant the owner cookie on its visitors", async () => {
   const f = await widgetFixture((_req, res) => {
     res.writeHead(200, {

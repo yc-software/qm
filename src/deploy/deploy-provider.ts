@@ -6,6 +6,7 @@ export interface DeployProfile {
   managedScaleToZero: boolean;
   inPlaceReconcile?: boolean;
   dataDir?: string;
+  maxAppBytes?: number;
 }
 
 export interface DeployReconcileInput {

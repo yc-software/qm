@@ -6,7 +6,7 @@ import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
 import { isServiceName, serviceDef } from "./services.ts";
-import { canonicalJson } from "./util.ts";
+import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
   "org_id",
@@ -280,7 +280,8 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
   const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
   const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
   const hasDatabaseOverrides = config.aws?.dbInstanceClass !== undefined;
-  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides) return;
+  const hasEgressProxy = Boolean(config.aws?.services["egress-proxy"]);
+  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides && !hasEgressProxy) return;
   const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(tfvarsPath)) return;
   const variablesPath = join(configDir, "infra", "variables.tf");
@@ -298,6 +299,11 @@ export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDi
   if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
     throw new CliError(
       "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",
+    );
+  }
+  if (hasEgressProxy && !/resource\s+"aws_lb"\s+"egress_proxy"/.test(main)) {
+    throw new CliError(
+      "the vendored AWS scaffold predates the egress-proxy service; update infra/main.tf and infra/outputs.tf from the current scaffold before enabling it",
     );
   }
   if (

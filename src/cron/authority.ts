@@ -15,21 +15,30 @@ export function cronTriggerAuthority(cron: TriggerAuthority): TriggerAuthority {
   };
 }
 
+export interface UnattendedGrantRefusal {
+  code: "bad_request" | "forbidden";
+  message: string;
+}
+
 export async function unattendedGrantRefusal(
   app: App,
   admin: AdminService | undefined,
   cron: Pick<Cron, "owner" | "ownerScopeId">,
   capability: Pick<CapabilityClaims, "actorId" | "liveActor">,
-): Promise<string | null> {
-  if (capability.liveActor !== true) return "unattended grants require a live turn started by the cron owner";
-  if (!(await app.samePerson(cron.owner, capability.actorId))) return "only the cron owner may set unattended grants";
-  if (!cron.ownerScopeId.startsWith("personal:")) return "unattended grants require a personal-scope cron";
+): Promise<UnattendedGrantRefusal | null> {
+  const forbidden = (message: string): UnattendedGrantRefusal => ({ code: "forbidden", message });
+  if (capability.liveActor !== true)
+    return forbidden("unattended grants require a live turn started by the cron owner");
+  if (!(await app.samePerson(cron.owner, capability.actorId)))
+    return forbidden("only the cron owner may set unattended grants");
+  if (!cron.ownerScopeId.startsWith("personal:"))
+    return { code: "bad_request", message: "unattended grants require a personal-scope cron" };
   let status: Awaited<ReturnType<AdminService["adminStatusOf"]>> | undefined;
   try {
     status = await admin?.adminStatusOf({ id: capability.actorId, type: "internal" });
   } catch (e) {
-    return `unattended grants could not confirm the cron owner is a current org admin: ${errMessage(e)}`;
+    return forbidden(`unattended grants could not confirm the cron owner is a current org admin: ${errMessage(e)}`);
   }
-  if (!status?.isAdmin) return "unattended grants require the cron owner to be a current org admin";
+  if (!status?.isAdmin) return forbidden("unattended grants require the cron owner to be a current org admin");
   return null;
 }

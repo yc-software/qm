@@ -682,6 +682,10 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
   return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
+export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
+  return model.cost.input > 0 || model.cost.output > 0;
+}
+
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
   if (id && modelRequestOverrides(id)) return harness === "pi" || harness === "mock";
   if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));

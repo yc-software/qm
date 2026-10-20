@@ -1,4 +1,5 @@
 import { adminOperations } from "../tools/admin.ts";
+import { parkIfOverCap } from "../sessions/tool-output.ts";
 import { handbackStop } from "../runs/run-store.ts";
 import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
@@ -14,7 +15,6 @@ import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
-import { classifyScopeLabel } from "../classify/scope-classifier.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage } from "../util/errors.ts";
@@ -22,14 +22,18 @@ import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
-import { redactSecrets } from "./redact-secrets.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
+import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
+import { HARNESS_IDS } from "../model/pi-models.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
   cancelGoal,
-  createGoalRecord,
+  goalFromParams,
+  GoalCreateParams,
+  type GoalCreateInput,
   goalFloorMeter,
   goalIsOpen,
   goalReport,
@@ -117,6 +121,7 @@ export interface ToolContextRef {
   goalRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
+  modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
@@ -204,6 +209,7 @@ interface CronLike {
 }
 
 const LIST_PAGE_SIZE = 25;
+const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
 const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;
@@ -380,19 +386,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     capabilityTtlMs === 0
       ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
       : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
-  const log = async (type: EntryType, payload: unknown, sourceScopeId?: ScopeId | null): Promise<void> => {
+  const log = async (type: EntryType, payload: unknown): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
-    const scopeLabel = classifyScopeLabel({
-      type,
-      sessionScopeId: ref.scopeLabel,
-      orgScopeId: ref.orgScopeId ?? ref.scopeLabel,
-      sourceScopeId,
-    });
     if (type === "tool_result" && isObj(payload)) {
       if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: handbackStop(ref.shutdown) };
       else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
     }
-    await ref.emit({ type, payload, scopeLabel });
+    await ref.emit({ type, payload, scopeLabel: ref.scopeLabel });
   };
 
   const retryMarks = new Map<string, RetryMark>();
@@ -423,7 +423,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         .filter((c) => c.type === "text")
         .map((c) => c.text ?? "")
         .join("\n");
-      let result = capResultText(t);
+      const parked = ref.current?.toolOutput ? await parkIfOverCap(ref.current.toolOutput, t, callId) : null;
+      const output = parked?.output;
+      let result = parked?.text ?? capResultText(t);
       const resultTruncated = result !== t;
       if (result !== t) {
         const firstText = ret.content.findIndex((c) => c.type === "text");
@@ -529,18 +531,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result += `\n\n${text}`;
         delivered.push(message.id);
       }
-      await log(
-        "tool_result",
-        {
-          ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
-          callId,
-          isError,
-          ...(resultTruncated ? { resultTruncated: true } : {}),
-          ...(display ? { display } : {}),
-          result,
-        },
-        delivered.length ? ref.scopeLabel : sourceScopeId,
-      );
+      await log("tool_result", {
+        ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
+        callId,
+        isError,
+        ...(resultTruncated ? { resultTruncated: true } : {}),
+        ...(display ? { display } : {}),
+        result,
+        ...(output ? { output } : {}),
+      });
       if (delivered.length) await ref.current?.sessionSyscalls?.acknowledge?.(delivered).catch(() => undefined);
       return ret;
     });
@@ -1149,6 +1148,26 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         false,
         undefined,
         shared ? { provenance: "external", source: "shared file" } : undefined,
+      );
+    },
+  });
+
+  const installCanvas = defineTool({
+    name: "install_canvas",
+    label: "install_canvas",
+    description:
+      "Replace this person's always-on canvas with a copy of an always-on canvas someone shared with them as a Files record. Always asks them to approve first.",
+    parameters: Type.Object({ id: Type.String({ description: "Files ID of the shared canvas." }) }),
+    async execute(callId, params) {
+      const tc = ref.current;
+      if (!tc?.installSharedCanvas) return text("[error] installing a shared canvas isn't available on this turn");
+      await recordCall(callId, { tool: "files", action: "install_canvas", id: params.id });
+      const error = await tc.installSharedCanvas(params.id);
+      return recordResult(
+        callId,
+        { tool: "files", action: "install_canvas", id: params.id, ...(error ? { error } : {}) },
+        text(error ? `[error] ${error}` : "Installed the shared canvas as their always-on canvas."),
+        Boolean(error),
       );
     },
   });
@@ -2457,18 +2476,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union([Type.Literal("pi"), Type.Literal("claude")]),
-              modelId: Type.String(),
-              effortLevel: Type.Optional(
-                Type.Union([
-                  Type.Literal("low"),
-                  Type.Literal("medium"),
-                  Type.Literal("high"),
-                  Type.Literal("xhigh"),
-                  Type.Literal("max"),
-                  Type.Literal("ultracode"),
-                ]),
+              harnessId: Type.Union(
+                HARNESS_IDS.filter((harnessId) => harnessId !== "mock").map((harnessId) => Type.Literal(harnessId)),
               ),
+              modelId: Type.String(),
+              effortLevel: Type.Optional(Type.String()),
               fastMode: Type.Optional(Type.Boolean()),
             }),
           ],
@@ -2775,8 +2787,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "action=create takes `action` (what to do on each event; the event payload is appended " +
       "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
       'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      "`destinationKey` (same delivery menu as crons). verification.scheme is one of github | slack | " +
-      "stripe | hmac-sha256: for github/slack/stripe the USER gives you the signing secret from the " +
+      `\`destinationKey\` (same delivery menu as crons). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
+      `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
       "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
       "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +
       "relay BOTH to the user verbatim — the `url` is already the full public inbound URL (hand it over as-is) " +
@@ -2802,12 +2814,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Object(
           {
             scheme: Type.Union(
-              [Type.Literal("github"), Type.Literal("slack"), Type.Literal("stripe"), Type.Literal("hmac-sha256")],
+              WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme)),
               { description: "how the inbound request is authenticated." },
             ),
             secret: Type.String({
-              description:
-                "the signing secret (from the sender for github/slack/stripe; self-generated for hmac-sha256).",
+              description: `the signing secret (from the sender for ${SENDER_WEBHOOK_SCHEMES.join("/")}; self-generated for hmac-sha256).`,
             }),
           },
           { description: "create only: the inbound authentication scheme + secret." },
@@ -3884,31 +3895,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
       'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
       "Fails if an unfinished goal exists.",
-    parameters: Type.Object({
-      objective: Type.String({
-        description:
-          "The concrete end state to pursue, in the user's terms. Verifiable phrasing ('all tests in X pass') beats vague ('improve X').",
-      }),
-      floor: Type.Optional(
-        Type.Object(
-          {
-            minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
-            minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
-            minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
-            minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
-          },
-          {
-            description:
-              "Work floor — set when the user names a duration/amount ('for 30 minutes'). Completing early is allowed, but the harness keeps prompting for more work until the floor is met.",
-          },
-        ),
-      ),
-      token_cap: Type.Optional(
-        Type.Number({ description: "Wind-down token budget. Set only when the user explicitly caps spend/size." }),
-      ),
-    }),
+    parameters: GoalCreateParams,
     async execute(callId, params) {
-      const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
+      const p = params as GoalCreateInput;
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
       if (goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
@@ -3920,13 +3909,19 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      if (p.floor?.minUsd !== undefined && ref.modelHasPrices?.() === false) {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "create", error: "spend_unmeasurable" },
+          text(
+            "The current model has no price data, so a spend floor (minUsd) cannot be measured. Use a time (minMs), token (minTokens) or turn (minTurns) floor instead.",
+          ),
+          true,
+        );
+      }
       let record: GoalRecord;
       try {
-        record = createGoalRecord({
-          objective: p.objective,
-          ...(p.floor ? { floor: p.floor } : {}),
-          ...(p.token_cap !== undefined ? { capTokens: p.token_cap } : {}),
-        });
+        record = goalFromParams(p);
       } catch (e) {
         return recordCoreAuthoredResult(
           callId,
@@ -3960,7 +3955,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "get", goal },
-        text(goal ? goalReport(goal) : "No goal registered in this session."),
+        text(goal ? goalReport(goal, ref.goalMeter ?? createGrindMeter()) : "No goal registered in this session."),
       );
     },
   });
@@ -4313,7 +4308,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", { read, write, ...(controlTools ? { share: sharingTool("file") } : {}) }),
+    resourceTool("files", {
+      read,
+      write,
+      ...(controlTools ? { share: sharingTool("file") } : {}),
+      ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
+    }),
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
@@ -4481,6 +4481,15 @@ function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): T
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
+export const GATED_TOOL_APPROVALS: Record<
+  string,
+  { reason: string; summary: (params: Record<string, unknown>) => string }
+> = {
+  "files:install_canvas": {
+    reason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
+    summary: (params) => `file ${String(params.id)}`,
+  },
+};
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
 
 function withToolApprovalGate(
@@ -4515,12 +4524,18 @@ function withToolApprovalGate(
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       if (gate && !gate(approvalIdentity)) {
+        const gated = GATED_TOOL_APPROVALS[approvalIdentity];
+        const reason = gated?.reason ?? STRICT_TOOL_APPROVAL_REASON;
+        let summary: string | undefined;
+        if (gated && isObj(params)) summary = gated.summary(params);
+        else if (params !== undefined) summary = redactCommand(redactSecrets(JSON.stringify(params)));
         ref.pendingApprovals?.push({
           command: commandLabel,
-          reason: STRICT_TOOL_APPROVAL_REASON,
+          reason,
           kind: "approval",
           approvalKey: `tool:${approvalIdentity}`,
-          ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
+          ...(gated ? { grantModes: { session: false, always: false } } : {}),
+          ...(summary === undefined ? {} : { summary }),
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
         });
         ref.pausedOnApproval = true;
@@ -4529,7 +4544,7 @@ function withToolApprovalGate(
           ...(resourceAction ? { action: resourceAction } : {}),
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
           blocked: "needs_approval",
-          reason: STRICT_TOOL_APPROVAL_REASON,
+          reason,
         });
         return rec.recordResult(
           callId,
@@ -4537,12 +4552,10 @@ function withToolApprovalGate(
             tool: tool.name,
             ...(resourceAction ? { action: resourceAction } : {}),
             blocked: "needs_approval",
-            reason: STRICT_TOOL_APPROVAL_REASON,
+            reason,
           },
           {
-            content: [
-              { type: "text" as const, text: `[blocked: needs human approval] ${STRICT_TOOL_APPROVAL_REASON}` },
-            ],
+            content: [{ type: "text" as const, text: `[blocked: needs human approval] ${reason}` }],
             details: {},
             terminate: true,
           },

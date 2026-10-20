@@ -124,7 +124,7 @@ test("Postgres pending selection retains one live query across sweep timeouts", 
   const waiting = async (): Promise<number> => {
     const result = await observer.query<{ count: number }>(
       "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1",
-      ["SELECT json% FROM swarms%"],
+      ["SELECT id, json% FROM swarms%"],
     );
     return result.rows[0]!.count;
   };

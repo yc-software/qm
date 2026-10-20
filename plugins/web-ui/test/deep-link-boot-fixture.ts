@@ -26,6 +26,7 @@ export interface Harness {
 }
 
 interface HarnessOptions {
+  api?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   path: string;
   session?: CoreSession;
   messageLink?: boolean;
@@ -33,6 +34,7 @@ interface HarnessOptions {
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
+  approvals?: (sessionId: string) => unknown[];
   holdRuntimeConfig?: boolean;
   holdRemoteSplit?: boolean;
   remoteCanvas?: unknown;
@@ -44,6 +46,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  returnReplaces?: string;
   openNewChat?: boolean;
 }
 
@@ -63,8 +66,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const env = await browserEnv({
     dom: { url: `http://localhost${opts.path}` },
     html: '<!doctype html><div id="app"></div>',
-    fetch: (input) => {
-      const answer = respond(input);
+    fetch: (input, init) => {
+      const answer = respond(input, init);
       inFlight.add(answer);
       void answer.finally(() => inFlight.delete(answer)).catch(() => {});
       return answer;
@@ -105,6 +108,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         path: "/s/sess-deep",
         service: { id: "gmail", name: "Gmail" },
         accountId: "ca_test",
+        ...(opts.returnReplaces ? { replaces: opts.returnReplaces } : {}),
         widget: opts.returnWidget ?? "welcome",
         expiresAt: Date.now() + 60000,
         picker: { query: "mail", expanded: true },
@@ -125,9 +129,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
   const sessionsHeld = new Promise<void>((resolve) => (releaseSessions = resolve));
   const transcriptHeld = new Promise<void>((resolve) => (releaseTranscript = resolve));
   let failuresLeft = opts.transcriptFailures ?? (opts.transcriptStatus ? Number.POSITIVE_INFINITY : 0);
-  const respond = async (input: RequestInfo | URL): Promise<Response> => {
+  const respond = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const path = String(input);
     requests.push(path);
+    const custom = opts.api?.(path, init);
+    if (custom) return custom;
     if (path === "/me")
       return Response.json({
         user: "tester",
@@ -164,7 +170,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     }
     if (path.startsWith("/api/sessions/") && path.includes("/approvals")) {
       if (opts.holdApprovals) await approvalsHeld;
-      return Response.json({ approvals: [] });
+      const sessionId = decodeURIComponent(path.split("/")[3] ?? "");
+      return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
     if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;

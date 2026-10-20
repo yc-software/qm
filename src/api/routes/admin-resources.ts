@@ -43,7 +43,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -52,7 +52,7 @@ import {
 } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
-import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
+import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
 export interface AutoFlaggerDraft {
@@ -129,12 +129,12 @@ function generic<V>(
     body: unknown,
     ctx: { scope: string; deps: ServerDeps },
   ) => { value: V } | { error: string; code?: string; status?: number },
-  set: (deps: ServerDeps, scope: string, value: V) => unknown,
+  set: (deps: ServerDeps, scope: string, value: V) => Promise<void>,
 ): AdminResource["apply"] {
   return async (ctx, _actor, scope) => {
     const parsed = parse(ctx.body, { scope, deps: ctx.deps });
     if ("error" in parsed) return parsed;
-    await Promise.resolve(set(ctx.deps, scope, parsed.value));
+    await set(ctx.deps, scope, parsed.value);
     return { ok: true };
   };
 }
@@ -206,12 +206,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (bad) return bad;
       const body = ctx.body as { reset?: unknown };
       if (body.reset === true) {
-        ctx.deps.config!.setAutoFlaggerConfig(null);
+        await ctx.deps.config!.setAutoFlaggerConfig(null);
         return { ok: true };
       }
       const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
       if ("error" in parsed) return parsed;
-      ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
+      await ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
       return { ok: true };
     },
   },
@@ -258,7 +258,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
       if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
       if (body.expectedVersion === undefined) {
-        await ctx.deps.config!.setSoulLatest(scope, body.content, actor.id);
+        await ctx.deps.config!.setSoul(scope, body.content, actor.id);
         return { ok: true };
       }
       if (typeof body.expectedVersion !== "number")
@@ -281,7 +281,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: async (deps, scope) => {
       const ref = channelContainer(scope);
       if (!deps.channelPolicy || !ref) return undefined;
-      const p = await deps.channelPolicy.get(ref).catch(() => undefined);
+      const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
         orders: p?.orders ?? "",
@@ -346,7 +346,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     readKey: "featureFlags",
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
-    get: (deps) => deps.featureFlags?.list(),
+    get: async (deps) => {
+      if (!deps.featureFlags) return undefined;
+      const rows = await deps.featureFlags.list();
+      return FEATURE_NAMES.map((featureName) => ({
+        ...FEATURES[featureName],
+        ...(rows.find((row) => row.featureName === featureName) ?? { featureName, enabledScopes: [] }),
+      }));
+    },
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
       const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
@@ -436,7 +443,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (raw.some((m) => typeof m !== "string" || !m.trim() || m.length > 320))
         return { error: "each member must be a non-empty string of at most 320 characters" };
       const before = ctx.deps.config!.getInternalMemberOverrides();
-      ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
+      await ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
       const after = ctx.deps.config!.getInternalMemberOverrides();
       audit(ctx.deps, {
         principalId: actor.id,
@@ -461,7 +468,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, scope, on) => deps.config!.setChannelHeaderPinLatest(scope, on),
+      (deps, scope, on) => deps.config!.setChannelHeaderPin(scope, on),
     ),
   },
   {
@@ -564,13 +571,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             }
           : null;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
-      if (!modelId) await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
+      if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
       else if (runtime) {
         if (!isHarnessId(runtime.harnessId) || !modelSupportedByHarness(modelId, runtime.harnessId))
           return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
         const bad = unserviceable(runtime.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+        await ctx.deps.config!.setRuntimeSelection(scope, {
           harnessId: runtime.harnessId,
           modelId,
           ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
@@ -593,7 +600,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
         const bad = unserviceable(effective.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+        await ctx.deps.config!.setRuntimeSelection(scope, {
           harnessId: effective.harnessId,
           modelId,
           ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
@@ -627,7 +634,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
         if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
-        else await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
+        else await ctx.deps.config!.setRuntimeSelection(scope, null);
         return { ok: true };
       }
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
@@ -665,7 +672,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : {}),
       };
       if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
-      else await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
+      else await ctx.deps.config!.setRuntimeSelection(scope, choice);
       return { ok: true };
     },
   })),
@@ -797,7 +804,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (markUrlInput && !value?.markUrl) {
         return { error: "branding mark image must be an https URL" };
       }
-      ctx.deps.config!.setBranding(scope, value ?? null);
+      await ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
     },
   },
@@ -828,7 +835,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (modelId && !modelServiceable(modelId, providers)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
-      await Promise.resolve(ctx.deps.config!.setBrowseModel(scope, modelId || null));
+      await ctx.deps.config!.setBrowseModel(scope, modelId || null);
       return { ok: true };
     },
   },
@@ -1174,9 +1181,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "env" ? { envKey } : {}),
         host: delivery === "env" ? "" : host,
         ...(typeof b.secret === "string" && b.secret ? { secret: b.secret } : {}),
-        ...(delivery === "broker" &&
-        effectiveInjection &&
-        (effectiveInjection.header || effectiveInjection.scheme || effectiveInjection.actor !== undefined)
+        ...(delivery === "broker" && effectiveInjection && Object.keys(effectiveInjection).length
           ? { injection: effectiveInjection }
           : {}),
         ...(delivery === "broker" ? brokerMethods : {}),

@@ -4,6 +4,7 @@ import { createBackgroundBroker } from "../src/connectors/background-exec-broker
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { redactCommand } from "../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../src/sandbox/sandbox.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
@@ -59,9 +60,9 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
         readErrors.delete(id);
         throw error;
       }
-      if (missing.has(id)) throw new Error(`no such process session: ${id}`);
+      if (missing.has(id)) throw new ProcessSessionGoneError(id);
       const p = procs.get(id);
-      if (!p) throw new Error(`no such process session: ${id}`);
+      if (!p) throw new ProcessSessionGoneError(id);
       const cur = opts?.sinceCursor ?? 0;
       const maxBytes = opts?.maxBytes ?? 64 * 1024;
       const end = Math.min(p.output.length, cur + maxBytes);

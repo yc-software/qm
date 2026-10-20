@@ -30,7 +30,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) =>
       (method === "GET" &&
         ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
-      (method === "POST" && ["authorize", "execute"].some((name) => path === `/v1/composio/${name}`)),
+      (method === "POST" && ["authorize", "execute", "disconnect"].some((name) => path === `/v1/composio/${name}`)),
     guidance:
       "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
@@ -52,6 +52,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "{tool,accountId,version,arguments} executes a discovered tool using your own active connection",
       },
       {
+        method: "POST",
+        path: "/v1/composio/disconnect",
+        summary:
+          "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
+      },
+      {
         method: "GET",
         path: "/v1/composio/identity",
         summary:
@@ -63,7 +69,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Only a parent can assign goals, to its own workers; send a goal again to replace a paused one.",
     routes: [
       {
         method: "GET",
@@ -75,7 +81,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },
@@ -348,19 +354,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    match: (m, p) => m === "POST" && /^\/v1\/triggers\/[^/]+\/consent$/.test(p),
-    guidance:
-      "If the person you're helping is told a teammate set up a recurring delivery (a cron or webhook that DMs them), THEY control whether it reaches them — not its behavior. When they say yes/no, call this with the ref id from the notice. Reversible anytime; only the recipient can decide.",
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/triggers/:id/consent",
-        summary:
-          'accept or decline a standing trigger\'s deliveries to you (a teammate\'s cron/webhook/watch that DMs you) — body {decision:"accept"|"decline"}; reversible; recipient-only',
-      },
-    ],
-  },
-  {
     match: (m, p) =>
       ((m === "POST" || m === "GET") && p === "/v1/pins") || (m === "DELETE" && /^\/v1\/pins\/[^/]+$/.test(p)),
     guidance:
@@ -374,6 +367,17 @@ const FAMILIES: AgentApiFamily[] = [
       },
       { method: "GET", path: "/v1/pins", summary: "list this conversation's pins" },
       { method: "DELETE", path: "/v1/pins/:id", summary: "unpin an item" },
+    ],
+  },
+  {
+    match: (m, p) =>
+      (p === "/v1/ui/canvas" && ["GET", "POST", "DELETE"].includes(m)) || (m === "POST" && p === "/v1/ui/observe"),
+    when: () => false,
+    routes: [
+      { method: "GET", path: "/v1/ui/canvas", summary: "read this conversation's web UI canvas" },
+      { method: "POST", path: "/v1/ui/canvas", summary: "write, update, replace or pin the canvas (ui-canvas skill)" },
+      { method: "DELETE", path: "/v1/ui/canvas", summary: "dismiss the canvas" },
+      { method: "POST", path: "/v1/ui/observe", summary: "snapshot the person's open web UI (ui-state skill)" },
     ],
   },
   {
@@ -648,7 +652,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/keychain/drops",
         summary:
-          'mint a single-use, expiring link for someone to drop a credential into the keychain via a browser (no secret in chat; hand the returned url over VERBATIM — it carries a link-bound token, so a reconstructed url will not work; declare the form inputs with fields[], e.g. [{key:"X_EMAIL",label:"Email",secret:false},{key:"X_PASSWORD",label:"Password"}] for a login, or omit for a single token; the link binds to the person who will paste the secret — pass onBehalfOf with their id when that is a teammate who spoke in this conversation rather than the person whose turn this is; refused on trigger-fired turns)',
+          "mint a single-use, expiring link for someone to enter a new credential into their keychain — follow the `secret-drop` skill",
       },
     ],
   },
@@ -842,9 +846,9 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/audit|errors|metrics|egress?scope=",
+        path: "/v1/admin/audit|errors|egress?scope=",
         summary:
-          "observability: audit log, error telemetry, turn metrics, outbound-destination log (logs: DM or effective Open sharing)",
+          "observability: audit log, error telemetry, outbound-destination log (logs: DM or effective Open sharing)",
       },
       { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
       {
@@ -896,13 +900,6 @@ const FAMILIES: AgentApiFamily[] = [
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [{ method: "GET", path: "/v1/admin/audit", summary: "read security audit events" }],
-  },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.metrics.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [{ method: "GET", path: "/v1/admin/metrics", summary: "read usage and performance metrics" }],
   },
   {
     match: () => false,

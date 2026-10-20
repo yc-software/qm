@@ -94,7 +94,7 @@ point and uses E2B's rules only to make that proxy unavoidable:
   does neither.
 
 Set `E2B_EGRESS_PROXY_URL` to a QM egress proxy reachable on port 443, for example
-`deploy/egress-proxy-pub` (TLS on 443 in front of the proxy's port 48080). Core then
+the `egress-proxy` service (TLS on 443 in front of the proxy's port 48080). Core then
 creates every agent computer with `allowOut: [<proxy host>]` and `denyOut: ["0.0.0.0/0"]`
 and points the computer's proxy settings at it with the turn's token. Without it, core
 warns at boot and computers have open egress.

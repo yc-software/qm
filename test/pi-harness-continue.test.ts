@@ -129,7 +129,7 @@ test("a genuine resume whose context ends at a recorded tool result continues th
   );
   assert.deepEqual(
     userTexts(requests),
-    ["list the files"],
+    ["── Wednesday, December 31, 1969 ──\nlist the files"],
     "the request reaches the model once and nothing else is prompted",
   );
   assert.deepEqual(
@@ -161,14 +161,14 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
   );
   const flattened = JSON.stringify(requests[0]!.messages);
   assert.ok(flattened.includes("shared/q2.md"), "the model sees the re-run result");
-  assert.deepEqual(userTexts(requests), ["list the files"]);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.ok(!flattened.includes("[interrupted"));
 });
 
 test("a resume whose last tool call never recorded a result continues silently after the interrupted result", async () => {
   const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true, resumeUserSeq: ASK.seq });
   assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
-  assert.deepEqual(userTexts(requests), ["list the files"]);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
     sink.entries.map((e) => e.type),
     ["assistant"],
@@ -178,7 +178,7 @@ test("a resume whose last tool call never recorded a result continues silently a
 test("a resume that died before any work continues from the recorded request without re-sending it", async () => {
   const { sink, requests } = await runResume([ASK], { continueTurn: true, resumeUserSeq: ASK.seq });
   assert.equal(requests[0]!.messages.length, 1);
-  assert.deepEqual(userTexts(requests), ["list the files"]);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
     sink.entries.map((e) => e.type),
     ["assistant"],
@@ -207,7 +207,7 @@ test("a resume that died before delivering its reply drops that reply and contin
   });
   assert.equal(requests[0]!.messages.at(-1)!.role, "user");
   assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
-  assert.deepEqual(userTexts(requests), ["list the files"]);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
     sink.entries.map((e) => e.type),
     ["assistant"],

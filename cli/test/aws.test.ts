@@ -25,6 +25,7 @@ import {
   awsRollback,
   awsSecretsPush,
   awsSetBackgroundWork,
+  awsStoppedCoreOwner,
   taskDefinitionForBackgroundWork,
   awsStatus,
   awsUp,
@@ -451,6 +452,7 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--task-definition")) service.taskDefinition = after("--task-definition");
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
+  if (s.stoppedInventory) delete s.taskInventory;
   if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
@@ -6117,6 +6119,127 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       awsSetBackgroundWork({ ...single, aws: { ...single.aws!, backgroundWorkControl: false } }, dir, true),
       /cannot fall back/,
     );
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stopped AWS core cohort is replaceable only while the production route reports another active owner", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-stopped-background-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const base = oneServiceConfig();
+  const single: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
+  const fake = statefulAws(dir, single);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const current = () => {
+      const state = JSON.parse(readFileSync(fake.state, "utf8"));
+      return JSON.parse(
+        state.dynamo[`deployment/manifest/${state.dynamo["deployment/current"].manifestId.S}`].manifest.S,
+      );
+    };
+    const manifest = current();
+    const stopped = (lastStatus = "STOPPED", runningCount = 0) => {
+      const state = JSON.parse(readFileSync(fake.state, "utf8"));
+      state.services["acme-core"].desiredCount = 0;
+      if (runningCount) state.serviceOverrides = { "acme-core": { runningCount } };
+      else delete state.serviceOverrides;
+      state.stoppedInventory = true;
+      state.taskInventory = {
+        "acme-core": [
+          {
+            taskArn: "arn:aws:ecs:us-west-2:123456789012:task/old-core",
+            taskDefinitionArn: state.services["acme-core"].taskDefinition,
+            desiredStatus: "STOPPED",
+            lastStatus,
+          },
+        ],
+      };
+      return state;
+    };
+    const production = {
+      protocol: 2,
+      deploymentId: "other-core:release",
+      instanceId: "other-instance",
+      ownerDeploymentId: "other-core:release" as string | null,
+      setAt: "2026-10-19T00:00:00.000Z",
+      setBy: "other-core:release",
+      active: true,
+    };
+    let status = 200;
+    const reads: string[] = [];
+    const fetchLayer = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).includes("/v1/background-work")) return fetchLayer(url, init);
+      reads.push(String(url));
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
+      assert.equal(init?.method, "GET");
+      return new Response(JSON.stringify(production), { status });
+    };
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    assert.deepEqual(await awsStoppedCoreOwner(single, manifest.backgroundDeploymentId), {
+      ...production,
+      ownerDeploymentId: "other-core:release",
+    });
+    assert.deepEqual(reads, ["https://agent.acme.example/v1/background-work"]);
+    reads.length = 0;
+    await awsStoppedCoreOwner({ ...single, apiUrl: "https://api.acme.example" }, manifest.backgroundDeploymentId);
+    assert.deepEqual(reads, ["https://api.acme.example/v1/background-work"]);
+    await assert.rejects(
+      awsStoppedCoreOwner({ ...single, apiUrl: "http://api.acme.example" }, manifest.backgroundDeploymentId),
+      /must be HTTPS/,
+    );
+    const refusals: Array<[() => void, RegExp]> = [
+      [() => Object.assign(production, { deploymentId: manifest.backgroundDeploymentId }), /another deployment/],
+      [
+        () => Object.assign(production, { ownerDeploymentId: manifest.backgroundDeploymentId }),
+        /active background owner/,
+      ],
+      [() => Object.assign(production, { ownerDeploymentId: null }), /active background owner/],
+      [() => Object.assign(production, { active: false }), /active background owner/],
+      [() => (status = 503), /HTTP 503/],
+      [() => writeFileSync(fake.state, JSON.stringify(stopped("DEACTIVATING"))), /retiring task/],
+      [() => writeFileSync(fake.state, JSON.stringify(stopped("STOPPED", 1))), /stable deployment capacity/],
+    ];
+    const healthy = structuredClone(production);
+    for (const [arrange, error] of refusals) {
+      Object.assign(production, healthy);
+      status = 200;
+      writeFileSync(fake.state, JSON.stringify(stopped()));
+      arrange();
+      writeFileSync(fake.log, "");
+      await assert.rejects(awsUp(single, dir, { yes: true }), error);
+      await assert.rejects(awsRollback(single, manifest.id), error);
+      assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|register-task-definition/);
+    }
+    Object.assign(production, healthy);
+    status = 200;
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    reads.length = 0;
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { yes: true, restart: ["core"] });
+    const replaced = current();
+    assert.notEqual(replaced.id, manifest.id);
+    assert.notEqual(replaced.backgroundDeploymentId, manifest.backgroundDeploymentId);
+    assert.equal(replaced.counts.core, 1);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    await awsRollback(single, manifest.id);
+    const rolledBack = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(current().id, manifest.id);
+    assert.equal(rolledBack.services["acme-core"].taskDefinition, manifest.tasks.core);
+    assert.equal(rolledBack.services["acme-core"].desiredCount, 1);
+    assert.deepEqual(reads, [
+      "https://agent.acme.example/v1/background-work",
+      "https://agent.acme.example/v1/background-work",
+    ]);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();

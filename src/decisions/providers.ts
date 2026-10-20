@@ -147,7 +147,7 @@ const PROTOCOLS: Record<
 export function createDecisionBackend(opts: {
   providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
   gateway?: { url: string; apiKey: string; apiKeyHeader?: string };
-  credential: (slug: string) => Promise<{ host: string; enabled: boolean; header: [string, string] } | null>;
+  credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
   fetch?: typeof fetch;
 }): DecisionBackend {
   const fetchImpl = opts.fetch ?? fetch;
@@ -168,7 +168,7 @@ export function createDecisionBackend(opts: {
       throw new Error(
         `decision provider ${provider.id}: credential ${provider.credential} is for ${rec.host}, not ${url.host}`,
       );
-    return { base: provider.baseUrl, auth: { [rec.header[0]]: rec.header[1] } };
+    return { base: provider.baseUrl, auth: rec.headers };
   };
   return {
     async choose({ questions, state, model, signal }) {

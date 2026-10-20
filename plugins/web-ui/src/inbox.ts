@@ -48,7 +48,8 @@ import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, avatarTpl, relTime, sheenLabel, slackMark, workingWave } from "./ui";
+import { brandName, fieldSelect, menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
 import { inboxChat } from "./inbox-chat";
@@ -156,8 +157,6 @@ export interface InboxSyncCron {
   id: string;
   enabled: boolean;
   lastFiredAt?: number;
-  taskVersion: number | null;
-  currentTaskVersion: number;
 }
 
 const DEFAULT_VIEWS: InboxView[] = [
@@ -910,7 +909,7 @@ function editDraft(item: InboxItem, patch: Partial<InboxDraft>): void {
 }
 
 function isDraftConflict(e: unknown): boolean {
-  return e instanceof ApiError && e.status === 409 && /draft changed/i.test(e.message);
+  return e instanceof ApiError && (e.body as { error?: unknown } | null)?.error === "draft_changed";
 }
 
 async function explainDraftConflict(item: InboxItem, edited: boolean): Promise<void> {

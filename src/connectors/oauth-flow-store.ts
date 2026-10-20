@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { OAuthState } from "./oauth.ts";
+import { swallowAs } from "../util/errors.ts";
 
 /**
  * The authorize `state` parameter has to survive a provider round trip, and
@@ -31,7 +32,7 @@ export function createOAuthFlowStore(
       return flowId;
     },
     async finish(flowId, now) {
-      const rec = await backing.take(flowId).catch(() => null);
+      const rec = await backing.take(flowId).catch(swallowAs("oauth flow: take state", null));
       if (!rec) return null;
       if ((now ?? clock()) - rec.issuedAt > ttl) return null;
       return rec;

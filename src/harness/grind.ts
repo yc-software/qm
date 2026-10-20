@@ -11,6 +11,7 @@ export interface GrindMeter {
   turns: number;
   tokens: number;
   usd: number;
+  unpricedCalls: number;
   startedAt: number;
 }
 
@@ -19,30 +20,20 @@ export interface GrindState {
   text: string;
 }
 
-const MODEL_USD_PER_MILLION_TOKENS: ReadonlyArray<[RegExp, number]> = [
-  [/opus/i, 15],
-  [/sonnet/i, 3],
-  [/haiku/i, 0.8],
-  [/gpt-5/i, 5],
-  [/o3/i, 10],
-  [/o4-mini/i, 2],
-  [/gemini.*pro/i, 3.5],
-  [/gemini.*flash/i, 0.5],
-];
-
-const DEFAULT_USD_PER_MILLION_TOKENS = 5;
-
 export function createGrindMeter(startedAt = Date.now()): GrindMeter {
-  return { turns: 0, tokens: 0, usd: 0, startedAt };
+  return { turns: 0, tokens: 0, usd: 0, unpricedCalls: 0, startedAt };
 }
 
-export function meterGrindCall(meter: GrindMeter, usage: LlmCallUsage | null, model: string): void {
+export function meterGrindCall(meter: GrindMeter, usage: LlmCallUsage | null): void {
   meter.turns++;
-  const tokens = Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
-  meter.tokens += tokens;
-  const price =
-    MODEL_USD_PER_MILLION_TOKENS.find(([pattern]) => pattern.test(model))?.[1] ?? DEFAULT_USD_PER_MILLION_TOKENS;
-  meter.usd += (tokens * price) / 1_000_000;
+  meter.tokens += Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
+  meterGrindSpend(meter, usage);
+}
+
+export function meterGrindSpend(meter: GrindMeter, usage: LlmCallUsage | null): void {
+  if (!usage) return;
+  if (usage.costUsd > 0) meter.usd += usage.costUsd;
+  else if (usage.input + usage.output > 0) meter.unpricedCalls++;
 }
 
 export function grindState(grind: GrindBudget, meter: GrindMeter, now = Date.now()): GrindState {
@@ -61,7 +52,11 @@ export function grindState(grind: GrindBudget, meter: GrindMeter, now = Date.now
     met &&= meter.tokens >= grind.minTokens;
     values.push(`${meter.tokens}/${grind.minTokens} tokens`);
   }
-  if (grind.minUsd !== undefined) {
+  if (grind.minUsd !== undefined && meter.unpricedCalls > 0) {
+    values.push(
+      `$${grind.minUsd} spend floor waived: a model call in this turn had no price data, so spend cannot be measured`,
+    );
+  } else if (grind.minUsd !== undefined) {
     met &&= Math.round(meter.usd * 1_000_000) >= Math.round(grind.minUsd * 1_000_000);
     values.push(`$${meter.usd.toFixed(4)}/$${grind.minUsd}`);
   }

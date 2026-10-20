@@ -154,7 +154,11 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       assert.equal(turns.at(-1), "second");
       assert.deepEqual(signalled, [`q${turnId}`]);
       assert.deepEqual(composer!.queuedRunsFor(threadRef), []);
-      assert.deepEqual(chips(), ["Steering"]);
+      assert.deepEqual(chips(), []);
+      assert.deepEqual(
+        composer!.waitingSteers(agent).map((q) => q.text),
+        ["second"],
+      );
       assert.equal(seenTags.has("Queued"), false);
       reset();
     });

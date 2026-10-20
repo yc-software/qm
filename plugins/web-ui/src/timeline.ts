@@ -156,6 +156,7 @@ const timelineMemo = new WeakMap<
   WorkBlock,
   {
     activity: WorkBlock["activity"];
+    reasoning: WorkBlock["reasoning"];
     status: WorkBlock["status"];
     approvals: WorkBlock["pendingApprovals"];
     items: TimelineItem[];
@@ -164,12 +165,19 @@ const timelineMemo = new WeakMap<
 
 export function buildTimeline(work: WorkBlock): TimelineItem[] {
   const hit = timelineMemo.get(work);
-  if (hit && hit.activity === work.activity && hit.status === work.status && hit.approvals === work.pendingApprovals) {
+  if (
+    hit &&
+    hit.activity === work.activity &&
+    hit.reasoning === work.reasoning &&
+    hit.status === work.status &&
+    hit.approvals === work.pendingApprovals
+  ) {
     return hit.items;
   }
   const items = buildTimelineUncached(work);
   timelineMemo.set(work, {
     activity: work.activity,
+    reasoning: work.reasoning,
     status: work.status,
     approvals: work.pendingApprovals,
     items,
@@ -221,6 +229,20 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
       open = null;
     }
   }
+  if (!isTerminalWorkStatus(work.status)) {
+    liveReasoning(work).forEach((block, i) =>
+      items.push({
+        kind: "thinking",
+        activity: {
+          seq: -1 - i,
+          parentSeq: null,
+          type: "thinking",
+          payload: { thinking: block.text, step: { id: block.step, index: block.index } },
+          createdAt: 0,
+        },
+      }),
+    );
+  }
   const collapsed = collapseToolItems(items, work.status);
   for (const item of collapsed) {
     if (item.kind !== "tool") continue;
@@ -232,6 +254,16 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   }
   for (const queue of pendingByCmd.values()) for (const a of queue) collapsed.push({ kind: "approval", approval: a });
   return collapsed;
+}
+
+export function thinkingStepKey(payload: unknown): string | null {
+  const step = (payload as { step?: { id?: unknown; index?: unknown } } | null)?.step;
+  return step ? `${String(step.id)}:${String(step.index)}` : null;
+}
+
+function liveReasoning(work: WorkBlock): NonNullable<WorkBlock["reasoning"]> {
+  const persisted = new Set(work.activity.map((a) => (a.type === "thinking" ? thinkingStepKey(a.payload) : null)));
+  return (work.reasoning ?? []).filter((b) => b.text.trim() && !persisted.has(`${b.step}:${b.index}`));
 }
 
 function collapseToolItems(items: TimelineItem[], status: WorkBlock["status"]): TimelineItem[] {

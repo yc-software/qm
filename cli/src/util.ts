@@ -235,18 +235,6 @@ export function waitForLog(file: string, pattern: RegExp, timeoutSec: number): P
 
 export const tailString = (s: string, lines: number): string => s.split("\n").slice(-lines).join("\n");
 
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value))
-    return `[${value.map((element) => (element === undefined ? "null" : canonicalJson(element))).join(",")}]`;
-  if (typeof value !== "object" || value === null) return JSON.stringify(value);
-  const object = value as Record<string, unknown>;
-  return `{${Object.keys(object)
-    .filter((key) => object[key] !== undefined)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
-    .join(",")}}`;
-}
-
 export function tail(file: string, lines = 20): string {
   if (!existsSync(file)) return "";
   return tailString(readFileSync(file, "utf8"), lines);

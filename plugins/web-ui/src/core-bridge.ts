@@ -409,7 +409,6 @@ export interface SessionEntry {
     | "text"
     | "tool_call"
     | "tool_result"
-    | "soul"
     | "system"
     | "approval_request"
     | "approval_resolved"
@@ -445,9 +444,17 @@ export interface WorkBlock {
   finishedAt?: number;
   stale?: boolean;
   activity: ToolActivity[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   pendingApprovals?: PendingApproval[];
   goal?: GoalStripState;
   runtime?: TurnRuntime;
+}
+
+interface LiveReasoning {
+  step: string;
+  index: number;
+  text: string;
 }
 
 export interface TurnRuntime {
@@ -517,6 +524,7 @@ export interface RunPoll {
     status: string;
     reply?: string;
     reason?: string;
+    refusalKind?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -527,6 +535,8 @@ export interface RunPoll {
   stale?: boolean;
   replyComplete?: boolean;
   activity?: unknown[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   startedAt?: number | null;
   finishedAt?: number | null;
 }
@@ -1455,6 +1465,21 @@ function parseActivity(raw: unknown): ToolActivity[] {
   return out;
 }
 
+function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offset = 0): boolean {
+  if (!work || typeof block.step !== "string" || !Number.isSafeInteger(block.index) || typeof block.text !== "string")
+    return false;
+  const blocks = work.reasoning ?? [];
+  const at = blocks.findIndex((b) => b.step === block.step && b.index === block.index);
+  const current = at >= 0 ? blocks[at]!.text : "";
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > current.length) return false;
+  const text = current.slice(0, offset) + block.text;
+  if (text.length <= current.length) return false;
+  const next = { step: block.step, index: block.index, text };
+  work.reasoning =
+    at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks.filter((b) => b.step === block.step), next];
+  return true;
+}
+
 function setWorkStale(work: WorkBlock | undefined, stale: boolean, notify?: () => void): void {
   if (!work || (work.stale ?? false) === stale) return;
   work.stale = stale;
@@ -1493,6 +1518,12 @@ function applyRun(
     if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
     notify?.();
   }
+  if (work && typeof run.attempt === "number" && work.attempt !== run.attempt) {
+    if (work.attempt !== undefined && work.reasoning?.length) work.reasoning = [];
+    work.attempt = run.attempt;
+  }
+  if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
+    notify?.();
   setWorkStale(work, run.stale === true, notify);
   if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
     work.goal = run.goal;
@@ -1520,7 +1551,7 @@ function applyRun(
   }
   const approvals = res?.pendingApprovals ?? [];
   const paused = approvals.length > 0;
-  const approvalDenied = approvalDeniedMessage(res?.reason);
+  const approvalDenied = res?.refusalKind === "approval_denied";
   const quiet = res?.status === "silent" || res?.status === "react";
   if (work) {
     work.finishedAt = typeof run.finishedAt === "number" ? run.finishedAt : Date.now();
@@ -1541,7 +1572,7 @@ function applyRun(
   }
   if (approvalDenied) {
     (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(stream, partial, st, approvalDenied);
+    finish(stream, partial, st, "Denied.");
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
@@ -1595,8 +1626,9 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle" | "metadata";
+  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
   at: number;
+  ui?: unknown;
 }
 
 export interface InboxItemEvent {
@@ -1687,6 +1719,13 @@ async function streamRunViaSse(
           return "fallback";
         if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
         applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
+      } else if (event.name === "reasoning") {
+        const value = event.value as { step: string; index: number; offset: number; delta: string };
+        const work = (partial as AssistantWork).work;
+        if (mergeReasoning(work, { step: value.step, index: value.index, text: value.delta }, value.offset)) {
+          st.lastProgressAt = now();
+          notify?.();
+        }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
         // Completion must carry the final result, including files and approvals.
@@ -1796,13 +1835,6 @@ function deliveredFilesFromAttachments(
       ...(typeof a.sizeBytes === "number" ? { sizeBytes: a.sizeBytes } : {}),
       ...(a.artifactId ? { artifactId: a.artifactId } : {}),
     }));
-}
-
-function approvalDeniedMessage(reason?: string): string | null {
-  const trimmed = reason?.trim();
-  if (!trimmed) return null;
-  if (trimmed === "approval denied") return "Denied.";
-  return trimmed.startsWith("approval denied for ") ? "Denied." : null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2044,6 +2076,14 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
+const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+
+function deliveredSilence(a: ToolActivity): boolean {
+  if (a.type !== "tool_result") return false;
+  const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
+  return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
+}
+
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
   if (entry.type !== "text") return false;
   const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
@@ -2058,6 +2098,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
   let stoppedShown = false;
+  let hiddenPrompt = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -2101,12 +2142,14 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
     if (stopped) stoppedShown = true;
+    if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
+      pending = pending.filter((a) => !SILENCE_TOOLS.has((a.payload as { tool?: string } | null)?.tool ?? ""));
+      if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
+        pending = [];
+        return;
+      }
+    }
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
-    const deliveredSilence = (a: ToolActivity): boolean => {
-      if (a.type !== "tool_result") return false;
-      const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
-      return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
-    };
     const lastText = pending.findLastIndex((a) => a.type === "text");
     if (lastText >= 0) {
       const segment = ((pending[lastText]!.payload as { text?: string } | null)?.text ?? "").trim();
@@ -2153,6 +2196,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     const payload = e.payload as {
       text?: string;
       display?: string;
+      tool?: string;
       callId?: string;
       attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
       files?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -2225,7 +2269,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
-      if (!payload?.steered) stoppedShown = false;
+      if (!payload?.steered) {
+        stoppedShown = false;
+        hiddenPrompt = payload?.hidden === true;
+      }
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;

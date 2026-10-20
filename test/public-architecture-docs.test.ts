@@ -57,7 +57,6 @@ test("Strict posture describes its approval gate, exemptions, and direct-mutatio
     server,
     /pathname === "\/v1\/surface-context".*pathname === "\/v1\/memory\/search".*pathname\.startsWith\("\/v1\/run-signals\/"\)/s,
   );
-  assert.match(server, /decision === "decline"/);
   assert.doesNotMatch(server, /Strict posture permits observation only/);
   assert.doesNotMatch(adminUi, /every tool call/i);
 });

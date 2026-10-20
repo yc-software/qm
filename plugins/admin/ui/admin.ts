@@ -10,7 +10,6 @@ export { onboarding };
 export * as users from "./users.ts";
 export * as userDetail from "./user-detail.ts";
 export * as keychain from "./keychain.ts";
-export * as metrics from "./metrics.ts";
 export * as spend from "./spend.ts";
 export * as transcript from "./transcript.ts";
 export * as design from "./design.ts";
@@ -19,6 +18,7 @@ export * as history from "./history.ts";
 export * as artifacts from "./artifacts.ts";
 export * as slackActivity from "./slack-activity.ts";
 export * as shared from "./shared.ts";
+export { charForName } from "../../web-ui/src/emoji-picker.ts";
 
 const modules = [governance, settings, integrations];
 export const states = new Map<string, GovernanceState | settings.SettingsState | SlackSetting>(

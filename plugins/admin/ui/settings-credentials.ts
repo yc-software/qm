@@ -141,6 +141,7 @@ export class CredentialState {
     const d = this.draft;
     const env = d.delivery === "env";
     const actor = this.original?.injection?.actor;
+    const fixedHeaders = this.original?.injection?.headers;
     return {
       slug: d.slug.trim(),
       name: d.name.trim(),
@@ -150,6 +151,7 @@ export class CredentialState {
       ...(d.secret ? { secret: d.secret } : {}),
       injection: {
         ...(typeof actor === "boolean" ? { actor } : {}),
+        ...(fixedHeaders ? { headers: fixedHeaders } : {}),
         ...(d.header.trim() ? { header: d.header.trim() } : {}),
         ...(d.scheme ? { scheme: d.scheme } : {}),
       },

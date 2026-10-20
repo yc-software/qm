@@ -2,18 +2,35 @@ import type { DurableMap } from "./persistence/durable-map.ts";
 import { orgId as configOrgId } from "./config.ts";
 import { scopeId, type ScopeId } from "./types.ts";
 
-export const FEATURE_NAMES = [
-  "app_annotations",
-  "persistent_subagents",
-  "responsive_spine",
-  "inbox_loops",
-  "slack_loading_indicator",
-  "external_app_sharing",
-  "loop_triage",
-  "swarms",
-  "team_scopes",
-] as const;
-export type FeatureName = (typeof FEATURE_NAMES)[number];
+export const FEATURES = {
+  app_annotations: {
+    label: "App annotations",
+    personalOnly: true,
+    hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
+  },
+  persistent_subagents: {
+    label: "Persistent subagents",
+    personalOnly: true,
+    hint: "Persistent subagents are available for personal scopes only.",
+  },
+  responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
+  inbox_loops: { label: "Inbox Loops" },
+  slack_loading_indicator: {
+    label: "Slack loading indicator (experimental)",
+    hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
+  },
+  external_app_sharing: { label: "External app sharing (public links, outside emails)" },
+  loop_triage: { label: "Loop triage (prioritize and consolidate)" },
+  swarms: { label: "Swarms", personalOnly: true },
+  team_scopes: { label: "Team scopes" },
+  ui_canvas: {
+    label: "UI canvas and UI state (agent code runs in the page)",
+    personalOnly: true,
+    hint: "Lets the agent read the selected people's whole web UI and place live HTML/CSS/JS panels in their conversations. Canvas code runs unsandboxed in their page with their full session: it can do anything they can, including answering approvals. Personal scopes only. Turning it off stops canvases from loading on the next page load.",
+  },
+} as const satisfies Record<string, { label: string; personalOnly?: boolean; hint?: string }>;
+export type FeatureName = keyof typeof FEATURES;
+export const FEATURE_NAMES = Object.keys(FEATURES) as FeatureName[];
 
 export interface FeatureFlagRecord {
   featureName: FeatureName;

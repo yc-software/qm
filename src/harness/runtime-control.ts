@@ -70,7 +70,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
       const authError = await authorizeChoice?.(choice);
       if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
       if (signal?.aborted) return { ok: false, error: "cancelled" };
-      if (lifetime === "scope") await deps.config.setRuntimeSelectionLatest(claims.scopeId, null);
+      if (lifetime === "scope") await deps.config.setRuntimeSelection(claims.scopeId, null);
       return { ok: true, handoff: { choice, lifetime } };
     }
     if (request.action !== "set") return { ok: false, error: "invalid_action" };
@@ -105,7 +105,7 @@ export function createRuntimeService(deps: RuntimeDeps, app: Pick<App, "authoriz
     const authError = await authorizeChoice?.(choice);
     if (authError) return { ok: false, error: "account_runtime_unavailable", message: authError };
     if (signal?.aborted) return { ok: false, error: "cancelled" };
-    if (lifetime === "scope") await deps.config.setRuntimeSelectionLatest(claims.scopeId, choice);
+    if (lifetime === "scope") await deps.config.setRuntimeSelection(claims.scopeId, choice);
     return { ok: true, handoff: { choice, lifetime } };
   };
 }

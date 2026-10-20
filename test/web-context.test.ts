@@ -40,6 +40,7 @@ test("the window carries the person's display text and the agent's DELIVERED pos
       ["you", "Yes — the main ones are…"],
     ],
   );
+  assert.deepEqual(out.selfTs, [(out.messages[1] as { ts: string }).ts]);
   assert.ok(
     out.messages.every((m) => (m as { threadTs?: string }).threadTs === ROOT),
     "every message is stamped with the thread root so whats_new counts it as here",
@@ -132,7 +133,7 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
   const unknown = await answerWebContextRequest(sessions, { conversationTarget: "web:carol@acme.com:nope", count: 10 });
   assert.ok(unknown.error);
   const search = await answerWebContextRequest(sessions, { conversationTarget: TARGET, searchAll: "x", count: 10 });
-  assert.equal(search.result?.note, "live-search-unconfigured");
+  assert.equal(search.result?.liveSearch, "unconfigured");
   const file = await answerWebContextRequest(sessions, { conversationTarget: TARGET, count: 1, file: { ts: "1" } });
   assert.ok(file.error);
 });

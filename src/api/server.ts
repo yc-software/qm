@@ -1,8 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
-import { traceStatus } from "../../plugins/chassis/src/timing.ts";
+import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -23,12 +22,11 @@ import {
 } from "../auth/source-auth.ts";
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
-import { isUserScoped, userScopedField, assertedActor, isUnclassifiedWrite } from "./user-scoped-routes.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { armBodyDeadline, PayloadTooLargeError, readRawBody, sendJson, verifyOrReject } from "./http.ts";
-import { findRoute, run, type ApiCtx, type BaseCtx, type Route, type RouteAuth } from "./routes/route.ts";
+import { findRoute, run, type ApiCtx, type BaseCtx, type Route } from "./routes/route.ts";
 import { apiRoutes, rawRoutes } from "./routes/index.ts";
 import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -88,7 +86,6 @@ const UNATTENDED_READ_PATHS: Record<string, (pathname: string) => boolean> = {
     p === "/v1/admin/errors" ||
     p === "/v1/admin/runs",
   "admin.audit.read": (p) => p === "/v1/admin/audit",
-  "admin.metrics.read": (p) => p === "/v1/admin/metrics",
   "admin.egress.read": (p) => p === "/v1/admin/egress",
   "admin.files.read": (p) =>
     p === "/v1/admin/files" || p === "/v1/admin/files/read" || p === "/v1/admin/files/download",
@@ -125,7 +122,7 @@ function isAdminContentRead(pathname: string): boolean {
   return false;
 }
 
-function strictPostAllowed(pathname: string, body: unknown): boolean {
+function strictPostAllowed(pathname: string): boolean {
   if (
     pathname === "/v1/surface-context" ||
     pathname === "/v1/projects" ||
@@ -135,11 +132,10 @@ function strictPostAllowed(pathname: string, body: unknown): boolean {
   )
     return true;
   if (/^\/v1\/projects\/[^/]+(?:\/members(?:\/[^/]+)?)?$/.test(pathname)) return true;
-  if (/^\/v1\/skills\/[^/]+\/restore$/.test(pathname)) return true;
-  return (
-    /^\/v1\/triggers\/[^/]+\/consent$/.test(pathname) && (body as { decision?: unknown } | null)?.decision === "decline"
-  );
+  return /^\/v1\/skills\/[^/]+\/restore$/.test(pathname);
 }
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {
   const h = req.headers[CAPABILITY_HEADER];
@@ -257,8 +253,9 @@ async function gate(
   pathname: string,
   url: URL,
   raw: string,
-  routeAuth: RouteAuth | undefined,
+  route: Pick<Route, "auth" | "actor"> | undefined,
 ): Promise<GateResult | null> {
+  const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAud = typeof routeAuth === "object" ? routeAuth.aud : null;
@@ -311,7 +308,7 @@ async function gate(
     capability &&
     !requiredAud &&
     method !== "GET" &&
-    !strictPostAllowed(pathname, body) &&
+    !strictPostAllowed(pathname) &&
     deps.config &&
     (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict"
   ) {
@@ -344,20 +341,18 @@ async function gate(
         body !== null &&
         typeof body === "object" &&
         (body as { surface?: unknown }).surface === "web";
+      const routeActor = route?.actor ?? (WRITE_METHODS.has(method) ? "person" : undefined);
       const needsActor =
-        isUserScoped(method, pathname) ||
-        webTurn ||
-        pathname.startsWith("/v1/admin/") ||
-        isUnclassifiedWrite(method, pathname);
+        webTurn || pathname.startsWith("/v1/admin/") || (routeActor !== undefined && routeActor !== "system");
       if (needsActor) {
         if (!psecret || !actor) {
           sendJson(res, 401, { error: "unauthorized", message: "portal identity required" });
           return null;
         }
-        const field = webTurn ? undefined : userScopedField(method, pathname);
+        const field = !webTurn && routeActor?.includes(".") ? routeActor : undefined;
         let asserted: unknown = null;
         if (webTurn) asserted = (body as { actor?: { externalId?: unknown } }).actor?.externalId ?? null;
-        else if (field) asserted = assertedActor(field, url, body, req);
+        else if (field) asserted = assertedActorField(field, url, body);
         const actorId = actor.p;
         const matchesActor = (value: unknown): boolean => typeof value === "string" && samePerson(value, actorId);
         if ((field && !matchesActor(asserted)) || (!field && asserted !== null && !matchesActor(asserted))) {
@@ -368,6 +363,13 @@ async function gate(
     }
   }
   return { body, capability, actor };
+}
+
+function assertedActorField(field: string, url: URL, body: unknown): unknown {
+  const [where, name] = field.split(".", 2) as [string, string];
+  if (where === "query") return url.searchParams.get(name);
+  const value = body && typeof body === "object" ? (body as Record<string, unknown>)[name] : undefined;
+  return typeof value === "string" ? value : null;
 }
 
 function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): BaseCtx {
@@ -419,7 +421,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       const base = baseCtx(req, res, wiring);
       const raw = rawBodies.get(req) ?? "";
       const found = findRoute(matchRoutes, base.method, base.pathname);
-      const g = await gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route.auth);
+      const g = await gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route);
       if (!g) return;
       if (found) {
         const ctx: ApiCtx = {
@@ -474,7 +476,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       url.pathname,
       url,
       raw,
-      request.routeOptions.config.route?.auth,
+      request.routeOptions.config.route,
     );
     if (!result) {
       reply.hijack();
@@ -535,20 +537,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
-  const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
-    const finishTiming =
-      req.url === "/healthz" || req.url === "/readyz"
-        ? undefined
-        : startTiming("http.server", `${req.method ?? "GET"} /*`);
-    if (finishTiming)
-      res.once("close", () =>
-        finishTiming({
-          name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
-          status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
-          data: { url: req.url, http_status: res.writableFinished ? String(res.statusCode) : undefined },
-        }),
-      );
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
@@ -565,12 +554,12 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
-      requestNames.set(req, "/deployment-proxy/*");
+      nameRequest(base.method, "/deployment-proxy/*");
       return;
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
-      if ("path" in raw.route) requestNames.set(req, raw.route.path);
+      if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
         base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth.aud);
@@ -580,7 +569,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       return;
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
-    if (matched && "path" in matched.route) requestNames.set(req, matched.route.path);
+    if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {
@@ -590,7 +579,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
         Math.abs(Date.now() - timestamp * 1000) > SOURCE_AUTH_REPLAY_WINDOW_MS ||
         typeof req.headers["x-signature"] !== "string"
       ) {
-        sendJson(res, 401, { error: "unauthorized", message: "missing, invalid, or stale source-auth headers" });
+        sendJson(res, 401, {
+          error: "unauthorized",
+          message: `missing, invalid, or stale source-auth headers; agent calls must send the capability token as ${CAPABILITY_HEADER}: $AGENT_API_TOKEN`,
+        });
         return;
       }
     }

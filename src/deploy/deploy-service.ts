@@ -25,7 +25,7 @@ import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { errMessage, reportFailure, swallow } from "../util/errors.ts";
+import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 
 export interface DeployFile {
   path: string;
@@ -118,10 +118,15 @@ export interface DeploymentGrantee {
 const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
-export class PublicLinksUnavailableError extends Error {
-  constructor() {
-    super(PUBLIC_LINKS_UNAVAILABLE);
-    this.name = "PublicLinksUnavailableError";
+export type DeployAccessErrorCode =
+  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable";
+
+export class DeployAccessError extends Error {
+  readonly code: DeployAccessErrorCode;
+  constructor(code: DeployAccessErrorCode, message: string) {
+    super(message);
+    this.name = "DeployAccessError";
+    this.code = code;
   }
 }
 
@@ -148,6 +153,19 @@ export interface DeployServiceDeps {
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertAppSize(sizes: readonly number[], maxBytes: number | undefined): void {
+  if (!maxBytes) return;
+  const total = sizes.reduce((sum, n) => sum + n, 0);
+  if (total > maxBytes) {
+    throw new Error(
+      `the app is too large to publish: ${total} bytes, maximum ${maxBytes} bytes — publish fewer or smaller files`,
+    );
+  }
+}
+
+const fileSizes = (files: readonly DeployFile[] | undefined): number[] =>
+  (files ?? []).map((f) => (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength));
 
 function validateName(name: string): void {
   if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
@@ -184,7 +202,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     const { kind, ref } = parseScopeId(grantee);
     if (permission === null || kind !== "personal" || !ref?.includes("@")) return;
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
-    throw new Error(EXTERNAL_APP_SHARING_OFF);
+    throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
@@ -325,6 +343,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
       }
+      assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
       const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
       const homeDir = input.homeFiles?.length ? await snapshotFiles(deps.deployDir, input.homeFiles) : undefined;
       const env = input.stampEnv ? { ...input.env, ...input.stampEnv } : input.env;
@@ -353,7 +372,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
-      void deps.appPublished?.(input.createdBy, d.id, d.versions[0]!.version).catch(() => {});
+      void deps
+        .appPublished?.(input.createdBy, d.id, d.versions[0]!.version)
+        .catch(swallowAs("deploy: app published hook", undefined));
       deps.auditLog.record({
         at: Date.now(),
         principalId: input.createdBy,
@@ -369,6 +390,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         const before = await deps.deployStore.get(id);
         if (!before) throw new Error(`unknown deployment: ${id}`);
         const current = currentVersionOf(before);
+        assertAppSize(fileSizes(input.files), deps.provider.profile.maxAppBytes);
         const snapshotDir = await snapshotFiles(deps.deployDir, input.files);
         let homeDir = input.homeFiles === undefined ? current?.homeDir : undefined;
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
@@ -383,7 +405,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion, input.alwaysOn);
         await markVersionRunning(id, v.version, endpoint);
-        void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
+        void deps
+          .appPublished?.(before.createdBy, id, v.version)
+          .catch(swallowAs("deploy: app published hook", undefined));
         deps.auditLog.record({
           at: Date.now(),
           principalId: before.createdBy,
@@ -539,12 +563,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d) throw new Error(`no such app: ${idOrName}`);
+      if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
+        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
       }
-      if (isPublic && !(await externalSharingAllowed(d.ownerScopeId))) throw new Error(EXTERNAL_APP_SHARING_OFF);
-      if (isPublic && deps.publicLinksAvailable === false) throw new PublicLinksUnavailableError();
+      if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
+        throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
+      if (isPublic && deps.publicLinksAvailable === false)
+        throw new DeployAccessError("public_links_unavailable", PUBLIC_LINKS_UNAVAILABLE);
       await deps.deployStore.setPublic(d.id, isPublic);
       deps.auditLog.record({
         at: Date.now(),
@@ -612,11 +638,18 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ownerScopeId = before.ownerScopeId;
           const pushed = await deps.deployStore.refOf(id, deployCurrentGitRef);
           if (!pushed) return result;
+          const tree = await deps.deployStore.commitTreeOf(id, pushed);
+          assertAppSize(
+            tree.map((f) => f.size),
+            deps.provider.profile.maxAppBytes,
+          );
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
-          void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});
+          void deps
+            .appPublished?.(before.createdBy, id, v.version)
+            .catch(swallowAs("deploy: app published hook", undefined));
           deps.auditLog.record({
             at: Date.now(),
             principalId: before.createdBy,
@@ -768,9 +801,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async shareDeployment(idOrName, grantee, permission, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d) throw new Error(`no such app: ${idOrName}`);
+      if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       if (d.ownerScopeId !== scopeId("personal", actor.createdBy)) {
-        throw new Error(`only the owner can change who can reach "${d.name ?? d.id}"`);
+        throw new DeployAccessError("forbidden", `only the owner can change who can reach "${d.name ?? d.id}"`);
       }
       grantee = await deploymentShareScope(grantee, permission, deps.canManageEmail);
       await assertShareAllowed(d.ownerScopeId, grantee, permission);
@@ -806,9 +839,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
     async transferDeploymentOwner(idOrName, toScope, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
-      if (!d) throw new Error(`no such app: ${idOrName}`);
+      if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       if (!(await managesHome(d, actor.callerId, actor.actingScopeId))) {
-        throw new Error(`only the owner can transfer "${d.name ?? d.id}"`);
+        throw new DeployAccessError("forbidden", `only the owner can transfer "${d.name ?? d.id}"`);
       }
       if (d.ownerScopeId === toScope) return d;
       const ref = deploymentRef(d.id);

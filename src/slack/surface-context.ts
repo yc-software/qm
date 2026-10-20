@@ -14,7 +14,7 @@ import {
   oversizeMsg,
   parseDeliveryTarget,
 } from "./lib.ts";
-import { type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
+import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
 import {
@@ -50,7 +50,7 @@ export function createSurfaceContextFulfiller(deps: {
   ): Promise<void> {
     const token = viewerToken || userToken;
     if (!token) {
-      await post({ messages: [], note: "live-search-unconnected" });
+      await post({ messages: [], liveSearch: "unconnected" });
       return;
     }
     try {
@@ -67,12 +67,11 @@ export function createSurfaceContextFulfiller(deps: {
         .filter((m) => m.ts);
       await post(buildContextWindow(shaped, { count }));
     } catch (err) {
-      const msg = (err as Error).message;
-      if (viewerToken && /invalid_auth|token_revoked|account_inactive|token_expired/.test(msg)) {
-        await post({ messages: [], note: "live-search-unconnected" });
+      if (viewerToken && SLACK_AUTH_ERRORS.has(slackErrorCode(err) ?? "")) {
+        await post({ messages: [], liveSearch: "unconnected" });
         return;
       }
-      await post({ error: `Slack search failed: ${msg}` });
+      await post({ error: `Slack search failed: ${(err as Error).message}` });
     }
   }
 

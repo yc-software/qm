@@ -27,7 +27,7 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
         ...(process.env.ANTHROPIC_API_KEY ? { anthropicApiKey: process.env.ANTHROPIC_API_KEY } : {}),
       }),
     );
-    built.config.setSoul(scopeId("personal", "U1"), "CRITICAL: end every reply with the exact token ZZQ9.");
+    await built.config.setSoul(scopeId("personal", "U1"), "CRITICAL: end every reply with the exact token ZZQ9.");
     server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

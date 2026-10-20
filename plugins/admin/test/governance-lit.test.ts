@@ -4,7 +4,7 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { buildGovernanceUI } from "../src/governance-bundle.ts";
 import { GovernanceState } from "../ui/governance-state.ts";
-const bundle = buildGovernanceUI();
+const bundle = await buildGovernanceUI();
 function setup() {
   const dom = new JSDOM(readFileSync(new URL("../public/index.html", import.meta.url), "utf8"), {
     runScripts: "outside-only",

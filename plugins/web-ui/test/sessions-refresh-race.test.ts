@@ -139,7 +139,7 @@ function jsdomGlobals(): JSDOM {
   return dom;
 }
 
-test("opening a conversation joins the list refresh already in flight instead of starting its own", async () => {
+test("opening a conversation joins the first list load and leaves a current list to the delivery stream", async () => {
   const dom = jsdomGlobals();
   const pending: Array<(r: Response) => void> = [];
   globalThis.fetch = async (input) => {
@@ -162,13 +162,13 @@ test("opening a conversation joins the list refresh already in flight instead of
     await sessionsReady();
 
     refreshSessionsOnOpen();
+    refreshSessionsOnOpen();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(pending.length, 2, "once it has landed, opening a conversation freshens the list again");
-
-    refreshSessionsOnOpen();
-    refreshSessionsOnOpen();
-    assert.equal(pending.length, 2, "…and panes restored together still share one refresh, loaded list or not");
-    pending[1]!(Response.json({ sessions: [] }));
+    assert.equal(
+      pending.length,
+      1,
+      "once it has landed, opening a conversation leaves the list to the delivery stream",
+    );
   } finally {
     await vite.close();
     dom.window.close();
@@ -193,6 +193,41 @@ test("a failed list load does not lock out the next conversation open", async ()
     refreshSessionsOnOpen();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(hits, 2, "nothing is in flight to defer to — the open must retry");
+  } finally {
+    await vite.close();
+    dom.window.close();
+  }
+});
+
+test("after a background refresh fails, the next open refetches the loaded list", async () => {
+  const dom = jsdomGlobals();
+  const sessions = [{ id: "a", threadRef: "web:alex:a", scopeId: "personal:alex", title: "Before" }];
+  let failing = false;
+  let hits = 0;
+  globalThis.fetch = async (input) => {
+    const path = String(input);
+    if (path === "/api/contexts") return Response.json({ contexts: [] });
+    hits++;
+    if (failing) throw new Error("network down");
+    return Response.json({ sessions });
+  };
+
+  const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom" });
+  try {
+    const { refreshSessions, refreshSessionsOnOpen, sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
+    assert.equal(await refreshSessions({ showLoading: true }), true);
+    failing = true;
+    assert.equal(await refreshSessions({ silent: true }), false);
+    failing = false;
+    sessions[0]!.title = "After";
+    refreshSessionsOnOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hits, 3, "an open repairs a list whose last refresh failed");
+    assert.equal(sessionsState.list[0]?.title, "After");
+    refreshSessionsOnOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(hits, 3, "and leaves it alone once it is current again");
   } finally {
     await vite.close();
     dom.window.close();

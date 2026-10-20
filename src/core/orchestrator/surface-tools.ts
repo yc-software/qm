@@ -37,7 +37,7 @@ import {
 } from "../attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
@@ -197,7 +197,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
     if (!deps.surfaceCache || !container) return coverageSince;
     const cacheContainer = currentDestination.type === "slack" ? container.split(":")[0]! : container;
-    const st = await deps.surfaceCache.containerState(cacheContainer).catch(() => null);
+    const st = await deps.surfaceCache
+      .containerState(cacheContainer)
+      .catch(swallowAs("surface cache: container coverage", null));
     coverageSince = st?.oldestTs ? isoFromTs(st.oldestTs) || undefined : undefined;
     return coverageSince;
   };
@@ -328,10 +330,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      const msgs = (result.messages ?? []) as Array<{ ts?: string; threadTs?: string; author?: string }>;
+      const msgs = (result.messages ?? []) as Array<{ ts?: string; threadTs?: string }>;
       const since = opts?.since;
+      const self = new Set(result.selfTs);
       const newer = msgs.filter(
-        (m) => typeof m?.ts === "string" && (since === undefined || m.ts > since) && m.author !== "you",
+        (m) => typeof m?.ts === "string" && (since === undefined || m.ts > since) && !self.has(m.ts),
       );
       const isDm = conversation.kind === "dm";
       const hereRoot = dest.target.slice(dest.target.lastIndexOf(":") + 1);
@@ -386,8 +389,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           searchAll: q,
         });
         if (!result) return { ok: false, message: "the surface didn't answer in time" };
-        if (result.note === "live-search-unconfigured") return { ok: false, message: "[live search isn't configured]" };
-        if (result.note === "live-search-unconnected")
+        if (result.liveSearch === "unconfigured") return { ok: false, message: "[live search isn't configured]" };
+        if (result.liveSearch === "unconnected")
           return {
             ok: false,
             message:

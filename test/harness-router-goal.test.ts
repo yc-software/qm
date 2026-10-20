@@ -314,3 +314,33 @@ test("the router reports the runtime each turn runs on, and the rule that routed
     { harnessId: "claude", modelId: "claude-opus-5-5", label: "Opus 5.5" },
   ]);
 });
+
+async function completeSpendGoal(costUsd: number) {
+  const emitted: SessionEntry[] = [];
+  let reply = "";
+  const { harness } = fakeAdapter(async (turn, round) => {
+    if (round > 0) return { reply: "", stopped: true };
+    const { call } = goalTools(turn);
+    await call("c1", { action: "create", objective: "spend the budget", floor: { minUsd: 0.05 } });
+    await turn.recordLlmRequest?.({
+      turnSeq: null,
+      step: 0,
+      model: "claude-opus-5-5",
+      truncated: false,
+      usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 1000, costUsd },
+    });
+    reply = (await call("c2", { action: "update", status: "complete", note: "spent it" })).content[0]!.text!;
+    return { reply: "done" };
+  });
+  await router(harness).turns.runTurn(stubTurn(emitted));
+  return reply;
+}
+
+test("a non-enforcing harness's recorded call cost counts toward a goal's spend floor", async () => {
+  assert.doesNotMatch(await completeSpendGoal(0.06), /floor/i);
+  assert.match(await completeSpendGoal(0.01), /floor/i);
+});
+
+test("a call without a recorded price stops a spend floor from blocking completion on a non-enforcing harness", async () => {
+  assert.doesNotMatch(await completeSpendGoal(0), /floor/i);
+});

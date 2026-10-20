@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { sendBuffered } from "../../chassis/src/http.ts";
 
 const SECRET = "web-ui-compression-test";
 
@@ -21,8 +22,12 @@ const sessionsPayload = JSON.stringify({
 
 const core = createServer((req: IncomingMessage, res) => {
   req.resume();
-  res.writeHead(200, { "content-type": "application/json" });
-  res.end((req.url ?? "").startsWith("/v1/sessions") ? sessionsPayload : "{}");
+  sendBuffered(
+    res,
+    200,
+    { "content-type": "application/json" },
+    (req.url ?? "").startsWith("/v1/sessions") ? sessionsPayload : "{}",
+  );
 });
 await new Promise<void>((r) => core.listen(0, r));
 

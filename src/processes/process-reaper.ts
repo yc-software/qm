@@ -2,9 +2,9 @@ import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -35,7 +35,7 @@ export function createReaperKillHook(
         }
         if (status.state !== "exited") throw new Error(`process survived TERM+KILL: ${rec.processId}`);
       } catch (e) {
-        if (!processIsGone(e)) throw e;
+        if (!(e instanceof ProcessSessionGoneError)) throw e;
       }
       await opts
         ?.onExit?.(handle, rec.processId)
@@ -74,7 +74,8 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (opts.kill) {
         try {
           await opts.kill(rec);
-        } catch {
+        } catch (error) {
+          swallow(`process reaper: kill ${rec.processId}`, error);
           continue;
         }
       }

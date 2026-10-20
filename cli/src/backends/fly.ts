@@ -190,7 +190,6 @@ export interface FlyUpOpts {
 
 interface FlyCtx {
   config: QmConfig;
-  templateRoot: string;
   generatedRoot: string;
   commandCwd: string;
   sourceRoot?: string;
@@ -335,8 +334,7 @@ const flyOwnershipMarker = (flyOrg: string, orgId: string, appPrefix: string): s
 
 function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const spec = serviceDef(service).fly!;
-  const nested = join(ctx.templateRoot, service, "fly.toml");
-  const base = readFileSync(existsSync(nested) ? nested : join(ctx.templateRoot, `${service}.toml`), "utf8");
+  const base = readFileSync(join(flyTemplateRoot(), `${service}.toml`), "utf8");
   const sandboxEnv = service === "core" ? sandboxCoreEnv(ctx.config).env : {};
   const virtualEnv = service === "core" ? virtualServiceEnv(ctx.config.services, ctx.config.env) : {};
   const modelEnv: Record<string, string> =
@@ -429,7 +427,6 @@ export function derivedTomlFor(config: QmConfig, service: ServiceName, repoRoot:
   const deployAppPrefix = config.deployAppPrefix ?? `${appPrefix}-d`;
   const ctx: FlyCtx = {
     config,
-    templateRoot: join(repoRoot, "deploy"),
     generatedRoot: join(repoRoot, "deploy", "stacks", ".generated"),
     commandCwd: repoRoot,
     sourceRoot: repoRoot,
@@ -672,6 +669,24 @@ function ensureFlycast(app: string): void {
   note(`flycast: allocated private v6 for ${app}`);
 }
 
+function ensurePublicIngress(app: string): void {
+  let ips: Array<{ Type?: string }>;
+  try {
+    ips = JSON.parse(fly(["ips", "list", "-a", app, "--json"]) || "[]");
+  } catch {
+    throw new CliError(`fly ips list returned invalid JSON for ${app}`);
+  }
+  const types = new Set(ips.map((ip) => ip.Type));
+  if (!types.has("v6")) {
+    fly(["ips", "allocate-v6", "-a", app]);
+    note(`public ingress: allocated v6 for ${app}`);
+  }
+  if (!types.has("v4") && !types.has("shared_v4")) {
+    fly(["ips", "allocate-v4", "--shared", "-a", app]);
+    note(`public ingress: allocated shared v4 for ${app}`);
+  }
+}
+
 interface FlyImageDetail {
   digest: string;
   immutableReference: string;
@@ -790,7 +805,6 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
     const root = resolve(explicit);
     return existsSync(join(root, "package.json")) &&
       existsSync(join(root, "src", "index.ts")) &&
-      existsSync(join(root, "deploy", "core", "fly.toml")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile"))
       ? root
       : undefined;
@@ -808,12 +822,11 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
     (root) =>
       existsSync(join(root, "package.json")) &&
       existsSync(join(root, "src", "index.ts")) &&
-      existsSync(join(root, "deploy", "core", "fly.toml")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile")),
   );
 }
 
-function packagedFlyTemplateRoot(): string {
+function flyTemplateRoot(): string {
   const source = fileURLToPath(new URL("../../templates/fly", import.meta.url));
   if (existsSync(source)) return source;
   return fileURLToPath(new URL("../../../templates/fly", import.meta.url));
@@ -831,7 +844,6 @@ function buildCtx(config: QmConfig, configDir: string, opts: Pick<FlyUpOpts, "bu
   const deployAppPrefix = config.deployAppPrefix ?? `${appPrefix}-d`;
   return {
     config,
-    templateRoot: sourceRoot ? join(sourceRoot, "deploy") : packagedFlyTemplateRoot(),
     generatedRoot: join(configDir, ".generated", "fly"),
     commandCwd: configDir,
     ...(sourceRoot ? { sourceRoot } : {}),
@@ -854,6 +866,7 @@ async function deployService(
   note(`\n=== deploying ${app} ===`);
   if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
   if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
+  if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
   if (imageSource?.kind === "tagged") {

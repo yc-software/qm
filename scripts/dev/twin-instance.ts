@@ -3,7 +3,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { provisionTwinEnvironment, teardownTwinEnvironment } from "../../test/live-slack/arga-provision.ts";
-import { readEnvFile } from "./lib/util.ts";
+import { readEnvFile } from "../../cli/src/util.ts";
+import { swallowAs } from "../../src/util/errors.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const dir = join(root, ".twin-instance");
@@ -11,7 +12,7 @@ const envFile = join(dir, "env");
 const pumpPid = join(dir, "pump.pid");
 
 function loadEnvFile(): Record<string, string> {
-  return readEnvFile(envFile);
+  return Object.fromEntries(readEnvFile(envFile));
 }
 
 async function up(): Promise<void> {
@@ -31,7 +32,9 @@ async function up(): Promise<void> {
     stdio: "inherit",
   });
   if (boot.status !== 0) {
-    await teardownTwinEnvironment(process.env.ARGA_API_KEY!, bootEnv.ARGA_TWIN_RUN_ID).catch(() => {});
+    await teardownTwinEnvironment(process.env.ARGA_API_KEY!, bootEnv.ARGA_TWIN_RUN_ID).catch(
+      swallowAs("twin instance: teardown after failed boot", undefined),
+    );
     rmSync(dir, { recursive: true, force: true });
     throw new Error("instance boot failed — twin torn down");
   }

@@ -38,6 +38,7 @@ export async function browserEnv(
     sessionStorage: dom.window.sessionStorage,
     navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement,
+    HTMLAnchorElement: dom.window.HTMLAnchorElement,
     Element: dom.window.Element,
     Node: dom.window.Node,
     Event: dom.window.Event,

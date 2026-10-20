@@ -450,3 +450,12 @@ test("deployment names become DNS labels and ids become sandbox-safe names", asy
   assert.match(body.name, /^qmt-app-dep-9-/);
   assert.deepEqual(fake.volumeNames(), ["qmt-app-dep-9-data"]);
 });
+
+test("a refused sandbox create surfaces the cluster's own error unchanged", async () => {
+  const refused = new Error("no private sandbox ingress is configured on this cluster");
+  fake.client.sandboxes.create = () => Promise.reject(refused);
+  await assert.rejects(
+    provider.apply(deployment("refused"), version({ "server.js": SERVER }, "node server.js")),
+    (error) => error === refused,
+  );
+});

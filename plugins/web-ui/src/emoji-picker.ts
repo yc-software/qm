@@ -1,6 +1,16 @@
-import { EMOJI_ROWS, type EmojiRow } from "./emoji-data.ts";
+import { EMOJI_TABLE } from "./emoji-table.ts";
 
-export type { EmojiRow };
+export interface EmojiRow {
+  n: string;
+  c: string;
+  a: string[];
+}
+
+export const EMOJI_ROWS: readonly EmojiRow[] = EMOJI_TABLE.map(([unified, n, ...a]) => ({
+  n: n!,
+  c: String.fromCodePoint(...unified!.split("-").map((hex) => parseInt(hex, 16))),
+  a,
+}));
 
 function normalizeName(name: string): string {
   return name.toLowerCase().replaceAll("-", "_");
@@ -8,7 +18,7 @@ function normalizeName(name: string): string {
 
 const names = new Map<string, EmojiRow>();
 for (const row of EMOJI_ROWS) {
-  for (const name of [row.n, ...(row.a ?? [])]) {
+  for (const name of [row.n, ...row.a]) {
     const normalized = normalizeName(name);
     if (!names.has(normalized)) names.set(normalized, row);
   }
@@ -18,29 +28,14 @@ export function rowForName(name: string): EmojiRow | null {
   return names.get(normalizeName(name)) ?? null;
 }
 
-export function matchesQuery(row: EmojiRow, needle: string): boolean {
-  if (!needle) return true;
-  if (normalizeName(row.n).includes(normalizeName(needle))) return true;
-  return (row.a ?? []).some((alias) => normalizeName(alias).includes(normalizeName(needle)));
+function matchesQuery(row: EmojiRow, needle: string): boolean {
+  return [row.n, ...row.a].some((name) => normalizeName(name).includes(normalizeName(needle)));
 }
 
 export function filterEmoji(rows: readonly EmojiRow[], query: string): EmojiRow[] {
   const needle = query.trim().toLowerCase().replace(/^:+/, "").replace(/:+$/, "");
   if (!needle) return [...rows];
   return rows.filter((row) => matchesQuery(row, needle));
-}
-
-export function groupEmoji(
-  rows: readonly EmojiRow[],
-  order: readonly string[],
-): Array<{ group: string; rows: EmojiRow[] }> {
-  const byGroup = new Map<string, EmojiRow[]>();
-  for (const row of rows) {
-    const bucket = byGroup.get(row.g);
-    if (bucket) bucket.push(row);
-    else byGroup.set(row.g, [row]);
-  }
-  return order.filter((g) => byGroup.has(g)).map((group) => ({ group, rows: byGroup.get(group)! }));
 }
 
 export function charForName(name: string): string | null {

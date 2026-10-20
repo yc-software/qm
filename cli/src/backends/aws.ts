@@ -56,8 +56,8 @@ import {
   type ServiceName,
 } from "../services.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
+import { canonicalJson } from "../canonical-json.ts";
 import {
-  canonicalJson,
   capture,
   deploymentSecretValue,
   envNum,
@@ -92,10 +92,40 @@ import {
 import {
   awaitBackgroundWork,
   readBackgroundWork,
+  readProductionOwner,
   setBackgroundOwner,
   type BackgroundWorkStatus,
   type BackgroundWorkTransport,
 } from "../background-work.ts";
+
+async function fetchCore(
+  url: URL,
+  init: RequestInit,
+  maxResponseBytes?: number,
+): Promise<{ status: number; body: string }> {
+  const response = await fetch(url, init);
+  if (maxResponseBytes === undefined) return { status: response.status, body: await response.text() };
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = response.body?.getReader();
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxResponseBytes) throw new CliError("AWS core response exceeded its size limit");
+        chunks.push(value);
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  return { status: response.status, body: Buffer.concat(chunks).toString("utf8") };
+}
 
 export async function awsCoreRequest(
   config: QmConfig,
@@ -107,28 +137,7 @@ export async function awsCoreRequest(
   if (!validAlbHostname(target)) throw new CliError("AWS deployment-layer ALB hostname is invalid");
   if (awsPublicOrigin(config).protocol === "http:") {
     assertCloudFrontLayerTarget(config, url, target);
-    const response = await fetch(url, init);
-    if (maxResponseBytes === undefined) return { status: response.status, body: await response.text() };
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    const reader = response.body?.getReader();
-    if (reader) {
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          size += value.byteLength;
-          if (size > maxResponseBytes) throw new CliError("AWS core response exceeded its size limit");
-          chunks.push(value);
-        }
-      } catch (error) {
-        await reader.cancel().catch(() => {});
-        throw error;
-      } finally {
-        reader.releaseLock();
-      }
-    }
-    return { status: response.status, body: Buffer.concat(chunks).toString("utf8") };
+    return fetchCore(url, init, maxResponseBytes);
   }
   return new Promise((resolve, reject) => {
     const request = https.request(
@@ -380,7 +389,12 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       : {};
   const env: Record<string, string> = {
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-    ...(service === "core" ? {} : { CORE_API_URL: coreUrl }),
+    ...(service === "core"
+      ? {}
+      : {
+          CORE_API_URL:
+            isServiceName(service) && serviceDef(service).tcpIngress ? (config.apiUrl ?? config.publicUrl) : coreUrl,
+        }),
     ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? securityScreenEnv(config) : {}),
@@ -498,7 +512,8 @@ export function renderTaskDefinition(
   const aws = requireAws(config);
   const spec = aws.services[service];
   if (!spec) throw new CliError(`aws.services.${service} is missing`);
-  const internalPort = isServiceName(service) ? serviceDef(service).docker.internalPort : 8080;
+  const def = isServiceName(service) ? serviceDef(service) : undefined;
+  const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
   const managedTaskRole = spec.assumeRoleArns?.length
     ? `${aws.cluster}-${service}-task`
@@ -512,9 +527,9 @@ export function renderTaskDefinition(
       })),
     )
     .sort((a, b) => a.name.localeCompare(b.name));
-  const healthCheck = isServiceName(service)
+  const healthCheck = def
     ? {
-        command: [
+        command: def.tcpIngress?.healthCheck ?? [
           "CMD",
           "node",
           "-e",
@@ -553,7 +568,7 @@ export function renderTaskDefinition(
             containerPort: internalPort,
             hostPort: internalPort,
             protocol: "tcp",
-            appProtocol: "http",
+            ...(def?.tcpIngress ? {} : { appProtocol: "http" }),
           },
         ],
         ...(healthCheck ? { healthCheck } : {}),
@@ -2936,6 +2951,7 @@ function awsBackgroundWorkTransport(
   path = "/v1/background-work",
   timeoutMs = 30_000,
   maxResponseBytes?: number,
+  productionRoute = false,
 ): BackgroundWorkTransport {
   const aws = requireAws(config);
   const secret = (name: string): string =>
@@ -2951,31 +2967,32 @@ function awsBackgroundWorkTransport(
   const control = secret("DEPLOYMENT_CONTROL_SECRET");
   if (isInvalidSecret("CORE_SIGNING_SECRET", signing) || control.trim().length < 32 || control === signing)
     throw new CliError("deployment control requires a distinct secret of at least 32 characters");
-  const url = new URL(config.publicUrl);
+  const url = new URL(productionRoute ? (config.apiUrl ?? config.publicUrl) : config.publicUrl);
+  if (productionRoute && (url.protocol !== "https:" || url.username || url.password))
+    throw new CliError("the production background ownership route must be HTTPS without credentials");
   url.pathname = `${url.pathname.replace(/\/+$/, "")}${path}`;
   url.search = "";
+  url.hash = "";
   return (method, body = "") => {
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = createHmac("sha256", signing)
       .update(`v0:${timestamp}:${method}\n${url.pathname}\n${body}`)
       .digest("hex");
-    return awsCoreRequest(
-      config,
-      url,
-      {
-        method,
-        headers: {
-          "content-type": "application/json",
-          "x-timestamp": String(timestamp),
-          "x-signature": `v0=${signature}`,
-          authorization: `Bearer ${control}`,
-        },
-        ...(method === "POST" ? { body } : {}),
-        redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+    const init: RequestInit = {
+      method,
+      headers: {
+        "content-type": "application/json",
+        "x-timestamp": String(timestamp),
+        "x-signature": `v0=${signature}`,
+        authorization: `Bearer ${control}`,
       },
-      maxResponseBytes,
-    );
+      ...(method === "POST" ? { body } : {}),
+      redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs),
+    };
+    return productionRoute
+      ? fetchCore(url, init, maxResponseBytes ?? 65_536)
+      : awsCoreRequest(config, url, init, maxResponseBytes);
   };
 }
 
@@ -3251,8 +3268,19 @@ export async function awsBackgroundWorkCapacity(
   return proof;
 }
 
+export async function awsStoppedCoreOwner(
+  config: QmConfig,
+  deploymentId: string,
+): Promise<BackgroundWorkStatus | undefined> {
+  const state = describedServices(config, ["core"]).get("core");
+  if (!state || state.desiredCount !== 0) return undefined;
+  stableWorkloadCapacity(config, "core", state, state.taskDefinition ?? "", 0);
+  return readProductionOwner(awsBackgroundWorkTransport(config, undefined, undefined, undefined, true), deploymentId);
+}
+
 async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentManifest | undefined): Promise<void> {
   if (!current?.backgroundDeploymentId) return;
+  if (await awsStoppedCoreOwner(config, current.backgroundDeploymentId)) return;
   const status = await readBackgroundWork(awsBackgroundWorkTransport(config), current.backgroundDeploymentId);
   if (status.ownerDeploymentId === current.backgroundDeploymentId)
     throw new CliError("hand background ownership to another deployment before replacing the current core tasks");
@@ -4053,7 +4081,11 @@ export function assertAwsPublicRouting(
     }
   }
   for (const name of deployedAwsServices(aws)) {
-    if (!ingress.includes(name) && (routingServices.get(name)?.loadBalancers ?? []).length) {
+    if (
+      !ingress.includes(name) &&
+      !(isServiceName(name) && serviceDef(name).tcpIngress) &&
+      (routingServices.get(name)?.loadBalancers ?? []).length
+    ) {
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
   }

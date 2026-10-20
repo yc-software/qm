@@ -101,7 +101,7 @@ const getCfg = async (base: string) =>
       enabled: boolean;
       grantees: string[];
       updatedAt: number;
-      injection?: { header?: string; scheme?: string; actor?: boolean };
+      injection?: { header?: string; scheme?: string; actor?: boolean; headers?: Record<string, string> };
       allowedMethods?: string[];
       allowedPathPrefixes?: string[];
     }>;
@@ -334,6 +334,20 @@ test("partial credential updates preserve capability lists while explicit empty 
     );
     loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(loaded.enabled, false, "omitting enabled preserves a disabled credential");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a credential whose injection only adds fixed headers keeps them", async () => {
+  const srv = start();
+  try {
+    const injection = { headers: { "x-api-version": "2025-11-01" } };
+    assert.equal(
+      (await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example", injection })).status,
+      200,
+    );
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.injection, injection);
   } finally {
     await srv.close();
   }
@@ -1056,7 +1070,7 @@ test("orchestrator vends a capability for only the requested org credential", as
   await built.app.turn(dm("!run echo hi"));
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   const res = await built.app.turn(
-    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`),
+    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`),
   );
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1080,7 +1094,7 @@ test("orchestrator vends a capability for only the requested org credential", as
       audience: [actor],
       publishMembers: [actor],
     },
-    text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["service_x-firehose"] })}`,
+    text: `!execute ${JSON.stringify({ command: "echo bot", credentials: ["x-firehose"] })}`,
   });
   const botClaims = await verifyCapabilityToken(executionEnv()!.AGENT_CREDENTIAL_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(botClaims?.botActor, true);
@@ -1106,7 +1120,7 @@ test("orchestrator does NOT stamp a credential granted only to someone else", as
   await selectDefaultSandbox(built, "U1", "personal:U1");
 
   await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   const res = await built.app.turn(dm("!run echo hi"));
@@ -1148,7 +1162,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(executionEnv()?.AGENT_CREDENTIAL_TOKEN, undefined);
   let res = await built.app.turn({
     ...channelTurn("C1"),
-    text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`,
+    text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
   });
   assert.equal(res.status, "ok", res.reason);
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined);
@@ -1160,7 +1174,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
   await assert.rejects(
     built.app.turn({
       ...channelTurn("C2"),
-      text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`,
+      text: `!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`,
     }),
     /not available/,
   );
@@ -1169,7 +1183,7 @@ test("a channel grantee stamps the credential in that channel's conversations an
   assert.equal(env()?.AGENT_CREDENTIAL_TOKEN, undefined, "another channel must not get the credential");
 
   await assert.rejects(
-    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_x-firehose"] })}`)),
+    built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["x-firehose"] })}`)),
     /not available/,
   );
   res = await built.app.turn(dm("!run echo hi"));
@@ -1367,8 +1381,8 @@ test("credential inventory and policy reordering do not resend unchanged credent
   }
   const first = await built.app.turn(dm("!sysprompt"));
   assert.equal(first.status, "ok");
-  assert.match(first.reply ?? "", /service_z-service/);
-  assert.match(first.reply ?? "", /service_a-service/);
+  assert.match(first.reply ?? "", /z-service/);
+  assert.match(first.reply ?? "", /a-service/);
   assert.match(first.reply ?? "", /### Organization/);
   const list = built.serviceCreds.listServiceCredentials.bind(built.serviceCreds);
   built.serviceCreds.listServiceCredentials = async (...args) =>

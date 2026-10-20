@@ -73,6 +73,7 @@ import {
   contextTokenBudgetForModel,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexProviderModelId,
+  modelHasPrices,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import {
@@ -97,6 +98,7 @@ import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.t
 import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
+  dayMarkerPrefix,
   recordedMessageTimestamps,
   replayPreamble,
   userPromptText,
@@ -1582,8 +1584,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
-  ): Promise<{ entry: TurnSession; compileMs: number }> {
-    const compileStart = Date.now();
+  ): Promise<{ entry: TurnSession }> {
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -1604,7 +1605,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       tempDirPrefix,
       composedPrompt,
     );
-    const compileMs = Date.now() - compileStart;
 
     let session: AgentSession;
     try {
@@ -1723,7 +1723,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
-    return { entry, compileMs };
+    return { entry };
   }
 
   return defineHarness(
@@ -1773,7 +1773,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
         const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
         const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-        const { entry, compileMs } = await createTurnSession(
+        const { entry } = await createTurnSession(
           withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
@@ -1789,6 +1789,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
+          entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
           const effectiveModel = activeModel?.id ?? desiredModelId;
           const defaultThinkingLevel = entry.agentSession.model
             ? defaultInteractiveThinkingLevel(entry.agentSession.model)
@@ -1839,8 +1840,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   ...imageRefs(turn.images),
                 },
                 scopeLabel: turn.scopeLabel,
+                ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
               });
-          const modelPrompt = userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+          const modelPrompt =
+            (userEntry
+              ? dayMarkerPrefix(
+                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                  userEntry,
+                )
+              : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
@@ -1908,6 +1916,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
+              steps.startStreaming();
               curStart = Date.now();
               curFirst = undefined;
               try {
@@ -1925,12 +1934,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
+            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+              const { contentIndex, delta, partial } = event.assistantMessageEvent;
+              const block = partial.content[contentIndex];
+              if (block?.type === "thinking" && !block.redacted)
+                turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
+              meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
               callStats.push({
@@ -2036,6 +2050,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                         ts,
                         attachments: prepared?.attachments,
                         images: prepared?.images,
+                        author: prepared?.author,
                         acknowledge,
                       };
                       pendingSteers.push(steer);
@@ -2311,7 +2326,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply: "",
               runtimeHandoff: entry.ref.runtimeHandoff,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
               cacheUsage: sumCacheUsage(callStats) ?? undefined,
             };
           }
@@ -2349,7 +2363,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply,
               stopped: true as const,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
             };
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
@@ -2379,9 +2392,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
                 modelCalls,
                 ...silent,
-                compileMs,
               }
-            : { reply, modelCalls, ...silent, compileMs };
+            : { reply, modelCalls, ...silent };
           return cacheUsage ? { ...base, cacheUsage } : base;
         } finally {
           removeIsolatedDirs(entry);
@@ -2389,25 +2401,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       },
 
       async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
-        try {
-          const modelId = detectModelId();
-          const model = requiredModel(modelId);
-          const providerKeys = await resolveProviderKeys();
-          if (!keyForModel(providerKeys, model)) return { respond: true };
-          const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
-          const prompt = renderDetectPrompt(detect);
-          detect.recordModelCall({
-            model: modelId,
-            inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
-            entryCount: detect.history.length,
-          });
-          const out = (
-            (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
-          ).trim();
-          return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
-        } catch {
-          return { respond: false };
-        }
+        const modelId = detectModelId();
+        const model = requiredModel(modelId);
+        const providerKeys = await resolveProviderKeys();
+        if (!keyForModel(providerKeys, model)) return { respond: true };
+        const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
+        const prompt = renderDetectPrompt(detect);
+        detect.recordModelCall({
+          model: modelId,
+          inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
+          entryCount: detect.history.length,
+        });
+        const out = (
+          (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
+        ).trim();
+        return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
       },
 
       async compactHistory(input: HarnessCompactInput): Promise<string> {

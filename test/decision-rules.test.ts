@@ -121,7 +121,7 @@ test("runHook: highest-probability option decides; observe rules never act; erro
     credential: async (slug: string) => ({
       host: slug === "dec" ? "dec.example" : "ts.example",
       enabled: true,
-      header: ["Authorization", `Bearer ${slug}-key`] as [string, string],
+      headers: { Authorization: `Bearer ${slug}-key` },
     }),
     fetch: async () =>
       new Response(
@@ -240,7 +240,7 @@ test("decisions protocol calls the Decisions API and reads its probability array
     credential: async (slug: string) => ({
       host: slug === "dec" ? "dec.example" : "ts.example",
       enabled: true,
-      header: ["Authorization", `Bearer ${slug}-key`] as [string, string],
+      headers: { Authorization: `Bearer ${slug}-key` },
     }),
     fetch: fetchImpl,
   });
@@ -267,7 +267,7 @@ test("systemone protocol posts to /systemone", async () => {
     credential: async (slug: string) => ({
       host: slug === "dec" ? "dec.example" : "ts.example",
       enabled: true,
-      header: ["Authorization", `Bearer ${slug}-key`] as [string, string],
+      headers: { Authorization: `Bearer ${slug}-key` },
     }),
     fetch: fetchImpl,
   });
@@ -279,7 +279,7 @@ test("a missing, disabled or mismatched credential is an error, so the rule fall
   const backend = (rec: { host: string; enabled: boolean } | null) =>
     createDecisionBackend({
       providers: () => [{ id: "oa", protocol: "decisions", baseUrl: "https://dec.example/v1", credential: "dec" }],
-      credential: async () => rec && { ...rec, header: ["Authorization", "Bearer x"] as [string, string] },
+      credential: async () => rec && { ...rec, headers: { Authorization: "Bearer x" } },
     });
   await assert.rejects(ask(backend(null), { provider: "oa", model: "m" }), /missing or disabled/);
   await assert.rejects(

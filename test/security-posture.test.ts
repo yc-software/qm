@@ -218,12 +218,6 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   );
 
   await restarted.setApprovalGrantModes(org, { session: true, always: true });
-  restarted.clearApprovalGrantModes(channel);
-  assert.deepEqual(
-    restarted.getApprovalGrantModes(channel),
-    { session: true, always: true },
-    "clearing the scope override restores the org value",
-  );
 });
 
 test("tool results carry a provenance class and only external content reaches the classifier", () => {

@@ -9,7 +9,6 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { isPollSurface, isSilentPollReply } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Cron } from "../src/types.ts";
@@ -36,9 +35,6 @@ function harness(
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (typeof reply === "function") return reply(req);
-    if (req.triggered && req.surface && isPollSurface(req.surface) && isSilentPollReply(reply)) {
-      return { status: "silent" };
-    }
     return { status: "ok", reply };
   };
   const scheduler = createScheduler({
@@ -133,49 +129,6 @@ test("a group-DM cron composed at another scope delivers verbatim (person-keyed 
   assert.equal((await deliveries.pending("group"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
-test("a poll cron whose turn replies [no-update] runs but delivers nothing", async () => {
-  const { crons, deliveries, calls, scheduler } = harness("  [no-update]\n");
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "check the status page; reply [no-update] if unchanged",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal(calls.length, 1);
-  assert.equal((await deliveries.pending("slack")).length, 0);
-});
-
-test("a poll cron stays silent on an empty reply or a bare silence token", async (t) => {
-  const cases = [
-    ["empty reply — the natural nothing-to-report", ""],
-    ["whitespace-only reply", "  \n\n "],
-    ["summary then canonical marker", "No unread mail in the last hour.\n\n[no-update]"],
-    ["upper no reply marker", "Nothing changed.\nNO_REPLY"],
-    ["lower no reply marker", "Nothing changed.\nno_reply"],
-    ["silent marker", "All quiet.\n[SILENT]\n\n"],
-    ["case-insensitive canonical marker", "No changes.\n[NO-UPDATE]"],
-  ] as const;
-  for (const [name, reply] of cases) {
-    await t.test(name, async () => {
-      const { crons, deliveries, calls, scheduler } = harness(reply);
-      const cron = await crons.create({
-        schedule: { everyMs: 1000 },
-        action: "check the mailbox; output [no-update] if unchanged",
-        owner: "U1",
-        createdBy: "U1",
-        ownerScopeId: scopeId("personal", "U1"),
-        destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
-      });
-      await runNowSettled(scheduler, cron.id);
-      assert.equal(calls.length, 1);
-      assert.equal((await deliveries.pending("slack")).length, 0);
-    });
-  }
-});
-
 test("a channel cron fire gives the agent the people-here roster with real <@…> mention ids", async () => {
   const directory = createDirectoryStore();
   await directory.replace([
@@ -221,20 +174,6 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
   assert.doesNotMatch(calls[0]?.text ?? "", /People here:/);
 });
 
-test("a poll cron delivers when a silent marker is not the final non-empty line", async () => {
-  const { crons, deliveries, scheduler } = harness("[no-update]\nFound one failed check");
-  const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "check the status page",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-    destination: { type: "slack", target: "D1", audienceScopeId: scopeId("personal", "U1") },
-  });
-  await runNowSettled(scheduler, cron.id);
-  assert.equal((await deliveries.pending("slack"))[0]?.text, "[no-update]\nFound one failed check");
-});
-
 test("a personal cron runs as a DM and delivers to the owner", async () => {
   const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({
@@ -278,7 +217,6 @@ test("a personal cron with a principal destination delivers its real output to t
       audienceScopeId: scopeId("personal", "U-alice"),
       onBehalfOf: "U1",
     },
-    recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
@@ -293,11 +231,11 @@ test("a personal cron with a principal destination delivers its real output to t
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
-test("a recurring teammate-DM cron without current recipient consent is withheld", async () => {
-  const { crons, deliveries, scheduler } = harness();
+test("a recurring verbatim reminder to a teammate delivers to the teammate", async () => {
+  const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "let Alice know the deploy is done",
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    message: "daily standup notes are due",
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -309,13 +247,13 @@ test("a recurring teammate-DM cron without current recipient consent is withheld
     },
   });
   await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 0);
   const pending = await deliveries.pending("principal");
   assert.equal(pending.length, 1);
-  assert.equal(pending[0]?.destination.target, "U1");
-  assert.match(pending[0]?.text ?? "", /consent.*skipped/i);
+  assert.equal(pending[0]?.destination.target, "U-alice");
+  assert.equal(pending[0]?.text, "daily standup notes are due");
   const { runs: stored } = await crons.listFires(cron.id);
-  assert.equal(stored[0]?.status, "refused");
-  assert.match(stored[0]?.note ?? "", /consent/);
+  assert.equal(stored[0]?.status, "ok");
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
@@ -332,7 +270,6 @@ test("a teammate-DM cron created in a channel delivers its real output (§10 par
       audienceScopeId: scopeId("personal", "U-alice"),
       onBehalfOf: "U1",
     },
-    recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");

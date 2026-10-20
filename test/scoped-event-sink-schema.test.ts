@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresEventSink, scopedEventMigrationId, type EventColumn } from "../src/admin/scoped-event-sink.ts";
-import { createPostgresMetricsSink } from "../src/admin/postgres-metrics-sink.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
 import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audit-sink.ts";
 import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
@@ -17,19 +16,6 @@ const BASE: readonly EventColumn<keyof Ev & string>[] = [
   ["a", "a", "INT", "number"],
 ];
 const common = { defaultLimit: 10, equalityFilters: {}, persistErrorMessage: "x" };
-
-test("turn_metrics/0001 keeps the checksum already recorded in deployed databases; later columns ride a follow-up", () => {
-  const url = fakeUrl();
-  createPostgresMetricsSink(url);
-  const migrations = registeredPgMigrations(url);
-  const first = migrations.find((m) => m.id === "admin/scoped-events/turn_metrics/0001");
-  assert.ok(first, "0001 registered");
-  assert.equal(first.checksum, "d3bbf44523fb16643f38c18151c990ccbdaa2c411e01ce686b9576fcf98a6141");
-  assert.ok(!first.statements.some((s) => /lease_wait_ms/.test(s)), "0001 must not learn new columns");
-  const second = migrations.find((m) => m.id === "admin/scoped-events/turn_metrics/0002");
-  assert.ok(second, "0002 registered");
-  assert.match(second.statements.join("\n"), /ADD COLUMN IF NOT EXISTS lease_wait_ms INT/);
-});
 
 test("0001 is rendered from the frozen initial columns, not the live column list", () => {
   const frozenUrl = fakeUrl();

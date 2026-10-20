@@ -13,8 +13,6 @@
         "src/sandbox/local-sandbox.ts",
         "scripts/aws-deploy-smoke.ts",
         "scripts/aws-litestream-smoke.ts",
-        "scripts/backfill-search-index.ts",
-        "scripts/backfill-session-origin.ts",
         "scripts/e2b-live-smoke.mjs",
         "scripts/modal-live-smoke.mjs",
         "scripts/dev/cli.ts",
@@ -46,7 +44,7 @@
       ]
     },
     "cli": {
-      "entry": ["bin/qm.ts"]
+      "entry": ["bin/qm.ts", "src/contract.ts"]
     },
     "plugins/*": {},
     "plugins/web-ui": {

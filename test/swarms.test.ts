@@ -606,7 +606,7 @@ test("swarm settings are fixed at creation and reject conflicting attempts", asy
   assert.equal(swarm.settings.turnMs, 600_000);
   await assert.rejects(
     service.spawn(caller, { requestId: "second", text: "Work", settings: { turnMs: 300_000 } }),
-    /settings are only allowed on initial swarm creation/,
+    /turnMs cannot change after swarm creation/,
   );
 });
 
@@ -642,17 +642,18 @@ test("recursive spawn depth is enforced independently of arbitrary character", a
 
 test("notification and message budgets include initial work and prevent recursion loops", async () => {
   const { service, caller, store, root } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
+  const settings = { messages: 40, notifications: 20 };
+  await service.spawn(caller, { requestId: "one", text: "Work", settings });
   await service.sweep();
   await store.update(root.id, (swarm) => {
-    swarm.notificationCount = SWARM_DEFAULTS.notifications;
+    swarm.notificationCount = settings.notifications;
   });
   await assert.rejects(
     service.send(caller, { requestId: "notify", audience: "all", text: "Work" }),
     /notification budget/,
   );
   await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
-  for (let index = 2; index < SWARM_DEFAULTS.messages; index++) {
+  for (let index = 2; index < settings.messages; index++) {
     await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
   }
   await assert.rejects(
@@ -660,6 +661,25 @@ test("notification and message budgets include initial work and prevent recursio
     /message budget/,
   );
   assert.equal((await service.read(caller, {})).length, 32);
+});
+
+test("spawn request budget applies only when set", async () => {
+  const { service, caller } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work", settings: { spawnRequests: 2 } });
+  await service.spawn(caller, { requestId: "two", text: "Work" });
+  await assert.rejects(service.spawn(caller, { requestId: "three", text: "Work" }), /spawn budget/);
+});
+
+test("without caps, message, notification and spawn counts are unlimited", async () => {
+  const { service, caller, runs } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", count: 2, text: "Work", settings: { agents: 64 } });
+  await service.sweep();
+  for (let index = 0; index < 130; index++)
+    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work" });
+  await service.sweep();
+  assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 262);
+  for (let index = 0; index < 33; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
+  assert.equal((await service.inspect(caller)).peers.length, 36);
 });
 
 test("restart between enqueue and outbox acknowledgement does not redeliver", async () => {
@@ -845,6 +865,20 @@ test("expired swarms retain readable history but cannot reserve or wake more wor
   await assert.rejects(service.send(caller, { requestId: "message", text: "Work", audience: "all" }), /expired/);
   assert.equal((await service.read(caller, {})).length, 1);
   assert.equal((await runs.list()).length, 1);
+});
+
+test("the root can extend an expired work window", async () => {
+  const { service, caller, store, root } = await swarmFixture();
+  await service.spawn(caller, { requestId: "one", text: "Work", settings: { lifetimeMs: 60_000 } });
+  await store.update(root.id, (swarm) => {
+    swarm.createdAt -= 120_000;
+    swarm.expiresAt = swarm.createdAt + 60_000;
+  });
+  await assert.rejects(service.spawn(caller, { requestId: "two", text: "Work" }), /expired/);
+  await service.spawn(caller, { requestId: "three", text: "Work", settings: { lifetimeMs: 3_600_000 } });
+  const swarm = (await store.get(root.id))!;
+  assert.equal(swarm.expiresAt, swarm.createdAt + 3_600_000);
+  await service.send(caller, { requestId: "message", text: "Work", audience: "all" });
 });
 
 test("memory store has transaction rollback and detached read parity", async () => {

@@ -14,7 +14,7 @@ core stamps the secret onto the outbound call at the wire and returns the respon
 ## When this applies
 
 The **Credentials** inventory groups available credentials by owner. Organization rows marked
-`proxy` give the host and allowed methods/paths. Select the exact `service_<slug>` handle in
+`proxy` give the host and allowed methods/paths. Select that credential's handle (e.g. `gitlab`) in
 `execute.credentials` for the command making the request, with an explicit `sandbox_id`. Core supplies
 `AGENT_CREDENTIAL_TOKEN` only to that command; its absence before selection does not mean
 access is missing. Use that token, not `AGENT_API_TOKEN`, for broker requests.

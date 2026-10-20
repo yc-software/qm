@@ -185,7 +185,7 @@ test("the marker renders into model context on the entries-replay path", () => {
   ] as unknown as SessionEntry[];
   const messages = reconstructMessagesFromHistory(history);
   const texts = messages.map((m) => (m.content[0] as { text: string }).text);
-  assert.equal(texts[0], "original text");
+  assert.equal(texts[0], "── Wednesday, December 31, 1969 ──\noriginal text");
   assert.match(texts[1]!, /<message-edited id="100.1" author="Alex Morgan"[^>]*>fixed &lt;text&gt;<\/message-edited>/);
   assert.match(
     texts[2]!,
@@ -332,7 +332,11 @@ test("the anchor is the last conversation entry, skipping system entries such as
   await sleep(5);
   await recordMessageRevisions(sessions, [edit()], NO_WAIT);
   const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, { type: "system", payload: { kind: "note" }, scopeLabel: SCOPE });
+  await sessions.append(lease!, {
+    type: "system",
+    payload: { kind: "wake", cause: "cron", text: "a fresh marker" },
+    scopeLabel: SCOPE,
+  });
   await sessions.releaseLease(lease!);
   assert.equal(await revisionAnchorAt(sessions, session.id), conversationAt);
   assert.equal(await revisionAnchorAt(createMemorySessionStore(), "nope"), undefined);

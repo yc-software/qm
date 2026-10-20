@@ -13,7 +13,7 @@ import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
-import { spawnDockerExec, type DockerExec } from "./docker-exec.ts";
+import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { ephemeralCredLinkScript } from "../credentials/resident-paths.ts";
 import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
 import { shortHash } from "../util/crypto.ts";
@@ -55,7 +55,7 @@ export interface LocalSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "aws/microvm-agent/agent.mjs"];
+const FINGERPRINT_FIXED_SOURCES = ["fly/Dockerfile", "local/Dockerfile", "cli/templates/aws/microvm-agent/agent.mjs"];
 
 export async function computeSandboxImageFingerprint(repoRoot: string): Promise<string | null> {
   try {
@@ -235,20 +235,13 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   }
 
   async function ensureNetwork(name: string): Promise<string> {
-    const net = localNetworkName(name);
-    if ((await dexec(["network", "inspect", net])).code !== 0) {
-      const r = await dexec(["network", "create", net]);
-      if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
-        throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
-      }
-    }
-    return net;
+    return ensureDockerNetwork(dexec, localNetworkName(name));
   }
 
   async function connectCore(net: string): Promise<void> {
     if (!opts.coreContainer) return;
     const r = await dexec(["network", "connect", net, opts.coreContainer]);
-    if (r.code !== 0 && !/already (?:exists|connected)/i.test(r.stderr)) {
+    if (r.code !== 0 && !(await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(net)) {
       throw new Error(`docker network connect ${net} ${opts.coreContainer} failed: ${r.stderr.trim()}`);
     }
   }
@@ -483,23 +476,16 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
         const network = localNetworkName(name);
         const remove = async (args: string[]) => {
           const result = await dexec(args);
-          if (
-            result.code !== 0 &&
-            !/no such (container|object|network|volume)|network .* not found/i.test(result.stderr)
-          )
-            throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
+          if (result.code !== 0) throw new Error(`docker ${args.join(" ")}: ${result.stderr.trim()}`);
         };
         await remove(["rm", "-f", name]);
         if (opts.coreContainer) {
           const result = await dexec(["network", "disconnect", "-f", network, opts.coreContainer]);
-          if (
-            result.code !== 0 &&
-            !/no such (network|container|object)|is not connected|network .* not found/i.test(result.stderr)
-          )
+          if (result.code !== 0 && (await dockerContainerNetworks(dexec, opts.coreContainer))?.includes(network))
             throw new Error(`docker network disconnect ${network}: ${result.stderr.trim()}`);
         }
-        await remove(["network", "rm", network]);
-        await remove(["volume", "rm", localVolumeName(scopeId)]);
+        await remove(["network", "rm", "-f", network]);
+        await remove(["volume", "rm", "-f", localVolumeName(scopeId)]);
         activeByContainer.delete(name);
         scopeByContainer.delete(name);
         portByName.delete(name);

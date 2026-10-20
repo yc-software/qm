@@ -1,3 +1,5 @@
+import { isSensitiveKey, redactSecrets } from "./redact-secrets.ts";
+
 export function errMessage(e: unknown, fallback?: string): string {
   if (e instanceof Error) return e.message;
   if (fallback !== undefined) return fallback;
@@ -42,12 +44,14 @@ function errorFields(e: unknown): string {
     const fields = Object.entries(Object.getOwnPropertyDescriptors(e))
       .filter(([key, descriptor]) => key !== "cause" && descriptor.enumerable)
       .map(([key, descriptor]) => {
+        if (isSensitiveKey(key)) return `${key}=[redacted]`;
         try {
           const seen = new Set<object>();
           const value = descriptor.value;
           const text =
             typeof value === "object" && value !== null
-              ? JSON.stringify(value, (_key, item) => {
+              ? JSON.stringify(value, (itemKey, item) => {
+                  if (isSensitiveKey(itemKey)) return "[redacted]";
                   if (typeof item === "bigint") return String(item);
                   if (typeof item === "object" && item !== null) {
                     if (seen.has(item)) return "[Circular]";
@@ -56,7 +60,7 @@ function errorFields(e: unknown): string {
                   return item;
                 })
               : String(value);
-          return `${key}=${descriptor.get ? "[Getter]" : text}`;
+          return `${key}=${descriptor.get ? "[Getter]" : redactSecrets(text)}`;
         } catch {
           return `${key}=[Unserializable]`;
         }

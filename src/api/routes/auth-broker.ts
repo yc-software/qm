@@ -219,11 +219,11 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
 }
 
 export const authBrokerRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/auth/invitations/redeem", auth: "source", handle: redeemInvitation },
-  { method: "POST", path: "/v1/auth/trusted/admin", auth: "source", handle: trustedAdmin },
-  { method: "POST", path: "/v1/auth/broker/sessions", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/sessions/use", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/sessions/revoke", auth: "source", handle: brokerSession },
-  { method: "POST", path: "/v1/auth/broker/claim", auth: "source", handle: claimBrokerNonce },
+  { method: "POST", path: "/v1/auth/invitations/redeem", actor: "system", auth: "source", handle: redeemInvitation },
+  { method: "POST", path: "/v1/auth/trusted/admin", actor: "system", auth: "source", handle: trustedAdmin },
+  { method: "POST", path: "/v1/auth/broker/sessions", actor: "system", auth: "source", handle: brokerSession },
+  { method: "POST", path: "/v1/auth/broker/sessions/use", actor: "system", auth: "source", handle: brokerSession },
+  { method: "POST", path: "/v1/auth/broker/sessions/revoke", actor: "person", auth: "source", handle: brokerSession },
+  { method: "POST", path: "/v1/auth/broker/claim", actor: "system", auth: "source", handle: claimBrokerNonce },
   { method: "GET", path: "/v1/auth/broker/email-allowed", auth: "source", handle: emailAllowed },
 ];

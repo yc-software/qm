@@ -38,7 +38,6 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
@@ -106,7 +105,6 @@ export interface SlackCoreClient {
   signalRunAbort(runId: string): Promise<void>;
   stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
-  reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
@@ -131,7 +129,7 @@ export interface SlackCoreClient {
     threadTs?: string;
     text?: string;
     senderEmail?: string;
-    isDirectMessage?: boolean;
+    isDirectMessage: boolean;
   }): Promise<void>;
 }
 
@@ -161,7 +159,6 @@ export interface SlackCoreClientDeps {
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
   errors?: ErrorLog;
-  metrics: MetricsSink;
   runs: RunStore;
   turnStream: TurnStream;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
@@ -218,7 +215,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async publishEmojiCatalog(emoji) {
-      deps.config.setSlackEmojiCatalog(orgScope, emoji);
+      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
     },
 
     async surfaceHeaderFacts(scope) {
@@ -404,10 +401,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       await deps.app.ackDeliveryByKey(`run:${runId}`);
     },
 
-    async reportTurnMetrics(runId, patch) {
-      await deps.metrics.updateByRunId(runId, patch);
-    },
-
     async reportRunEditRef(runId, editRef) {
       const found = await deps.app.setRunDeliveryState(runId, { editRef });
       if (!found) throw new Error(`run ${runId} not found`);
@@ -536,7 +529,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           ...(pick.latencyMs != null ? { latencyMs: pick.latencyMs } : {}),
           createdAt: Date.now(),
         })
-        .catch(() => {});
+        .catch(swallowAs("slack: record ack emoji pick", undefined));
     },
 
     async fulfillContextRequest(id, outcome) {

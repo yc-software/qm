@@ -16,7 +16,7 @@ import {
   Heart,
   Wrench,
 } from "lucide";
-import { slackMark } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 
 export const LOOP_ICONS = [

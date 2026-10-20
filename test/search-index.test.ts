@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { searchRowsFromEntries } from "../src/sessions/entry-search.ts";
 import type { Lease, SessionStore } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
 
@@ -53,7 +52,6 @@ async function secretTurn(sim: Sim): Promise<void> {
 test("message writes index only conversational text — tool results and thinking stay unsearchable", async () => {
   const sim = await simSession();
   await secretTurn(sim);
-  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, TOOL_SECRET), []);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, THINKING_SECRET), []);
   assert.deepEqual(await sim.store.searchEntries(VIEWER, "brokered credential"), []);
@@ -64,40 +62,10 @@ test("message writes index only conversational text — tool results and thinkin
   assert.ok(userHits.some((h) => h.type === "user" && h.author === "Alex"));
 });
 
-test("searchRowsFromEntries drops every non-conversational entry type", () => {
-  const entries: SessionEntry[] = (
-    [
-      ["user", { text: "hello" }],
-      ["assistant", { text: "hi" }],
-      ["text", { text: "narration" }],
-      ["thinking", { thinking: TOOL_SECRET, text: TOOL_SECRET }],
-      ["tool_call", { tool: "execute", callId: "c", command: TOOL_SECRET, text: TOOL_SECRET }],
-      ["tool_result", { tool: "execute", callId: "c", result: TOOL_SECRET, text: TOOL_SECRET }],
-      ["system", { kind: "context_summary", text: TOOL_SECRET }],
-      ["approval_request", { text: TOOL_SECRET }],
-      ["approval_resolved", { text: TOOL_SECRET }],
-    ] as const
-  ).map(([type, payload], seq) => ({
-    sessionId: "s",
-    seq,
-    parentSeq: seq === 0 ? null : seq - 1,
-    type,
-    payload,
-    scopeLabel: scope,
-    createdAt: seq,
-  }));
-  assert.deepEqual(
-    searchRowsFromEntries(entries, -1).map((r) => r.type),
-    ["user", "assistant", "text"],
-  );
-  assert.ok(searchRowsFromEntries(entries, -1).every((r) => !r.text.includes(TOOL_SECRET)));
-});
-
 test("messages are searchable as soon as they are appended", async () => {
   const sim = await simSession();
   await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy document" }, scopeLabel: scope });
   assert.equal((await sim.store.searchEntries(VIEWER, "legacy document")).length, 1);
-  assert.equal(await sim.store.missingSearchEntries(sim.session.id), 0);
 });
 
 test("tenure windows filter search hits", async () => {
@@ -108,18 +76,4 @@ test("tenure windows filter search hits", async () => {
   assert.deepEqual(await sim.store.searchEntries("latecomer", "early private"), []);
   assert.equal((await sim.store.searchEntries("latecomer", "late shared")).length, 1);
   assert.equal((await sim.store.searchEntries(VIEWER, "early private")).length, 1);
-});
-
-test("lastSearchableEntrySeq skips trailing tool output and empty replies", async () => {
-  const sim = await simSession();
-  await simTurn(sim, { input: "find the report", reply: "Found it." });
-  const reply = (await sim.store.getEntries(sim.session.id)).at(-1)!;
-  await sim.store.append(sim.lease, {
-    type: "tool_result",
-    payload: { tool: "execute", callId: "t1", isError: false, result: "trailing output" },
-    scopeLabel: scope,
-  });
-  await sim.store.append(sim.lease, { type: "assistant", payload: { text: "" }, scopeLabel: scope });
-  assert.equal(await sim.store.lastSearchableEntrySeq(sim.session.id), reply.seq);
-  assert.equal(await sim.store.lastSearchableEntrySeq("missing-session"), -1);
 });

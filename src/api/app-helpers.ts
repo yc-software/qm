@@ -152,7 +152,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     opts: { blockingOnly: boolean; viewer?: string },
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
-    const [entries, session] = await Promise.all([deps.approvals.entries(), deps.sessions.get(sessionId)]);
+    const [entries, session] = await Promise.all([
+      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.sessions.get(sessionId),
+    ]);
     if (!session) return [];
     const candidates: Array<{ key: string; record: PendingApprovalRecord }> = [];
     for (const [key, record] of entries) {
@@ -403,7 +406,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       for (const groupId of groups) scopes.add(scopeId("group", groupId));
       for (const project of projects) scopes.add(project.scopeId);
     } catch (error) {
-      void error;
+      swallow("app: current resource scopes for viewer", error);
     }
     return [...scopes];
   }

@@ -2,12 +2,14 @@ import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { buildGovernanceUI } from "../src/governance-bundle.ts";
 
+const bundle = await buildGovernanceUI();
+
 export function readAdminSource(): string {
   const shell = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   const dom = new JSDOM(shell, { runScripts: "outside-only" });
   dom.window.structuredClone = structuredClone;
   try {
-    dom.window.eval(buildGovernanceUI() + ";window.governanceUI = governanceUI; governanceUI.mountCards();");
+    dom.window.eval(bundle + ";window.governanceUI = governanceUI; governanceUI.mountCards();");
     return (
       shell
         .replace(/<template data-onboarding-ui="([^"]+)"><\/template>/g, (_, kind) => {

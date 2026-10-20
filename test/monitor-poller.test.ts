@@ -9,6 +9,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -56,7 +57,7 @@ function fakeSandbox() {
       return { processId };
     },
     async readProcess(_h, id, opts) {
-      if (missing.has(id) || !procs.has(id)) throw new Error(`no such process session: ${id}`);
+      if (missing.has(id) || !procs.has(id)) throw new ProcessSessionGoneError(id);
       const p = procs.get(id)!;
       const cur = opts?.sinceCursor ?? 0;
       const end = Math.min(p.output.length, cur + (opts?.maxBytes ?? 64 * 1024));

@@ -104,7 +104,7 @@ async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
 }
 
 export const surfaceCacheRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/surface-cache/ingest", auth: "source", handle: ingestSurfaceEvents },
+  { method: "POST", path: "/v1/surface-cache/ingest", actor: "system", auth: "source", handle: ingestSurfaceEvents },
   { method: "GET", path: "/v1/surface-cache/policy", auth: "source", handle: getChannelPolicy },
-  { method: "POST", path: "/v1/surface-cache/policy", auth: "source", handle: setChannelPolicy },
+  { method: "POST", path: "/v1/surface-cache/policy", actor: "system", auth: "source", handle: setChannelPolicy },
 ];

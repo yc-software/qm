@@ -151,6 +151,7 @@ export const FORWARD_WEBHOOK_HEADERS = [
   "x-slack-signature",
   "x-slack-request-timestamp",
   "stripe-signature",
+  "linear-signature",
   "x-signature",
   "x-delivery-id",
 ];

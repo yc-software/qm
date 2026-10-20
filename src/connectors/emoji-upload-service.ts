@@ -1,5 +1,6 @@
 import type { BrowserSessionStore } from "./browser-session-store.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
 
 const EMOJI_NAME_RE = /^[a-z0-9_'+-]{1,100}$/;
 
@@ -56,13 +57,12 @@ const EMOJI_UPLOAD_NO_SESSION =
 export const EMOJI_UPLOAD_SESSION_EXPIRED =
   "The Slack session for the emoji uploader has expired — an operator needs to sign in to Slack again to refresh it.";
 
-const AUTH_ERRORS = new Set(["not_authed", "invalid_auth", "token_expired", "token_revoked", "account_inactive"]);
 const PERMISSION_ERRORS = new Set(["no_permission", "missing_scope", "restricted_action", "user_is_restricted"]);
 const TOO_BIG_ERRORS = new Set(["resized_but_still_too_large", "error_too_big", "too_large"]);
 
 function humanizeEmojiError(err: string | undefined): string {
   if (!err) return "the emoji upload failed.";
-  if (AUTH_ERRORS.has(err)) return EMOJI_UPLOAD_SESSION_EXPIRED;
+  if (SLACK_AUTH_ERRORS.has(err)) return EMOJI_UPLOAD_SESSION_EXPIRED;
   if (PERMISSION_ERRORS.has(err)) return "the uploader account isn't allowed to add custom emoji in this workspace.";
   if (TOO_BIG_ERRORS.has(err))
     return "the image is too large — use a smaller square PNG or GIF (Slack's limit is 128×128 and 128KB).";

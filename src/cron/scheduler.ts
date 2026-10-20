@@ -82,6 +82,7 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
@@ -273,6 +274,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
+          ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
         },
         {
           ...cronTriggerAuthority(cron),
@@ -287,8 +289,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
-          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );

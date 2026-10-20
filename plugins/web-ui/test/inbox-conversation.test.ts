@@ -121,7 +121,8 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     globalThis.fetch = async (url) => {
       if (String(url).includes("runtime-config")) return Response.json(inboxRuntime);
       staleCalls.push(String(url));
-      if (String(url).endsWith("/action")) return Response.json({ message: "draft changed" }, { status: 409 });
+      if (String(url).endsWith("/action"))
+        return Response.json({ error: "draft_changed", message: "draft changed" }, { status: 409 });
       staleLedger.proposal = { data: { body: "New agent draft" }, by: "agent", at: 200 };
       return Response.json({ item: staleLedger });
     };
@@ -258,9 +259,12 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         if (String(url).endsWith("/action"))
           return new Response(JSON.stringify({ message: "Save unavailable" }), { status: 502 });
         if (String(url).endsWith("/followup"))
-          return new Response(JSON.stringify({ message: "the draft changed; review it before continuing" }), {
-            status: 409,
-          });
+          return new Response(
+            JSON.stringify({ error: "draft_changed", message: "the draft changed; review it before continuing" }),
+            {
+              status: 409,
+            },
+          );
         return Response.json({
           item: { ...ledger, proposal: { ...ledger.proposal, data: { body: "New server draft" }, at: 101 } },
         });

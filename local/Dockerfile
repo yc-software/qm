@@ -1,7 +1,7 @@
 ARG BASE=qm-sandbox-base:dev
 FROM ${BASE}
 
-COPY aws/microvm-agent/agent.mjs /opt/microvm-agent/agent.mjs
+COPY cli/templates/aws/microvm-agent/agent.mjs /opt/microvm-agent/agent.mjs
 
 ENV HOME=/root
 WORKDIR /root

@@ -253,19 +253,17 @@ test("real harnesses require and route the sandbox-reachable PUBLIC_API_URL to c
   );
 });
 
-test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with deploy/core/fly.toml", () => {
+test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with the packaged core fly template", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "deploy", "core", "fly.toml"), "utf8");
-  const packaged = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
+  const toml = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
   for (const [name, value] of Object.entries(FLY_TEMPLATE_ENV_DEFAULTS.core ?? {})) {
     assert.match(
       toml,
       new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `deploy/core/fly.toml sets ${name}="${value}"`,
+      `cli/templates/fly/core.toml sets ${name}="${value}"`,
     );
   }
   assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
-  assert.doesNotMatch(packaged, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {

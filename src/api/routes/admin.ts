@@ -10,7 +10,7 @@ import {
   whoami,
 } from "./admin/scope-config.ts";
 import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
-import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
+import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
@@ -116,7 +116,6 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   },
   { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
   { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
-  { method: "GET", path: "/v1/admin/metrics", auth: "either", handle: metrics },
   { method: "GET", path: "/v1/admin/spend", auth: "either", handle: spend },
   { method: "GET", path: "/v1/admin/egress", auth: "either", handle: egress },
   { method: "GET", path: "/v1/admin/sessions", auth: "either", handle: listAdminSessions },

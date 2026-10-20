@@ -1,3 +1,4 @@
+import type { GoalCreateInput } from "../harness/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
@@ -44,6 +45,7 @@ export interface SwarmMessage {
   text: string;
   audience: string[];
   replyTo?: string;
+  goal?: GoalCreateInput;
   createdAt: number;
   notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;
 }
@@ -54,7 +56,7 @@ export interface Swarm {
   ownerId: string;
   participants: string[];
   createdAt: number;
-  expiresAt: number;
+  expiresAt?: number;
   template: SwarmTemplate;
   settings: SwarmSettings;
   backend: SandboxBackendName;
@@ -67,8 +69,12 @@ export interface Swarm {
   pending: boolean;
 }
 
+export function swarmExpired(swarm: Swarm): boolean {
+  return swarm.expiresAt !== undefined && Date.now() >= swarm.expiresAt;
+}
+
 export function assertSwarmOpen(swarm: Swarm): void {
-  if (Date.now() >= swarm.expiresAt) throw new NonRetryableTurnError("swarm work window expired");
+  if (swarmExpired(swarm)) throw new NonRetryableTurnError("swarm work window expired");
 }
 
 export interface SwarmStore {

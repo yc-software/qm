@@ -553,3 +553,55 @@ test("recorded commentary is not repeated after its live window is trimmed", () 
   });
   assert.equal(streamedAnswer("ipped word here", work), "");
 });
+
+test("live reasoning renders as a trailing thinking row until its persisted entry arrives or work ends", () => {
+  const reasoning = [
+    { step: "s1", index: 0, text: "**Checking** the cache" },
+    { step: "s1", index: 2, text: "   " },
+  ];
+  const work: WorkBlock = {
+    status: "working",
+    activity: [act(1, "thinking", { thinking: "earlier", step: { id: "s0", index: 0 } })],
+    reasoning,
+  };
+  const live = buildTimeline(work);
+  assert.deepEqual(
+    live.map((item) =>
+      item.kind === "thinking" ? (item.activity.payload as { thinking: string }).thinking : item.kind,
+    ),
+    ["earlier", "**Checking** the cache"],
+  );
+  const persisted: WorkBlock = {
+    ...work,
+    activity: [
+      ...work.activity,
+      act(2, "thinking", { thinking: "**Checking** the cache", step: { id: "s1", index: 0 } }),
+    ],
+  };
+  assert.equal(buildTimeline(persisted).length, 2, "the persisted entry replaces the live row instead of doubling it");
+  const otherBlock: WorkBlock = {
+    ...work,
+    activity: [...work.activity, act(2, "thinking", { thinking: "other", step: { id: "s1", index: 1 } })],
+  };
+  assert.equal(buildTimeline(otherBlock).length, 3, "a different block of the same step does not hide this one");
+  assert.equal(buildTimeline({ ...work, status: "complete" }).length, 1, "finished work shows only durable rows");
+});
+
+test("NULL legacy call IDs preserve the existing adjacent-result fallback", () => {
+  for (const callId of [null, "known-call"]) {
+    const work: WorkBlock = {
+      status: "complete",
+      activity: [
+        act(10, "tool_call", { tool: "execute", command: "echo hello", callId }),
+        act(11, "tool_result", { tool: "execute", result: "hello", code: 0, callId: null }),
+      ],
+    };
+    const timeline = buildTimeline(work);
+    assert.equal(timeline.length, 1);
+    assert.equal(timeline[0].kind, "tool");
+    if (timeline[0].kind !== "tool") throw new Error("expected paired tool row");
+    assert.equal(timeline[0].row.call?.seq, 10);
+    assert.equal(timeline[0].row.result?.seq, 11);
+    assert.equal(toolRowKind(timeline[0].row, work.status), "ok");
+  }
+});
