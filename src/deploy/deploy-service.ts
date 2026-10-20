@@ -118,7 +118,8 @@ export interface DeploymentGrantee {
 const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
-export type DeployAccessErrorCode = "not_found" | "forbidden" | "external_sharing_disabled";
+export type DeployAccessErrorCode =
+  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable";
 
 export class DeployAccessError extends Error {
   readonly code: DeployAccessErrorCode;
@@ -126,13 +127,6 @@ export class DeployAccessError extends Error {
     super(message);
     this.name = "DeployAccessError";
     this.code = code;
-  }
-}
-
-export class PublicLinksUnavailableError extends Error {
-  constructor() {
-    super(PUBLIC_LINKS_UNAVAILABLE);
-    this.name = "PublicLinksUnavailableError";
   }
 }
 
@@ -571,7 +565,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
-      if (isPublic && deps.publicLinksAvailable === false) throw new PublicLinksUnavailableError();
+      if (isPublic && deps.publicLinksAvailable === false)
+        throw new DeployAccessError("public_links_unavailable", PUBLIC_LINKS_UNAVAILABLE);
       await deps.deployStore.setPublic(d.id, isPublic);
       deps.auditLog.record({
         at: Date.now(),

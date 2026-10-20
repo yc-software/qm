@@ -28,6 +28,7 @@ import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store
 import type { App, AppDeps } from "./app-types.ts";
 import {
   SoulUpdateDeniedError,
+  SoulVersionConflictError,
   toFileItem,
   type ScopeDeployment,
   type SessionPinView,
@@ -1230,7 +1231,7 @@ export function createSessionMethods(
             opts?.expectedVersion === undefined
               ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
               : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
-          if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
+          if (version === null) throw new SoulVersionConflictError();
           deps.auditLog.record({
             at: Date.now(),
             principalId: actorId,

@@ -27,8 +27,8 @@ export interface FileUploadStore {
 
 export class FileUploadError extends Error {
   readonly status: number;
-  readonly code: string;
-  constructor(message: string, status = 400, code = "upload_error") {
+  readonly code: "upload_error" | "upload_quota";
+  constructor(message: string, status = 400, code: "upload_error" | "upload_quota" = "upload_error") {
     super(message);
     this.name = "FileUploadError";
     this.status = status;

@@ -16,7 +16,7 @@ import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
 import { notifyOwnerOfCronEdit, type CronEditDetail } from "../triggers/edit-notice.ts";
 import { errMessage } from "../util/errors.ts";
-import { SoulUpdateDeniedError } from "./app-types.ts";
+import { SoulUpdateDeniedError, SoulVersionConflictError } from "./app-types.ts";
 import { AdminError } from "../admin/admin-service.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import {
@@ -177,8 +177,16 @@ export interface ControlService {
     content: string,
     claims: CapabilityClaims,
     expectedVersion?: number,
-  ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied" | "soul_update_failed">>;
+  ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
   shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
+}
+
+type SoulWriteFailureCode = "soul_update_denied" | "soul_version_conflict" | "soul_update_failed";
+
+function soulWriteFailureCode(e: unknown): SoulWriteFailureCode {
+  if (e instanceof SoulUpdateDeniedError) return "soul_update_denied";
+  if (e instanceof SoulVersionConflictError) return "soul_version_conflict";
+  return "soul_update_failed";
 }
 
 async function ownsCron(
@@ -772,7 +780,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       } catch (e) {
         return {
           ok: false,
-          code: e instanceof SoulUpdateDeniedError ? "soul_update_denied" : "soul_update_failed",
+          code: soulWriteFailureCode(e),
           message: errMessage(e),
         };
       }

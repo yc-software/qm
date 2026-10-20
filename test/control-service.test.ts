@@ -784,7 +784,7 @@ test("soul write separates a refused scope from a failed write", async () => {
   assert.equal(denied.ok ? "" : denied.code, "soul_update_denied");
 
   const stale = await control.writeSoul("Stale edit.", claims("U1"), 41);
-  assert.equal(stale.ok ? "" : stale.code, "soul_update_failed");
+  assert.equal(stale.ok ? "" : stale.code, "soul_version_conflict");
 });
 
 test("noteCron stores a flattened shift-change note, overwriting the previous one, with owner authz", async () => {

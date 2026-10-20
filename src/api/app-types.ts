@@ -781,6 +781,13 @@ export class SoulUpdateDeniedError extends Error {
   }
 }
 
+export class SoulVersionConflictError extends Error {
+  constructor() {
+    super("Guidance changed; read it and retry the edit.");
+    this.name = "SoulVersionConflictError";
+  }
+}
+
 export const CONTEXT_REQUEST_EXPIRY_MS = 2 * 60_000;
 
 export const STALE_LEASE_GRACE_MS = 30_000;

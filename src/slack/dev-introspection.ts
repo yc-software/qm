@@ -59,9 +59,9 @@ export function installDevIntrospection(app: any, opts: DevIntrospectionOptions 
   const canary = async (
     channel: string,
     timeoutMs = 15_000,
-  ): Promise<{ ok: boolean; rttMs?: number; reason?: string; nonce: string }> => {
+  ): Promise<{ ok: boolean; code?: "unconfigured"; rttMs?: number; reason?: string; nonce: string }> => {
     const nonce = randomUUID();
-    if (!channel) return { ok: false, reason: "no canary channel configured", nonce };
+    if (!channel) return { ok: false, code: "unconfigured", reason: "no canary channel configured", nonce };
     const arrival = new Promise<number>((resolve) => canaryWaiters.set(nonce, { postedAt: now(), resolve }));
     let postedTs: string | undefined;
     try {

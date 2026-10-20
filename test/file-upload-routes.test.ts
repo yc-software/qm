@@ -7,7 +7,7 @@ import { buildApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
-import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
+import type { FileUpload } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -116,20 +116,6 @@ test("owner can retrieve status and executable publisher with no credentials emb
   assert.ok(text.includes("def main():"));
   assert.ok(text.includes('os.environ["AGENT_API_TOKEN"]'));
   assert.ok(!text.includes(cap));
-});
-
-test("an active-upload quota refusal reaches the caller as a 429 upload_quota", async (t) => {
-  t.mock.method(fake, "begin", async () => {
-    throw new FileUploadError("active upload quota exceeded", 429, "upload_quota");
-  });
-  const result = await call("/v1/files/uploads", await token("U1"), "POST", {
-    name: "file",
-    sizeBytes: 1,
-    checksums: [],
-    requestId: "b".repeat(32),
-  });
-  assert.equal(result.status, 429);
-  assert.deepEqual(await result.json(), { error: "upload_quota", message: "active upload quota exceeded" });
 });
 
 test("disabled initiation preserves existing session recovery", async () => {

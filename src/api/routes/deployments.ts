@@ -1,9 +1,5 @@
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
-import {
-  DeployAccessError,
-  PublicLinksUnavailableError,
-  type DeployAccessErrorCode,
-} from "../../deploy/deploy-service.ts";
+import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -1623,8 +1619,6 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         grantees: await app.deploymentGrantees(deployment.id),
       });
     } catch (e) {
-      if (e instanceof PublicLinksUnavailableError)
-        return sendJson(res, 409, { error: "public_links_unavailable", message: e.message });
       return sendShareFailure(res, e);
     }
   }
@@ -1689,6 +1683,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   not_found: 404,
   forbidden: 403,
   external_sharing_disabled: 403,
+  public_links_unavailable: 409,
 };
 
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
