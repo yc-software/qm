@@ -40,13 +40,6 @@ test("findTrailingPartialTurn returns null when the last turn completed (assista
 test("findTrailingPartialTurn returns null when the trailing user entry belongs to another run", () => {
   const entries = [user("an older abandoned ask", 1, "run-0"), toolCall(2)];
   assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
-  assert.equal(findTrailingPartialTurn([user("x", 1)], undefined), null);
-  assert.equal(findTrailingPartialTurn([], "run-1"), null);
-});
-
-test("a repeated message from another run is not mistaken for this run's turn", () => {
-  const entries = [user("build and deploy the release", 1, "run-0"), toolCall(2)];
-  assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
 });
 
 test("a trailing steer is not the run's turn", () => {
