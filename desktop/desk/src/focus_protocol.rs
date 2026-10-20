@@ -176,8 +176,14 @@ impl Scope {
 
     pub fn observe_user_event(&mut self, kind: u32, source: i32, destination: i32) -> Decision {
         if self.activation.is_some() && source != self.owner && !self.yielded {
-            if matches!(kind, 10..=12) && self.activation == Some(destination) {
-                return Decision::Pass;
+            if matches!(kind, 10..=12) {
+                if destination == self.keyboard_owner {
+                    self.keyboard_interrupted = true;
+                    return Decision::Pass;
+                }
+                if self.activation == Some(destination) {
+                    return Decision::Pass;
+                }
             }
             self.yield_to_user();
             return Decision::Intervened;
@@ -207,6 +213,51 @@ impl Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwarded_activation_keys_survive_observer_reentry_until_the_pair_finishes() {
+        let mut state = Scope::new(100, 200, 200, 300);
+        assert!(state.begin_activation(300));
+        for kind in [10, 11] {
+            assert_eq!(state.keyboard(0, 300), Decision::Redirect(200));
+            assert_eq!(state.observe_user_event(kind, 0, 300), Decision::Pass);
+            assert_eq!(state.keyboard(0, 200), Decision::Pass);
+            assert_eq!(state.observe_user_event(kind, 0, 200), Decision::Pass);
+            assert!(state.permits_foreground(300));
+        }
+        assert!(state.interrupted());
+        state.end_activation();
+        assert!(!state.permits_foreground(300));
+        assert!(!state.begin_activation(300));
+    }
+
+    #[test]
+    fn activation_forwarding_does_not_hide_unrelated_user_input() {
+        for (kind, destination) in [(1, 200), (1, 300), (10, 400), (22, 300)] {
+            let mut state = Scope::new(100, 200, 200, 300);
+            assert!(state.begin_activation(300));
+            assert_eq!(state.keyboard(0, 300), Decision::Redirect(200));
+            assert_eq!(state.observe_user_event(kind, 0, destination), Decision::Intervened);
+            assert!(!state.permits_foreground(300));
+        }
+    }
+
+    #[test]
+    fn original_owner_keyboard_input_defers_interruption_until_activation_finishes() {
+        for (down, up) in [(200, 300), (300, 200)] {
+            let mut state = Scope::new(100, 200, 200, 300);
+            assert!(state.begin_activation(300));
+            for (kind, destination) in [(10, down), (11, up)] {
+                assert_eq!(state.observe_user_event(kind, 0, destination), Decision::Pass);
+                assert_eq!(state.keyboard(0, destination), if destination == 300 { Decision::Redirect(200) } else { Decision::Pass });
+                assert_eq!(state.observe_user_event(kind, 0, 200), Decision::Pass);
+            }
+            assert!(state.interrupted());
+            assert!(state.permits_foreground(300));
+            state.end_activation();
+            assert!(!state.permits_foreground(300));
+        }
+    }
 
     #[test]
     fn activation_preserves_physical_input_and_limits_suppression() {
