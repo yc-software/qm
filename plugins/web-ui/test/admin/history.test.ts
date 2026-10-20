@@ -1,3 +1,4 @@
+import { item } from "../item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mountPage, tabText } from "./fixture.ts";
@@ -107,11 +108,11 @@ test("a session opens its transcript with paired tools, deliveries and session e
     "/sessions/sess-1": {
       session: { scopeId: "channel:C1", createdAt: Date.now() },
       hasMore: true,
-      entries: [
-        { seq: 1, type: "user", payload: { text: "hello", name: "Alice" }, createdAt: 1 },
-        { seq: 2, type: "tool_call", payload: { tool: "execute", callId: "a", command: "ls" }, createdAt: 2 },
-        { seq: 3, type: "tool_result", payload: { callId: "a", stdout: "x" }, createdAt: 3 },
-        { seq: 4, type: "assistant", payload: "reply", createdAt: 5 },
+      items: [
+        item("UserMessage", { seq: 1, text: "hello", body: { name: "Alice" }, createdAt: 1 }),
+        item("ToolCall", { seq: 2, tool: "execute", callId: "a", body: { command: "ls" }, createdAt: 2 }),
+        item("ToolResult", { seq: 3, callId: "a", body: { stdout: "x" }, createdAt: 3 }),
+        item("AgentMessage", { seq: 4, text: "reply", createdAt: 5 }),
       ],
       deliveryEvents: [
         { type: "outbound_delivery", destination: { type: "slack", target: "C1" }, text: "reply", createdAt: 4 },

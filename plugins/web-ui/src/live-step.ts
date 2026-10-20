@@ -6,7 +6,7 @@ import { activityDescription, activityLabel, sessionPresentation, thinkingPresen
 import type { WorkBlock } from "./core-bridge";
 import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { messageWorkTimeline, postSpeechText, type TimelineItem, type ToolPayload } from "./timeline";
+import { messageWorkTimeline, postSpeechText, rowArgs, rowTool, type TimelineItem, type ToolPayload } from "./timeline";
 import { sheenLabel } from "./ui";
 
 export interface LiveStep {
@@ -29,23 +29,21 @@ export function preStepWork(work: WorkBlock | null | undefined): work is WorkBlo
 export function currentStep(
   timeline: TimelineItem[],
   work: WorkBlock,
-  toolMeta: (payload: ToolPayload) => { icon: IconNode; active: string },
+  toolMeta: (tool: string | null, payload: ToolPayload) => { icon: IconNode; active: string },
 ): LiveStep | null {
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i]!;
     if (item.kind === "thinking") {
-      const title = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
+      const title = thinkingPresentation(item.text).title;
       return { icon: Brain, label: title };
     }
     if (item.kind !== "tool") continue;
-    const call = (item.row.call?.payload ?? {}) as ToolPayload;
-    const result = (item.row.result?.payload ?? {}) as ToolPayload;
-    const meta = toolMeta({ ...result, ...call });
+    const meta = toolMeta(rowTool(item.row), rowArgs(item.row));
     const posting = postSpeechText(item.row, true);
     if (posting) return { icon: MessageSquare, label: "Posting message" };
     const session = sessionPresentation(item.row, work.status);
     if (session) return { icon: Bot, label: [session.label, session.target].filter(Boolean).join(" ") };
-    const category = activityDescription(call, result).category;
+    const category = activityDescription(item.row).category;
     const stepIcon = { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[category];
     const inFlight = item.row.result ? { ...item.row, result: null } : item.row;
     return { icon: stepIcon, label: activityLabel(inFlight, work.status) ?? meta.active };
