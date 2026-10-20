@@ -1142,7 +1142,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         defaultDestination = input.origin.destination;
       }
       const cronBlock =
-        delivery.candidates.length > 1 && deps.signingSecret && deps.apiBaseUrl
+        delivery.candidates.length > 1 && deps.signingSecret
           ? `\n\n${deliveryMenu(delivery.candidates, delivery.defaultKey)}`
           : "";
 
@@ -1629,9 +1629,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(liveTurn ? { liveActor: true } : {}),
         ...(input.botActor ? { botActor: true } : {}),
       };
-      if (!strictReadOnly && deps.signingSecret && deps.apiBaseUrl) {
+      // Control claims need only the signing secret; the sandbox env also needs the URL (#1488).
+      if (!strictReadOnly && deps.signingSecret) {
         const destination = defaultDestination;
-        connectorEnv.AGENT_API_URL = deps.apiBaseUrl;
+        const apiBaseUrl = deps.apiBaseUrl;
+        if (apiBaseUrl) connectorEnv.AGENT_API_URL = apiBaseUrl;
         if (deps.admin && liveAuthorTurn) {
           const status = await deps.admin
             .adminStatusOf(actor)
@@ -1684,33 +1686,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           threadRef: conversation.threadRef,
           ...(turnSurface ? { surface: turnSurface } : {}),
         };
-        connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
-          controlClaims,
-          deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
-        );
-        if (managedBrowse) {
-          connectorEnv.BROWSE_LAB_BASE_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
-          connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
+        if (apiBaseUrl) {
+          connectorEnv.AGENT_API_TOKEN = await mintCapabilityToken(
+            controlClaims,
+            deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
+          );
+          if (managedBrowse) {
+            connectorEnv.BROWSE_LAB_BASE_URL = `${apiBaseUrl.replace(/\/+$/, "")}/v1/browser-model`;
+            connectorEnv.BROWSE_LAB_MODEL_TOKEN = await mintCapabilityToken(
+              {
+                ...scopeAttestation,
+                aud: BROWSER_MODEL_AUD,
+                browserModel: browserSelection.model ?? "unavailable",
+                browserAccount: browserSelection.account,
+                exp: Date.now() + CAPABILITY_TTL_MS,
+              },
+              deps.capabilitySecret ?? deps.signingSecret,
+            );
+          }
+          connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
             {
               ...scopeAttestation,
-              aud: BROWSER_MODEL_AUD,
-              browserModel: browserSelection.model ?? "unavailable",
-              browserAccount: browserSelection.account,
-              exp: Date.now() + CAPABILITY_TTL_MS,
+              aud: OAUTH_CONSENT_AUD,
+              exp: sandboxTokenExpiry,
             },
             deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
           );
         }
-        connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
-          {
-            ...scopeAttestation,
-            aud: OAUTH_CONSENT_AUD,
-            exp: sandboxTokenExpiry,
-          },
-          deps.capabilitySecret ?? deps.signingSecret,
-          deps.capabilityTokenCompression,
-        );
       }
       const egressSecret = deps.capabilitySecret ?? deps.signingSecret;
       const egressTokenForPolicy = async (egress: EgressPolicy): Promise<string | undefined> => {
@@ -2221,7 +2225,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ". You're acting as them: confirm before any mutation, and say exactly what you changed. Hard limits the API enforces: private-content reads require a DM or an Open conversation on a live admin turn (organization, personal, and conversation sharing restrictions all apply); admin grant changes and impersonation are portal-only. Open admin reads can expose private data to everyone in the conversation: retrieve and report only what the request needs. Admin access to other people's private sessions, memory and files is for running and repairing the system, not a shortcut to answer questions about them: when a request needs something only another person's private context holds, use the hand-off skill even if admin access could reach it." +
             " System administration is not limited to the admin dashboard. Use the admin's independently authorized infrastructure or provider access to diagnose, repair, and manage this instance, including resources owned by other users. Ordinary resource-owner restrictions do not by themselves prohibit that administrative work or require the resource owner to do it. An owner-only API denial is not a denial of separately authorized system administration; verify that authority before taking another route. Using that independently authorized access as the admin is not impersonation or circumvention. Credential grants, provider permissions, explicit restrictions (including the portal-only actions above), mutation approvals, and audience privacy still apply. Keep actions attributed to the admin; never borrow another user's identity or credentials without authorization. Follow the admin and cloud-cli skills.";
         }
-        if (deps.signingSecret && deps.apiBaseUrl && (deps.crons || deps.webhooks || deps.monitors)) {
+        if (deps.signingSecret && (deps.crons || deps.webhooks || deps.monitors)) {
           const nowMs = Date.now();
           const obligations = await Promise.all([
             deps.crons?.list() ?? [],

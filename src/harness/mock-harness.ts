@@ -286,6 +286,10 @@ export function createMockHarness(): Harness {
           throw new NonRetryableTurnError(
             "API integrators: you can reduce refusals for your users by configuring a fallback model",
           );
+        } else if (command0.startsWith("!cron-create")) {
+          const title = command0.slice("!cron-create".length).trim() || "Mock cron";
+          const r = await turn.tools.cronCreate({ title, schedule: { everyMs: 3_600_000 }, action: "check in" });
+          reply = r.ok ? `cron created: ${r.cron.id}` : `cron failed: ${r.code}`;
         } else if (command0 === "!silent") {
           reply = "";
         } else if (command0.startsWith("[system] You were addressed")) {
