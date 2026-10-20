@@ -107,9 +107,9 @@ impl Drop for Updates {
 }
 
 fn activate_window(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
-    let (frame, point) = geometry
-        .or_else(|| crate::mac::focus_activation_window(target, window))
-        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target window has no valid activation point"))?;
+    let Some((frame, point)) = geometry else {
+        return synthetic_focus(target, 0, 1);
+    };
     synthetic_focus(target, window, 1)?;
     let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
     if pointer.is_null() {
@@ -166,7 +166,7 @@ fn activate_window(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>
     })
 }
 
-fn restore_order(target: i32, original: i32, window: u32) -> Result<(), Failure> {
+fn restore_order(target: i32, window: u32, original_window: &CFType) -> Result<(), Failure> {
     let windows = core_graphics::window::copy_window_info(0x11, 0)
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot verify window order after activation"))?;
     let mut ahead = Vec::new();
@@ -179,7 +179,7 @@ fn restore_order(target: i32, original: i32, window: u32) -> Result<(), Failure>
         if number("kCGWindowNumber") == Some(i64::from(window)) {
             if ahead.contains(&(i64::from(target), number("kCGWindowLayer"))) {
                 check_current()?;
-                crate::mac::restore_focused_window(original, window)?;
+                crate::mac::restore_focused_window(original_window)?;
             }
             return Ok(());
         }
@@ -190,8 +190,9 @@ fn restore_order(target: i32, original: i32, window: u32) -> Result<(), Failure>
     Err(Failure::new(ErrorCode::ActionFailed, "Original focused window disappeared during activation"))
 }
 
-fn enforce_window(target: i32, window: u32, original: i32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
-    let original_window = crate::mac::focused_window_id(original);
+fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure> {
+    let original_window = crate::mac::focused_window(original);
+    let geometry = crate::mac::focus_activation_window(target, window);
     let original_app = NSRunningApplication::runningApplicationWithProcessIdentifier(original)
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Original foreground app exited before activation"))?;
     let transition = crate::intervention::ActivationTransition::begin(target, original)?;
@@ -220,14 +221,21 @@ fn enforce_window(target: i32, window: u32, original: i32, geometry: Option<(CGR
         if frontmost() != Some(original) {
             return Err(Failure::new(ErrorCode::ActionFailed, "Original foreground app did not return after activation"));
         }
-        if let Some(original_window) = original_window {
-            restore_order(target, original, original_window)?;
+        if let Some((id, original_window)) = original_window {
+            restore_order(target, id, &original_window)?;
         }
+        transition.verify_keyboard_owner()?;
         check_current()
     })();
     let resumed = updates.resume();
     drop(transition);
-    let result = activation.and(restoration).and(resumed);
+    let mut failures = Vec::new();
+    for (phase, result) in [("activation", activation), ("restoration", restoration), ("display resume", resumed)] {
+        if let Err(error) = result {
+            failures.push(format!("{phase}: {}", error.message));
+        }
+    }
+    let result = if failures.is_empty() { Ok(()) } else { Err(Failure::new(ErrorCode::ActionFailed, failures.join("; "))) };
     if result.is_err() && frontmost() != Some(target) {
         let _ = synthetic_focus(target, 0, 2);
     }
@@ -264,17 +272,13 @@ impl Activation {
 }
 
 pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
-    activate_target_with_geometry(target, window, None)
-}
-
-pub fn activate_target_with_geometry(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
     check_current()?;
     let activation = ACTIVATION
         .with(|current| current.borrow().upgrade())
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original, geometry))?;
+    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original))?;
     check_current()
 }
 

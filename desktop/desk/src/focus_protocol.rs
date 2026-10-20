@@ -32,11 +32,21 @@ pub struct Scope {
     lease: Option<Lease>,
     yielded: bool,
     activation: Option<i32>,
+    keyboard_interrupted: bool,
 }
 
 impl Scope {
     pub fn new(owner: i32, foreground: i32, keyboard_owner: i32, target: i32) -> Self {
-        Self { owner, foreground, keyboard_owner, targets: HashSet::from([target]), lease: None, yielded: false, activation: None }
+        Self {
+            owner,
+            foreground,
+            keyboard_owner,
+            targets: HashSet::from([target]),
+            lease: None,
+            yielded: false,
+            activation: None,
+            keyboard_interrupted: false,
+        }
     }
 
     pub fn begin_activation(&mut self, target: i32) -> bool {
@@ -47,12 +57,19 @@ impl Scope {
         true
     }
 
+    pub fn keyboard_owner(&self) -> i32 {
+        self.keyboard_owner
+    }
+
     pub fn interrupted(&self) -> bool {
-        self.yielded
+        self.keyboard_interrupted
     }
 
     pub fn end_activation(&mut self) {
         self.activation = None;
+        if self.keyboard_interrupted {
+            self.yield_to_user();
+        }
     }
 
     pub fn permits_foreground(&self, pid: i32) -> bool {
@@ -173,7 +190,7 @@ impl Scope {
 
     pub fn keyboard(&mut self, source: i32, destination: i32) -> Decision {
         if self.activation == Some(destination) && source != self.owner && !self.yielded {
-            self.yield_to_user();
+            self.keyboard_interrupted = true;
             return Decision::Redirect(self.keyboard_owner);
         }
         if !self.yielded && source != self.owner {
@@ -202,7 +219,14 @@ mod tests {
         assert_eq!(state.observe_user_event(10, 7, 3), Decision::Pass);
         assert_eq!(state.keyboard(7, 3), Decision::Redirect(2));
         assert!(state.interrupted());
-        assert!(!state.permits_foreground(2));
+        assert!(state.permits_foreground(2));
+        for kind in 10..=12 {
+            assert_eq!(state.observe_user_event(kind, 7, 3), Decision::Pass);
+            assert_eq!(state.keyboard(7, 3), Decision::Redirect(2));
+        }
+        assert_eq!(state.activation_event(3, 13, 2), Decision::Suppress);
+        state.end_activation();
+        assert!(!state.permits_foreground(3));
         assert_eq!(state.activation_event(3, 13, 2), Decision::Pass);
         assert!(!state.begin_activation(3));
     }

@@ -199,9 +199,6 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
         Decision::Pass => original,
         Decision::Suppress => std::ptr::null_mut(),
         Decision::Redirect(pid) => {
-            if scope.interrupted() {
-                context.fail("User typed during activation; input was returned to its original owner and automation stopped");
-            }
             CGEvent::set_integer_value_field(Some(value), CGEventField::EventTargetUnixProcessID, i64::from(pid));
             CGEvent::post_to_pid(pid, Some(value));
             std::ptr::null_mut()
@@ -248,6 +245,19 @@ pub struct ActivationTransition {
 }
 
 impl ActivationTransition {
+    pub fn verify_keyboard_owner(&self) -> Result<(), Failure> {
+        let expected = self
+            .context
+            .scope
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::ActionFailed, "Focus protection state is unavailable"))?
+            .keyboard_owner();
+        if keyboard_focus_pid()? != expected {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Original keyboard owner was not restored after activation"));
+        }
+        Ok(())
+    }
+
     pub fn begin(target: i32, original: i32) -> Result<Self, Failure> {
         include_target(target);
         include_target(original);
@@ -272,6 +282,9 @@ impl Drop for ActivationTransition {
     fn drop(&mut self) {
         if let Ok(mut scope) = self.context.scope.lock() {
             scope.end_activation();
+            if scope.interrupted() {
+                self.context.fail("User typed during activation; input was returned to its original owner and automation stopped");
+            }
         }
     }
 }

@@ -775,8 +775,13 @@ fn exact_window(pid: i32, id: u32) -> Option<El> {
         .find(|w| window_id(w) == id && bool_attr(w, "AXMinimized") != Some(true))
 }
 
-pub(crate) fn focused_window_id(pid: i32) -> Option<u32> {
-    attr(&app_element(pid), "AXFocusedWindow").map(|w| window_id(&w)).filter(|id| *id != 0)
+pub(crate) fn focused_window(pid: i32) -> Option<(u32, CFType)> {
+    let window = attr(&app_element(pid), "AXFocusedWindow")?;
+    let id = window_id(&window);
+    if id == 0 || unsafe { AXUIElementSetMessagingTimeout(window.as_CFTypeRef(), 0.2) } != 0 {
+        return None;
+    }
+    Some((id, window))
 }
 
 pub(crate) fn focus_activation_window(pid: i32, id: u32) -> Option<(core_graphics::geometry::CGRect, CGPoint)> {
@@ -789,8 +794,7 @@ pub(crate) fn focus_activation_window(pid: i32, id: u32) -> Option<(core_graphic
     Some((core_graphics::geometry::CGRect::new(&pt(f.x, f.y), &CGSize::new(f.w, f.h)), activation))
 }
 
-pub(crate) fn restore_focused_window(pid: i32, id: u32) -> Result<(), Failure> {
-    let window = exact_window(pid, id).ok_or_else(|| fail(ErrorCode::ActionFailed, "Original focused window is no longer available"))?;
+pub(crate) fn restore_focused_window(window: &CFType) -> Result<(), Failure> {
     let status = unsafe { AXUIElementPerformAction(window.as_CFTypeRef(), cfs("AXRaise").as_concrete_TypeRef()) };
     if status == 0 {
         Ok(())
