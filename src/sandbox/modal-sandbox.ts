@@ -707,10 +707,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
+      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,

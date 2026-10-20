@@ -27,11 +27,18 @@ export const DROPPED_PROXY_ENV = new Set([
   "NO_PROXY",
 ]);
 
-export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Record<string, string> {
+const PROXY_GIT_CONFIG: ReadonlyArray<readonly [string, string]> = [["http.proxyAuthMethod", "basic"]];
+
+export function forceThroughProxyEnv(
+  egressProxyUrl: string,
+  token: string,
+  base: Record<string, string>,
+): Record<string, string> {
   const u = new URL(egressProxyUrl);
   const url = `${u.protocol}//x:${token}@${u.host}`;
   const noProxy = "localhost,127.0.0.1,::1";
-  return {
+  const env: Record<string, string> = {
+    ...base,
     HTTPS_PROXY: url,
     HTTP_PROXY: url,
     NO_PROXY: noProxy,
@@ -39,6 +46,14 @@ export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Rec
     http_proxy: url,
     no_proxy: noProxy,
   };
+  const existing = Number(base.GIT_CONFIG_COUNT);
+  const start = Number.isSafeInteger(existing) && existing > 0 ? existing : 0;
+  PROXY_GIT_CONFIG.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${start + i}`] = key;
+    env[`GIT_CONFIG_VALUE_${start + i}`] = value;
+  });
+  env.GIT_CONFIG_COUNT = String(start + PROXY_GIT_CONFIG.length);
+  return env;
 }
 
 export function proxyExportPrefix(handle: SandboxHandle): string {
