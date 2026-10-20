@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { traceStatus } from "../plugins/chassis/src/timing.ts";
@@ -33,9 +33,8 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       "--input-type=module",
       "-e",
       `
-    import * as Sentry from '@sentry/node';
     import { initializeErrorReporting, reportBackendError, startTiming, flushErrorReporting } from './plugins/chassis/src/error-reporting.ts';
-    initializeErrorReporting(Sentry, 'test');
+    await initializeErrorReporting(() => import('@sentry/node'), 'test');
     ${body}
   `,
     ],
@@ -109,6 +108,38 @@ test("disabled reporting leaves process listeners and logging alone", async () =
   assert.equal(code, 0);
   assert.equal(output.trim(), "0 0");
   assert.equal(events.length, 0);
+});
+
+test("service entrypoints do not load the SDK without a DSN", () => {
+  const entrypoints = [
+    "./src/instrument.ts",
+    "./src/runs/instrument.ts",
+    "./plugins/admin/src/instrument.ts",
+    "./plugins/auth/src/instrument.ts",
+    "./plugins/portal/src/instrument.ts",
+    "./plugins/web-ui/server/instrument.ts",
+  ];
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    const { registerHooks } = await import('node:module');
+    const loaded = [];
+    registerHooks({ resolve: (specifier, context, next) => {
+      const resolved = next(specifier, context);
+      if (resolved.url.includes('/@sentry/')) loaded.push(resolved.url);
+      return resolved;
+    } });
+    for (const entry of ${JSON.stringify(entrypoints)}) await import(entry);
+    console.log(JSON.stringify(loaded));
+  `,
+    ],
+    { cwd: new URL("..", import.meta.url), env: { ...process.env, SENTRY_DSN: "" }, encoding: "utf8" },
+  );
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout.trim(), "[]");
 });
 
 test("unhandled rejection flushes a fatal unhandled event and exits", async () => {

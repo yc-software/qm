@@ -8,7 +8,6 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
@@ -26,7 +25,7 @@ const collector = createServer(async (req, res) => {
 });
 collector.listen(0, "127.0.0.1");
 await once(collector, "listening");
-initializeErrorReporting(Sentry, "core", {
+await initializeErrorReporting(() => import("@sentry/node"), "core", {
   SENTRY_DSN: `http://public@127.0.0.1:${(collector.address() as AddressInfo).port}/1`,
   SENTRY_TRACES_SAMPLE_RATE: "1",
 });
