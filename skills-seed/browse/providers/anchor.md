@@ -31,7 +31,7 @@ the person asks to reset their state).
 
 ## Create the browser
 
-In a DM, with the person's profile:
+With the person's profile:
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.anchorbrowser.io/v1/sessions \
@@ -41,16 +41,6 @@ CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sy
 ANCHOR_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['data'].get('id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin)['data'].get('live_view_url',''))")
 ```
-
-In a channel or group, OMIT the profile entirely (per the DM-only rule):
-
-```bash
-CREATE=$(curl -fsS -X POST https://api.anchorbrowser.io/v1/sessions \
-  -H "anchor-api-key: $ANCHOR_API_KEY" -H 'content-type: application/json' \
-  -d '{"session":{"timeout":{"max_duration":30,"idle_timeout":10}}}')
-```
-
-then extract `CDP_URL` / `ANCHOR_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
 
 Timeouts are minutes (`max_duration` caps the session, `idle_timeout` reaps an unused one).
 For a site behind serious bot protection, add a proxy and Anchor's hardened build — both
@@ -103,19 +93,14 @@ when the site expires the session. If the person wants re-auth without being pin
 time, Anchor's Identities store their login and re-run the auth flow automatically before
 each session. Check `GET /v1/keychain/credentials` for an existing login for the domain
 first (use it via a grant; NEVER bind a login registered for a different site); otherwise
-mint a one-time secret-drop so the password never transits chat:
-
-```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{"service":"<domain>","fields":[{"key":"EMAIL","secret":false},{"key":"PASSWORD"}],"purpose":"sign in to <domain> in the managed browser"}'
-```
+mint a one-time link with the `secret-drop` skill so the password never transits chat
+(service `<domain>`, fields `EMAIL` with `secret:false` and `PASSWORD`).
 
 Hand over the returned `url` with the consent stated plainly: _filling it stores this login
 with Anchor (our managed-browser provider) so it can sign in and re-sign-in for you_ — that
 storage is the point, and it needs their explicit OK. Redemption fires a wake back into
-this conversation with `EMAIL`/`PASSWORD` in your env (sign-ins are DM-only, so no grant
-dance). Then create the identity with Python building the body from env
+this conversation; name the new credential's handle in `credentials` to get
+`EMAIL`/`PASSWORD` for that command. Then create the identity with Python building the body from env
 (`POST /v1/identities` with `{"source":"https://<domain>","name":...,"credentials":
 [{"type":"username_password","username":...,"password":...}]}`), and register the returned
 identity id in their keychain (service `anchor-identity`, envKey

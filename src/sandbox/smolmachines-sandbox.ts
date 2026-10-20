@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure, errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -78,8 +77,8 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   snapshotIntervalMs?: number;
-  store?: DurableMap<StoredSmolmachinesSandbox>;
-  advisoryLock?: AdvisoryLock;
+  store: DurableMap<StoredSmolmachinesSandbox>;
+  advisoryLock: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -88,7 +87,7 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions = {}): Sandbox {
+export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: SmolmachinesSandboxOptions): Sandbox {
   if (!opts.token && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=smolmachines requires SMOLMACHINES_TOKEN");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_SMOLMACHINES_BASE_URL).replace(/\/+$/, "");
@@ -101,8 +100,8 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
-  const store = opts.store ?? createMemoryMap<StoredSmolmachinesSandbox>();
-  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const store = opts.store;
+  const advisoryLock = opts.advisoryLock;
   const lifecycleKey = (scope: string): string => `smolmachines-provision:${prefix}:${scope}`;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
   const network: MachineNetwork = egressProxyHost ? { mode: "allowCidrs", hosts: [egressProxyHost] } : { mode: "open" };
@@ -402,11 +401,7 @@ export function createSmolmachinesSandbox(workspace: WorkspaceStore, opts: Smolm
       return { coldStart: false };
     }
     await mergeStored(scope, { initializationPending: true });
-    try {
-      onStatus?.("Preparing the sandbox…");
-    } catch (error) {
-      void error;
-    }
+    onStatus?.("Preparing the sandbox…");
     try {
       const info = existing ?? (await createMachine(name, false)).info;
       idByName.set(name, info.id);

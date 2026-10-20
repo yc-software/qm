@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
+import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
-import { spendCsv, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
+import { spendCsv, spendExportRows, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
 
 const DAY = 86_400_000;
 const MON = 20353;
@@ -12,6 +12,7 @@ const WED = 20355;
 
 const row = (over: Partial<SpendRow> & Pick<SpendRow, "day" | "scopeId" | "origin">): SpendRow => ({
   model: null,
+  cronId: null,
   calls: 1,
   costUsd: 0,
   input: 0,
@@ -92,6 +93,7 @@ const summarize = (rows: SpendRow[], over: Partial<Parameters<typeof summarizeSp
     to: (WED + 1) * DAY,
     bucket: "day",
     label: () => "",
+    cron: () => null,
     ...over,
   });
 
@@ -123,13 +125,40 @@ test("summarizeSpend: people plus non-person scopes conserve the org totals", ()
   }
   const alice = report.people.find((p) => p.principalId === "alice")!;
   assert.equal(alice.live.costUsd, 1.75);
-  assert.equal(alice.cron.costUsd, 0.75);
-  assert.equal(alice.cron.calls, 3);
-  assert.equal(alice.background.costUsd, 0);
+  assert.equal(alice.background.sources.cron.costUsd, 0.75);
+  assert.equal(alice.background.sources.cron.calls, 3);
+  assert.equal(alice.background.costUsd, 0.75, "crons are background");
   const bob = report.people.find((p) => p.principalId === "bob")!;
-  assert.equal(bob.cron.costUsd, 0, "no cron rows means a zero cron bucket, not a missing one");
+  assert.equal(bob.background.sources.cron.costUsd, 0, "no cron rows means a zero cron source, not a missing one");
+  assert.equal(bob.background.sources.monitor.costUsd, 4);
   assert.equal(bob.background.costUsd, 4, "monitor origin rolls up as background");
+  assert.equal(report.scopes[0]!.background.sources.webhook.costUsd, 2);
   assert.equal(report.scopes[0]!.background.costUsd, 2, "webhook origin rolls up as background");
+});
+
+test("summarizeSpend: background holds every non-live source, split by where it came from", () => {
+  const report = summarize([
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", costUsd: 2 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "loop", costUsd: 4 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "swarm", costUsd: 8 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "webhook", costUsd: 16 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "monitor", costUsd: 32 }),
+  ]);
+  const alice = report.people[0]!;
+  assert.equal(alice.live.costUsd, 1);
+  assert.equal(alice.background.costUsd, 62);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(alice.background.sources).map(([source, t]) => [source, t.costUsd])),
+    { cron: 2, loop: 4, swarm: 8, webhook: 16, monitor: 32 },
+  );
+  assert.equal(alice.costUsd, alice.live.costUsd + alice.background.costUsd);
+  const day = report.series[0]!;
+  assert.equal(day.background.costUsd, 62);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(day.background.sources).map(([source, t]) => [source, t.costUsd])),
+    { cron: 2, loop: 4, swarm: 8, webhook: 16, monitor: 32 },
+  );
 });
 
 test("summarizeSpend: cache hit ratio comes from the shared helper and is null without cache data", () => {
@@ -180,7 +209,7 @@ test("summarizeSpend: the series is sparse, UTC-keyed, and restricted to [from, 
 
   const narrowed = summarizeSpend(
     ROWS.filter((r) => r.day >= TUE && r.day < WED),
-    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "" },
+    { from: TUE * DAY, to: WED * DAY, bucket: "day", label: () => "", cron: () => null },
   );
   assert.deepEqual(narrowed.window, { from: "2025-09-23", to: "2025-09-24", bucket: "day" });
   assert.deepEqual(
@@ -208,14 +237,15 @@ test("spendCsv: one row per entity, people first, matching the report's numbers"
   const lines = spendCsv(report).trimEnd().split("\r\n");
   assert.equal(
     lines[0],
-    "principal_id,scope_id,kind,display_name,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+    "principal_id,scope_id,kind,display_name,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
   );
   assert.equal(lines.length, report.people.length + report.scopes.length + 1);
   const bob = lines.find((l) => l.startsWith("bob,"))!.split(",");
   const bobRow = report.people.find((p) => p.principalId === "bob")!;
-  assert.equal(Number(bob[7]), bobRow.costUsd);
+  assert.equal(Number(bob[11]), bobRow.costUsd);
   assert.equal(Number(bob[4]), bobRow.live.costUsd);
-  assert.equal(Number(bob[6]), bobRow.background.costUsd);
+  assert.equal(Number(bob[5]), bobRow.background.costUsd);
+  assert.equal(Number(bob[10]), bobRow.background.sources.monitor.costUsd);
   assert.equal(lines.at(-1)!.split(",")[1], "channel:C1", "non-person rows come last");
 });
 
@@ -245,7 +275,7 @@ test("summarizeSpend: models conserve org totals and category totals across scop
       column,
     );
   }
-  for (const origin of ["live", "cron", "background"] as const) {
+  for (const origin of ["live", "background"] as const) {
     for (const column of ["costUsd", "calls", "tokens"] as const) {
       assert.equal(
         report.models.reduce((sum, m) => sum + m[origin][column], 0),
@@ -263,7 +293,7 @@ test("summarizeSpend: models conserve org totals and category totals across scop
       }),
     );
   }
-  assert.equal(report.models.find((m) => m.model === null)!.cron.costUsd, 0.75);
+  assert.equal(report.models.find((m) => m.model === null)!.background.sources.cron.costUsd, 0.75);
   assert.deepEqual(summarize([]).models, []);
 });
 
@@ -303,13 +333,13 @@ test("spendCsv: model export retains totals, unknown models, and safe escaping",
   const csv = spendCsv(report, "model");
   assert.ok(
     csv.startsWith(
-      "model,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio\r\n",
+      "model,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio\r\n",
     ),
   );
-  assert.ok(csv.includes('"Model ""quoted"", name",0,1,0,1,1,100,0,100,0,0.5\r\n'));
+  assert.ok(csv.includes('"Model ""quoted"", name",0,1,1,0,0,0,0,1,1,100,0,100,0,0.5\r\n'));
   assert.ok(csv.includes('"line one\r\nline two"'));
   for (const model of ["=formula", "+formula", "-formula", "@formula"]) assert.ok(csv.includes(`'${model},`));
-  assert.ok(csv.includes("Unknown model,0,1,0,1,1,100,0,100,0,0.5\r\n"));
+  assert.ok(csv.includes("Unknown model,0,1,1,0,0,0,0,1,1,100,0,100,0,0.5\r\n"));
   assert.equal(spendCsv(report), spendCsv(report, "entity"));
 });
 
@@ -409,3 +439,145 @@ for (const bucket of ["day", "week"] as const) {
     assert.deepEqual(summarize(rows.toReversed(), { bucket, to: (MON + 8) * DAY }).series, report.series);
   });
 }
+
+test("spendExportRows keeps the ledger grain, merging principal aliases into one person per day, source and model", (t) => {
+  installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  const labels = new Map([
+    ["personal:slack-alice", "Alice"],
+    ["personal:alice", "alice@example.com"],
+    ["channel:C1", "#general"],
+  ]);
+  const ledger = [
+    row({ day: TUE, scopeId: "channel:C1", origin: "cron", model: "m1", costUsd: 8, calls: 2 }),
+    row({ day: MON, scopeId: "personal:slack-alice", origin: "conversation", model: "m1", costUsd: 2, input: 5 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 1, input: 3 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "monitor", model: "m1", costUsd: 4 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "webhook", model: "m1", costUsd: 16 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: null, costUsd: 32 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "loop", model: "m1", costUsd: 64 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "swarm", model: "m1", costUsd: 128 }),
+  ];
+  const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "");
+  assert.deepEqual(
+    rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.source, r.model, r.costUsd, r.calls]),
+    [
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "loop", "m1", 64, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "swarm", "m1", 128, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "webhook", "m1", 16, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "monitor", "m1", 4, 1],
+      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "m1", 8, 2],
+    ],
+    "each row names its exact source, live first, then background kinds in report order",
+  );
+  assert.equal(rows[1]!.input, 8);
+  const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY, label: (id) => labels.get(id) ?? "" });
+  assert.equal(
+    rows.reduce((sum, r) => sum + r.costUsd, 0),
+    report.org.costUsd,
+  );
+  assert.equal(
+    rows.filter((r) => r.principalId === "alice").reduce((sum, r) => sum + r.costUsd, 0),
+    report.people.find((p) => p.principalId === "alice")!.costUsd,
+  );
+  const names = new Map([...report.people, ...report.scopes].map((e) => [e.scopeId, e.displayName]));
+  assert.deepEqual(
+    rows.map((r) => r.displayName),
+    rows.map((r) => names.get(r.scopeId)),
+    "the export names each scope exactly as the Spend page does",
+  );
+});
+
+test("summarizeSpend: crons group each cron's spend under the scope it ran in, and deleted crons keep theirs", (t) => {
+  installPrincipalLinks({ canonical: (id) => (id === "slack-bob" ? "bob" : undefined), aliases: () => [] });
+  t.after(() => installPrincipalLinks(null));
+  const nightly = {
+    id: "nightly",
+    title: "Nightly report",
+    owner: "alice",
+    ownerScopeId: "personal:alice",
+    schedule: { cron: "0 9 * * *", timezone: "UTC" },
+    enabled: true,
+  };
+  const rows = [
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m1", costUsd: 2 }),
+    row({ day: TUE, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m2", costUsd: 3, calls: 2 }),
+    row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "digest", costUsd: 4 }),
+    row({ day: WED, scopeId: "personal:slack-bob", origin: "cron", cronId: "gone", costUsd: 1 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "moved", costUsd: 1 }),
+    row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "moved", costUsd: 1 }),
+    row({ day: WED, scopeId: "personal:bob", origin: "conversation", costUsd: 10 }),
+  ];
+  const infos = new Map([
+    ["nightly", nightly],
+    ["digest", { ...nightly, id: "digest", title: "Digest" }],
+  ]);
+  const report = summarize(rows, {
+    cron: (id) => infos.get(id) ?? null,
+    label: (id) => (id === "channel:C1" ? "#general" : ""),
+  });
+  assert.deepEqual(
+    report.crons.map((c) => [c.cronId, c.scopeId, c.scopeName, c.info?.title ?? null, c.costUsd, c.calls]),
+    [
+      ["nightly", "personal:alice", "", "Nightly report", 5, 3],
+      ["digest", "channel:C1", "#general", "Digest", 4, 1],
+      ["moved", "personal:alice", "", null, 2, 2],
+      ["gone", "personal:slack-bob", "", null, 1, 1],
+    ],
+  );
+  assert.deepEqual(
+    report.people.map((p) => [p.scopeId, p.costUsd]),
+    [
+      ["personal:bob", 11],
+      ["personal:alice", 6],
+    ],
+  );
+  assert.deepEqual(report.crons[0]!.info, nightly);
+  assert.equal(
+    report.crons.reduce((sum, c) => sum + c.costUsd, 0),
+    report.org.background.sources.cron.costUsd,
+  );
+});
+
+test("spendCsv: cron export names each cron by id, title, owner and spend scope, and de-fangs titles", () => {
+  const rows = [
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "c1", costUsd: 2, calls: 1 }),
+    row({ day: MON, scopeId: "channel:C1", origin: "cron", cronId: "gone", costUsd: 1, calls: 1 }),
+  ];
+  const report = summarize(rows, {
+    cron: (id) =>
+      id === "c1"
+        ? { id, title: "=HYPERLINK()", owner: "alice", ownerScopeId: "personal:alice", schedule: {}, enabled: true }
+        : null,
+  });
+  const lines = spendCsv(report, "cron").trimEnd().split("\r\n");
+  assert.equal(
+    lines[0],
+    "cron_id,title,owner,scope_id,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+  );
+  assert.deepEqual(lines.slice(1), [
+    "c1,'=HYPERLINK(),alice,personal:alice,0,2,2,0,0,0,0,2,1,0,0,0,0,",
+    "gone,,,channel:C1,0,1,1,0,0,0,0,1,1,0,0,0,0,",
+  ]);
+});
+
+test("spendExportRows keeps two crons in the same scope, day and model apart", () => {
+  const rows = spendExportRows(
+    [
+      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "a", model: "m1", costUsd: 1 }),
+      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "b", model: "m1", costUsd: 2 }),
+      row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 4 }),
+    ],
+    () => "",
+  );
+  assert.deepEqual(
+    rows.map((r) => [r.source, r.cronId, r.costUsd]),
+    [
+      ["live", null, 4],
+      ["cron", "a", 1],
+      ["cron", "b", 2],
+    ],
+  );
+});

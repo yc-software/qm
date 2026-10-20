@@ -92,7 +92,7 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
 });
 
-test("sidebar batches visible goals and preserves the lookback boundary and inactive overrides", async () => {
+test("sidebar batches visible goals from the session rows and drops inactive ones", async () => {
   const { app, sessions, runs } = freshApp();
   const visible: string[] = [];
   const refs: string[] = [];
@@ -102,31 +102,14 @@ test("sidebar batches visible goals and preserves the lookback boundary and inac
     await sessions.addParticipant(session.id, owner);
     const { lease } = await sessions.acquireLease(session.id);
     assert.ok(lease);
-    const goal = {
+    await sessions.setGoal(lease, {
       objective: `goal ${index}`,
-      status: "active",
+      status: index === 1 ? "complete" : "active",
       tokensUsed: 0,
       createdAt: 1,
       updatedAt: 1,
       activeMs: 123,
-    };
-    await sessions.appendMany(lease, [
-      { type: "system", payload: { kind: "goal", goal }, scopeLabel: session.scopeId },
-      ...Array.from({ length: index === 1 ? 1999 : 2000 }, () => ({
-        type: "user" as const,
-        payload: { text: "filler" },
-        scopeLabel: session.scopeId,
-      })),
-      ...(index === 1
-        ? [
-            {
-              type: "system" as const,
-              payload: { kind: "goal", goal: { ...goal, status: "complete" } },
-              scopeLabel: session.scopeId,
-            },
-          ]
-        : []),
-    ]);
+    });
     await sessions.releaseLease(lease);
     await runs.enqueue({ sessionId: ref, request: enqueueRequest() });
     if (owner === "U1") {
@@ -134,14 +117,14 @@ test("sidebar batches visible goals and preserves the lookback boundary and inac
       refs.push(ref);
     }
   }
-  const recent = sessions.getRecentEntries.bind(sessions);
+  const goals = sessions.goals.bind(sessions);
   const latest = runs.latestForThreads.bind(runs);
   let reads = 0;
   let runReads = 0;
-  sessions.getRecentEntries = async (ids, lookback) => {
+  sessions.goals = async (ids) => {
     reads++;
     assert.deepEqual(new Set(ids), new Set(visible));
-    return recent(ids, lookback);
+    return goals(ids);
   };
   runs.latestForThreads = async (ids, opts) => {
     runReads++;
@@ -152,5 +135,6 @@ test("sidebar batches visible goals and preserves the lookback boundary and inac
   assert.deepEqual({ reads, runReads }, { reads: 1, runReads: 1 });
   assert.equal(list.length, 2);
   assert.equal(list.find((row) => row.id === visible[0])?.goal?.objective, "goal 0");
+  assert.equal(list.find((row) => row.id === visible[0])?.goal?.activeMs, 123);
   assert.equal(list.find((row) => row.id === visible[1])?.goal, undefined);
 });

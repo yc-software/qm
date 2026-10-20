@@ -18,7 +18,6 @@ import {
 } from "lucide";
 import {
   api,
-  isContinuable,
   sharedContextLabel,
   type CoreContext,
   type CoreProject,
@@ -26,12 +25,14 @@ import {
   fileContentUrl,
 } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
-import { errMessage } from "../../chassis/src/errors";
-import { actionSnippet, fieldSelect, formatBytes, icon, initials, menuSelect, relTime } from "./ui";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
+import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
+import { slackMark } from "./slack-mark";
+import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo, surfaceOf } from "./sessions";
-import { activityOf } from "./session-list";
+import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
+import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
 import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
@@ -171,7 +172,11 @@ export async function renderContexts(): Promise<void> {
   contextsLoading = true;
   drawContexts();
   try {
-    await Promise.all([fetchContexts(), refreshSessions({ silent: true })]);
+    await Promise.all([
+      fetchContexts(),
+      refreshSessions({ silent: true }),
+      contextsState.selected ? loadScopeSessions(contextsState.selected) : null,
+    ]);
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
   } catch (e) {
     if (seq !== appState.viewRenderSeq || appState.currentView !== "contexts") return;
@@ -286,7 +291,7 @@ export function scopeFilterControl(current: string | null, onSelect: (scopeId: s
 }
 
 function sessionsIn(scopeId: string): CoreSession[] {
-  return sessionsState.list
+  return sidebarSessions(sessionsState.list)
     .filter((s) => s.scopeId === scopeId && !s.archived)
     .sort((a, b) => activityOf(b) - activityOf(a));
 }
@@ -697,10 +702,11 @@ function projectMembersSection(context: CoreContext): TemplateResult {
       <div class="project-member-list">
         ${projectPeople(context).map((principalId) => {
           const label = memberLabel(context, principalId);
-          const viaChannel = Boolean(project.members.find((member) => member.principalId === principalId)?.viaChannel);
+          const member = project.members.find((m) => m.principalId === principalId);
+          const viaChannel = Boolean(member?.viaChannel);
           return html`
             <div class="project-member-row">
-              <span class="project-member-avatar" aria-hidden="true">${initials(label)}</span>
+              ${avatarTpl({ key: principalId, name: label, avatarUrl: member?.avatarUrl })}
               <span class="project-member-name" dir="auto">${label}</span>
               ${principalId === project.ownerId ? html`<span class="badge">Owner</span>` : nothing}
               ${
@@ -1381,12 +1387,12 @@ async function loadScopeResources(scopeId: string): Promise<void> {
 
 function contextSessionRow(s: CoreSession): TemplateResult {
   const surface = surfaceOf(s);
-  const readOnly = !isContinuable(s, appState.me?.user ?? "");
+  const readOnly = !s.canContinue;
   return html`
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
-        ${surface === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : html`<span class="badge">${surface}</span>`}
+        ${surface === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : html`<span class="badge">${surface}</span>`}
         ${readOnly ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>
@@ -1418,6 +1424,7 @@ function selectContext(scopeId: string | null): void {
   syncUrlFromState();
   drawContexts();
   if (scopeId) {
+    void loadScopeSessions(scopeId).then(drawContexts).catch(swallowAs("web-ui: load context chats", undefined));
     void loadScopeResources(scopeId);
     void loadAmbientPolicy(scopeId, drawContexts);
     void loadContextModel(scopeId, drawContexts);

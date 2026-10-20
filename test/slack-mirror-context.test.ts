@@ -89,6 +89,33 @@ test("automatic context renders overheard messages and preserves literal entitie
   assert.match(rendered.header, /stored Slack events/);
 });
 
+test("a top-level tag after a multi-day gap still sees earlier channel messages", async () => {
+  const { cache, readHistory, client } = fixture();
+  const trigger = 1_700_200_000;
+  await cache.ingest([
+    {
+      container: "C1",
+      ts: `${trigger - 3 * 86_400}.000001`,
+      text: "the Claude key errors when I chat",
+      authorId: "U1",
+    },
+  ]);
+  const serializer = createConversationSerializer({
+    ids,
+    directory,
+    externalParticipantsEnabled: async () => false,
+    readHistory,
+  });
+  const result = await serializer.serializeSlackConversation(
+    client,
+    { kind: "channel", channel: "C1", ts: `${trigger}.000002`, rawText: "help me debug this", userId: "U2", files: [] },
+    { audience: [] },
+  );
+  const overheard = renderConversationView(result.view).overheard;
+  const earlier = overheard.find((m) => m.ts === `${trigger - 3 * 86_400}.000001`);
+  assert.equal(earlier?.text, "the Claude key errors when I chat");
+});
+
 test("missing parent falls back once then the returned parent is stored for later turns", async () => {
   const { cache, readHistory, client } = fixture();
   await cache.ingest([{ container: "C1", ts: "2.000000", sub: "1.000000", text: "reply" }]);

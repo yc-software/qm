@@ -53,12 +53,24 @@ human author. Request bodies cannot set identity, authorization, or provenance.
 }
 ```
 
+Any spawn — initial or later, by the root or by a worker — may choose the
+model for the workers it creates with optional `model`, `effort` (a thinking
+level) and `fastMode`, e.g.
+`{"action":"spawn","requestId":"r1","count":8,"model":"gpt-6.1-sol","effort":"medium","fastMode":false,"text":"..."}`.
+The choice is stored on each new member (visible in inspect), applies to every
+turn that worker takes, and is inherited by workers it spawns unless they choose
+again. Workers do not copy the root's runtime: fields nobody chose resolve like any
+subagent turn, from the org subagent default and then the owner's default. An
+unavailable model fails closed at dispatch.
+
 Optional `settings` overrides the defaults below at initial spawn. The backend
 can configure defaults with `SWARM_DEFAULTS`, a JSON object such as
 `{"agents":16,"turnMs":900000}`. Values must be positive safe integers within the
-safety bounds; unknown settings are rejected. Resolved settings and the chosen
-`backend` are stored once. Identical initial requests can be retried; subsequent
-spawns inherit the settings and cannot reconfigure the swarm.
+safety bounds; unknown settings are rejected. Resolved settings and the chosen `backend` are stored once. Identical
+initial requests can be retried. Later spawns by the root session may pass
+`settings` again to change any setting except `turnMs` (for example, to raise
+`agents`); workers inherit the settings and cannot reconfigure the swarm. The
+backend cannot change after creation.
 
 Omit `count` to spawn one; `contexts` also determines the count when provided. A
 single `context` supplies the same initial JSON to every worker. Context may be any
@@ -98,7 +110,7 @@ never retires the existing forum.
 
 ### Identity, peers, and character
 
-`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt`. Peer
+`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt` when a work window is set. Peer
 records keep trusted IDs, ancestry, session links, storage selection, and lifecycle
 state separate from arbitrary `context` data. Only this swarm is listed, not every
 session with the same owner, and never all private sessions in the organization.
@@ -144,8 +156,35 @@ delivery target, and the delivery layer also refuses swarm result delivery.
 
 Set `notify:false` for a durable message without a wakeup. Sending to oneself does
 not wake oneself. There are no automatic reply-to-reply notifications: agents
-explicitly decide whether a response warrants another turn. Every generated turn
-consumes the same finite notification budget.
+explicitly decide whether a response warrants another turn. When `notifications`
+is set, every generated turn consumes that budget.
+
+### Worker goals
+
+A worker turn normally ends when the worker replies, and the worker then waits
+for its next message. To keep a worker working, its parent can attach a goal to
+`spawn` or `send`:
+
+```json
+{
+  "action": "send",
+  "requestId": "lane-goal",
+  "audience": ["member-id"],
+  "text": "Work through every archive for your lane.",
+  "goal": { "objective": "Exhaust the lane's archives", "floor": { "minMs": 3600000 }, "token_cap": 2000000 }
+}
+```
+
+The goal is installed as the worker session's goal when that turn starts, and the
+turn runs under the normal goal loop: the worker is prompted to continue until the
+goal's governor approves completion or pauses it, or an optional `token_cap` is
+spent. A turn that carries a goal runs without the swarm `turnMs` deadline; other
+turns keep it. `floor` and `token_cap` take the same keys as the goal tool, and
+neither is required. Only a parent can assign goals, and
+only to its own workers; a goal needs `notify`. The worker treats its parent as
+the user for the goal and messages it when it needs a decision. Each goal message
+installs a fresh goal once (a retried delivery does not reinstall it), so sending
+a goal again replaces a paused or finished one and starts a new token budget.
 
 ### Ask, read, and tail
 
@@ -218,31 +257,36 @@ Resume, and Stop; and Pause all, Resume all, and Stop all (with a confirm), whic
 apply this action to the root's direct children so it cascades. The strip
 refreshes every few seconds only while workers are active and the tab is visible.
 
-## Defaults and safety bounds
+## Defaults
 
-| Setting                                          | Default              | Maximum     |
-| ------------------------------------------------ | -------------------- | ----------- |
-| `agents` (root and failed reservations included) | 32                   | 256         |
-| `depth` below root                               | 4                    | 8           |
-| `spawnRequests`                                  | 32                   | 64          |
-| `messages` including initial work                | 128                  | 256         |
-| `notifications` including initial work           | 256                  | 1,024       |
-| `contextBytes` / `textBytes`                     | 8,192 each           | 16,384 each |
-| `lifetimeMs` from first spawn                    | 3,600,000            | 86,400,000  |
-| `turnMs` per notification                        | 600,000 (10 minutes) | 3,600,000   |
-| `waitMs` per read                                | 10,000               | 30,000      |
+| Setting                                          | Default              |
+| ------------------------------------------------ | -------------------- |
+| `agents` (root and failed reservations included) | 32                   |
+| `depth` below root                               | 4                    |
+| `contextBytes` / `textBytes`                     | 8,192 each           |
+| `spawnRequests`                                  | unset (no limit)     |
+| `messages` including initial work                | unset (no limit)     |
+| `notifications` including initial work           | unset (no limit)     |
+| `lifetimeMs` from first spawn                    | unset (no limit)     |
+| `turnMs` per notification                        | 600,000 (10 minutes) |
+| `waitMs` per read                                | 10,000               |
 
 The root and at least one worker require `agents >= 2`. All other settings accept
-positive integers up to their maximum. Read requests can still use `waitMs:0`.
-Per-swarm budgets are reserved atomically with the messages and members consuming
-them. Both the orchestrator and independent worker cancellation honor the stored
-turn deadline; existing organization-wide limits can shorten it. Internal reconciliation limits, the 32-message read page, and
-bounded run retry counts are not swarm configuration.
+any positive integer; `turnMs` is limited only by the 2,147,483,647 ms timer ceiling. Read requests can still use `waitMs:0`.
+`spawnRequests`, `messages`, `notifications`, and `lifetimeMs` are off unless a
+spawn or `SWARM_DEFAULTS` sets them. When set, they are enforced as budgets that are
+reserved atomically with the members and messages that consume them. Both the
+orchestrator and independent worker cancellation honor the stored turn deadline;
+existing organization-wide limits can shorten it. Internal reconciliation limits,
+the 32-message read page, and bounded run retry counts are not swarm
+configuration.
 
-After expiration, history remains readable, but new work, notifications, and
-character changes are rejected. Human-initiated ordinary session turns remain
-ordinary QM actions. Workers and their durable results remain visible; computers
-can be retired through the existing sandbox inventory. There is no automatic
+When `lifetimeMs` is set and the window passes, history remains readable, but new
+work, notifications, and character changes are rejected until the root extends
+`lifetimeMs` on a later spawn. Swarms without `lifetimeMs` never expire. Human-initiated
+ordinary session turns remain ordinary QM actions.
+Workers and their durable results remain visible; computers can be retired
+through the existing sandbox inventory. There is no automatic
 filesystem export on retirement: publish useful outputs through existing Files
 or your version-control workflow first.
 

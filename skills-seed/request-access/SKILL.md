@@ -20,7 +20,6 @@ curl -fsS -X POST "$AGENT_API_URL/v1/keychain/asks" \
 ```
 
 - `purpose` is one plain sentence about the command, not the whole task.
-- Add `"requestedMode":"once"` only when a single command is all you need. The default lasts until revoked.
 - If a request for that credential is already pending, the same one comes back. Don't ask twice.
 
 ## Where the card shows up

@@ -7,7 +7,7 @@ export function recoveredRuntime(
   entries: readonly SessionEntry[],
   runId: string,
   actorId: string,
-): RuntimeChoice | undefined {
+): { choice: RuntimeChoice; lifetime: "task" | "scope" } | undefined {
   for (const entry of [...entries].reverse()) {
     const p = entry.payload;
     if (
@@ -27,7 +27,10 @@ export function recoveredRuntime(
       (choice.effortLevel === undefined || typeof choice.effortLevel === "string") &&
       (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
     )
-      return choice as unknown as RuntimeChoice;
+      return {
+        choice: choice as unknown as RuntimeChoice,
+        lifetime: p.runtimeHandoff.lifetime === "scope" ? "scope" : "task",
+      };
   }
   return undefined;
 }

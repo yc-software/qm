@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import type { SkillPackFetcher } from "../src/skills/pack-fetcher.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const base: NewSkillPack = {
   kind: "git",
@@ -34,6 +35,7 @@ test("tracked pack: fast-path skips reconcile when HEAD == last good commit", as
   await packs.recordImport(s.id, { at: 0, commit: "c1", status: "ok" });
   const calls: string[] = [];
   const engine = createSkillSyncEngine({
+    ...singleProcessDeps(),
     packs,
     fetcher: fakeFetcher({ [s.id]: "c1" }),
     reconcile: async (id) => void calls.push(id),
@@ -48,6 +50,7 @@ test("tracked pack: reconciles when HEAD has advanced", async () => {
   await packs.recordImport(s.id, { at: 0, commit: "c1", status: "ok" });
   const calls: string[] = [];
   const engine = createSkillSyncEngine({
+    ...singleProcessDeps(),
     packs,
     fetcher: fakeFetcher({ [s.id]: "c2" }),
     reconcile: async (id) => void calls.push(id),
@@ -62,6 +65,7 @@ test("pinned pack: sets updateAvailable when the line advanced past the pinned c
   await packs.recordImport(s.id, { at: 0, commit: "c1", status: "ok" });
   const calls: string[] = [];
   const engine = createSkillSyncEngine({
+    ...singleProcessDeps(),
     packs,
     fetcher: fakeFetcher({ [s.id]: "c2" }),
     reconcile: async (id) => void calls.push(id),
@@ -76,7 +80,12 @@ test("pinned pack: clears a stale updateAvailable when HEAD == pinned commit", a
   const s = await packs.create({ ...base, syncMode: "pinned", ref: "c1" });
   await packs.recordImport(s.id, { at: 0, commit: "c1", status: "ok" });
   await packs.update(s.id, { updateAvailable: true });
-  const engine = createSkillSyncEngine({ packs, fetcher: fakeFetcher({ [s.id]: "c1" }), reconcile: async () => {} });
+  const engine = createSkillSyncEngine({
+    ...singleProcessDeps(),
+    packs,
+    fetcher: fakeFetcher({ [s.id]: "c1" }),
+    reconcile: async () => {},
+  });
   await engine.tick();
   assert.equal((await packs.get(s.id))?.updateAvailable, false, "no advance ⇒ flag cleared");
 });
@@ -89,6 +98,7 @@ test("one failing pack never aborts the tick", async () => {
   await packs.recordImport(good.id, { at: 0, commit: "c1", status: "ok" });
   const calls: string[] = [];
   const engine = createSkillSyncEngine({
+    ...singleProcessDeps(),
     packs,
     fetcher: fakeFetcher({ [good.id]: "c2" }),
     reconcile: async (id) => void calls.push(id),

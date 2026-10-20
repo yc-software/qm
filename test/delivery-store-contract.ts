@@ -176,28 +176,6 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
       sourceThreadRef: "agent:main:cron:legacy",
     },
   });
-  const sentCounts = await store.sentCountsBySourceSessions([
-    { sessionId: "source-session", threadRef: "agent:main:cron:c1" },
-    { sessionId: "shadow-session", threadRef: "agent:main:cron:hb-1" },
-    { sessionId: "legacy-session", threadRef: "agent:main:cron:legacy" },
-    { sessionId: "silent-session", threadRef: "agent:main:cron:c9" },
-  ]);
-  assert.equal(
-    sentCounts.get("source-session"),
-    1,
-    "a row naming another session never counts for a page session sharing its thread",
-  );
-  assert.equal(sentCounts.get("shadow-session"), undefined, "shadow rows never count as sent");
-  assert.equal(sentCounts.get("legacy-session"), 1, "rows without sourceSessionId fall back to threadRef");
-  assert.equal(sentCounts.get("silent-session"), undefined, "sessions with no deliveries stay absent");
-  assert.equal((await store.sentCountsBySourceSessions([])).size, 0);
-
-  const runCounts = await store.sentRunCountsByCron(["c1", "hb-1", "legacy", "c9"]);
-  assert.equal(runCounts.get("c1"), 2, "distinct delivering runs per cron (session id or legacy threadRef)");
-  assert.equal(runCounts.get("legacy"), 1, "legacy provenance counts by threadRef");
-  assert.equal(runCounts.get("hb-1"), undefined, "shadow rows never count as delivered runs");
-  assert.equal(runCounts.get("c9"), undefined, "crons with no deliveries stay absent");
-  assert.equal((await store.sentRunCountsByCron([])).size, 0);
 
   const contested = await store.enqueue({
     destination: { type: "group", target: "C-race" },
@@ -317,36 +295,29 @@ export async function exerciseDeliveryExpiryRevive(
 ): Promise<void> {
   const store = makeStore({ maxAgeMs: 300 });
 
-  const consent = await store.enqueue({
+  const notice = await store.enqueue({
     destination: { type: "slack", target: "C-gone" },
-    text: "please approve this cron",
-    idempotencyKey: "consent-notice:trigger-1",
+    text: "scheduled notice",
+    idempotencyKey: "notice:trigger-1",
     provenance: {
       trigger: "cron",
       surface: "cron",
-      fireKey: "consent-notice:trigger-1",
+      fireKey: "notice:trigger-1",
       sourceScopeId: "personal:U-owner",
       sourceThreadRef: "agent:main:cron:t1",
-      sourceSessionId: "consent-session",
+      sourceSessionId: "notice-session",
     },
   });
   await new Promise((r) => setTimeout(r, 400));
   assert.deepEqual(await store.claimPending("slack", 60_000), [], "the overaged notice is swept, not handed out");
-  assert.ok(((await store.get(consent.id))?.expiredAt ?? 0) > 0);
-  assert.equal(
-    (await store.sentCountsBySourceSessions([{ sessionId: "consent-session", threadRef: "agent:main:cron:t1" }])).get(
-      "consent-session",
-    ),
-    undefined,
-    "dropped rows never count as sent",
-  );
+  assert.ok(((await store.get(notice.id))?.expiredAt ?? 0) > 0);
 
   const revived = await store.enqueue({
     destination: { type: "slack", target: "C-restored" },
-    text: "please approve this cron (retry)",
-    idempotencyKey: "consent-notice:trigger-1",
+    text: "scheduled notice (retry)",
+    idempotencyKey: "notice:trigger-1",
   });
-  assert.equal(revived.id, consent.id, "the once-ever key still owns one row");
+  assert.equal(revived.id, notice.id, "the once-ever key still owns one row");
   assert.equal(revived.deliveredAt, null);
   assert.equal(revived.expiredAt, undefined, "a dropped once-ever notice re-enqueues instead of deadlocking");
   assert.equal(revived.destination.target, "C-restored", "the revived row carries the fresh destination");
@@ -360,7 +331,7 @@ export async function exerciseDeliveryExpiryRevive(
   const dedup = await store.enqueue({
     destination: { type: "slack", target: "C-x" },
     text: "same key after delivery",
-    idempotencyKey: "consent-notice:trigger-1",
+    idempotencyKey: "notice:trigger-1",
   });
   assert.notEqual(dedup.deliveredAt, null, "a delivered key stays a dedup hit — no re-send after success");
 

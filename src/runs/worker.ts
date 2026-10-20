@@ -4,13 +4,23 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import { errorParks, type Run, type RunStore } from "./run-store.ts";
+import {
+  countedClaims,
+  errorParks,
+  handbackStop,
+  MAX_PREEMPTIONS,
+  PARKED,
+  type Run,
+  type RunStop,
+  type RunStore,
+} from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
+import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -29,6 +39,30 @@ export async function processRun(
   run: Run,
   opts?: { background?: boolean; shutdown?: AbortSignal },
 ): Promise<TurnResult> {
+  const { trace, ...request } = run.request;
+  return traceQueued(
+    trace,
+    "run",
+    {
+      "messaging.system": "qm",
+      "messaging.destination.name": "runs",
+      "messaging.message.id": run.id,
+      "messaging.message.retry.count": Math.max(0, run.attempts - 1),
+      "messaging.message.receive.latency":
+        run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
+      "qm.surface": request.surface,
+      "qm.origin": resolveTurnOrigin(request).kind,
+    },
+    () => attemptRun(deps, { ...run, request }, opts),
+    (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+  );
+}
+
+async function attemptRun(
+  deps: ProcessDeps,
+  run: Run,
+  opts?: { background?: boolean; shutdown?: AbortSignal },
+): Promise<TurnResult> {
   const token = run.leaseToken;
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
@@ -37,6 +71,7 @@ export async function processRun(
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
+  let started = false;
   let consecutiveLost = 0;
   let leaseLost = false;
   const beat = setInterval(() => {
@@ -70,23 +105,23 @@ export async function processRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    if (run.request.swarm) {
+    if (run.request.swarm && !run.request.swarmGoal) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
     }
-    if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
-    const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
+    if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    started = true;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
       origin: resolveTurnOrigin(run.request),
       runId: run.id,
       attempt: run.attempts,
+      ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
       runLeaseToken: token,
       finalAttempt: errorParks(run, deps.runs.maxClaims),
       background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
-      ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();
@@ -112,6 +147,7 @@ export async function processRun(
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !isNonRetryable(err),
       retryAfterMs: retryDelay(run.errorAttempts),
+      stop: runStopFor(err),
     });
     throw err;
   } finally {
@@ -120,7 +156,7 @@ export async function processRun(
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
       await deps.runs
-        .releaseLease(run.id, token)
+        .releaseLease(run.id, token, started ? handbackStop(opts.shutdown) : undefined)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
 }
@@ -135,6 +171,8 @@ export interface WorkerDeps extends ProcessDeps {
 
 export interface Worker {
   start(): void;
+  held(): { run: Run; claimedAt: number; shutdown: AbortController } | null;
+  preempt(runId: string): void;
   stopClaims(): Promise<void>;
   drained(): Promise<void>;
   stop(drainMs?: number): Promise<void>;
@@ -151,9 +189,11 @@ export function createWorker(deps: WorkerDeps): Worker {
   let generation = 0;
   let wake: (() => void) | null = null;
   let unsubscribe: (() => void) | undefined;
-  const notify = (): void => {
+  const notify = (): boolean => {
     generation++;
-    wake?.();
+    if (!wake) return false;
+    wake();
+    return true;
   };
   async function waitForWork(observed: number): Promise<void> {
     if (stopped || observed !== generation) return;
@@ -170,7 +210,12 @@ export function createWorker(deps: WorkerDeps): Worker {
   let stopped = false;
   let loopDone: Promise<void> | null = null;
   let claimDone: Promise<void> | null = null;
-  let inFlight: { shutdown: AbortController; done: Promise<void> } | null = null;
+  let inFlight: {
+    run: Run;
+    claimedAt: number;
+    shutdown: AbortController;
+    done: Promise<void>;
+  } | null = null;
 
   async function loop(): Promise<void> {
     let claimFailures = 0;
@@ -214,12 +259,15 @@ export function createWorker(deps: WorkerDeps): Worker {
       }
       const shutdown = new AbortController();
       let settled!: () => void;
-      inFlight = {
+      const current: NonNullable<typeof inFlight> = {
+        run,
+        claimedAt: Date.now(),
         shutdown,
         done: new Promise<void>((resolve) => {
           settled = resolve;
         }),
       };
+      inFlight = current;
       console.log(`[worker] claimed worker=${workerId} run=${run.id} thread=${run.sessionId}`);
       claimed();
       claimDone = null;
@@ -247,6 +295,11 @@ export function createWorker(deps: WorkerDeps): Worker {
   }
 
   return {
+    held: () => inFlight,
+    preempt(runId) {
+      if (inFlight?.run.id !== runId || inFlight.shutdown.signal.aborted) return;
+      inFlight.shutdown.abort(PARKED);
+    },
     start() {
       if (loopDone) return;
       stopped = false;
@@ -270,6 +323,33 @@ export function createWorker(deps: WorkerDeps): Worker {
     async stop(drainMs = STOP_DRAIN_MS) {
       void stopClaims();
       await Promise.race([loopDone, sleep(drainMs, { unref: true })]);
+    },
+  };
+}
+
+function runStopFor(err: unknown): RunStop {
+  if (err instanceof ProviderTurnError)
+    return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };
+  return { kind: "error" };
+}
+
+export function createRunPreemption(deps: {
+  runs: RunStore;
+  workers: readonly Worker[];
+  canClaim?: () => boolean;
+  graceMs?: number;
+}): { sweep(): Promise<boolean> } {
+  return {
+    async sweep() {
+      if (deps.canClaim && !deps.canClaim()) return false;
+      const held = deps.workers.map((worker) => ({ worker, held: worker.held() }));
+      if (held.some(({ held }) => !held || held.shutdown.signal.aborted)) return false;
+      const victim = held
+        .filter(({ held }) => held!.run.priority === 2 && held!.run.preemptions < MAX_PREEMPTIONS)
+        .sort((a, b) => b.held!.claimedAt - a.held!.claimedAt)[0];
+      if (!victim || !(await deps.runs.personWaiting(Date.now() - (deps.graceMs ?? 1_000)))) return false;
+      victim.worker.preempt(victim.held!.run.id);
+      return true;
     },
   };
 }

@@ -4,13 +4,11 @@ import assert from "node:assert/strict";
 import { createMockHarness } from "../src/harness/mock-harness.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let executions = 0;
 let observedRelease = "";
-let failRelease = false;
 mock.module("../src/harness/mock-harness.ts", {
   namedExports: {
     createMockHarness() {
@@ -24,7 +22,6 @@ mock.module("../src/harness/mock-harness.ts", {
               (entry.payload as { securityReleaseRequestId?: string }).securityReleaseRequestId,
           );
           observedRelease = String((held?.payload as { text?: string } | undefined)?.text ?? "Missing released output");
-          if (failRelease) throw new Error("fixture continuation failure");
           const reply = "Released fixture output.";
           await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
           await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
@@ -57,8 +54,10 @@ mock.module("../src/harness/mock-harness.ts", {
           args: unknown,
         ) => Promise<{ content: Array<{ text?: string }> }>;
         const result = await execute(
-          "fixture-call",
-          sharedRead ? { action: "read", path: "private.txt" } : { command: "printf SCREENING_FIXTURE_BLOCK" },
+          `fixture-call-${++callSeq}`,
+          sharedRead
+            ? { action: "read", path: "private.txt" }
+            : { command: "printf SCREENING_FIXTURE_BLOCK", purpose: "Check output screening" },
         );
         const reply = result.content.map((part) => part.text ?? "").join("\n");
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
@@ -68,6 +67,7 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
+let callSeq = 0;
 const { buildApp } = await import("../src/wiring.ts");
 
 function request(threadRef = "fixture-thread"): TurnRequest {
@@ -144,43 +144,3 @@ for (const failure of ["error", "timeout"] as const) {
     assert.ok(events.some((event) => event.action === "security_posture.tool_result_failed_open"));
   });
 }
-
-test("released shared content retains scope and survives a failed continuation", async () => {
-  const built = buildApp(testConfig({ securityPosture: "auto" }), {
-    securityScreener: {
-      provider: "fixture-screen",
-      async classify() {
-        return { verdict: { decision: "strict" }, score: 1, threshold: 0.5 };
-      },
-    },
-  });
-  const req: TurnRequest = {
-    ...request(),
-    text: "run fixture shared",
-    conversation: { kind: "channel", threadRef: "shared-fixture", channelRef: "C", audience: [{ externalId: "U1" }] },
-  };
-  const blocked = await built.app.turn(req);
-  const approval = { requestId: blocked.pendingApprovals![0]!.requestId, approved: true };
-  failRelease = true;
-  try {
-    await built.app.turn({ ...req, approval }).catch(() => undefined);
-  } finally {
-    failRelease = false;
-  }
-  const entries = await built.sessions.getEntries(blocked.sessionId!);
-  const released = entries.filter(
-    (entry) =>
-      entry.type === "user" &&
-      (entry.payload as { securityReleaseRequestId?: string }).securityReleaseRequestId === approval.requestId,
-  );
-  assert.equal(released.length, 1);
-  assert.equal(released[0]!.scopeLabel, "personal:U1");
-  assert.match(JSON.stringify(released[0]!.payload), /SCREENING_FIXTURE_BLOCK/);
-  assert.equal(
-    filterHistoryForAudience(released, [{ id: "U2", type: "internal" }], "channel:C", "org:default-org").length,
-    0,
-  );
-  const replay = await built.app.turn({ ...req, approval });
-  assert.equal(replay.status, "refused");
-  assert.match(replay.reason ?? "", /expired/);
-});

@@ -6,6 +6,7 @@ export interface DeployProfile {
   managedScaleToZero: boolean;
   inPlaceReconcile?: boolean;
   dataDir?: string;
+  maxAppBytes?: number;
 }
 
 export interface DeployReconcileInput {
@@ -22,6 +23,8 @@ export interface DeployProvider {
   destroy(d: Deployment): Promise<void>;
   setAlwaysOn?(d: Deployment, alwaysOn: boolean): Promise<void>;
   resolveEndpoint?(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint | null>;
+  rotationDue?(d: Deployment): Promise<boolean>;
+  park?(d: Deployment): Promise<void>;
   /** Recent output from the running app (entrypoint stdout+stderr), newest last. */
   logs?(d: Deployment, opts: { tailLines: number }): Promise<string | null>;
 }

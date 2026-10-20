@@ -7,7 +7,7 @@ const sessions = [{ id: "child-123", title: "bug 1" }];
 test("created badges recover a known child from historical result text", () => {
   const view = sessionToolView(
     { action: "open", name: "Original name" },
-    { unscreened: true, result: 'Opened subagent "Original name" (sessionId child-123). It is working now.' },
+    { result: 'Opened subagent "Original name" (sessionId child-123). It is working now.' },
     sessions,
   );
   assert.equal(view.sessionId, "child-123");
@@ -34,7 +34,7 @@ test("reading the child list renders a count without a target badge", () => {
 });
 
 test("historical list reads stay a plural label without a fake child badge", () => {
-  assert.deepEqual(sessionToolView({ action: "read" }, { unscreened: true }, sessions), {
+  assert.deepEqual(sessionToolView({ action: "read" }, {}, sessions), {
     action: "read",
     detail: "subagents",
   });

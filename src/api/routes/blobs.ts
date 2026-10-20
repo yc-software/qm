@@ -33,7 +33,10 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
     }
     if (!(await ctx.app.authorizesCapabilityScope(claims))) {
       req.resume();
-      sendJson(res, 403, { error: "forbidden", message: "capability scope membership has been revoked" });
+      sendJson(res, 403, {
+        error: "forbidden",
+        message: "the acting user is not currently authorized for this conversation",
+      });
       return null;
     }
     return { via: "capability" };
@@ -100,6 +103,6 @@ async function getBlob(ctx: BaseCtx): Promise<void> {
 }
 
 export const blobRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/blobs", auth: "either", handle: putBlob },
+  { method: "POST", path: "/v1/blobs", actor: "system", auth: "either", handle: putBlob },
   { method: "GET", path: "/v1/blobs/:id", auth: "either", handle: getBlob },
 ];

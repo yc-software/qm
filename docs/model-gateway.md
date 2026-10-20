@@ -24,7 +24,7 @@ credentials when no gateway is configured; ChatGPT access uses the user's connec
 OpenAI account, including refreshed subscription access; Claude access supports
 API keys. Claude subscription access is unavailable for the inner browser agent
 and returns an actionable error. No account silently falls back to another.
-Kernel, Anchor and Browserbase still use their own credentials for browser sessions.
+Kernel, Anchor, Browserbase and Browser Use still use their own credentials for browser sessions.
 
 Core gives internal, non-strict turns a one-hour capability bound to the account,
 model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming
@@ -48,26 +48,26 @@ The managed browse runner needs browser-use 0.12.9 with
 `ChatOpenAI.default_headers` support. It never requests separate browser model
 credentials or falls back to them on account or gateway errors.
 
-## Astra Ultrafast
+## Ultrafast
 
-Pi offers `gpt-6-astra-ultrafast` as **GPT-6 Astra · Ultrafast (6× cost)**.
-This is a QM selection identifier: requests use `gpt-6-astra` with
-`service_tier: "ultrafast"` through the Responses API. Standard Astra and its
-Fast switch retain their existing behavior. Ultrafast has its own pricing card,
+Pi offers `gpt-6-astra-ultrafast` and `gpt-6.1-sol-ultrafast`, each labeled
+**Ultrafast (6× cost)**. These are QM selection identifiers: requests use the
+corresponding base model (`gpt-6-astra` or `gpt-6.1-sol`) with
+`service_tier: "ultrafast"` through the Responses API. Standard models and their
+Fast switches retain their existing behavior. Ultrafast has its own pricing card,
 including cached input, cache writes, and long-context rates.
 
-Use an OpenAI API key or explicitly map `gpt-6-astra-ultrafast` to your gateway's
-Astra group in `MODEL_GATEWAY_MODELS`. The gateway must support Responses and
+Use an OpenAI API key or explicitly map the Ultrafast model ID to your gateway's
+corresponding base-model group in `MODEL_GATEWAY_MODELS`. The gateway must support Responses and
 forward `service_tier`. The choice is supported in Pi only, and is unavailable
 with ChatGPT subscription authentication. It is never selected as the default
 merely by enabling Fast.
 
-OpenAI currently makes Astra Ultrafast broadly available with separate rate
-limits. Sol Ultrafast remains a preview and is not enabled by this choice.
+OpenAI supports Ultrafast for Astra and Sol 6.1 with separate rate limits.
 See [Ultrafast availability](https://developers.openai.com/api/docs/guides/ultrafast-mode)
 and [pricing](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast).
 
-In the web picker, select Astra and use the Ultrafast switch. The picker shows a
+In the web picker, select Astra or Sol 6.1 and use the Ultrafast switch. The picker shows a
 distinct active badge and the 6× cost before enabling it. Fast and Ultrafast are
-mutually exclusive, and both speeds share one Astra preset. The internal model
-ID above preserves routing, authorization, pricing, and saved selections.
+mutually exclusive, and both speeds share one preset per base model. The internal model
+IDs above preserve routing, authorization, pricing, and saved selections.

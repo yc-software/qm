@@ -37,7 +37,7 @@
     "qm": "node -- bin/qm.ts",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsrs -p tsconfig.json",
     "test": "node --test test/*.test.ts",
     "test:e2e": "node --test test/e2e/*.e2e.test.ts",
     "test:all": "node --test test/*.test.ts test/e2e/*.e2e.test.ts",
@@ -45,6 +45,10 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "tsrs": "0.14.1-ts7.1.0-dev.20260929",
     "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "nodemailer": "^10.1.0"
   }
 }

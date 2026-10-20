@@ -3,15 +3,15 @@ import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
 import {
   FAST_MODE_MODEL_IDS,
-  harnessSupportsFastMode,
+  modelCatalogFor,
   HARNESS_IDS,
   selectableBaseModels,
+  embeddingModelCatalog,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   modelServiceable,
   ALL_PROVIDERS_AVAILABLE,
   resolveModel,
-  thinkingLevelsForHarness,
 } from "../../../model/pi-models.ts";
 import {
   builtInModelCatalog,
@@ -37,6 +37,7 @@ import {
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
+import { scopeActivity } from "./scope-activity.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
@@ -46,19 +47,6 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (
-    [
-      "base-model",
-      "runtime",
-      "cron-runtime",
-      "subagent-runtime",
-      "fallback-runtime",
-      "webui-models",
-      "browse-model",
-      "auto-flagger",
-    ].includes(resource)
-  )
-    await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -103,13 +91,13 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, actor, targetScope);
       if ("error" in result) {
         return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
       }
-      await deps.config!.flushScope(targetScope);
     } catch (err) {
       await deps.config!.refreshScope(targetScope);
       throw err;
@@ -152,12 +140,11 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
-  const [crons, deployments, skills, environmentRows, rollups] = await Promise.all([
+  const [crons, deployments, skills, environmentRows] = await Promise.all([
     app.listCrons(),
     app.listDeployments(),
     app.listSkills(),
     app.listEnvironments(),
-    deps.sessions?.scopeSessionRollups(scope, true) ?? [],
   ]);
   const environments = environmentRows.map(({ environment, attachments }) => ({
     id: environment.id,
@@ -178,22 +165,18 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
     ...environments.map((environment) => environment.id),
     ...environments.flatMap((environment) => environment.attachedScopes),
   ];
-  const previewIds = rollups.flatMap((r) => (r.previewSessionId ? [r.previewSessionId] : []));
-  const [labels, previews] = await Promise.all([
-    discoverScopes(app, deps, owners),
-    deps.sessions?.lastUserMessages(previewIds) ?? new Map<string, string>(),
-  ]);
+  const labels = await discoverScopes(app, deps, owners);
+  const activity = scopeActivity(deps.sessions);
   const countBy = (ids: string[]): Map<string, number> => {
     const m = new Map<string, number>();
     for (const id of ids) m.set(id, (m.get(id) ?? 0) + 1);
     return m;
   };
-  const rollupBy = new Map(rollups.map((r) => [r.scopeId, r]));
   const cronN = countBy(crons.map((c) => c.ownerScopeId));
   const deployN = countBy(deployments.map((d) => d.ownerScopeId));
   const skillN = countBy(skills.map((s) => s.scopeId));
   const scopes = [...labels].map(([id, label]) => {
-    const rollup = rollupBy.get(id);
+    const counts = activity?.byScope.get(id);
     return {
       scopeId: id,
       ...(label ? { label } : {}),
@@ -206,24 +189,25 @@ export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
             },
           }
         : {}),
-      sessions: rollup?.sessions ?? 0,
-      backgroundSessions: rollup?.backgroundSessions ?? 0,
-      lastActivity: rollup?.lastActivity ?? 0,
-      lastConversationActivity: rollup?.lastConversationActivity ?? 0,
-      lastMessage: (rollup?.previewSessionId && previews.get(rollup.previewSessionId)) || "",
+      ...(activity
+        ? {
+            sessions: counts?.conversations ?? 0,
+            backgroundSessions: (counts?.crons ?? 0) + (counts?.background ?? 0),
+            lastActivity: counts?.lastActivity ?? 0,
+          }
+        : {}),
       crons: cronN.get(id) ?? 0,
       deployments: deployN.get(id) ?? 0,
       skills: skillN.get(id) ?? 0,
     };
   });
-  scopes.sort(
-    (a, b) =>
-      b.lastActivity - a.lastActivity ||
-      b.sessions - a.sessions ||
-      b.backgroundSessions - a.backgroundSessions ||
-      a.scopeId.localeCompare(b.scopeId),
-  );
-  return sendJson(res, 200, { scopeId: scope, scopes, environments });
+  scopes.sort((a, b) => (b.lastActivity ?? 0) - (a.lastActivity ?? 0) || a.scopeId.localeCompare(b.scopeId));
+  return sendJson(res, 200, {
+    scopeId: scope,
+    scopes,
+    environments,
+    ...(activity ? { activityAsOf: activity.asOf } : {}),
+  });
 }
 
 interface ScopeEnvironmentMetadata {
@@ -267,7 +251,7 @@ const SETTINGS_RESOURCES = {
     "egress",
     "orgAmbient",
   ],
-  customize: ["soul", "branding", "featureFlags"],
+  customize: ["soul", "branding", "featureFlags", "decisions"],
   "slack-settings": ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
@@ -279,6 +263,7 @@ const SETTINGS_RESOURCES = {
     "webuiModels",
     "interactiveFastMode",
     "individualModelAuth",
+    "memoryEmbeddingModel",
     "browseModel",
     "browseMaxSteps",
   ],
@@ -368,12 +353,11 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
   const currentHarness = typeof runtime?.harnessId === "string" ? runtime.harnessId : (deps.harnessId ?? "pi");
   const resolvedCurrent = resolveModel(currentId);
-  const preserveCurrent =
-    typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent && currentId.includes("/"));
+  const preserveCurrent = typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent);
   const currentModel: ModelCatalogEntry = {
     id: currentId,
     name: resolvedCurrent?.name ?? currentId + " (configured)",
-    provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
+    provider: resolvedCurrent?.provider ?? "",
   };
   const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
     (value): value is { harnessId: string; modelId: string } =>
@@ -401,6 +385,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         configured.some((runtime) => runtime.modelId === model.id),
     );
   };
+  const modelsByHarness = Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)]));
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
     baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
@@ -413,18 +398,15 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
           runtime?.harnessId === id ||
           purposeRuntimes.some((runtime) => runtime.harnessId === id)),
     ),
-    modelsByHarness: Object.fromEntries(
-      HARNESS_IDS.map((id) => [
-        id,
-        modelsFor(id).map((model) => ({ ...model, effortLevels: thinkingLevelsForHarness(id, model.id) })),
-      ]),
-    ),
-    thinkingLevelsByHarness: Object.fromEntries(
-      HARNESS_IDS.filter((id) => id !== "mock").map((id) => [id, thinkingLevelsForHarness(id)]),
+    modelsByHarness,
+    modelCatalog: modelCatalogFor(
+      Object.values(modelsByHarness)
+        .flat()
+        .map((model) => model.id),
     ),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
-    fastModeHarnessIds: HARNESS_IDS.filter(harnessSupportsFastMode),
     autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
+    memoryEmbeddingOptions: embeddingModelCatalog(),
     browseModelOptions: selectableBaseModels().filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),
     ),

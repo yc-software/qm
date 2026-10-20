@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord, type GoalRecord } from "../src/harness/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
+
+const sessionGoals = new Map<string, GoalRecord>();
+const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
 
 function goalTurn(
   sessionId: string,
@@ -19,17 +22,11 @@ function goalTurn(
     cancel,
     input: "continue",
     systemPrompt: "BASE",
-    history: [
-      {
-        type: "tool_result",
-        payload: { tool: "goal", action: "create", goal },
-        seq: 0,
-        sessionId,
-        parentSeq: null,
-        createdAt: 1,
-        scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
-      },
-    ],
+    history: [],
+    goal,
+    saveGoal: async (record) => {
+      sessionGoals.set(sessionId, structuredClone(record));
+    },
     tools: {} as HarnessTurnInput["tools"],
     scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
     orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
@@ -69,7 +66,7 @@ test("an active goal stops continuing once a model round fails at the provider",
       "the turn fails with the provider error",
     );
     assert.match((outcome as { error: Error }).error.message, /credit balance is too low/);
-    assert.equal(latestGoalRecord(entries)?.status, "active", "the goal itself stays active for a later turn");
+    assert.equal(savedGoal("goal-provider-failure")?.status, "active", "the goal itself stays active for a later turn");
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -126,7 +123,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
     assert.equal(refused, primary, "the second round goes to the primary model and is refused");
     assert.notEqual(fallback, primary, "the refused round is answered by a fallback model");
     assert.equal(continued, fallback, "the goal keeps going on the fallback model instead of stopping");
-    assert.equal(latestGoalRecord(entries)?.status, "active");
+    assert.equal(savedGoal("goal-refusal-fallback")?.status, "active");
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -156,7 +153,7 @@ test("a goal never falls back to a model that already refused in the same turn",
     assert.deepEqual([refused, refusedAgain], [primary, fallback]);
     assert.equal(models.length, 4, "the turn ends instead of bouncing back to the model that already refused");
     assert.ok("error" in outcome && outcome.error instanceof ProviderTurnError && !outcome.error.retryable);
-    assert.equal(latestGoalRecord(entries)?.status, "active");
+    assert.equal(savedGoal("goal-refusal-alternation")?.status, "active");
   } finally {
     globalThis.fetch = realFetch;
   }

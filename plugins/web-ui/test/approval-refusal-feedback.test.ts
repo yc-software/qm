@@ -84,7 +84,11 @@ test("a completed approval resume resolves quietly", async () => {
 });
 
 test("a denied approval's refusal is a clean outcome, not an error", async () => {
-  stubApprovalResolve({ status: "refused", reason: "approval denied for git push --force" });
+  stubApprovalResolve({
+    status: "refused",
+    refusalKind: "approval_denied",
+    reason: "approval denied for git push --force",
+  });
   await runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: false }, undefined);
 });
 

@@ -1,55 +1,8 @@
 export interface GoalStripState {
   objective: string;
-  status: "active" | "paused" | "complete";
+  status: "active" | "paused" | "complete" | "cancelled";
   floor?: string;
   createdAt: number;
-}
-
-interface ActivityLike {
-  type?: string;
-  payload?: unknown;
-}
-
-interface MessageLike {
-  work?: { activity?: ActivityLike[] };
-}
-
-function snapshotFrom(payload: unknown): GoalStripState | null | undefined {
-  const p = payload as { tool?: unknown; goal?: unknown } | null;
-  if (!p || typeof p !== "object" || p.tool !== "goal") return undefined;
-  if (!("goal" in p)) return undefined;
-  if (p.goal === null) return null;
-  const goal = p.goal as {
-    objective?: unknown;
-    status?: unknown;
-    floor?: Record<string, unknown> | null;
-    createdAt?: unknown;
-  };
-  if (typeof goal !== "object" || typeof goal.objective !== "string" || !goal.objective.trim()) return undefined;
-  const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete") return undefined;
-  const floor = goalFloorLabel(goal.floor ?? null);
-  const createdAt = typeof goal.createdAt === "number" ? goal.createdAt : Date.now();
-  return {
-    objective: goal.objective,
-    status,
-    ...(floor ? { floor } : {}),
-    createdAt,
-  };
-}
-
-export function latestGoal(messages: readonly unknown[]): GoalStripState | null {
-  let latest: GoalStripState | null = null;
-  for (const message of messages) {
-    const activity = (message as MessageLike).work?.activity;
-    if (!activity) continue;
-    for (const item of activity) {
-      if (item?.type !== "tool_result") continue;
-      const snap = snapshotFrom(item.payload);
-      if (snap !== undefined) latest = snap;
-    }
-  }
-  return latest;
 }
 
 export function goalFloorLabel(floor: Record<string, unknown> | null): string | null {

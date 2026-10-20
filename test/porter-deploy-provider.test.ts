@@ -12,6 +12,7 @@ import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -27,6 +28,8 @@ let fake: FakePorter;
 let store: DurableMap<StoredPorterDeployBody>;
 let provider: DeployProvider;
 let appPort: number;
+let reported: { category: string; code: string; message: string; scopeLabel: string }[] = [];
+let reportedErrors: unknown[] = [];
 
 const freePort = (): Promise<number> =>
   new Promise((resolve) => {
@@ -67,23 +70,37 @@ const freeListener = (): void => {
   if (appPort) spawnSync("sh", ["-c", `lsof -ti tcp:${appPort} -sTCP:LISTEN | xargs kill 2>/dev/null; true`]);
 };
 
-function make(extra: { terminateLag?: number; resolveCacheMs?: number; visibility?: "public" | "private" } = {}): void {
+function make(
+  extra: {
+    terminateLag?: number;
+    resolveCacheMs?: number;
+    visibility?: "public" | "private";
+    readyWindowSec?: number;
+  } = {},
+): void {
   fake?.cleanup();
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
   store = createMemoryMap<StoredPorterDeployBody>();
   provider = createPorterDeployProvider({
+    ...singleProcessDeps(),
     appsDomain: "apps.test",
     namePrefix: "qmt",
     appPort,
-    readyWindowSec: 10,
+    readyWindowSec: extra.readyWindowSec ?? 10,
     resolveCacheMs: extra.resolveCacheMs ?? 0,
     ...(extra.visibility ? { visibility: extra.visibility } : {}),
     client: fake.client,
     store,
+    onError: (e, error) => {
+      reported.push(e);
+      reportedErrors.push(error);
+    },
   });
 }
 
 beforeEach(async () => {
+  reported = [];
+  reportedErrors = [];
   freeListener();
   appPort = await freePort();
   make();
@@ -157,6 +174,7 @@ test("explicit public visibility opts the domain out of the private default", as
 
 test("without an apps domain the app defaults to its cluster-internal address", async () => {
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     namePrefix: "qmt",
     appPort,
     readyWindowSec: 10,
@@ -237,6 +255,90 @@ test("resolveEndpoint reports the live body and forgets a dead one", async () =>
   assert.equal(await store.get("dep-5"), null);
 });
 
+test("an app that crashes after publishing is restarted in place, and keeps resolving while it comes back", async () => {
+  const d = deployment("dep-5d", "crashy");
+  const crashy = SERVER.replace(
+    "if (q.url === '/data')",
+    "if (q.url === '/crash') process.exit(1); if (q.url === '/data')",
+  );
+  const v = version({ "server.js": crashy }, "node server.js");
+  const applied = await provider.apply(d, v);
+  await fetch(`http://127.0.0.1:${appPort}/crash`).catch(() => {});
+  assert.deepEqual(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), applied);
+  let body = "";
+  for (const end = Date.now() + 10_000; !body && Date.now() < end; await new Promise((r) => setTimeout(r, 200)))
+    body = await fetchText("/").catch(() => "");
+  assert.match(body, /^hello from/);
+  assert.match((await provider.logs!(d, { tailLines: 50 })) ?? "", /entrypoint exited with status 1/);
+});
+
+test("resolveEndpoint returns null when the app and its supervisor are both gone, so the service re-applies", async () => {
+  const d = deployment("dep-5e", "gone");
+  const v = version({ "server.js": SERVER }, "node server.js");
+  const applied = await provider.apply(d, v);
+  const { sandboxId } = (await store.get("dep-5e"))!;
+  await fake.client.sandboxes.raw.exec(sandboxId, { command: ["sh", "-c", 'kill -KILL -"$(cat /tmp/qm-app.pid)"'] });
+  for (const end = Date.now() + 5_000; Date.now() < end; await new Promise((r) => setTimeout(r, 100)))
+    if (!(await fetchText("/").catch(() => ""))) break;
+  assert.equal(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), null);
+});
+
+test("an app that only answers 5xx fails publish, and the failure reaches the error log with its redacted output", async () => {
+  make({ readyWindowSec: 3 });
+  const d = deployment("dep-5f", "broken");
+  const server =
+    "console.log('connecting to ' + process.env.DATABASE_URL); console.log('booting with api_key=sk-livevalue1234567890'); require('http').createServer((q, s) => { s.statusCode = 500; s.end('boom'); }).listen(process.env.PORT);";
+  const env = { DATABASE_URL: "postgres://app:hunter2hunter2@db/app" };
+  await assert.rejects(
+    provider.apply(d, version({ "server.js": server }, "node server.js", { env })),
+    (e: Error) => e === reportedErrors[0] && /HTTP 500[\s\S]*booting/.test(e.message),
+  );
+  assert.equal(reported.length, 1);
+  const [e] = reported;
+  assert.equal(e!.code, "app_start_failed");
+  assert.equal(e!.scopeLabel, d.ownerScopeId);
+  assert.match(e!.message, /app broken \(deployment dep-5f\): app answered HTTP 500[\s\S]*booting/);
+  assert.doesNotMatch(e!.message, /sk-livevalue|hunter2/);
+  assert.match(e!.message, /connecting to <redacted:DATABASE_URL>/);
+});
+
+test("a crash the supervisor recovers from is reported once, with the output before the exit", async () => {
+  const d = deployment("dep-5g", "crashy2");
+  const crashy = SERVER.replace(
+    "if (q.url === '/data')",
+    "if (q.url === '/crash') { console.error('fatal: out of widgets'); process.exit(3); } if (q.url === '/data')",
+  );
+  const v = version({ "server.js": crashy }, "node server.js");
+  const applied = await provider.apply(d, v);
+  await fetch(`http://127.0.0.1:${appPort}/crash`).catch(() => {});
+  for (const end = Date.now() + 5_000; Date.now() < end; await new Promise((r) => setTimeout(r, 100)))
+    if (/entrypoint exited/.test((await provider.logs!(d, { tailLines: 50 })) ?? "")) break;
+  assert.deepEqual(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), applied);
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0]!.code, "app_restarted");
+  assert.match(reported[0]!.message, /exited 1 time\(s\)[\s\S]*out of widgets[\s\S]*exited with status 3/);
+  await provider.resolveEndpoint!({ ...d, endpoint: applied }, v);
+  assert.equal(reported.length, 1, "the same crash is not reported twice");
+});
+
+test("an app found down with no supervisor is reported with its last output", async () => {
+  const d = deployment("dep-5h", "gone2");
+  const v = version({ "server.js": SERVER }, "node server.js");
+  const applied = await provider.apply(d, v);
+  const { sandboxId } = (await store.get("dep-5h"))!;
+  await fake.client.sandboxes.raw.exec(sandboxId, { command: ["sh", "-c", 'kill -KILL -"$(cat /tmp/qm-app.pid)"'] });
+  for (const end = Date.now() + 5_000; Date.now() < end; await new Promise((r) => setTimeout(r, 100)))
+    if (!(await fetchText("/").catch(() => ""))) break;
+  assert.equal(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), null);
+  assert.equal(await provider.resolveEndpoint!({ ...d, endpoint: applied }, v), null);
+  assert.deepEqual(
+    reported.map((e) => e.code),
+    ["app_down"],
+    "the visit path probes twice; one outage is one report",
+  );
+  assert.match(reported[0]!.message, /server starting/);
+});
+
 test("resolveEndpoint caches the live answer instead of asking Porter on every request", async () => {
   make({ resolveCacheMs: 60_000 });
   const d = deployment("dep-5b", "cached");
@@ -301,6 +403,7 @@ test("a body that vanished between list and terminate does not break destroy or 
 
 test("without an apps domain a private app gets the host the cluster names", async () => {
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     visibility: "private",
     namePrefix: "qmt",
     appPort,
@@ -320,6 +423,7 @@ test("a cluster that names no host fails the deploy and leaves no body behind", 
   fake.cleanup();
   fake = installFakePorter({ assignHost: false });
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     visibility: "private",
     namePrefix: "qmt",
     appPort,
@@ -350,4 +454,13 @@ test("deployment names become DNS labels and ids become sandbox-safe names", asy
   const body = fake.bodies().find((b) => b.phase === "running")!;
   assert.match(body.name, /^qmt-app-dep-9-/);
   assert.deepEqual(fake.volumeNames(), ["qmt-app-dep-9-data"]);
+});
+
+test("a refused sandbox create surfaces the cluster's own error unchanged", async () => {
+  const refused = new Error("no private sandbox ingress is configured on this cluster");
+  fake.client.sandboxes.create = () => Promise.reject(refused);
+  await assert.rejects(
+    provider.apply(deployment("refused"), version({ "server.js": SERVER }, "node server.js")),
+    (error) => error === refused,
+  );
 });

@@ -57,7 +57,7 @@ export async function assertSpendRollupParity(
 
   const day = Math.floor(BASE / DAY);
   const rollup = (await store.spendRollup({ from: BASE, to: BASE + 2 * DAY })).filter((r) => mine.has(r.scopeId));
-  const key = (r: SpendRow) => JSON.stringify([r.day, r.scopeId, r.origin, r.model]);
+  const key = (r: SpendRow) => JSON.stringify([r.day, r.scopeId, r.origin, r.cronId, r.model]);
   const byKey = (a: SpendRow, b: SpendRow) => {
     if (key(a) === key(b)) return 0;
     return key(a) < key(b) ? -1 : 1;
@@ -71,6 +71,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "other-model",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 0.75,
         input: 100,
@@ -83,6 +84,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 2,
         costUsd: 1.75,
         input: 200,
@@ -95,6 +97,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "cron",
+        cronId: `${prefix}-nightly`,
         calls: 1,
         costUsd: 0.5,
         input: 100,
@@ -107,6 +110,7 @@ export async function assertSpendRollupParity(
         scopeId: channel,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 2,
         input: 100,
@@ -119,6 +123,7 @@ export async function assertSpendRollupParity(
         scopeId: alice,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 0.125,
         input: 100,
@@ -131,6 +136,7 @@ export async function assertSpendRollupParity(
         scopeId: bob,
         model: "mock",
         origin: "conversation",
+        cronId: null,
         calls: 1,
         costUsd: 4,
         input: 100,
@@ -149,8 +155,16 @@ export async function assertSpendRollupParity(
     await store.setParentSession(session.id, parentId);
     return session;
   };
-  for (const origin of ["cron", "webhook", "monitor", "conversation"] as const) {
-    const parent = await store.getOrCreateByThread(`agent:main:${origin}:${prefix}-parent`, "dm", bob);
+  const parents = {
+    cron: `agent:main:cron:${prefix}-parent`,
+    webhook: `agent:main:webhook:${prefix}-parent`,
+    monitor: `agent:main:monitor:${prefix}-parent`,
+    loop: `loop:${prefix}-parent:fire:aaa`,
+    swarm: `swarm:${prefix}-parent:member`,
+    conversation: `agent:main:conversation:${prefix}-parent`,
+  };
+  for (const [origin, threadRef] of Object.entries(parents)) {
+    const parent = await store.getOrCreateByThread(threadRef, "dm", bob);
     const first = await child(`${origin}-child`, parent.id);
     await child(`${origin}-grandchild`, first.id);
   }
@@ -168,7 +182,7 @@ export async function assertSpendRollupParity(
     r.model?.startsWith(`${prefix}-`),
   );
   const origins = new Map<string, string>([
-    ...["cron", "webhook", "monitor", "conversation"].flatMap((origin) =>
+    ...Object.keys(parents).flatMap((origin) =>
       ["child", "grandchild"].map((kind) => [`${prefix}-${origin}-${kind}`, origin] as const),
     ),
     ...["missing-parent", "deleted-parent", "cycle-a", "cycle-b", "self-cycle"].map(
@@ -178,6 +192,7 @@ export async function assertSpendRollupParity(
   assert.equal(inherited.length, origins.size);
   for (const row of inherited) {
     assert.equal(row.origin, origins.get(row.model!), row.model!);
+    assert.equal(row.cronId, row.origin === "cron" ? `${prefix}-parent` : null, row.model!);
     assert.equal(row.scopeId, alice, "inherit origin, not the parent's scope");
     assert.equal(row.calls, 1);
     assert.equal(row.costUsd, 0.01);
@@ -199,8 +214,10 @@ export async function assertSpendRollupParity(
   const cronParent = await store.getOrCreateByThread(`cron:${prefix}-changing:fire:aaa`, "dm", bob);
   await store.setParentSession(changing.id, cronParent.id);
   assert.equal((await readChanging())[0]!.origin, "cron");
+  assert.equal((await readChanging())[0]!.cronId, `${prefix}-changing`);
   await store.deleteSession(cronParent.id);
   assert.equal((await readChanging())[0]!.origin, "conversation");
+  assert.equal((await readChanging())[0]!.cronId, null);
   await store.deleteSession(changing.id);
   assert.deepEqual(await readChanging(), []);
 }

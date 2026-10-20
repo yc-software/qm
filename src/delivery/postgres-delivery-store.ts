@@ -1,25 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
-import { cronIdOf, threadRefCronIdExpr } from "../sessions/session-store.ts";
+import { pgTextSafe } from "../util/text.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
-const SOURCE_CRON_ID_EXPR = threadRefCronIdExpr("provenance->>'sourceThreadRef'");
-
-export async function backfillDeliverySourceCronIdBatch(q: PgPool["q"], limit: number): Promise<number> {
-  const updated = await q(
-    `UPDATE deliveries
-        SET source_cron_id = ${SOURCE_CRON_ID_EXPR}
-      WHERE id IN (SELECT id FROM deliveries
-                    WHERE source_cron_id IS NULL AND ${SOURCE_CRON_ID_EXPR} IS NOT NULL
-                    LIMIT $1)
-      RETURNING 1`,
-    [limit],
-  );
-  return updated.length;
-}
-
 function rowToDelivery(r: Record<string, unknown>): Delivery {
   return {
     id: r.id as string,
@@ -100,6 +85,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         WHERE id IN (
           SELECT id FROM deliveries
            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
+             AND destination->'webTranscript'->>'kind' IS DISTINCT FROM 'slack_reply'
              AND created_at <= ${NOW_MS_SQL} - $1
              AND (claim_expires_at IS NULL
                OR claim_expires_at <= ${NOW_MS_SQL})
@@ -117,14 +103,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
   return {
     async enqueue(input) {
       const inserted = await q(
-        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, source_cron_id, created_at, shadow)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO deliveries (id, idempotency_key, destination, text, attachments, provenance, created_at, shadow)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (idempotency_key) DO UPDATE
            SET destination = EXCLUDED.destination,
                text = EXCLUDED.text,
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
-               source_cron_id = EXCLUDED.source_cron_id,
                created_at = EXCLUDED.created_at,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
@@ -135,10 +120,9 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
           randomUUID(),
           input.idempotencyKey,
           JSON.stringify(input.destination),
-          input.text,
+          pgTextSafe(input.text),
           input.attachments?.length ? JSON.stringify(input.attachments) : null,
           input.provenance ? JSON.stringify(input.provenance) : null,
-          cronIdOf(input.provenance?.sourceThreadRef),
           Date.now(),
           input.shadow === true,
         ],
@@ -256,43 +240,6 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         [sourceSessionId, sourceThreadRef, limit],
       );
       return rows.map(rowToDelivery).reverse();
-    },
-    async sentCountsBySourceSessions(sources) {
-      const counts = new Map<string, number>();
-      if (!sources.length) return counts;
-      const byThreadRef = new Map(sources.map((s) => [s.threadRef, s.sessionId]));
-      const rows = await q(
-        `SELECT provenance->>'sourceSessionId' AS session_id,
-                provenance->>'sourceThreadRef' AS thread_ref,
-                COUNT(*)::int AS sent
-           FROM deliveries
-          WHERE NOT shadow AND expired_at IS NULL
-            AND (provenance->>'sourceSessionId' = ANY($1)
-              OR (provenance->>'sourceSessionId' IS NULL AND provenance->>'sourceThreadRef' = ANY($2)))
-          GROUP BY 1, 2`,
-        [sources.map((s) => s.sessionId), sources.map((s) => s.threadRef)],
-      );
-      for (const r of rows as Array<{ session_id: string | null; thread_ref: string | null; sent: number }>) {
-        const id = r.session_id ?? (r.thread_ref ? byThreadRef.get(r.thread_ref) : undefined);
-        if (id) counts.set(id, (counts.get(id) ?? 0) + Number(r.sent));
-      }
-      return counts;
-    },
-    async sentRunCountsByCron(cronIds) {
-      const counts = new Map<string, number>();
-      if (!cronIds.length) return counts;
-      const rows = await q(
-        `SELECT d.cron_id, COUNT(DISTINCT d.run)::int AS runs
-           FROM (SELECT COALESCE(source_cron_id, ${SOURCE_CRON_ID_EXPR}) AS cron_id,
-                        COALESCE(provenance->>'sourceSessionId', provenance->>'sourceThreadRef') AS run
-                   FROM deliveries
-                  WHERE NOT shadow AND expired_at IS NULL AND provenance->>'sourceThreadRef' IS NOT NULL) d
-          WHERE d.cron_id = ANY($1)
-          GROUP BY d.cron_id`,
-        [cronIds],
-      );
-      for (const r of rows as Array<{ cron_id: string; runs: number }>) counts.set(r.cron_id, Number(r.runs));
-      return counts;
     },
     onEnqueue(listener) {
       enqueueListeners.add(listener);

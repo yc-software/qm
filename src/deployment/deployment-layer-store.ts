@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ScopeId } from "../types.ts";
 import {
@@ -271,7 +271,7 @@ export function createDeploymentLayerStore(opts: {
   durable?: boolean;
   now?: () => number;
   retryDelaysMs?: readonly number[];
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   auditPersisted?: (record: StoredDeploymentLayer) => Promise<void>;
 }): DeploymentLayerStore {
   const now = opts.now ?? Date.now;
@@ -280,7 +280,7 @@ export function createDeploymentLayerStore(opts: {
   let failedHash: string | null = null;
   let seeded = false;
   const queue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
 
   const retrying = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -562,7 +562,12 @@ export function createDeploymentLayerStore(opts: {
           }
           for (const [path, owner] of await activeBundleClaims(existing)) claimed.set(path, owner);
           for (const manifest of manifests) {
-            const clash = foreignSkillCollision(existing, opts.scopeId, manifest.name, LAYER_CREATED_BY);
+            const clash = foreignSkillCollision(
+              existing,
+              opts.scopeId,
+              manifest.name,
+              (skill) => skill.createdBy === LAYER_CREATED_BY,
+            );
             if (clash) {
               throw new DeploymentLayerValidationError(
                 `deployment layer skill "${manifest.name}" collides with an existing skill created by ${clash.createdBy} — rename it or remove the colliding skill`,

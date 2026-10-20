@@ -5,13 +5,16 @@ import { createScheduler } from "../src/cron/scheduler.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
+import type { TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function fakeIdentity() {
   return {
@@ -43,6 +46,8 @@ function service(
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
+    directory?: ReturnType<typeof createDirectoryStore>;
+    resolveRecipient?: TriggerDeps["resolveRecipient"];
   },
 ) {
   const loops = createLoopStore();
@@ -66,6 +71,8 @@ function service(
       deliveries: deliveries.store as never,
       idempotency,
       identity: fakeIdentity() as never,
+      ...(overrides?.directory ? { directory: overrides.directory } : {}),
+      ...(overrides?.resolveRecipient ? { resolveRecipient: overrides.resolveRecipient } : {}),
       run: async (req): Promise<TurnResult> => {
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
@@ -345,6 +352,32 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
   assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
 });
 
+test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
+  const directory = createDirectoryStore();
+  await directory.replace([
+    { principalId: "josh", displayName: "Josh", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "internal" },
+  ]);
+  await directory.replaceGroups([{ groupId: "G1", principalId: "U2" }]);
+  const s = service(HAPPY, { directory });
+  const loop = await makeLoop(s.loops, {
+    governor: { staleFireMs: 1_000 },
+    destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
+  });
+  await s.fire.sweepStale(loop.createdAt + 1_001);
+  assert.equal(s.deliveries.sent.length, 0);
+});
+
+test("a stale-loop ping still reaches the owner's web conversation", async () => {
+  const s = service(HAPPY, { directory: createDirectoryStore(), resolveRecipient: async () => ({ kind: "none" }) });
+  const loop = await makeLoop(s.loops, {
+    governor: { staleFireMs: 1_000 },
+    destination: { type: "web", target: "web:josh:t1", audienceScopeId: base.ownerScopeId },
+  });
+  await s.fire.sweepStale(loop.createdAt + 1_001);
+  assert.equal(s.deliveries.sent.length, 1);
+});
+
 test("review saturation pings once and recovers after outputs drain", async () => {
   const s = service(HAPPY);
   const loop = await makeLoop(s.loops, {
@@ -579,7 +612,6 @@ async function bindCron(
     schedule: { everyMs: 60_000 },
     action: "fire loop",
     loopId: loop.id,
-    ...(loop.runAs ? { runAs: loop.runAs } : {}),
     ...over,
   });
   await s.loops.update(loop.id, { cronId: cron.id });
@@ -592,6 +624,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
     const loop = await makeLoop(s.loops);
     const cron = await bindCron(s, loop, { unattendedGrants, destination: { type: "slack", target: "C-alerts" } });
     const scheduler = createScheduler({
+      ...singleProcessDeps(),
       crons: s.crons,
       deliveries: s.deliveries.store as never,
       idempotency: s.idempotency,
@@ -636,27 +669,25 @@ test("bound loop stages reread grants after revocation", async () => {
   assert.deepEqual(s.turns.at(-1)?.unattendedGrants, []);
 });
 
-for (const runAs of ["scopeShared", "scopeFloor"] as const) {
-  test(`bound loop preserves ${runAs} exclusions and member snapshot`, async () => {
-    const s = service(HAPPY);
-    const loop = await makeLoop(s.loops, { runAs, ownerScopeId: scopeId("channel", "C1") });
-    await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"], members: [{ id: "josh", type: "internal" }] });
-    const result = await s.fire.fire(loop.id, "shared");
-    assert.equal(result.status, "ok");
-    assert.equal(s.turns.length, 3);
-    for (const turn of s.turns) {
-      assert.equal(turn.unattendedGrants, undefined);
-      assert.equal(turn.ownerKeychainUnion, runAs === "scopeShared" ? true : undefined);
-      assert.equal(turn.conversation.kind, "channel");
-    }
-  });
-}
+test("a channel loop fires as its owner with their keychain and no unattended grants", async () => {
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops, { ownerScopeId: scopeId("channel", "C1") });
+  await bindCron(s, loop, { unattendedGrants: ["admin.sessions.read"] });
+  const result = await s.fire.fire(loop.id, "shared");
+  assert.equal(result.status, "ok");
+  assert.equal(s.turns.length, 3);
+  for (const turn of s.turns) {
+    assert.equal(turn.unattendedGrants, undefined);
+    assert.equal(turn.ownerKeychainUnion, true);
+    assert.equal(turn.actor.externalId, loop.owner);
+    assert.equal(turn.conversation.kind, "channel");
+  }
+});
 
 test("bound loops reject missing crons, foreign scheduler bindings, and authority drift", async () => {
   for (const over of [
     { owner: "mallory" },
     { ownerScopeId: scopeId("personal", "mallory") },
-    { runAs: "scopeFloor" as const },
     { loopId: "another-loop" },
   ]) {
     const s = service(HAPPY);
@@ -984,16 +1015,17 @@ test("a failed followup rejects so the composer can retain uploaded attachments"
 });
 
 test("triage groups a flood read-only so only the representative is worked, with the rest as evidence", async () => {
-  const s = service((req) => {
+  const s = service(async (req) => {
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
-      const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
+      const open = await s.items.byLoop(loop.id);
+      const representative = open.find((item) => item.sourceKey === "SENTRY-1")!;
       return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: index === 0 ? "urgent" : "low",
+        items: open.map((item) => ({
+          id: item.id,
+          priority: item.id === representative.id ? "urgent" : "low",
           reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
+          ...(item.id !== representative.id ? { groupWith: representative.id } : {}),
         })),
       })}\n\`\`\``;
     }
@@ -1069,4 +1101,64 @@ test("a triage dry run regroups every open item with draft instructions and writ
   assert.equal(preview.length, 2);
   assert.ok(preview.every((entry) => entry.priority === "high" && entry.groupId));
   assert.deepEqual(await s.items.byLoop(loop.id), before);
+});
+
+test("parallel items stage work and judge on their own conversation, never colliding", async () => {
+  const active = new Set<string>();
+  const busy: string[] = [];
+  const s = service(async (req) => {
+    const ref = req.conversation.threadRef!;
+    if (active.has(ref)) busy.push(ref);
+    active.add(ref);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active.delete(ref);
+    if (stage(req) === "intake")
+      return '```json\n[{"sourceKey": "A", "sourceSummary": "a"}, {"sourceKey": "B", "sourceSummary": "b"}]\n```';
+    return HAPPY(req);
+  });
+  const loop = await makeLoop(s.loops, { caps: { maxConcurrentItems: 2 } });
+  const result = await s.fire.fire(loop.id, "f1");
+  assert.equal(result.status, "ok");
+  assert.deepEqual(busy, []);
+  const refs = (kind: string) => s.turns.filter((t) => stage(t) === kind).map((t) => t.conversation.threadRef);
+  assert.equal(new Set(refs("work")).size, 2);
+  assert.deepEqual(new Set(refs("judge")), new Set(refs("work")));
+  assert.ok(!refs("work").includes(refs("intake")[0]!));
+});
+
+test("Slack work and follow-up prompts preserve message images without repeating profile cosmetics", async () => {
+  const s = service((req) => {
+    if (stage(req) === "work") return '```json\n{"proposal":{"body":"Draft reply"},"outputs":[]}\n```';
+    return '```json\n{"outcome":"met","reason":"Ready"}\n```';
+  });
+  const loop = await makeLoop(s.loops, { sources: ["slack"], shipActions: [{ action: "send", gate: "hold" }] });
+  await s.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "D1",
+      source: "slack",
+      sourcePayload: {
+        participants: [{ id: "U1", name: "Alex", avatarUrl: "https://example.com/avatar.png" }],
+        context: [
+          {
+            authorId: "U1",
+            author: "Alex",
+            text: "Review this image",
+            images: ["https://example.com/task.png"],
+            avatarUrl: "https://example.com/avatar.png",
+          },
+        ],
+        slackAvatarsRefreshAt: 12345,
+      },
+    },
+  ]);
+  await s.fire.fire(loop.id, "push:1", undefined, { enumerate: false });
+  const [item] = await s.items.byLoop(loop.id);
+  await s.fire.followUp(loop, item!, "Please revise", loop.owner);
+  for (const req of s.turns.filter((req) => stage(req) === "work" || req.text?.startsWith("[Loop item chat]"))) {
+    assert.doesNotMatch(req.text ?? "", /avatarUrl|slackAvatarsRefreshAt/);
+    assert.match(req.text ?? "", /task.png/);
+    assert.match(req.text ?? "", /Alex/);
+  }
+  assert.match(JSON.stringify((await s.items.get(item!.id))!.sourcePayload), /avatar.png/);
 });

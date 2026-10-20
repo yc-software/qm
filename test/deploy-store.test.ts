@@ -17,6 +17,7 @@ import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore();
@@ -89,6 +90,7 @@ test("a provider without reconcile receives durable Git contents after a push", 
   const deployStore = createDeployStore({ git: { repoRoot: join(root, "repos") } });
   const applied: string[] = [];
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
@@ -568,6 +570,7 @@ test("resident home files are held to the same path rules as app files", async (
   const s = createDeployStore({ git: { repoRoot } });
   const acl = createAclStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: s,
     provider: {
       profile: { managedScaleToZero: false },

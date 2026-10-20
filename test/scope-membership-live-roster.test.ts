@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withLiveTurnMembership } from "../src/resolution/scope-membership.ts";
+import { rosterAdmits, withLiveTurnMembership } from "../src/resolution/scope-membership.ts";
 import type { ScopeId } from "../src/types.ts";
 
 const room = "group:C0NEW" as ScopeId;
@@ -23,4 +23,12 @@ test("the live turn says nothing about other scopes or unverified turns", async 
   assert.equal(await unverified("josh@example.com", room), false);
   const noStore = withLiveTurnMembership(undefined, { actorId: "josh@example.com", scopeId: room, verified: true });
   assert.equal(await noStore("josh@example.com", otherRoom), false);
+});
+
+test("a roster admits its members and its own conversation, never another conversation's actor", () => {
+  const project = "group:web-project-p1" as ScopeId;
+  assert.equal(rosterAdmits(["alice"], "alice", project), true);
+  assert.equal(rosterAdmits(["alice"], "bob", project), false);
+  assert.equal(rosterAdmits(["alice"], "system:group:web-project-p1", project), true);
+  assert.equal(rosterAdmits(["alice"], "system:group:web-project-p2", project), false);
 });

@@ -4,9 +4,10 @@ import { createBackgroundBroker } from "../src/connectors/background-exec-broker
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { redactCommand } from "../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../src/sandbox/sandbox.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 
 const SCOPE = "personal:U1";
-const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
 
 function fakeSandbox(opts?: { seedOutput?: string }) {
   interface Proc {
@@ -59,9 +60,9 @@ function fakeSandbox(opts?: { seedOutput?: string }) {
         readErrors.delete(id);
         throw error;
       }
-      if (missing.has(id)) throw new Error(`no such process session: ${id}`);
+      if (missing.has(id)) throw new ProcessSessionGoneError(id);
       const p = procs.get(id);
-      if (!p) throw new Error(`no such process session: ${id}`);
+      if (!p) throw new ProcessSessionGoneError(id);
       const cur = opts?.sinceCursor ?? 0;
       const maxBytes = opts?.maxBytes ?? 64 * 1024;
       const end = Math.min(p.output.length, cur + maxBytes);
@@ -503,4 +504,21 @@ test("start requires a purpose before launching, and persists a trimmed, redacte
   await broker.start(handle, "node server.js", "Another description");
   assert.equal(starts.length, 1, "labels must not alter command-based reattachment");
   assert.equal((await registry.get(result.processId))?.purpose, row?.purpose);
+});
+
+test("a computer discarded at the end of the turn cannot host a background job", async () => {
+  const { broker, registry, starts } = build();
+  const { resourceId: _resourceId, ...scratch } = handle;
+  await assert.rejects(broker.start(scratch, "npm run dev", "Run dev server"), /lasting computer/);
+  assert.equal(starts.length, 0);
+  assert.deepEqual(await registry.listByScope(SCOPE), []);
+});
+
+test("every registered background job records the computer it runs on", async () => {
+  const { broker, registry } = build();
+  await broker.start(handle, "npm run dev", "Run dev server");
+  assert.deepEqual(
+    (await registry.listByScope(SCOPE)).map((row) => row.sandboxId),
+    ["sandbox-1"],
+  );
 });

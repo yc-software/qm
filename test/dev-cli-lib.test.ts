@@ -7,7 +7,7 @@ import { ensureDeps } from "../scripts/dev/lib/deps.ts";
 import { spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
+import { envSha, errMessage, formatAge } from "../scripts/dev/lib/util.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -37,7 +37,7 @@ import {
 } from "../scripts/dev/lib/lease.ts";
 import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import { loadConfig, OPENCODE_RUNTIME_VERSION, providerKeysPresent } from "../src/config.ts";
+import { loadConfig, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
@@ -317,61 +317,52 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
 
-  const openCode = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: "opencode" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(openCode.harness, "opencode");
-  assert.equal(openCode.env.HARNESS, "opencode");
-  assert.equal(openCode.env.PI_CAPTURE_REQUESTS, undefined);
-
-  await assert.rejects(
-    assembleEnv({
+  for (const legacy of ["opencode", "codex"]) {
+    const legacyHarness = await assembleEnv({
       worktree,
-      callerEnv: { HARNESS: "codex", CODEX_HOME: join(worktree, "empty-codex") },
+      callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: legacy },
       allowMock: false,
       log,
       probeLoginShell: async () => "",
-    }),
-    /HARNESS=codex needs OPENAI_API_KEY/,
-  );
+    });
+    assert.equal(legacyHarness.harness, "pi");
+    assert.equal(legacyHarness.env.HARNESS, "pi");
+  }
+  const defaultCodexHome = join(worktree, "default-codex");
+  mkdirSync(defaultCodexHome, { recursive: true });
+  const oauthAuth = JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: {
+      access_token: "access",
+      refresh_token: "refresh",
+      account_id: "account",
+      id_token: oauthIdToken("account"),
+    },
+  });
+  writeFileSync(join(defaultCodexHome, "auth.json"), oauthAuth);
+  chmodSync(join(defaultCodexHome, "auth.json"), 0o600);
+  const implicit = await assembleEnv({
+    worktree,
+    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_HOME: defaultCodexHome },
+    allowMock: false,
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(implicit.codexAuthSource, "");
+  assert.equal(implicit.env.CODEX_AUTH_FILE, undefined);
   const oauthAuthFile = join(worktree, "codex-auth.json");
-  writeFileSync(
-    oauthAuthFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "access",
-        refresh_token: "refresh",
-        account_id: "account",
-        id_token: oauthIdToken("account"),
-      },
-    }),
-  );
+  writeFileSync(oauthAuthFile, oauthAuth);
   chmodSync(oauthAuthFile, 0o600);
-  const codexOAuth = await assembleEnv({
+  const companyChatGPT = await assembleEnv({
     worktree,
-    callerEnv: { HARNESS: "codex", CODEX_AUTH_FILE: oauthAuthFile },
+    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_AUTH_FILE: oauthAuthFile },
     allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
-  assert.equal(codexOAuth.harness, "codex");
-  assert.equal(codexOAuth.env.CODEX_AUTH_FILE, oauthAuthFile);
-  assert.equal(codexOAuth.codexAuthSource, oauthAuthFile);
-  const codex = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "codex", OPENAI_API_KEY: "sk-openai" },
-    allowMock: false,
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(codex.harness, "codex");
-  assert.equal(codex.env.HARNESS, "codex");
-  assert.equal(codex.openaiKeySource, "your shell export");
+  assert.equal(companyChatGPT.harness, "pi");
+  assert.equal(companyChatGPT.env.CODEX_AUTH_FILE, oauthAuthFile);
+  assert.equal(companyChatGPT.codexAuthSource, oauthAuthFile);
 
   const claude = await assembleEnv({
     worktree,
@@ -423,8 +414,17 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, allowMock: false, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY is required/,
+    /ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login/,
   );
+  const openaiOnly = await assembleEnv({
+    worktree,
+    callerEnv: { OPENAI_API_KEY: "sk-openai" },
+    allowMock: false,
+    log,
+    probeLoginShell: async () => "",
+  });
+  assert.equal(openaiOnly.harness, "pi");
+  assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
   const mock = await assembleEnv({ worktree, callerEnv: {}, allowMock: true, log, probeLoginShell: async () => "" });
   assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
@@ -445,16 +445,7 @@ test("dev security secrets are stable, complete, and distinct", () => {
   );
 });
 
-test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
-  assert.equal(OPENCODE_RUNTIME_VERSION, "1.18.31");
-  assert.equal(loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model" }).opencodeModel, "pi-model");
-  assert.equal(
-    loadConfig({ HARNESS: "opencode", PI_MODEL: "pi-model", OPENCODE_MODEL: "open-model" }).opencodeModel,
-    "open-model",
-  );
-  const codexEnv = { HARNESS: "codex", OPENAI_API_KEY: "sk-openai" };
-  assert.equal(loadConfig({ ...codexEnv, CODEX_MODEL: "gpt-5.4", CODEX_BIN: "/bin/codex" }).codexModel, "gpt-5.4");
-  assert.equal(loadConfig({ ...codexEnv, CODEX_BIN: "/bin/codex" }).codexBinPath, "/bin/codex");
+test("harness config is strict and a ChatGPT auth file feeds the company subscription", () => {
   assert.equal(
     loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8", CLAUDE_BIN: "/bin/claude" }).claudeModel,
     "claude-opus-4-8",
@@ -475,31 +466,23 @@ test("OpenCode config is strict, pinned, and inherits the Pi model", () => {
     }),
   );
   chmodSync(authFile, 0o600);
-  const oauthConfig = loadConfig({ HARNESS: "codex", CODEX_AUTH_FILE: authFile });
+  const oauthConfig = loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: authFile });
   assert.equal(oauthConfig.codexAuthFile, authFile);
   assert.equal(providerKeysPresent(oauthConfig).openai, false);
   assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
   assert.throws(
-    () =>
-      loadConfig({ HARNESS: "codex", CODEX_AUTH_FILE: join(source, "missing.json"), OPENAI_API_KEY: "placeholder" }),
-    /OPENAI_API_KEY/,
+    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }),
+    /CODEX_AUTH_FILE is unusable/,
   );
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, opencode, codex, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, opencode, codex, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use mock, pi, or claude/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {
   assert.equal(envSha({ A: "1", B: "2" }), envSha({ B: "2", A: "1" }));
   assert.notEqual(envSha({ A: "1" }), envSha({ A: "2" }));
-});
-
-test("readEnvFile keeps everything after the first '=' verbatim and skips bad keys", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  writeFileSync(join(dir, "x.env"), "GOOD=a=b=c\nHASH=abc#def\n1BAD=x\n# comment\nEMPTY=\n");
-  const env = readEnvFile(join(dir, "x.env"));
-  assert.deepEqual(env, { GOOD: "a=b=c", HASH: "abc#def", EMPTY: "" });
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("leaseOrgId reads the stale lease's booted org", () => {

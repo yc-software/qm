@@ -17,6 +17,7 @@ const SUMMARY_INSTRUCTIONS = [
   "Keep goals, constraints, decisions, open tasks, and facts that cannot be re-derived inline.",
   "Preserve necessary facts from tool results inline. For details that can be re-derived, cite the tool call.",
   "Preserve timestamps on time-sensitive facts. An interrupted tool call has an unknown outcome.",
+  "Name every shared file listed as (files: name [file id]) with its file id; its contents are no longer inline.",
   "Do not include secrets or credentials. Keep the summary under 8,000 characters.",
 ].join("\n");
 

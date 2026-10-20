@@ -41,6 +41,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
@@ -107,7 +108,6 @@ function buildOrchestrator(
   maxContextTokens?: number,
   defaultTurnWallClockMs?: number,
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
-  sessionTapeMode?: "serve" | "shadow",
 ) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
@@ -116,6 +116,7 @@ function buildOrchestrator(
   const sessions = swarm?.sessions ?? createMemorySessionStore();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "cc-deploy"),
@@ -123,6 +124,7 @@ function buildOrchestrator(
     acl,
   });
   const orch = createOrchestrator({
+    ...singleProcessDeps(),
     config,
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
@@ -141,7 +143,6 @@ function buildOrchestrator(
     acl,
     maxContextTokens,
     defaultTurnWallClockMs,
-    sessionTapeMode,
     runtime: createRuntimeService(
       { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
@@ -614,11 +615,11 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
     compactCalls.push(input);
     return "tiny recap";
   };
-  const keptAfterFirstTurn = ["msg 4", "msg 5", "msg 6", "msg 7", "!histcount", "history:8"];
-  const { orch, sessions } = buildOrchestrator(harness, budgetWhoseKeepWindowFits(tokensOf(...keptAfterFirstTurn)));
+  const messages = msgTexts(8).map((text) => `${text} ${"history ".repeat(1000)}`);
+  const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...messages)));
   const sid = await seed(
     sessions,
-    msgTexts(8).map((text) => ({ payload: { text } })),
+    messages.map((text) => ({ payload: { text } })),
   );
 
   await orch.handleTurn(turn("!histcount"));
@@ -626,18 +627,24 @@ test("a DM follow-up after the background pass reuses the summary — no blockin
   assert.equal(compactCalls.length, 1);
   await waitForLeaseRelease(sessions, sid);
 
+  const expectedHistory = forModelContext(await sessions.getEntries(sid));
+  assert.ok(expectedHistory.some((entry) => contextSummaryPayload(entry)));
+  assert.ok(expectedHistory.some((entry) => entry.type === "user"));
   delete harness.models.compactHistory;
   const res = await orch.handleTurn(turn("!histcount"));
   assert.equal(res.status, "ok");
-  assert.equal(res.reply, "history:7", "the follow-up starts on [summary, recent…] with no summarizer call");
+  assert.equal(
+    res.reply,
+    `history:${expectedHistory.length}`,
+    "the follow-up starts on [summary, recent…] with no summarizer call",
+  );
 });
 
-test("forModelContext strips thinking/text/soul (never laundered into a durable summary)", () => {
+test("forModelContext strips thinking/text (never laundered into a durable summary)", () => {
   const entries: SessionEntry[] = [
     mkEntry({ seq: 0, type: "user" }),
     mkEntry({ seq: 1, type: "thinking", payload: { thinking: "secret reasoning" } }),
     mkEntry({ seq: 2, type: "text", payload: { text: "scaffold" } }),
-    mkEntry({ seq: 3, type: "soul", payload: { text: "soul" } }),
     mkEntry({ seq: 4, type: "assistant" }),
   ];
   assert.deepEqual(
@@ -721,12 +728,6 @@ test("a runaway summarizer output does not commit a compaction checkpoint", asyn
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal((await summaryEntries(sessions, sid)).length, 0);
-  assert.equal(
-    (await sessions.getTape(sid)).some(
-      (row) => row.kind === "context_event" && (row.payload as { event?: string })?.event === "compaction",
-    ),
-    false,
-  );
 });
 
 function assertSummaryBoundary(history: SessionEntry[], label: string): void {
@@ -779,28 +780,6 @@ test("forModelContext applies the latest-summary boundary: one summary, nothing 
     view.map((e) => e.seq),
     [8, 9, 10],
     "latest summary first, then only uncovered entries",
-  );
-});
-
-test("hiding a tainted latest summary does not expose the raw entries it covers", () => {
-  const entries = [
-    mkEntry({ seq: 0, type: "user", payload: { text: "old clean" } }),
-    mkEntry({ seq: 1, type: "user", payload: { text: "old tainted", securityTainted: true } }),
-    mkEntry({
-      seq: 2,
-      type: "system",
-      payload: { ...createContextSummaryPayload(1, "tainted recap"), securityTainted: true },
-    }),
-    mkEntry({ seq: 3, type: "assistant", payload: { text: "new clean" } }),
-  ];
-
-  assert.deepEqual(
-    forModelContext(entries).map((e) => e.seq),
-    [3],
-  );
-  assert.deepEqual(
-    forModelContext(entries, { includeSecurityTainted: true }).map((e) => e.seq),
-    [2, 3],
   );
 });
 
@@ -984,10 +963,7 @@ test("the background pass waits out a turn that holds the lock rather than throw
 
 test("a turn landing mid-summarization does not disturb the fold: it covers a prefix, the turn's entries stay", async () => {
   const { harness, compactCalls, open } = gatedHarness();
-  const paddedTexts = Array.from(
-    { length: 15 },
-    (_, i) => `msg ${i} with enough padding words that a mid-summarization turn stays under the hard threshold`,
-  );
+  const paddedTexts = Array.from({ length: 15 }, (_, i) => `msg ${i} ${"padding ".repeat(1000)}`);
   const { orch, sessions } = buildOrchestrator(harness, budgetBetweenSoftAndHard(tokensOf(...paddedTexts)));
   const sid = await seed(
     sessions,
@@ -1083,6 +1059,7 @@ test("runtime handoff continues once with saved results under the original run a
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1154,6 +1131,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1194,7 +1172,13 @@ test("only a cron automation receives task-runtime authority and each fire start
           await input.emit({
             type: "tool_result",
             scopeLabel: input.scopeLabel,
-            payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: result.handoff,
+            },
           });
           return { reply: "", runtimeHandoff: result.handoff };
         }
@@ -1264,8 +1248,8 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     ),
   );
   const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelectionLatest(PERSONAL, {
+  await built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setRuntimeSelection(PERSONAL, {
     harnessId: "pi",
     modelId: "claude-sonnet-5",
     effortLevel: "high",
@@ -1310,9 +1294,8 @@ test("human child continuations respect non-fast category defaults", async () =>
     ),
   );
   const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
-  built.config.setInteractiveFastMode(true);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setInteractiveFastMode(true);
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
   const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
@@ -1328,7 +1311,7 @@ test("human child continuations respect non-fast category defaults", async () =>
   assert.deepEqual(seen, [category]);
 });
 
-test("verified swarm workers use category defaults instead of copied parent choices, retaining unset behavior and handoffs", async () => {
+test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
   const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const handoff = { ...category, modelId: "gpt-6-sol" };
@@ -1372,13 +1355,83 @@ test("verified swarm workers use category defaults instead of copied parent choi
       ),
     );
     const built = buildOrchestrator(router, undefined, undefined, f);
-    built.config.setApprovedHarnesses(["pi"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setApprovedHarnesses(["pi"]);
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
     assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [configured ? category : inherited, handoff]);
-    assert.equal(run.request.model, inherited.modelId, "the verified stored dispatch is not mutated");
+    assert.deepEqual(seen, [
+      configured ? category : { harnessId: inherited.harnessId, modelId: inherited.modelId },
+      handoff,
+    ]);
+    assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
+  }
+});
+
+test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
+  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  for (const configured of [false, true]) {
+    const f = await swarmFixture({
+      runtime: {
+        harness: inherited.harnessId,
+        model: inherited.modelId,
+        thinkingLevel: inherited.effortLevel,
+        fastMode: inherited.fastMode,
+      },
+    });
+    const [full] = await f.service.spawn(f.caller, {
+      requestId: "full",
+      text: "work",
+      model: "gpt-6-sol",
+      effort: "medium",
+      fastMode: false,
+    });
+    const [partial] = await f.service.spawn(f.caller, { requestId: "partial", text: "work", effort: "medium" });
+    await f.service.sweep();
+    const seen = new Map<string, unknown>();
+    for (const peer of [full!, partial!]) {
+      const worker = await f.workerCaller(peer.id);
+      if (worker.kind !== "agent") throw new Error("expected worker");
+      const run = (await f.runs.get(worker.claims.runId!))!;
+      const base = createMockHarness();
+      const adapter: Harness = {
+        ...base,
+        turns: {
+          ...base.turns,
+          runTurn: async (input) => {
+            seen.set(peer.id, input.runtime);
+            return { reply: "done" };
+          },
+        },
+      };
+      const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+        resolveRuntimeChoiceDurable(
+          built.config,
+          "org:default-org",
+          input.scopeLabel,
+          inherited,
+          input.runtime,
+          undefined,
+          input.runtimePurpose,
+        ),
+      );
+      const built = buildOrchestrator(router, undefined, undefined, f);
+      await built.config.setApprovedHarnesses(["pi"]);
+      if (configured) await built.config.setPurposeRuntime("subagent", category);
+      assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
+    }
+    assert.deepEqual(seen.get(full!.id), {
+      harnessId: "pi",
+      modelId: "gpt-6-sol",
+      effortLevel: "medium",
+      fastMode: false,
+    });
+    assert.deepEqual(
+      seen.get(partial!.id),
+      configured
+        ? { ...category, effortLevel: "medium" }
+        : { harnessId: inherited.harnessId, modelId: inherited.modelId, effortLevel: "medium" },
+    );
   }
 });
 
@@ -1427,7 +1480,6 @@ for (const explicit of [false, true]) {
             return { reply: "not final", runtimeHandoff: { context: "recent" } };
           }
           if (seen.length === (explicit ? 2 : 1)) {
-            assert.equal(input.tapeMode, "shadow");
             assert.ok(estimateHistoryTokens(input.history) <= 600);
             assert.ok(input.history.some((e) => (e.payload as { mode?: string }).mode === "recent"));
             assert.ok(
@@ -1442,7 +1494,7 @@ for (const explicit of [false, true]) {
         },
       },
     };
-    const { orch, sessions } = buildOrchestrator(harness, 1000, undefined, undefined, "serve");
+    const { orch, sessions } = buildOrchestrator(harness, 1000);
     const sid = await seed(
       sessions,
       explicit ? [] : Array.from({ length: 10 }, () => ({ payload: { text: "old excluded sentinel ".repeat(300) } })),
@@ -1456,7 +1508,6 @@ for (const explicit of [false, true]) {
     assert.equal(effects, explicit ? 1 : 0);
     assert.deepEqual((await sessions.getEntries(sid)).slice(0, before.length), before);
     assert.equal((await orch.handleTurn({ ...turn("what happened?"), surfaceTools: false })).status, "ok");
-    assert.equal(seen.at(-1)!.tapeMode, "shadow");
     assert.ok(!JSON.stringify(seen.at(-1)!.history).includes("old excluded sentinel"));
   });
 }
@@ -1476,8 +1527,8 @@ test("retry recovery supplies an excluded request without rerunning its complete
       ...base.turns,
       runTurn: async (input) => {
         mainCalls++;
-        assert.match(input.input, /Current request.*\nfinish the stored request/);
-        assert.match(input.input, /don't start over or repeat completed steps/);
+        assert.equal(input.input, "finish the stored request");
+        assert.equal(input.continueTurn, undefined);
         assert.ok(!input.history.some((e) => e.type === "user"));
         await input.emit({ type: "assistant", payload: { text: "resumed" }, scopeLabel: input.scopeLabel });
         return { reply: "resumed" };

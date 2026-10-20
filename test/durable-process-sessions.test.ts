@@ -24,6 +24,8 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { writableMemoryScope } from "../src/memory/policy.ts";
 import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -44,7 +46,7 @@ function fakeProcessSandbox() {
       processSessions: true,
     },
     async provision(): Promise<SandboxHandle> {
-      return { id: "vm", rootDir: "/workspace", homeDir: "/root" };
+      return { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
     },
     async run(_h, command) {
       if (/get-caller-identity|auth status|print-access-token/.test(command)) {
@@ -77,7 +79,7 @@ function fakeProcessSandbox() {
     },
     async readProcess(_h, id, opts) {
       const p = procs.get(id);
-      if (!p) throw new Error(`no such process session: ${id}`);
+      if (!p) throw new ProcessSessionGoneError(id);
       const cur = opts?.sinceCursor ?? 0;
       return {
         chunks: p.output.slice(cur),
@@ -115,6 +117,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "dps-deploy"),
@@ -122,6 +125,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
     acl,
   });
   return createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions: createMemorySessionStore(),
@@ -162,6 +166,7 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
   await reg.register({
     processId: live.processId,
     scopeId: await memoryScope(),
+    sandboxId: "sandbox-1",
     kind: "build",
     command: "long build",
     ttlMs: 600_000,
@@ -181,6 +186,7 @@ test("reattach reconciles a session whose process died while core was down", asy
   await reg.register({
     processId: "00000000-0000-0000-0000-0000000000ff",
     scopeId: await memoryScope(),
+    sandboxId: "sandbox-1",
     kind: "build",
     command: "aws-sso: aws sso login",
     ttlMs: 600_000,

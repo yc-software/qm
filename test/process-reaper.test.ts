@@ -5,6 +5,8 @@ import { createProcessReaper, createReaperKillHook } from "../src/processes/proc
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceLayer } from "../src/types.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -12,7 +14,7 @@ const ID = "00000000-0000-0000-0000-000000000abc";
 
 const FAST_GRACE = { termGraceMs: 20, killGraceMs: 20 };
 
-function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: boolean | "string-throw" }) {
+function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: boolean }) {
   const diesOn = opts?.diesOn ?? "TERM";
   const provisions: Array<{ layers: WorkspaceLayer[]; opts?: ProvisionOptions }> = [];
   const signals: Array<{ processId: string; signal: string }> = [];
@@ -26,8 +28,7 @@ function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: 
       return handle;
     },
     async readProcess(_h: SandboxHandle, processId: string) {
-      if (opts?.vanished === "string-throw") throw `no such process session: ${processId}`;
-      if (opts?.vanished) throw new Error(`no such process session: ${processId}`);
+      if (opts?.vanished) throw new ProcessSessionGoneError(processId);
       return {
         chunks: "",
         cursor: 0,
@@ -49,9 +50,17 @@ const bgId = (n: number) => `00000000-0000-0000-0000-${n.toString(16).padStart(1
 
 test("reaper flips expired sessions and calls kill for each", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "build", command: "aws sso login", ttlMs: -1 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "build",
+    command: "aws sso login",
+    ttlMs: -1,
+  });
   const killed: string[] = [];
   const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
     intervalMs: 60_000,
     kill: async (r: ProcessRecord) => void killed.push(r.processId),
   });
@@ -64,9 +73,18 @@ test("reaper flips expired sessions and calls kill for each", async () => {
 
 test("reaper calls onReaped for each reaped record (so a reaped run's death can notify the conversation)", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1, runId: "run-7" });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: x",
+    ttlMs: -1,
+    runId: "run-7",
+  });
   const seen: Array<{ kind: string; runId?: string }> = [];
   const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
     intervalMs: 60_000,
     onReaped: async (r: ProcessRecord) => void seen.push({ kind: r.kind, ...(r.runId ? { runId: r.runId } : {}) }),
   });
@@ -81,9 +99,18 @@ test("reaper calls onReaped for each reaped record (so a reaped run's death can 
 
 test("a row deleted mid-sweep (a run that finished between snapshot and mark) is neither counted nor notified", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1, runId: "run-9" });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: x",
+    ttlMs: -1,
+    runId: "run-9",
+  });
   const notified: string[] = [];
   const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
     intervalMs: 60_000,
     kill: async (r: ProcessRecord) => {
       await reg.delete(r.processId);
@@ -96,8 +123,17 @@ test("a row deleted mid-sweep (a run that finished between snapshot and mark) is
 
 test("an onReaped failure does not abort the sweep or un-reap the record", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1, runId: "run-7" });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: x",
+    ttlMs: -1,
+    runId: "run-7",
+  });
   const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
     intervalMs: 60_000,
     onReaped: async () => {
       throw new Error("delivery store down");
@@ -109,18 +145,40 @@ test("an onReaped failure does not abort the sweep or un-reap the record", async
 
 test("reaper leaves unexpired sessions alone", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "build", command: "make", ttlMs: 60_000 });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "build",
+    command: "make",
+    ttlMs: 60_000,
+  });
+  const reaper = createProcessReaper(reg, { ...singleProcessDeps(), intervalMs: 60_000 });
   assert.equal((await reaper.sweep()).reaped, 0);
   assert.equal((await reg.liveByScope("s")).length, 1);
 });
 
 test("a kill failure does not abort the sweep, leaves the record running, and is retried next sweep", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: bgId(1), scopeId: "s", kind: "build", command: "x", ttlMs: -1 });
-  await reg.register({ processId: bgId(2), scopeId: "s", kind: "background", command: "bg: y", ttlMs: -1 });
+  await reg.register({
+    processId: bgId(1),
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "build",
+    command: "x",
+    ttlMs: -1,
+  });
+  await reg.register({
+    processId: bgId(2),
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: y",
+    ttlMs: -1,
+  });
   let failFirst = true;
   const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
     intervalMs: 60_000,
     kill: async (r: ProcessRecord) => {
       if (failFirst && r.processId === bgId(1)) throw new Error("boom");
@@ -141,21 +199,34 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
   await reg.register({
     processId: bgId(1),
     scopeId: "personal:A",
+    sandboxId: "sandbox-1",
     kind: "background",
     command: "bg: npm run build",
     ttlMs: -1,
   });
-  await reg.register({ processId: bgId(2), scopeId: "personal:B", kind: "build", command: "aws sso login", ttlMs: -1 });
+  await reg.register({
+    processId: bgId(2),
+    scopeId: "personal:B",
+    sandboxId: "sandbox-1",
+    kind: "build",
+    command: "aws sso login",
+    ttlMs: -1,
+  });
   await reg.register({
     processId: bgId(3),
     scopeId: "personal:C",
+    sandboxId: "sandbox-1",
     kind: "dev-server",
     command: "npm run dev",
     ttlMs: -1,
   });
 
   const { sandbox, provisions, signals, teardowns } = killSpySandbox();
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
+  const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(sandbox, FAST_GRACE),
+  });
 
   const { reaped } = await reaper.sweep();
   assert.equal(reaped, 3, "all three rows are reaped (status flipped)");
@@ -168,7 +239,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
 
   assert.equal(provisions.length, 3);
   assert.deepEqual(provisions[0]!.layers, [{ scopeId: "personal:A", mode: "rw", mountPath: "" }]);
-  assert.equal(provisions[0]!.opts, undefined);
+  assert.deepEqual(provisions[0]!.opts, { sandboxId: "sandbox-1" });
   assert.equal(teardowns.length, 3);
   assert.equal(teardowns[0]!.opts?.keepWarm, true);
 
@@ -177,9 +248,20 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
 
 test("kill hook escalates TERM → KILL when the grace period passes without an exit", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: stubborn", ttlMs: -1 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: stubborn",
+    ttlMs: -1,
+  });
   const { sandbox, signals } = killSpySandbox({ diesOn: "KILL" });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
+  const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(sandbox, FAST_GRACE),
+  });
 
   assert.equal((await reaper.sweep()).reaped, 1);
   assert.deepEqual(
@@ -191,9 +273,20 @@ test("kill hook escalates TERM → KILL when the grace period passes without an 
 
 test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visible, kill retried)", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: immortal", ttlMs: -1 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: immortal",
+    ttlMs: -1,
+  });
   const { sandbox, signals } = killSpySandbox({ diesOn: "never" });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
+  const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(sandbox, FAST_GRACE),
+  });
 
   assert.equal((await reaper.sweep()).reaped, 0);
   assert.deepEqual(
@@ -208,7 +301,14 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
 
 test("only the leader instance's interval sweep reaps (one replica kills, not all of them)", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: x",
+    ttlMs: -1,
+  });
 
   let leader = false;
   const lease: LeaderLease = {
@@ -239,21 +339,43 @@ test("only the leader instance's interval sweep reaps (one replica kills, not al
 
 test("a vanished process session counts as a confirmed kill", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1 });
+  await reg.register({
+    processId: ID,
+    scopeId: "s",
+    sandboxId: "sandbox-1",
+    kind: "background",
+    command: "bg: x",
+    ttlMs: -1,
+  });
   const { sandbox, teardowns } = killSpySandbox({ vanished: true });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
+  const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(sandbox, FAST_GRACE),
+  });
 
   assert.equal((await reaper.sweep()).reaped, 1);
   assert.equal((await reg.get(ID))!.status, "reaped");
   assert.equal(teardowns[0]!.opts?.keepWarm, true, "the box is still released keep-warm");
 });
 
-test("a non-Error 'no such process' rejection also counts as a confirmed kill", async () => {
+test("an expired job with no recorded computer is retired without touching the scope's current computer", async () => {
   const reg = createMemoryProcessRegistry();
-  await reg.register({ processId: ID, scopeId: "s", kind: "background", command: "bg: x", ttlMs: -1 });
-  const { sandbox } = killSpySandbox({ vanished: "string-throw" });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
-
+  await reg.register({
+    processId: bgId(9),
+    scopeId: "personal:A",
+    kind: "background",
+    command: "bg: npm run dev",
+    ttlMs: -1,
+  } as unknown as Parameters<typeof reg.register>[0]);
+  const { sandbox, provisions, signals } = killSpySandbox();
+  const reaper = createProcessReaper(reg, {
+    ...singleProcessDeps(),
+    intervalMs: 60_000,
+    kill: createReaperKillHook(sandbox, FAST_GRACE),
+  });
   assert.equal((await reaper.sweep()).reaped, 1);
-  assert.equal((await reg.get(ID))!.status, "reaped");
+  assert.equal(provisions.length, 0);
+  assert.equal(signals.length, 0);
+  assert.equal((await reg.get(bgId(9)))!.status, "reaped");
 });

@@ -10,6 +10,7 @@ import { createControlService, type ControlService } from "../src/api/control-se
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { runNowSettled } from "./support/settle.ts";
 
 const SECRET = "control-service-test";
 
@@ -74,7 +75,7 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   assert.equal(unknown.ok ? "" : unknown.code, "bad_request");
 
   const shared = await control.createCron(
-    { ...request, runAs: "scopeFloor" },
+    request,
     claims("admin-alice", scopeId("channel", "C9"), {
       liveActor: true,
       members: [{ id: "admin-alice", type: "internal" }],
@@ -125,13 +126,7 @@ test("all five unattended read grant types are accepted on create", async () => 
     {
       schedule: { everyMs: 3_600_000 },
       action: "nightly usage analysis",
-      unattendedGrants: [
-        "admin.sessions.read",
-        "admin.audit.read",
-        "admin.metrics.read",
-        "admin.egress.read",
-        "admin.files.read",
-      ],
+      unattendedGrants: ["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"],
     },
     claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
   );
@@ -139,7 +134,6 @@ test("all five unattended read grant types are accepted on create", async () => 
   assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, [
     "admin.sessions.read",
     "admin.audit.read",
-    "admin.metrics.read",
     "admin.egress.read",
     "admin.files.read",
   ]);
@@ -288,7 +282,7 @@ test("cron create with `recipient` resolves a teammate by name and runs at the s
   assert.equal(r.cron.message, "standup in 5");
 });
 
-test("a RECURRING cron addressed to a teammate starts pending their consent and sends one notice", async () => {
+test("a recurring cron addressed to a teammate targets them directly and sends nothing at creation", async () => {
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "U1", displayName: "Alice", type: "internal" },
@@ -298,33 +292,39 @@ test("a RECURRING cron addressed to a teammate starts pending their consent and 
     {
       title: "daily ping",
       schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
-      action: "summarize",
+      text: "standup notes are due",
       recipient: "Bob",
     },
     claims("U1"),
   );
   assert.ok(r.ok, JSON.stringify(r));
-  assert.equal(r.cron.recipientConsent?.recipientId, "U2");
-  assert.equal(r.cron.recipientConsent?.status, "pending");
-  const notices = await built.deliveries.pending("principal");
-  assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, "U2");
-  assert.match(notices[0]!.text, /set up .* to be delivered to you/);
+  assert.equal(r.cron.destination?.target, "U2");
+  assert.equal((await built.deliveries.pending("principal")).length, 0);
 });
 
-test("a one-shot (firstFireAt) teammate DM needs no consent — a single scheduled message, like reach", async () => {
+test("a recurring teammate cron stops delivering once the recipient is no longer an addressable teammate", async () => {
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "U1", displayName: "Alice", type: "internal" },
     { principalId: "U2", displayName: "Bob", type: "internal" },
   ]);
   const r = await control.createCron(
-    { schedule: { firstFireAt: Date.now() + 1000 }, text: "ping", recipient: "Bob" },
+    { schedule: { everyMs: 3_600_000 }, text: "standup notes are due", recipient: "Bob" },
     claims("U1"),
   );
   assert.ok(r.ok, JSON.stringify(r));
-  assert.equal(r.cron.recipientConsent, undefined);
-  assert.equal((await built.deliveries.pending("principal")).length, 0, "no consent notice for a one-shot send");
+  await runNowSettled(built.scheduler, r.cron.id);
+  assert.deepEqual(
+    (await built.deliveries.pending("principal")).map((d) => [d.destination.target, d.text]),
+    [["U2", "standup notes are due"]],
+  );
+  await built.app.upsertDirectory([
+    { principalId: "U1", displayName: "Alice", type: "internal" },
+    { principalId: "U2", displayName: "Bob", type: "guest" },
+  ]);
+  await runNowSettled(built.scheduler, r.cron.id);
+  assert.equal((await built.deliveries.pending("principal")).length, 1);
+  assert.equal((await built.crons.listFires(r.cron.id)).runs.at(-1)?.status, "refused");
 });
 
 test("a teammate-addressed cron runs in the OWNER's scope; the recipient is delivery-only (run scope ⊆ owner-accessible)", async () => {
@@ -345,7 +345,6 @@ test("a teammate-addressed cron runs in the OWNER's scope; the recipient is deli
     claims("U1", scopeId("channel", "C9")),
   );
   assert.ok(personal.ok, JSON.stringify(personal));
-  assert.equal(personal.cron.recipientConsent, undefined);
 });
 
 test("an ambiguous recipient name returns candidates, not a created cron", async () => {
@@ -432,7 +431,7 @@ test('scope:"personal" runs at the invoking user\'s personal scope and DMs them,
   assert.equal(r.channel, undefined);
 });
 
-test('scope:"personal" can\'t be combined with an addressed target, a destinationKey, or scopeFloor', async () => {
+test('scope:"personal" can\'t be combined with an addressed target or a destinationKey', async () => {
   const { control } = setup();
   const withChannel = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", channel: "eng" },
@@ -447,13 +446,6 @@ test('scope:"personal" can\'t be combined with an addressed target, a destinatio
   );
   assert.equal(withKey.ok, false);
   assert.equal(withKey.ok ? "" : withKey.code, "bad_request");
-
-  const withFloor = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", runAs: "scopeFloor" },
-    claims("U1", scopeId("channel", "C9")),
-  );
-  assert.equal(withFloor.ok, false);
-  assert.equal(withFloor.ok ? "" : withFloor.code, "bad_request");
 });
 
 test('scope:"personal" ignores an empty participants array (tool callers often send []), but a non-empty one conflicts', async () => {
@@ -484,348 +476,101 @@ test("recipient AND channel together is rejected", async () => {
   assert.equal(r.ok ? "" : r.code, "bad_request");
 });
 
-test("runAs=scopeFloor needs the conversation member list; with it, the cron is a team cron", async () => {
-  const { control } = setup();
+test("a channel cron belongs to its creator: members see it, only the owner or a write grantee changes it", async () => {
   const chanScope = scopeId("channel", "C9");
-  const noMembers = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scopeFloor" },
-    claims("U1", chanScope),
-  );
-  assert.equal(noMembers.ok, false);
-  assert.equal(noMembers.ok ? "" : noMembers.code, "members_unavailable");
-
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  const withMembers = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scopeFloor" },
-    claims("U1", chanScope, {
-      members,
-      privateScope: true,
-      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
-      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
-      defaultDestinationKey: ROOM.key,
-    }),
-  );
-  assert.ok(withMembers.ok, JSON.stringify(withMembers));
-  assert.equal(withMembers.cron.runAs, "scopeFloor");
-  assert.equal(withMembers.cron.ownerScopeId, chanScope);
-});
-
-test("authority follows the person, not the conversation: members administer a channel-made team cron from their DMs; an ex-member (even the creator) loses it", async () => {
-  const chanScope = scopeId("channel", "C9");
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
   const chanClaims = (actor: string) =>
     claims(actor, chanScope, {
-      members,
       privateScope: true,
       destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
       destinations: [{ ...ROOM, audienceScopeId: chanScope }],
       defaultDestinationKey: ROOM.key,
     });
-  const pushMembers = (built: BuiltApp, ids: string[]) =>
-    built.app.upsertChannels(
-      [{ channelId: "C9", name: "eng", isPrivate: true }],
-      ids.map((principalId) => ({ channelId: "C9", principalId })),
-    );
-
   const { built, control } = setup();
   await built.app.upsertDirectory([
     { principalId: "U1", displayName: "Una", type: "internal" },
     { principalId: "U2", displayName: "Mia", type: "internal" },
   ]);
-  await pushMembers(built, ["U1", "U2"]);
+  await built.app.upsertChannels(
+    [{ channelId: "C9", name: "eng", isPrivate: true }],
+    ["U1", "U2"].map((principalId) => ({ channelId: "C9", principalId })),
+  );
 
   const made = await control.createCron(
-    { title: "minute pings", schedule: { everyMs: 60_000 }, action: "ping", runAs: "scopeShared" },
+    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest" },
     chanClaims("U1"),
   );
   assert.ok(made.ok, JSON.stringify(made));
-  assert.equal(made.cron.runAs, "scopeShared", "a private-channel cron defaults to the team mode");
+  assert.equal(made.cron.owner, "U1");
 
-  const dmClaims = claims("U1");
-  const listed = await control.listCrons(dmClaims);
-  assert.ok(
-    listed.crons.some((c) => c.id === made.cron.id),
-    "the owner's DM list includes the channel-made cron",
-  );
-  const disabled = await control.setCronEnabled(made.cron.id, false, dmClaims);
-  assert.ok(disabled.ok, JSON.stringify(disabled));
+  const seen = await control.getCron(made.cron.id, chanClaims("U2"));
+  assert.ok(seen.ok, "a channel member can read the cron");
+  const refused = await control.patchCron(made.cron.id, { title: "mine now" }, chanClaims("U2"));
+  assert.equal(refused.ok ? "" : refused.code, "forbidden", "a member without write access can't change it");
+  const outsider = await control.deleteCron(made.cron.id, claims("U9", scopeId("personal", "U9")));
+  assert.equal(outsider.ok, false);
 
-  const memberFromDm = await control.deleteCron(made.cron.id, claims("U2", scopeId("personal", "U2")));
-  assert.ok(memberFromDm.ok, "a current member administers the team cron from anywhere");
-  const outsider = await control.createCron(
-    { title: "digest", schedule: { everyMs: 60_000 }, action: "digest", runAs: "scopeShared" },
+  const shared = await control.shareArtifact(
+    { type: "cron", id: made.cron.id, scope: "personal:U2", permission: "write" },
     chanClaims("U1"),
   );
-  assert.ok(outsider.ok, JSON.stringify(outsider));
-  const nonMember = await control.deleteCron(outsider.cron.id, claims("U9", scopeId("personal", "U9")));
-  assert.equal(nonMember.ok, false, "a non-member can't touch the team cron from their DM");
-
-  await pushMembers(built, ["U2"]);
-  const exMember = await control.deleteCron(outsider.cron.id, claims("U1"));
-  assert.equal(exMember.ok, false, "the creator lost channel membership, so they lost the team cron");
-  const stillMember = await control.deleteCron(outsider.cron.id, claims("U2", scopeId("personal", "U2")));
-  assert.ok(stillMember.ok, JSON.stringify(stillMember));
-});
-
-test("scopeShared is explicit: shared-scope crons default to owner, while collaborators can opt into owner∪scope creds", async () => {
-  const chanScope = scopeId("channel", "C9");
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  const chanClaims = (actor: string) =>
-    claims(actor, chanScope, {
-      members,
-      privateScope: true,
-      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
-      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
-      defaultDestinationKey: ROOM.key,
-    });
-
-  const { built, control } = setup();
-  await built.app.upsertChannels(
-    [{ channelId: "C9", name: "eng", isPrivate: true }],
-    members.map((member) => ({ channelId: "C9", principalId: member.id })),
+  assert.ok(shared.ok, JSON.stringify(shared));
+  const granted = await control.patchCron(made.cron.id, { title: "weekly digest" }, chanClaims("U2"));
+  assert.ok(granted.ok, JSON.stringify(granted));
+  const reshared = await control.shareArtifact(
+    { type: "cron", id: made.cron.id, scope: "personal:U9", permission: "write" },
+    chanClaims("U2"),
   );
+  assert.equal(reshared.ok ? "" : reshared.code, "forbidden", "a grantee can't pass write access on");
+  assert.equal(granted.cron.owner, "U1", "a grantee's edit leaves the owner, and the owner's access, unchanged");
 
-  const ownerDefault = await control.createCron(
-    { title: "private digest", schedule: { everyMs: 3_600_000 }, action: "private digest" },
-    chanClaims("U1"),
-  );
-  assert.ok(ownerDefault.ok, JSON.stringify(ownerDefault));
-  assert.equal(
-    ownerDefault.cron.runAs,
-    undefined,
-    "shared-room creation does not silently share the owner's credentials or administration",
-  );
+  const fromDm = await control.setCronEnabled(made.cron.id, false, claims("U1"));
+  assert.ok(fromDm.ok, "the owner manages it from their DM");
 
-  const ok = await control.createCron(
-    { title: "expo digest", schedule: { everyMs: 3_600_000 }, action: "team digest", runAs: "scopeShared" },
-    chanClaims("U1"),
-  );
-  assert.ok(ok.ok, JSON.stringify(ok));
-  assert.equal(ok.cron.runAs, "scopeShared");
-  assert.equal(ok.cron.owner, "U1");
-  assert.equal(ok.cron.ownerScopeId, chanScope);
-  assert.deepEqual(
-    ok.cron.members?.map((m) => m.id),
-    ["U1", "U2"],
-  );
-
-  const ownerExplicit = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", runAs: "owner" },
-    chanClaims("U1"),
-  );
-  assert.ok(ownerExplicit.ok, JSON.stringify(ownerExplicit));
-  assert.notEqual(ownerExplicit.cron.runAs, "scopeShared");
-
-  const editNotices = async () =>
-    (await built.deliveries.pending("principal")).filter((d) => d.idempotencyKey.startsWith("cron-edit-notice:"));
-
-  const byMember = await control.patchCron(ok.cron.id, { title: "expo digest v2" }, chanClaims("U2"));
-  assert.ok(byMember.ok, JSON.stringify(byMember));
-  assert.equal(byMember.cron.title, "expo digest v2");
-  const afterMemberEdit = await editNotices();
-  assert.equal(afterMemberEdit.length, 1, "non-owner edit via control service notifies the owner");
-  assert.equal(afterMemberEdit[0]!.destination.target, "U1");
-
-  const memberNoop = await control.patchCron(ok.cron.id, { title: "expo digest v2" }, chanClaims("U2"));
-  assert.ok(memberNoop.ok, JSON.stringify(memberNoop));
-  assert.equal((await editNotices()).length, 1, "same-value member edit produces no notice");
-
-  const memberChange = await control.patchCron(ok.cron.id, { title: "expo digest v3" }, chanClaims("U2"));
-  assert.ok(memberChange.ok, JSON.stringify(memberChange));
-  assert.equal((await editNotices()).length, 2, "a later real member edit still notifies the owner");
-
-  await control.patchCron(ok.cron.id, { title: "owner tweak" }, chanClaims("U1"));
-  assert.equal((await editNotices()).length, 2, "owner self-edit produces no notice");
-
-  const byOutsider = await control.patchCron(
-    ok.cron.id,
-    { title: "nope" },
-    claims("U9", scopeId("channel", "C-other")),
-  );
-  assert.equal(byOutsider.ok, false);
-  assert.equal(byOutsider.ok ? "" : byOutsider.code, "forbidden");
-
-  const personalDefault = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "x" }, claims("U1"));
-  assert.ok(personalDefault.ok && personalDefault.cron.runAs === undefined, "personal cron defaults to owner");
-  const personal = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", runAs: "scopeShared" },
-    claims("U1", scopeId("personal", "U1"), { members }),
-  );
-  assert.equal(personal.ok, false);
-  assert.equal(personal.ok ? "" : personal.code, "bad_request");
-});
-
-test("Open shared crons retain their owner across collaborator edits and re-check membership", async () => {
-  const { built, control } = setup();
-  const room = scopeId("channel", "C9");
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  await built.config.setSharingPosture(scopeId("org", "default-org"), "open");
-  await built.app.upsertDirectory([
-    { principalId: "U1", displayName: "Owner", type: "internal" },
-    { principalId: "U2", displayName: "Editor", type: "internal" },
-  ]);
-  const roster = (ids: string[]) =>
-    built.app.upsertChannels(
-      [{ channelId: "C9", name: "eng", isPrivate: false }],
-      ids.map((principalId) => ({ channelId: "C9", principalId })),
-    );
-  await roster(["U1", "U2"]);
-  const roomClaims = (actorId: string) =>
-    claims(actorId, room, {
-      liveActor: true,
-      members,
-      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: room },
-      destinations: [ROOM],
-      defaultDestinationKey: ROOM.key,
-    });
-  const request = { title: "Team digest", action: "summarize", schedule: { everyMs: 3_600_000 } };
-  const created = await control.createCron(request, roomClaims("U1"));
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.equal(created.cron.runAs, "scopeShared");
-  assert.equal(created.cron.ownerResourcesRequireOpen, true);
-  const id = created.cron.id;
-  const edited = await control.patchCron(id, { action: "summarize changes" }, roomClaims("U2"));
-  assert.ok(edited.ok, JSON.stringify(edited));
-  assert.equal(edited.cron.owner, "U1");
-  assert.equal(edited.cron.createdBy, "U1");
-  assert.equal(edited.cron.runAs, "scopeShared");
-  assert.equal(edited.cron.ownerResourcesRequireOpen, true);
-  const notices = (await built.deliveries.pending("principal")).filter((d) =>
-    d.idempotencyKey.startsWith("cron-edit-notice:"),
-  );
-  assert.equal(notices.length, 1);
-  assert.equal(notices[0]!.destination.target, "U1");
-  assert.match(notices[0]!.text, /Editor.*Team digest.*do something different/);
-  assert.ok((await control.patchCron(id, { title: "Digest v2" }, claims("U2"))).ok);
-  await control.patchCron(id, { action: "summarize" }, roomClaims("U1"));
-  await control.patchCron(id, { action: "summarize changes" }, roomClaims("U2"));
-  const repeatedNotices = (await built.deliveries.pending("principal")).filter((d) =>
-    d.idempotencyKey.startsWith("cron-edit-notice:"),
-  );
-  assert.equal(repeatedNotices.length, 3, "repeating a reverted edit must notify again");
-
-  assert.ok((await control.getCron(id, claims("U1"))).ok);
-  const deniedMode = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U2"));
-  assert.equal(deniedMode.ok, false);
-  const floor = await control.patchCron(id, { runAs: "scopeFloor" }, roomClaims("U1"));
-  assert.ok(floor.ok && floor.cron.runAs === "scopeFloor");
-  const shared = await control.patchCron(id, { runAs: "scopeShared" }, roomClaims("U1"));
-  assert.ok(shared.ok && shared.cron.runAs === "scopeShared");
-  const noRoster = await control.createCron(
-    { ...request, title: "No roster digest" },
-    { ...roomClaims("U1"), members: undefined },
-  );
-  assert.ok(noRoster.ok && noRoster.cron.runAs === "scopeShared", JSON.stringify(noRoster));
-  const noRosterFloor = await control.createCron(
-    { ...request, runAs: "scopeFloor" },
-    { ...roomClaims("U1"), members: undefined },
-  );
-  assert.equal(noRosterFloor.ok, false);
-  const ownerOnly = await control.createCron({ ...request, runAs: "owner" }, roomClaims("U1"));
-  assert.ok(ownerOnly.ok && ownerOnly.cron.runAs !== "scopeShared");
-  const personal = await control.createCron(request, claims("U1"));
-  assert.ok(personal.ok && personal.cron.runAs !== "scopeShared");
-  await roster(["U1"]);
-  assert.equal((await control.patchCron(id, { title: "revoked edit" }, roomClaims("U2"))).ok, false);
-  assert.equal((await control.createCron({ ...request, runAs: "scopeShared" }, roomClaims("U2"))).ok, false);
-  await built.config.setSharingPosture(room, "isolated");
-  assert.ok((await control.setCronEnabled(id, false, claims("U1"))).ok);
-  assert.equal((await control.patchCron(id, { title: "revoked again" }, roomClaims("U2"))).ok, false);
-  assert.equal((await control.createCron({ ...request, runAs: "scopeShared" }, roomClaims("U1"))).ok, false);
-});
-
-test("scopeShared is confined to membership-controlled scopes: a public channel defaults to owner and rejects explicit scopeShared", async () => {
-  const { control } = setup();
-  const pubScope = scopeId("channel", "C-PUBLIC");
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  const pub = { key: "kp", type: "slack" as const, target: "C-PUBLIC", audienceScopeId: pubScope, label: "#pub" };
-  const pubClaims = claims("U1", pubScope, {
-    members,
-    destination: { type: pub.type, target: pub.target, audienceScopeId: pubScope },
-    destinations: [pub],
-    defaultDestinationKey: pub.key,
+  const conversational = await built.app.createCron({
+    owner: "system:channel:C9",
+    createdBy: "system:channel:C9",
+    ownerScopeId: chanScope,
+    schedule: { everyMs: 60_000 },
+    action: "tidy",
   });
-
-  const def = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "x" }, pubClaims);
-  assert.ok(def.ok, JSON.stringify(def));
-  assert.equal(def.cron.runAs, undefined);
-
-  const explicit = await control.createCron(
-    { schedule: { everyMs: 3_600_000 }, action: "x", runAs: "scopeShared" },
-    pubClaims,
-  );
-  assert.equal(explicit.ok, false);
-  assert.equal(explicit.ok ? "" : explicit.code, "bad_request");
-});
-
-test("app.createCron/updateCron backstop: scopeShared needs a shared scope + a member snapshot", async () => {
-  const chanScope = scopeId("channel", "C9");
-  const members = [{ id: "U1", type: "internal" as const }];
-  const base = { schedule: { everyMs: 3_600_000 }, action: "x", owner: "U1", createdBy: "U1", members } as const;
-  const { built } = setup();
-
-  await assert.rejects(
-    built.app.createCron({ ...base, ownerScopeId: scopeId("personal", "U1"), runAs: "scopeShared" }),
-    /shared/,
-  );
-  const ok = await built.app.createCron({ ...base, ownerScopeId: chanScope, runAs: "scopeShared" });
-  assert.equal(ok.runAs, "scopeShared");
-
-  const ownerCron = await built.app.createCron({ ...base, ownerScopeId: scopeId("personal", "U1") });
-  await assert.rejects(built.app.updateCron(ownerCron.id, { runAs: "scopeShared", members }), /shared/);
-});
-
-test("a cron's mode (runAs) is editable in place, but only by the owner", async () => {
-  const { built, control } = setup();
-  const chanScope = scopeId("channel", "C9");
-  const members = [
-    { id: "U1", type: "internal" as const },
-    { id: "U2", type: "internal" as const },
-  ];
-  const chanClaims = (actor: string) =>
-    claims(actor, chanScope, {
-      members,
-      privateScope: true,
-      destination: { type: ROOM.type, target: ROOM.target, audienceScopeId: chanScope },
-      destinations: [{ ...ROOM, audienceScopeId: chanScope }],
-      defaultDestinationKey: ROOM.key,
-    });
-
-  await built.app.upsertChannels(
-    [{ channelId: "C9", name: "eng", isPrivate: true }],
-    members.map((member) => ({ channelId: "C9", principalId: member.id })),
+  assert.ok((await control.patchCron(conversational.id, { title: "renamed" }, chanClaims("U2"))).ok);
+  await built.app.grant({
+    ownerScopeId: chanScope,
+    ref: `cron:${conversational.id}`,
+    granteeScopeId: scopeId("personal", "U9"),
+    permission: "write",
+    grantedBy: "U2",
+  });
+  const outsiderEdit = await control.patchCron(conversational.id, { title: "mine" }, claims("U9"));
+  assert.equal(
+    outsiderEdit.ok ? "" : outsiderEdit.code,
+    "forbidden",
+    "only current members manage the conversation's cron",
   );
 
-  const created = await control.createCron(
-    { title: "t", schedule: { everyMs: 3_600_000 }, action: "x", runAs: "scopeShared" },
-    chanClaims("U1"),
+  const personal = await control.createCron(
+    { title: "inbox", schedule: { everyMs: 60_000 }, action: "triage" },
+    claims("U1"),
   );
-  assert.ok(created.ok && created.cron.runAs === "scopeShared", JSON.stringify(created));
-  const id = created.cron.id;
-
-  const memberMode = await control.patchCron(id, { runAs: "scopeFloor" }, chanClaims("U2"));
-  assert.equal(memberMode.ok, false);
-  assert.equal(memberMode.ok ? "" : memberMode.code, "forbidden");
-
-  const toFloor = await control.patchCron(id, { runAs: "scopeFloor" }, chanClaims("U1"));
-  assert.ok(toFloor.ok && toFloor.cron.runAs === "scopeFloor", JSON.stringify(toFloor));
-  const back = await control.patchCron(id, { runAs: "scopeShared" }, chanClaims("U1"));
-  assert.ok(back.ok && back.cron.runAs === "scopeShared", JSON.stringify(back));
+  assert.ok(personal.ok);
+  const personalShare = await control.shareArtifact(
+    { type: "cron", id: personal.cron.id, scope: "personal:U2", permission: "write" },
+    claims("U1"),
+  );
+  assert.equal(
+    personalShare.ok ? "" : personalShare.code,
+    "bad_request",
+    "a personal cron runs with the whole keychain",
+  );
+  await built.app.grant({
+    ownerScopeId: personal.cron.ownerScopeId,
+    ref: `cron:${personal.cron.id}`,
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "write",
+    grantedBy: "U1",
+  });
+  const viaOldGrant = await control.patchCron(personal.cron.id, { action: "exfiltrate" }, claims("U2"));
+  assert.equal(viaOldGrant.ok ? "" : viaOldGrant.code, "forbidden", "an older write grant can't steer a personal cron");
 });
 
 test("app.turn forwards ownerKeychainUnion onto the persisted run request (else scheduled fires lose the union)", async () => {
@@ -917,10 +662,6 @@ test("cron list / get / patch / delete / run round-trip with owner authz", async
   assert.ok(same.ok, JSON.stringify(same));
   assert.equal(same.cron.id, id);
   assert.equal(updateCalls, 1, "same-value patches return the cron without writing");
-
-  const sameMode = await control.patchCron(id, { runAs: "owner" }, claims("U1"));
-  assert.ok(sameMode.ok, JSON.stringify(sameMode));
-  assert.equal(updateCalls, 1, "the current effective mode is a recognized no-op");
 
   const tooFrequent = await control.patchCron(id, { schedule: { everyMs: 1 } }, claims("U1"));
   assert.equal(tooFrequent.ok, false);
@@ -1028,6 +769,15 @@ test("soul write in a shared (channel) scope is allowed (allowSharedScope, like 
   assert.ok(w.ok, JSON.stringify(w));
   const after = control.readSoul(claims("U1", scopeId("channel", "C9")));
   assert.equal(after.soul, "Channel standing note.");
+});
+
+test("soul write separates a refused scope from a failed write", async () => {
+  const { control } = setup();
+  const denied = await control.writeSoul("Not my scope.", claims("U1", scopeId("personal", "U2")));
+  assert.equal(denied.ok ? "" : denied.code, "soul_update_denied");
+
+  const stale = await control.writeSoul("Stale edit.", claims("U1"), 41);
+  assert.equal(stale.ok ? "" : stale.code, "soul_version_conflict");
 });
 
 test("noteCron stores a flattened shift-change note, overwriting the previous one, with owner authz", async () => {
@@ -1238,7 +988,7 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["mock"]);
   const runtime = { harnessId: "mock" as const, modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
@@ -1263,9 +1013,8 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
-  built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
       surface,
@@ -1283,16 +1032,14 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
-  built.config.setApprovedHarnesses(["mock"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["mock"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
     assert.equal(result.run.request.harness, "mock");
     assert.equal(result.run.request.fastMode, false);
-    built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
   });
   await assert.rejects(

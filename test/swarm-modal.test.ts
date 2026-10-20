@@ -9,6 +9,8 @@ import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 test("real Modal adapter creates blank worker computers without snapshot or restore calls", async () => {
   const fake = installFakeModal({ native: true });
@@ -36,6 +38,8 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     },
   };
   const backend = createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "swarm-modal-"))), {
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client,
     snapshots: snapshotStore.store,
     nativeSnapshotsEnabled: true,

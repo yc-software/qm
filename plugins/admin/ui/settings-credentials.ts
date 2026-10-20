@@ -141,6 +141,7 @@ export class CredentialState {
     const d = this.draft;
     const env = d.delivery === "env";
     const actor = this.original?.injection?.actor;
+    const fixedHeaders = this.original?.injection?.headers;
     return {
       slug: d.slug.trim(),
       name: d.name.trim(),
@@ -150,6 +151,7 @@ export class CredentialState {
       ...(d.secret ? { secret: d.secret } : {}),
       injection: {
         ...(typeof actor === "boolean" ? { actor } : {}),
+        ...(fixedHeaders ? { headers: fixedHeaders } : {}),
         ...(d.header.trim() ? { header: d.header.trim() } : {}),
         ...(d.scheme ? { scheme: d.scheme } : {}),
       },
@@ -254,11 +256,15 @@ function credentialRows() {
         credentialState.rows,
         (c) => c.slug,
         (c) => {
-          const org = (c.grantees || []).some((g: string) => g.startsWith("org:"));
+          const deployment = c.source === "deployment";
+          const org = deployment || (c.grantees || []).some((g: string) => g.startsWith("org:"));
           const target =
             c.delivery === "env"
               ? "sandbox env $" + (c.envKey || "?")
-              : c.host + " · " + (c.allowedMethods?.length ? c.allowedMethods.join("/") : "GET");
+              : c.host +
+                " · " +
+                (c.allowedMethods?.length ? c.allowedMethods.join("/") : "GET") +
+                (c.maxRequestsPerDay ? " · " + plural(c.maxRequestsPerDay, "request") + " per UTC day" : "");
           return html`<div
             class=${classMap({ "credential-row": true, "is-editing": c.slug === credentialState.editing })}
           >
@@ -268,21 +274,25 @@ function credentialRows() {
               </div>
               <div class="hint">${target + " · " + credentialUsage(c)}</div>
               <div class="credential-badges">
-                ${badge(c.delivery === "env" ? "Env" : "Broker", "info")}${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err")}${badge(org ? "Organization-wide" : plural((c.grantees || []).length, "principal"), org ? "info" : "muted")}${c.delivery !== "env" && c.deployments === false ? badge("No apps", "muted") : null}
+                ${badge(c.delivery === "env" ? "Env" : "Broker", "info")}${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err")}${badge(org ? "Organization-wide" : plural((c.grantees || []).length, "principal"), org ? "info" : "muted")}${c.delivery !== "env" && c.deployments === false ? badge("No apps", "muted") : null}${deployment ? badge("Supplied by deployment", "info") : null}
               </div>
             </div>
-            <div class="credential-actions">
-              <button type="button" @click=${() => config.edit(c)}>Edit</button
-              ><button
-                type="button"
-                class="rowbtn danger"
-                title="Delete credential"
-                aria-label=${"Delete " + (c.name || c.slug)}
-                @click=${() => config.remove(c)}
-              >
-                Delete
-              </button>
-            </div>
+            ${
+              deployment
+                ? html`<div class="credential-actions hint">Read-only</div>`
+                : html`<div class="credential-actions">
+                    <button type="button" @click=${() => config.edit(c)}>Edit</button
+                    ><button
+                      type="button"
+                      class="rowbtn danger"
+                      title="Delete credential"
+                      aria-label=${"Delete " + (c.name || c.slug)}
+                      @click=${() => config.remove(c)}
+                    >
+                      Delete
+                    </button>
+                  </div>`
+            }
           </div>`;
         },
       )

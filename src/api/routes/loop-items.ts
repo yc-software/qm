@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
-import { canonicalJson } from "../../util/objects.ts";
+import { isAccountType } from "../../connectors/oauth.ts";
+import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   canAdministerLoop,
@@ -26,7 +27,6 @@ import {
   INBOX_LEDGER_MAX_ITEMS,
   INBOX_LEDGER_RETENTION_MS,
   INBOX_SYNC_DEFAULT_EVERY_MS,
-  INBOX_SYNC_TASK_VERSION,
 } from "../../loops/inbox-loop.ts";
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
@@ -124,7 +124,7 @@ async function listItems(ctx: ApiCtx): Promise<void> {
     const state = ledgerState(item);
     counts[state] = (counts[state] ?? 0) + 1;
   }
-  sendJson(ctx.res, 200, { loop, items: items.map((item) => ledgerItemView(item, loop)), counts });
+  sendJson(ctx.res, 200, { loop, items: items.map((item) => ledgerItemView(item, loop, !!ctx.capability)), counts });
 }
 
 async function ingestItems(ctx: ApiCtx): Promise<void> {
@@ -268,7 +268,7 @@ async function getItem(ctx: ApiCtx): Promise<void> {
   )
     await ctx.deps.inboxSourceRefresh?.(loaded.loop.owner, [loaded.item]);
   sendJson(ctx.res, 200, {
-    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop),
+    item: ledgerItemView((await loaded.deps.items.get(loaded.item.id)) ?? loaded.item, loaded.loop, !!ctx.capability),
     outputs: (await loaded.deps.outputs.byItem(loaded.item.id)).filter((output) => output.loopId === loaded.loop.id),
   });
 }
@@ -299,7 +299,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
   const draftChanged = (): void =>
     sendJson(ctx.res, 409, {
-      error: "conflict",
+      error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
 
@@ -307,7 +307,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     const data = proposalFrom(item, args.proposal ?? args);
     if (!data) return sendJson(ctx.res, 400, { error: "bad_request", message: "proposal is not valid for this item" });
     if (expectedAt !== undefined && item.proposal && item.proposal.at !== expectedAt) return draftChanged();
-    if (sameProposalData(item, data)) return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop) });
+    if (sameProposalData(item, data))
+      return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
     const next = await deps.items.setProposal(
       item.id,
       { data, by: proposalAuthor },
@@ -315,14 +316,14 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     );
     if (!next && expectedAt !== undefined) return draftChanged();
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "dismiss") {
     const next = await deps.items.recordAction(item.id, { kind, outcome: "dismissed" });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
     if (args.group === true && !ctx.capability) await settleGroup(deps.items, next);
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
@@ -336,20 +337,20 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         ? await deps.items.setTriage(item.id, { priority }, "human")
         : await removeFromGroup(deps.items, item);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is already actioned" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "reply") {
     if (!ctx.actor?.p || item.sourcePayload?.sentChat !== true) return sendJson(ctx.res, 403, { error: "forbidden" });
     const next = await deps.items.reopen(item.id, { sentReply: true });
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "a reply is already being drafted" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "replied") {
@@ -363,7 +364,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     if (!next) {
       return sendJson(ctx.res, 409, { error: "conflict", message: "this item was already actioned from here" });
     }
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop) });
+    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 
   if (kind === "send" && item.status !== "ready") {
@@ -415,9 +416,10 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, statusByReason[result.reason], { error: result.reason, message: result.message });
       }
       if (result.payloadPatch) item = (await deps.items.annotate(item.id, result.payloadPatch)) ?? item;
-      if (result.resolves === false) return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop) });
+      if (result.resolves === false)
+        return sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
       const next = await deps.items.recordAction(item.id, { kind, outcome: "actioned", result: result.result });
-      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop) });
+      return sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
     } finally {
       await deps.items.releaseDecision(item.id, decisionToken);
     }
@@ -435,7 +437,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     outcome: "actioned",
     ...(turn.reply ? { result: turn.reply } : {}),
   });
-  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop) });
+  sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
 }
 
 const followUpOptionsSchema = z.object({
@@ -476,7 +478,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
-    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+    return sendJson(ctx.res, 409, {
+      error: "draft_changed",
+      message: "the draft changed; review it before continuing",
+    });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
@@ -487,15 +492,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       loaded.actorId,
       options,
     );
-    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop) });
+    sendJson(ctx.res, 200, { item: ledgerItemView(next ?? item, loop, !!ctx.capability) });
   } catch (e) {
     sendJson(ctx.res, 502, { error: "followup_failed", message: errMessage(e) });
   }
-}
-
-function syncTaskVersionOf(cron: Cron | null): number | null {
-  const m = /Inbox sync v(\d+)\./.exec(cron?.action ?? "");
-  return m ? Number(m[1]) : null;
 }
 
 export function cronSummary(cron: Cron | null): {
@@ -503,8 +503,6 @@ export function cronSummary(cron: Cron | null): {
   enabled: boolean;
   schedule: Cron["schedule"];
   lastFiredAt?: number;
-  taskVersion: number | null;
-  currentTaskVersion: number;
 } | null {
   if (!cron) return null;
   return {
@@ -512,8 +510,6 @@ export function cronSummary(cron: Cron | null): {
     enabled: cron.enabled,
     schedule: cron.schedule,
     ...(cron.lastFiredAt !== undefined ? { lastFiredAt: cron.lastFiredAt } : {}),
-    taskVersion: syncTaskVersionOf(cron),
-    currentTaskVersion: INBOX_SYNC_TASK_VERSION,
   };
 }
 
@@ -545,12 +541,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const accountType = body.accountType === undefined ? "default" : body.accountType;
   const to = addressList(body.to === undefined ? [] : [body.to]);
   const cc = addressList(body.cc === undefined ? [] : [body.cc]);
-  if (
-    typeof accountType !== "string" ||
-    !["default", "personal", "company"].includes(accountType) ||
-    to === null ||
-    cc === null
-  )
+  if (!isAccountType(accountType) || to === null || cc === null)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
   const payload = {
     title: text("subject", 300),
@@ -589,7 +580,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   item = (await deps.items.annotate(id, payload, { summary: text("subject", 300) })) ?? item;
   if (item.actionKind === "sent") item = (await deps.items.reopen(id, { sentReply: true })) ?? item;
   ctx.res.setHeader("Cache-Control", "no-store");
-  sendJson(ctx.res, 200, { item: ledgerItemView(item, loop) });
+  sendJson(ctx.res, 200, { item: ledgerItemView(item, loop, !!ctx.capability) });
 }
 
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
@@ -622,25 +613,25 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
         const source = current.sources![0]!;
+        const task = renderSourceInboxTask(loop.id, source);
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({
             loopId: loop.id,
-            runAs: current.runAs,
             ownerScopeId: loop.ownerScopeId,
             owner,
             createdBy: owner,
             destination: principalDestination(owner, owner),
             schedule: { everyMs },
             title: `${loop.name} sync`,
-            action: renderSourceInboxTask(loop.id, source),
+            action: task,
           });
           await deps.store.update(loop.id, { cronId: cron.id });
         }
         if (cron) {
-          if (enable && syncTaskVersionOf(cron) !== INBOX_SYNC_TASK_VERSION)
+          if (enable && cron.action !== task)
             await ctx.app.updateCron(cron.id, {
-              action: renderSourceInboxTask(loop.id, source),
+              action: task,
               title: `${loop.name} sync`,
             });
           await ctx.app.setCronEnabled(cron.id, enable);
@@ -677,22 +668,24 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-  { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-  { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
-  { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
   { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/action",
-    auth: "either",
-    handle: serializeItemAction(actOnItem),
-  },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/followup",
-    auth: "either",
-    handle: serializeItemAction(followUpOnItem),
-  },
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
+    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+    { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
+    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/action",
+      auth: "either",
+      handle: serializeItemAction(actOnItem),
+    },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/followup",
+      auth: "either",
+      handle: serializeItemAction(followUpOnItem),
+    },
+  ]),
 ];

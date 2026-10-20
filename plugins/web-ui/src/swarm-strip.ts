@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { Users, ChevronRight } from "lucide";
 import { api } from "./core-bridge.ts";
-import { icon } from "./ui.ts";
+import { icon } from "./icons.ts";
 
 interface SwarmPeer {
   id: string;
@@ -18,7 +18,7 @@ interface SwarmView {
   self: SwarmPeer;
   peers: SwarmPeer[];
   board?: { sandboxId: string };
-  expiresAt: number;
+  expiresAt?: number;
 }
 
 type Control = "active" | "paused" | "stopped";

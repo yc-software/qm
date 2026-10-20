@@ -5,12 +5,11 @@ import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
-import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
+import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { consentRequiredRecipient, recipientConsentSatisfied } from "../triggers/trigger-store.ts";
 import { isRunnable, type LoopStore } from "./loop-store.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";
@@ -28,7 +27,7 @@ import { collectVitals, evaluateGovernor, healthWorsened } from "./governor.ts";
 import { unresolvedOutput } from "./output-store.ts";
 import { decideShip, outputCandidate } from "./ship-gate.ts";
 import { evaluateSuccess, type SuccessCheckResult, type SuccessVerdict } from "./success-evaluation.ts";
-import { consolidates, ledgerState, prioritizes } from "./ledger-view.ts";
+import { agentSourcePayload, consolidates, ledgerState, prioritizes } from "./ledger-view.ts";
 import {
   DEFAULT_CONSOLIDATE_INSTRUCTIONS,
   DEFAULT_PRIORITIZE_INSTRUCTIONS,
@@ -100,6 +99,10 @@ function loopFireThreadRef(loopId: string, fireKey: string): string {
   return `loop:${loopId}:fire:${hashId([fireKey], 12)}`;
 }
 
+function loopFireItemThreadRef(loopId: string, fireKey: string, itemId: string): string {
+  return `${loopFireThreadRef(loopId, fireKey)}:item:${hashId([itemId], 12)}`;
+}
+
 function loopItemThreadRef(loopId: string, itemId: string): string {
   return `loop:${loopId}:item:${hashId([itemId], 12)}`;
 }
@@ -111,7 +114,7 @@ function itemContextBlock(item: LoopItem): string {
     dedupeKey: item.sourceKey,
     state: ledgerState(item),
     ...(item.source ? { source: item.source } : {}),
-    sourcePayload: item.sourcePayload ?? {},
+    sourcePayload: agentSourcePayload(item.sourcePayload ?? {}, item.source),
     ...(item.proposal ? { proposal: item.proposal.data } : {}),
     thread: (item.thread ?? []).slice(-ITEM_THREAD_CONTEXT).map((message) => ({
       role: message.role,
@@ -395,7 +398,9 @@ function workPrompt(loop: Loop, item: LoopItem, guidance?: string, similar: Loop
     sourceKey: promptText(item.sourceKey),
     loopId: loop.id,
     itemId: item.id,
-    ...(item.sourcePayload ? { sourcePayload: JSON.parse(promptText(JSON.stringify(item.sourcePayload))) } : {}),
+    ...(item.sourcePayload
+      ? { sourcePayload: JSON.parse(promptText(JSON.stringify(agentSourcePayload(item.sourcePayload, item.source)))) }
+      : {}),
     ...(item.sourceSummary ? { sourceSummary: promptText(item.sourceSummary) } : {}),
     ...(guidance ? { reviewerNote: promptText(guidance) } : {}),
     ...(similar.length
@@ -599,13 +604,12 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       await deps.loops.setState(loop.id, "quarantined");
     }
     await deps.loops.setHealth(loop.id, verdict.health, verdict.reason, verdict.throttle);
-    const escalationRecipient = consentRequiredRecipient({
-      owner: loop.owner,
-      standing: true,
-      destination: loop.destination,
-    });
-    const escalationConsented = recipientConsentSatisfied(loop, escalationRecipient);
-    if (verdict.escalate && healthWorsened(previous, verdict.health) && loop.destination && escalationConsented) {
+    if (
+      verdict.escalate &&
+      healthWorsened(previous, verdict.health) &&
+      loop.destination &&
+      (await destinationVisible(deps.trigger, loop.owner, loop.destination))
+    ) {
       const lines = [
         `Loop "${loop.name}" is ${verdict.health}${verdict.reason ? `: ${verdict.reason}` : ""}.`,
         ...verdict.actions.map(
@@ -683,7 +687,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
     const workReplies = new Map<string, string>();
-    let members: LoopItem[] | undefined;
+    let members: Promise<LoopItem[]> | undefined;
     let held: Set<string> | undefined;
 
     let summary: FireSummary;
@@ -702,13 +706,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           },
           triage: () => triage(loop, fireKey, threadRef),
           work: async ({ item, guidance }) => {
-            members ??= consolidates(loop) ? await deps.items.byLoop(loop.id) : [];
-            const heldIds = (held ??= heldMembers(loop, members));
-            const similar = members.filter((member) => heldIds.has(member.id) && member.triage?.groupId === item.id);
+            const all = await (members ??= consolidates(loop) ? deps.items.byLoop(loop.id) : Promise.resolve([]));
+            const heldIds = (held ??= heldMembers(loop, all));
+            const itemThreadRef = loopFireItemThreadRef(loopId, fireKey, item.id);
+            const similar = all.filter((member) => heldIds.has(member.id) && member.triage?.groupId === item.id);
             const outcome = await stageTurn(
               loop,
               `${fireKey}:work:${item.id}:${item.attempts}`,
-              threadRef,
+              itemThreadRef,
               workPrompt(loop, item, guidance, similar),
             );
             const failure = stageFailure("work", outcome);
@@ -725,14 +730,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
                 { expectedClaimToken: item.claimToken! },
               );
             workReplies.set(item.id, outcome.reply ?? "");
-            return { runId: outcome.sessionId ?? `${threadRef}:work:${item.id}` };
+            return { runId: outcome.sessionId ?? `${itemThreadRef}:work` };
           },
           captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
           evaluate: async ({ item, attempt }) => {
             const outcome = await stageTurn(
               loop,
               `${fireKey}:judge:${item.id}:${attempt}`,
-              threadRef,
+              loopFireItemThreadRef(loopId, fireKey, item.id),
               judgePrompt(loop, item),
             );
             const failure = stageFailure("judge", outcome);

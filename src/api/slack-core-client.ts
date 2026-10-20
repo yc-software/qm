@@ -1,3 +1,4 @@
+import { isSessionTurn } from "../core/turn-origin.ts";
 import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
 import {
   createSlackSessionStatus,
@@ -19,7 +20,7 @@ import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type {
   Delivery,
   PendingApproval,
@@ -37,11 +38,9 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
-import type { TaskStore, TaskStatus } from "../tasks/task-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
@@ -54,28 +53,7 @@ interface SlackRunHooks {
   onReplying?(): void;
   onFirstBlock?(text: string): void;
   onSurfacePosted?(): void;
-  onTasks?(tasks: Array<{ id: string; title: string; status: TaskStatus }>): void | Promise<void>;
   onGoal?(goal: GoalView): void | Promise<void>;
-}
-
-export interface SlackAgentRequestContext {
-  requestId: string;
-  requesterId: string | undefined;
-  targetUserId: string;
-  targetDisplayName?: string;
-  originChannel: string;
-  originConversationKind?: "dm" | "channel" | "group";
-  originThreadTs?: string;
-  originThreadOnly: boolean;
-  originChannelName?: string;
-  originStatusTs?: string;
-  dmChannel: string;
-  dmMessageTs?: string;
-  task: string;
-  originAgentLabel: string;
-  targetAgentLabel: string;
-  createdAt: number;
-  approvalRequestIds?: string[];
 }
 
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
@@ -85,7 +63,7 @@ interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
 }
 
 interface DirectoryPush {
-  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string }>;
+  members?: Array<{ principalId: string; displayName: string; type: "internal"; slackId?: string; avatarUrl?: string }>;
   channels?: Array<{ channelId: string; name: string; isPrivate?: boolean; isExternal?: boolean }>;
   channelMembers?: Array<{ channelId: string; principalId: string }>;
   channelRosterIds?: string[];
@@ -127,13 +105,8 @@ export interface SlackCoreClient {
   signalRunAbort(runId: string): Promise<void>;
   stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
-  reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
-  putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void>;
-  getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
-  takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null>;
-  agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
@@ -156,7 +129,7 @@ export interface SlackCoreClient {
     threadTs?: string;
     text?: string;
     senderEmail?: string;
-    isDirectMessage?: boolean;
+    isDirectMessage: boolean;
   }): Promise<void>;
 }
 
@@ -186,16 +159,13 @@ export interface SlackCoreClientDeps {
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
   errors?: ErrorLog;
-  metrics: MetricsSink;
   runs: RunStore;
   turnStream: TurnStream;
-  tasks: TaskStore;
-  agentRequests: DurableMap<SlackAgentRequestContext>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
@@ -204,49 +174,9 @@ export interface SlackCoreClientDeps {
 
 const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
-const AGENT_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-
-function agentRequestExpired(record: SlackAgentRequestContext): boolean {
-  return Date.now() - record.createdAt > AGENT_REQUEST_TTL_MS;
-}
-
-export type AgentRequestStore = Pick<
-  SlackCoreClient,
-  "putAgentRequest" | "getAgentRequest" | "takeAgentRequest" | "agentRequestForApproval"
->;
-
-export function createAgentRequestStore(map: DurableMap<SlackAgentRequestContext>): AgentRequestStore {
-  return {
-    async putAgentRequest(requestId, record) {
-      await map.put(requestId, record);
-      await (async () => {
-        for (const [id, existing] of await map.entries()) {
-          if (agentRequestExpired(existing)) await map.delete(id);
-        }
-      })().catch(swallowAs("agent-requests: expired sweep", undefined));
-    },
-
-    async getAgentRequest(requestId) {
-      const record = await map.get(requestId);
-      return record && !agentRequestExpired(record) ? record : null;
-    },
-
-    async takeAgentRequest(requestId) {
-      const record = await map.take(requestId);
-      return record && !agentRequestExpired(record) ? record : null;
-    },
-
-    async agentRequestForApproval(approvalRequestId) {
-      for (const [, record] of await map.entries()) {
-        if (record.approvalRequestIds?.includes(approvalRequestId) && !agentRequestExpired(record)) return record;
-      }
-      return null;
-    },
-  };
-}
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
-  const lease = deps.leaderLease ?? createNoopLeaderLease();
+  const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {
@@ -285,7 +215,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async publishEmojiCatalog(emoji) {
-      deps.config.setSlackEmojiCatalog(orgScope, emoji);
+      await deps.config.setSlackEmojiCatalog(orgScope, emoji);
     },
 
     async surfaceHeaderFacts(scope) {
@@ -353,7 +283,12 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async privateContinuationSource(runId) {
       const run = await deps.runs.get(runId);
-      if (!run?.request.externalSlack || run.request.origin.kind !== "human" || run.request.actor.type !== "internal")
+      if (
+        !run?.request.externalSlack ||
+        run.request.origin.kind !== "human" ||
+        isSessionTurn(run.request) ||
+        run.request.actor.type !== "internal"
+      )
         return null;
       return replayableRequest(run.request);
     },
@@ -389,7 +324,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       });
       let lastProgressAt = Date.now();
       let lastMark = "";
-      let taskSnapshot = "";
       let goalSnapshot = "";
       const emitGoal = async (): Promise<void> => {
         if (!hooks.onGoal) return;
@@ -399,19 +333,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         if (next === goalSnapshot) return;
         goalSnapshot = next;
         await hooks.onGoal(goal);
-      };
-      const emitTasks = async (): Promise<void> => {
-        if (!hooks.onTasks) return;
-        const tasks = (await deps.tasks.list({ originRunId: runId })).map(({ id, title, status }) => ({
-          id,
-          title,
-          status,
-        }));
-        if (!tasks.length) return;
-        const next = JSON.stringify(tasks);
-        if (next === taskSnapshot) return;
-        taskSnapshot = next;
-        await hooks.onTasks(tasks);
       };
       try {
         for (;;) {
@@ -427,13 +348,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             if (deps.turnStream.surfacePosted(runId)) signalSurface();
             if (isTerminal(run.status)) {
               const view = await deps.app.getRun(runId);
-              await emitTasks().catch(swallowAs("slack-core-client: terminal task refresh", undefined));
               await emitGoal().catch(swallowAs("slack-core-client: terminal goal refresh", undefined));
               if (view?.surfacePosted) signalSurface();
               return (view?.result as TurnResult | null | undefined) ?? null;
             }
             signalReplying(run.deliveryState?.replying === true);
-            await emitTasks();
             await emitGoal().catch(swallowAs("slack-core-client: goal refresh", undefined));
             const fb = deps.turnStream.firstBlock(runId);
             if (fb?.closed) signalFirstBlock(fb.text);
@@ -482,10 +401,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       await deps.app.ackDeliveryByKey(`run:${runId}`);
     },
 
-    async reportTurnMetrics(runId, patch) {
-      await deps.metrics.updateByRunId(runId, patch);
-    },
-
     async reportRunEditRef(runId, editRef) {
       const found = await deps.app.setRunDeliveryState(runId, { editRef });
       if (!found) throw new Error(`run ${runId} not found`);
@@ -507,8 +422,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         ...(record.request !== undefined ? { request: record.request as unknown as Record<string, unknown> } : {}),
       };
     },
-
-    ...createAgentRequestStore(deps.agentRequests),
 
     async pushDirectory(body) {
       if (body.workspaceUrl) await deps.app.setDirectoryWorkspaceUrl(body.workspaceUrl);
@@ -616,7 +529,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           ...(pick.latencyMs != null ? { latencyMs: pick.latencyMs } : {}),
           createdAt: Date.now(),
         })
-        .catch(() => {});
+        .catch(swallowAs("slack: record ack emoji pick", undefined));
     },
 
     async fulfillContextRequest(id, outcome) {

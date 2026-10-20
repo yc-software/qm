@@ -139,7 +139,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       return transcriptFails
         ? Response.json({ error: "temporary synthetic outage" }, { status: 503 })
         : Response.json({ session: row, entries, earlierEntries: 0 });
-    if (path === "/api/sessions") return Response.json({ sessions: [row] });
+    if (path.startsWith("/api/sessions?")) return Response.json({ sessions: [row] });
     if (path === "/api/contexts") return Response.json({ contexts: [] });
     throw new Error(`Unexpected request: ${path}`);
   };
@@ -501,6 +501,30 @@ test("post replies remain visible in new and continuing conversations", async (t
           host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
           "Progress 2",
         );
+        const priorActivity = work.activity;
+        work.streamStartOffset = 200_001;
+        work.activity = [
+          ...priorActivity,
+          { seq: 3, parentSeq: null, type: "text_start", createdAt: Date.now(), payload: { streamOffset: 200_003 } },
+        ];
+        streaming.content = [{ type: "text", text: " \nCommentary marker" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".work-said qm-markdown")?.content,
+          "Commentary marker",
+        );
+        work.activity = [
+          { seq: 3, parentSeq: null, type: "text_start", createdAt: Date.now(), payload: { streamOffset: 0 } },
+        ];
+        streaming.content = [{ type: "text", text: "ipped tail complete" }];
+        conv!.drawActiveChat(agent);
+        assert.equal(
+          host.querySelector<HTMLElement & { content: string }>(".assistant-body > .streaming-text qm-markdown")
+            ?.content,
+          "…earlier output omitted\n\ntail complete",
+        );
+        delete work.streamStartOffset;
+        work.activity = priorActivity;
         work.activity = [
           ...work.activity,
           {

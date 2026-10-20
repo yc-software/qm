@@ -2,7 +2,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
@@ -152,19 +152,8 @@ function clipWords(text: string, max = 64): string {
   return `${(wordCut.length >= max * 0.55 ? wordCut : cut).trim()}…`;
 }
 
-function suggestedCronTitle(text: string): string {
-  const clean = cleanCronText(text);
-  if (!clean) return "(untitled cron)";
-  const candidate = clean
-    .replace(/^(please\s+)?(run|generate|create|send|post|deliver|summarize|check)\s+(the\s+)?/i, "")
-    .replace(/\s*[:;.!?]\s+.*$/, "")
-    .trim();
-  const clipped = clipWords(candidate || clean, 58);
-  return clipped.replace(/^[a-z]/, (ch) => ch.toUpperCase());
-}
-
 function cronTitle(c: CronView): string {
-  return c.title?.trim() || suggestedCronTitle(cronText(c));
+  return c.title?.trim() || clipWords(cronText(c), 58) || "(untitled cron)";
 }
 
 function cronScopeLabel(c: CronView): string {

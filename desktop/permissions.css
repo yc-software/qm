@@ -1,0 +1,185 @@
+:root {
+  font:
+    14px/1.5 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  color: #1b3043;
+  background: #f7f6f2;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 28px 32px;
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 1.8px;
+  color: #6b706f;
+  margin: 0 0 10px;
+}
+h1 {
+  font-size: 28px;
+  letter-spacing: -0.8px;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+.intro {
+  color: #6b706f;
+  margin: 0 0 22px;
+}
+section {
+  border: 1px solid #dcded5;
+  border-radius: 12px;
+  background: #fffefa;
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  gap: 10px;
+}
+.row + .row {
+  border-top: 1px solid #e6e7e0;
+}
+h2 {
+  font-size: 15px;
+  margin: 0;
+}
+.row p {
+  font-size: 12px;
+  color: #6b706f;
+  margin: 3px 0;
+}
+.status {
+  font-size: 12px;
+  color: #806431;
+}
+.status.ready {
+  color: #36704a;
+}
+button {
+  cursor: pointer;
+  font: inherit;
+  border: 1px solid #d7dace;
+  background: #fffefa;
+  color: inherit;
+  padding: 8px 12px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+button:focus-visible,
+#drag:focus-visible {
+  outline: 3px solid #8394a0;
+  outline-offset: 2px;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.link {
+  border: 0;
+  padding: 4px 0;
+  background: none;
+  color: #1b3043;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.guide {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  margin: 22px 0 14px;
+}
+.guide p {
+  font-size: 12px;
+  color: #6b706f;
+  margin: 0;
+}
+#drag {
+  flex: 0 0 112px;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  border: 1px dashed #b8bfae;
+  border-radius: 12px;
+  padding: 12px 6px;
+  cursor: grab;
+  user-select: none;
+}
+#drag img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+}
+#drag span {
+  font-size: 10px;
+  color: #6b706f;
+}
+#message {
+  font-size: 12px;
+  color: #6b706f;
+  min-height: 36px;
+}
+footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+}
+.primary {
+  background: #1b3043;
+  color: #fff;
+  border-color: #1b3043;
+}
+[hidden] {
+  display: none !important;
+}
+
+.instructions {
+  margin-top: 16px;
+  padding: 16px;
+}
+.instructions ol {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+.instructions li + li {
+  margin-top: 8px;
+}
+.instructions .guide {
+  margin: 16px 0 0;
+}
+#drag {
+  flex-basis: 140px;
+  background: #eef1f3;
+  border: 2px dashed #8394a0;
+}
+#drag span {
+  text-align: center;
+}
+.verification {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+.verification p {
+  flex: 1;
+  margin: 0;
+}
+.help {
+  color: #6b706f;
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+footer {
+  margin-top: 12px;
+}

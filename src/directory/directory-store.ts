@@ -1,11 +1,16 @@
 import type { PrincipalType } from "../types.ts";
-import { samePerson } from "./person.ts";
+import { rosterIds, samePerson } from "./person.ts";
+
+function hasPerson(members: ReadonlySet<string> | undefined, principalId: string): boolean {
+  return !!members && rosterIds(principalId).some((id) => members.has(id));
+}
 
 export interface DirectoryMember {
   principalId: string;
   displayName: string;
   type: PrincipalType;
   slackId?: string;
+  avatarUrl?: string;
 }
 
 export interface DirectoryChannel {
@@ -54,6 +59,7 @@ export interface DirectoryStore {
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;
+  getBySlackId(slackId: string): Promise<DirectoryMember | null>;
   resolve(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
@@ -197,7 +203,7 @@ export function createDirectoryStore(): DirectoryStore {
     async channelMember(channelId, principalId) {
       if (channels.some((channel) => channel.channelId === channelId && channel.isPrivate && channel.isExternal))
         return false;
-      return channelMembers?.get(channelId)?.has(principalId) ?? false;
+      return hasPerson(channelMembers?.get(channelId), principalId);
     },
     async channelMemberIds(channelId) {
       if (!knownChannelRosters?.has(channelId)) return undefined;
@@ -206,7 +212,7 @@ export function createDirectoryStore(): DirectoryStore {
     async channelMembership(channelId, principalId) {
       const channel = channels.find((candidate) => candidate.channelId === channelId);
       if (!channel || !knownChannelRosters?.has(channelId)) return undefined;
-      const member = channelMembers?.get(channelId)?.has(principalId) ?? false;
+      const member = hasPerson(channelMembers?.get(channelId), principalId);
       return member || channel.isPrivate === true ? member : undefined;
     },
     async channelPrivacy(channelId) {
@@ -260,18 +266,18 @@ export function createDirectoryStore(): DirectoryStore {
       return { kind: "none" };
     },
     async groupMember(groupId, principalId) {
-      return groupMembers?.get(groupId)?.has(principalId) ?? false;
+      return hasPerson(groupMembers?.get(groupId), principalId);
     },
     async groupMembership(groupId, principalId) {
       if (!groupsSynced) return undefined;
       if (!listedGroupIds?.has(groupId)) return false;
       if (!knownGroupRosters?.has(groupId)) return undefined;
-      return groupMembers?.get(groupId)?.has(principalId) ?? false;
+      return hasPerson(groupMembers?.get(groupId), principalId);
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;
       if (!memberships) return [];
-      return [...memberships].filter(([, members]) => members.has(principalId)).map(([groupId]) => groupId);
+      return [...memberships].filter(([, members]) => hasPerson(members, principalId)).map(([groupId]) => groupId);
     },
     async conversationMembers(kind, id) {
       let ids: string[];
@@ -292,8 +298,7 @@ export function createDirectoryStore(): DirectoryStore {
     async listChannelsFor(principalId) {
       return channels.filter(
         (channel) =>
-          !channel.isPrivate ||
-          (!channel.isExternal && (channelMembers?.get(channel.channelId)?.has(principalId) ?? false)),
+          !channel.isPrivate || (!channel.isExternal && hasPerson(channelMembers?.get(channel.channelId), principalId)),
       );
     },
     async list() {
@@ -304,6 +309,9 @@ export function createDirectoryStore(): DirectoryStore {
     },
     async get(principalId) {
       return members.find((m) => samePerson(m.principalId, principalId)) ?? null;
+    },
+    async getBySlackId(slackId) {
+      return members.find((m) => (m.slackId ?? m.principalId) === slackId) ?? null;
     },
     async resolve(query) {
       const bySlackId = members.find((x) => x.slackId && x.slackId === query.trim());

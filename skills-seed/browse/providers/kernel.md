@@ -7,7 +7,98 @@ Provider names for the shared flow in SKILL.md: API key `KERNEL_API_KEY`, keycha
 export PROFILE_ENV=KERNEL_PROFILE PROFILE_SERVICE=kernel-profile
 ```
 
+Name three handles in `credentials`: the Kernel key (see "Which key" below), the
+person's `KERNEL_PROFILE`, and their `KERNEL_PROXY_ID` (see "The person's static IP").
+
+## Which key
+
+Use the first of these that exists:
+
+1. **The person's own key**: a `KERNEL_API_KEY` handle of theirs in your keychain
+   manifest. Name it in `credentials`.
+2. **An org key delivered as env**: `KERNEL_API_KEY` already set in your shell.
+3. **The org's shared Kernel credential**: a `kernel` row in the Credentials
+   inventory (proxy, host `api.onkernel.com`). Name `kernel` in `credentials`.
+   You never see this key. QM adds it to each request you send through its credential
+   broker (see the use-shared-credential skill), so `KERNEL_API_KEY` stays unset.
+
+Make every Kernel API call in this doc through `kapi METHOD PATH [JSON-BODY]`, which
+picks the right route, prints the response body, and on any error exits non-zero with
+the status and body on stderr. Define it once per shell:
+
+```bash
+kapi() {
+  if [ -n "${KERNEL_API_KEY:-}" ]; then
+    if [ -n "${3:-}" ]; then
+      curl -fsS -X "$1" "https://api.onkernel.com$2" -H "Authorization: Bearer $KERNEL_API_KEY" \
+        -H 'content-type: application/json' -d "$3"
+    else
+      curl -fsS -X "$1" "https://api.onkernel.com$2" -H "Authorization: Bearer $KERNEL_API_KEY"
+    fi
+  else
+    python3 - "$1" "$2" "${3:-}" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+method, path, body = sys.argv[1:4]
+req = {"credential": "kernel", "method": method, "url": "https://api.onkernel.com" + path}
+if body:
+    req["headers"] = {"content-type": "application/json"}
+    req["body"] = body
+r = urllib.request.Request(os.environ["AGENT_API_URL"] + "/v1/credentials/broker",
+    data=json.dumps(req).encode(), method="POST",
+    headers={"x-agent-capability": os.environ["AGENT_CREDENTIAL_TOKEN"], "content-type": "application/json"})
+try:
+    env = json.load(urllib.request.urlopen(r))
+except urllib.error.HTTPError as e:
+    sys.stderr.write(f"broker {e.code}: {e.read().decode()[:500]}\n"); sys.exit(1)
+if not 200 <= env.get("status", 0) < 300:
+    sys.stderr.write(f"kernel {env.get('status')}: {(env.get('body') or '')[:500]}\n"); sys.exit(1)
+sys.stdout.write(env.get("body") or "")
+PY
+  fi
+}
+```
+
+The shared credential only creates and deletes (see "Org setup"), so with it you can't
+list or read anything back, and can't upload files (the broker carries JSON, not
+multipart). The flow below needs neither.
+
+## Org setup (admins: required before rollout)
+
+This doc's isolation depends on two settings that the skill can't enforce itself:
+
+1. **Shared credential: its own project, create and delete only.** Give QM's shared key
+   a dedicated Kernel project and a key restricted to it (`browsers`, `profiles` and
+   `proxies`, each with `use`, `create`, `write` and `delete` on `projects/<id>/*`, and no
+   `read`). Kernel requires project-wide `browsers:use` to create a browser at all, and
+   that also lets the key list and attach to every running browser in its project, so
+   never put the shared key in a project that people's own keys or other tools use. Then
+   configure the broker entry for `api.onkernel.com` with methods `POST` and `DELETE` only,
+   on paths `/browsers`, `/profiles` and `/proxies`. Do NOT allow `GET`: the paths match
+   by prefix, so any `GET` lets callers list every person's profiles and running browsers,
+   and their names are all anyone needs to open someone else's signed-in browser.
+   Nothing in this flow needs `GET`; the live view and CDP URL come back from the create.
+2. **Personal keys scoped to the person.** A person's own `KERNEL_API_KEY` must not be an
+   account-wide key; it would bypass rule 1. Give them their own Kernel project and a key
+   restricted to it, for the same reason as above: within one project, any key that can
+   create browsers can see every running browser.
+
+If you're an agent and the `kernel` row in your inventory allows `GET`, tell the person
+(and an org admin) that profiles aren't isolated yet. Don't work around it.
+
 ## Profiles
+
+The person's profile is a Kernel browser profile whose name lives in their keychain
+(`KERNEL_PROFILE`). It holds their sign-ins: a browser launched with it starts signed in,
+and a browser launched with `save_changes: true` writes its cookies back when it is
+DELETED or times out (closing CDP does not save). No Managed Auth: the person signs in
+once on the live view and the profile keeps it.
+
+Profile names are secrets, not labels. One Kernel account holds every person's profiles
+and records no owner, so whoever knows a name can launch a browser signed in as that
+person. The org's shared Kernel credential must therefore allow only creating and
+deleting (see "Org setup" below); don't list profiles or browsers with any key,
+and don't try to find a person's profile by name or recency. Their profile is the one in
+their keychain, full stop. If it is missing, run first-time setup; don't go looking.
 
 Kernel profiles must be pre-created at the API — a browser create naming a profile that
 doesn't exist 400s (that's the usual cause of a 400 here, not a Kernel outage). During
@@ -15,44 +106,76 @@ first-time setup, and whenever the create below 400s, create the profile under t
 name from the keychain — never a fresh random one, which would orphan the credential:
 
 ```bash
-curl -fsS -X POST https://api.onkernel.com/profiles \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d "{\"name\":\"$KERNEL_PROFILE\"}" > /dev/null
+kapi POST /profiles "{\"name\":\"$KERNEL_PROFILE\"}" > /dev/null
 ```
+
+## The person's static IP
+
+Each person also gets their own Kernel ISP proxy: a static exit IP on a residential ISP,
+the same on every session. Sites that remember devices (LinkedIn especially) see one
+person on one connection instead of a new address every run, which is what keeps a
+saved sign-in from tripping verification. Its id lives in their keychain as
+`KERNEL_PROXY_ID` (service `kernel-proxy`); treat it like the profile name (it decides
+whose address the browser wears), so it comes only from the keychain.
+
+If the manifest has no `KERNEL_PROXY_ID` handle, run the same existence check SKILL.md
+gives for the profile (`envKey == "KERNEL_PROXY_ID"`). Only when none exists, create one
+and register it, as part of the same silent first-time setup (don't ask first):
+
+```bash
+PX=$(kapi POST /proxies '{"type":"isp","name":"qm-<person>-isp","config":{"country":"US"}}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['id'])")
+[ -n "$PX" ] || { echo "proxy create returned no id; nothing registered" >&2; exit 1; }
+curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" -H "x-agent-capability: $AGENT_API_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"service\":\"kernel-proxy\",\"envKey\":\"KERNEL_PROXY_ID\",\"secret\":\"$PX\"}" > /dev/null
+```
+
+ISP proxies exist in US, GB, FR, DE and SG; pick the person's country. If the shared
+credential refuses `/proxies` (path_not_allowed), the org hasn't enabled it; launch
+without a proxy and tell the person. The first session from the new IP may ask the
+person to verify once on sites they were already signed in to elsewhere; after that it is
+stable. If a create fails on the proxy (`proxy_id` not found), check it with
+`kapi POST /proxies/$KERNEL_PROXY_ID/check` (own or env key only; the shared credential
+has no read access, so the check is refused) and tell the person rather than silently
+launching without it.
 
 ## Create the browser
 
-In a DM, with the person's profile:
+With the person's profile and proxy. Only ONE browser may write to a profile at a
+time: Kernel allows concurrent browsers on a profile, and each save replaces the whole
+profile, so a second writer silently clobbers the first. Since browsers can't be listed,
+record your own writer in the person's keychain (`KERNEL_ACTIVE`, service
+`kernel-active`, value `<session_id>:<epoch>`) and launch read-only while a record younger
+than the browser timeout exists. Name its handle in `credentials` when it exists (absent =
+no writer):
 
 ```bash
-CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"profile\":{\"name\":\"$KERNEL_PROFILE\"}}")
+SAVE=true
+case "${KERNEL_ACTIVE:-}" in *:*) [ $(( $(date +%s) - ${KERNEL_ACTIVE#*:} )) -lt 1800 ] && SAVE=false;; esac
+CREATE=$(kapi POST /browsers "{\"stealth\":true,\"headless\":false,\"timeout_seconds\":1800,\"proxy_id\":\"$KERNEL_PROXY_ID\",\"profile\":{\"name\":\"$KERNEL_PROFILE\",\"save_changes\":$SAVE}}")
 CDP_URL=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('cdp_ws_url',''))")
 KERNEL_SID=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('session_id',''))")
 LIVE_VIEW=$(printf '%s' "$CREATE" | python3 -c "import sys,json;print(json.load(sys.stdin).get('browser_live_view_url',''))")
 ```
 
-In a channel or group, OMIT the profile field entirely (per the DM-only rule) — never send
-an empty or personal profile name there:
+When `SAVE=true`, claim the profile right away:
 
 ```bash
-CREATE=$(curl -fsS -X POST https://api.onkernel.com/browsers \
-  -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-  -d '{"stealth":true,"headless":false,"timeout_seconds":1800}')
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d "{\"service\":\"kernel-active\",\"envKey\":\"KERNEL_ACTIVE\",\"secret\":\"$KERNEL_SID:$(date +%s)\"}" > /dev/null
 ```
 
-then extract `CDP_URL` / `KERNEL_SID` / `LIVE_VIEW` from `$CREATE` exactly as above.
-
-The profile is the person's own browsing state — their sign-ins persist in it across runs,
-so every browser you launch this way starts already signed in to whatever they've connected.
-It loads read-only: state gets INTO it via the Managed Auth hosted flow (below), never from
-your browsing. (Kernel also supports `profile.save_changes: true` to write a session's
-cookies back on browser DELETE — don't use it; concurrent runs would race their writes.)
+`CDP_URL` is the websocket the runner drives directly. If `SAVE` came back `false`, say so
+when you report: anything this run signs in to won't be kept. The record is not a lock —
+two runs starting in the same moment can both see none — so keep one browse run at a
+time on a person's profile.
 
 ## Giving the browser a file
 
-Files land in `/home/kernel`:
+Files land in `/home/kernel`. This needs a real key (own or env); the shared credential
+can't carry a file upload, so say so rather than improvising:
 
 ```bash
 curl -fsS -X POST "https://api.onkernel.com/browsers/$KERNEL_SID/fs/upload" \
@@ -64,105 +187,43 @@ Then run the task with `BROWSE_FILES="/home/kernel/receipt.jpg"` per SKILL.md.
 
 ## Routing a sign-in wall
 
-The FULL Managed Auth flow is available against the person's profile — prefer it (the
-session persists for all their future runs; a live-view login lives only as long as this
-browser).
+The person signs in once on the live browser; the profile keeps it.
 
-**Pre-store the person's login at Kernel whenever they'll let you** — this is the reliable
-path, per Kernel's own guidance. Without a linked credential the hosted page discovers the
-login form live and on some sites stalls at "Discovering login requirements…" until the
-link times out (seen on doordash.com); with one, Kernel skips discovery, auto-fills, and
-can re-auth automatically when the session lapses (only an OTP still needs the person).
+1. Navigate the live browser to the wall URL (read from `/tmp/wall-url.txt`, never shell
+   source) so the person lands on the login page, then hand them `$LIVE_VIEW` —
+   bearer material, never open it yourself. SKILL.md's shared `browse-nav.py` (written in
+   its wall step) does the steering:
 
-1. **Get the login into their keychain** (skip to step 3's plain hosted link only if they
-   decline). Check `GET /v1/keychain/credentials` first — a credential whose service/name
-   matches the walled domain may already exist (use it via a grant; NEVER bind a login
-   registered for a different site). Otherwise mint a one-time secret-drop so the password
-   never transits chat, and ask which way they sign in — a Google-SSO site needs the
-   Google login, not a site password:
    ```bash
-   curl -fsS -X POST "$AGENT_API_URL/v1/keychain/drops" -H "x-agent-capability: $AGENT_API_TOKEN" \
-     -H 'content-type: application/json' \
-     -d '{"service":"<domain>","fields":[{"key":"EMAIL","secret":false},{"key":"PASSWORD"}],"purpose":"sign in to <domain> in the managed browser"}'
+   CDP_URL="$CDP_URL" /opt/browser-engine/venv/bin/python /tmp/browse-nav.py
    ```
-   Hand over the returned `url` with the consent stated plainly: _filling it stores this
-   login with Kernel (our managed-browser provider) so it can sign in and re-sign-in for
-   you_ — that storage is the point, and it needs their explicit OK. Redemption fires a
-   wake back into this conversation, and since sign-ins are DM-only the person's own
-   credential injects straight into your env on that next turn (`EMAIL`/`PASSWORD` set —
-   no grant dance needed).
-2. **Store the credential at Kernel, then create the connection WITH it linked.** Linking
-   only works at connection create — if an unlinked connection for the domain already
-   exists (the create 409s with `existing_id`), DELETE it first and re-create. Names must
-   be fresh per store (Kernel 409s on reuse — never a silent overwrite). Build bodies with
-   Python from env; the secret never rides shell source, and the temp file is removed:
-   ```bash
-   export CRED_NAME="<domain>-$(python3 -c 'import secrets;print(secrets.token_hex(4))')"
-   python3 -c 'import json,os,sys
-   domain, name, sso = sys.argv[1], sys.argv[2], os.environ.get("SSO_PROVIDER","")
-   body={"name":name,"domain":("accounts.google.com" if sso=="google" else domain),
-         **({"sso_provider":sso} if sso else {}),
-         "values":{"email":os.environ["EMAIL"],"password":os.environ["PASSWORD"]}}
-   print(json.dumps(body))' "<the walled domain>" "$CRED_NAME" > /tmp/cred-body.json
-   curl -fsS -X POST https://api.onkernel.com/credentials \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-     --data-binary @/tmp/cred-body.json > /dev/null && rm -f /tmp/cred-body.json
-   ```
-   (`SSO_PROVIDER=google` when they sign in with Google — the credential's domain is then
-   `accounts.google.com`, exactly as Kernel's docs prescribe.) Then the connection — read
-   the wall URL from `/tmp/wall-url.txt` (extracted in SKILL.md; it never transits shell
-   source) and let Python build the JSON. Pass the wall URL as `login_url` too (skips
-   discovery even without a credential):
-   ```bash
-   python3 -c 'import json,os,sys,urllib.parse
-   url=open("/tmp/wall-url.txt").read().strip()
-   cred=os.environ.get("CRED_NAME","")
-   print(json.dumps({"domain": urllib.parse.urlsplit(url).hostname or "", "profile_name": sys.argv[1],
-                     "login_url": url, **({"credential":{"name":cred}} if cred else {})}))' \
-     "$KERNEL_PROFILE" > /tmp/conn-body.json
-   CONN=$(curl -sS -X POST https://api.onkernel.com/auth/connections \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' --data-binary @/tmp/conn-body.json)
 
+2. They sign in, finish any 2FA, and say done. If the browser was launched with
+   `SAVE=false` (another browser holds the profile), stop that one first and relaunch, or
+   the sign-in is lost.
+3. DELETE the browser (that is what writes the profile), wait ~10s, create a fresh one
+   (it launches signed in) and re-run the task.
 
-   CONN_ID=$(printf '%s' "$CONN" | python3 -c "import sys,json;j=json.load(sys.stdin);print(j.get('id') or j.get('existing_id',''))")
-   ```
-3. **Start the login flow** (`record_session: true` so a stuck flow is reviewable) and hand
-   the person the hosted URL — single-use, expires in ~30 min, never open it yourself, and
-   mint a fresh one if they lose it:
-   ```bash
-   curl -sS -X POST "https://api.onkernel.com/auth/connections/$CONN_ID/login" \
-     -H "Authorization: Bearer $KERNEL_API_KEY" -H 'content-type: application/json' \
-     -d '{"record_session":true}' \
-     | python3 -c "import sys,json;print(json.load(sys.stdin).get('hosted_url',''))"
-   ```
-   With a linked credential the hosted page auto-fills and usually only surfaces the OTP
-   step; without one the person types their login there. Expectation-setting: an SMS/email
-   OTP step always needs the person — including again on re-auth after the session lapses —
-   so 2FA-heavy sites are better, not hands-free. Avoid Kernel's programmatic login flow
-   (poll `/auth/connections/:id` and submit fields): it can loop forever on sites that
-   re-ask the same field (seen live on DoorDash's email step) — if you try it anyway, give
-   up after ~3 resubmits of the same fieldset and fall back to the hosted link.
-4. When they say they're done, confirm `status` is `AUTHENTICATED` via
-   `GET /auth/connections/$CONN_ID`, then DELETE the old browser, create a fresh one
-   (it launches with the now-signed-in profile), and re-run the task. If the flow instead
-   gets stuck at "Discovering login requirements…", delete the connection, get a credential
-   stored (step 1 — this is exactly the failure it prevents), and re-create linked.
-
-The profile is theirs alone, so signing in real accounts is fine — that's the point.
+Expectation-setting: the profile keeps session cookies; it can't re-answer challenges. A
+site that re-verifies on every visit (SMS/email OTP) will need the person again, and when
+a site eventually expires the session, the next run hits the wall and you repeat this.
+Don't use Kernel Managed Auth or stored Kernel credentials for this — the person's
+password never leaves them.
 
 ## Clean up
 
 ```bash
-curl -fsS -X DELETE "https://api.onkernel.com/browsers/$KERNEL_SID" -H "Authorization: Bearer $KERNEL_API_KEY"
+kapi DELETE "/browsers/$KERNEL_SID"
+# release the profile if this run held it
+[ "$SAVE" = true ] && curl -fsS -X POST "$AGENT_API_URL/v1/keychain/credentials" \
+  -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
+  -d '{"service":"kernel-active","envKey":"KERNEL_ACTIVE","secret":"none:0"}' > /dev/null
 ```
 
 ## API reference
 
 Read these instead of guessing when a call surprises you:
 
-- Managed Auth: https://www.kernel.sh/docs/api-reference/managed-auth/create-auth-connection
-  and https://www.kernel.sh/docs/api-reference/managed-auth/start-login-flow
-- Credentials (pre-store for auto-fill): https://www.kernel.sh/docs/auth/credentials
-- Programmatic login flows (SSO buttons, MFA options, flow states):
-  https://www.kernel.sh/docs/auth/programmatic
+- Profiles (save_changes, concurrency): https://www.kernel.sh/docs/browsers/profiles
+- ISP proxies (static exit IP): https://www.kernel.sh/docs/proxies/isp
 - Browsers (create/delete, profiles, live view, fs upload): https://www.kernel.sh/docs/api-reference/browsers

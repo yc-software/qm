@@ -24,7 +24,7 @@ function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
   opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
-): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string } {
+): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
   const asc = [...scanned].sort(compareSlackTimestamps);
   const needle = opts.match?.trim().toLowerCase();
   const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
@@ -44,10 +44,12 @@ export function buildContextWindow(
   const droppedMatches = matched.length > kept.length;
   let nextBefore = opts.scanHasMore ? asc[0]?.ts : undefined;
   if (droppedMatches) nextBefore = kept[0]?.ts;
+  const selfTs = kept.filter((m) => m.isSelf).map((m) => m.ts);
   return {
     messages,
     hasMore: Boolean(opts.scanHasMore) || droppedMatches,
     ...(nextBefore ? { nextBefore } : {}),
+    ...(selfTs.length ? { selfTs } : {}),
   };
 }
 
@@ -67,23 +69,12 @@ export interface RecentMessage {
 export const MAX_RECENT_MESSAGES = 20;
 const MAX_RECENT_MESSAGE_CHARS = 300;
 const MAX_TURN_MESSAGE_CHARS = 4000;
-export const MAX_TOP_LEVEL_CONTEXT_AGE_S = 24 * 60 * 60;
 
 export function recentWindow(
   candidates: readonly RecentMessage[],
   limit: number = MAX_RECENT_MESSAGES,
-  opts?: { triggerTs?: string; maxAgeSeconds?: number },
 ): RecentMessage[] {
-  const cutoff =
-    opts?.triggerTs && opts.maxAgeSeconds && Number.isFinite(Number(opts.triggerTs))
-      ? Number(opts.triggerTs) - opts.maxAgeSeconds
-      : undefined;
-  const usable = candidates.filter(
-    (m) =>
-      m.ts &&
-      (m.name || m.text?.trim() || m.files?.length) &&
-      (cutoff === undefined || m.isTrigger || Number(m.ts) >= cutoff),
-  );
+  const usable = candidates.filter((m) => m.ts && (m.name || m.text?.trim() || m.files?.length));
   if (!usable.length) return [];
   const window = Math.max(1, Math.floor(limit));
   const sorted = [...usable].sort(compareSlackTimestamps);

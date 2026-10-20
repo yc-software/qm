@@ -33,6 +33,8 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
@@ -171,6 +173,28 @@ test("scope name is stable and slugged", () => {
   assert.match(a, /^qmt-person-tester-[0-9a-f]{6}$/);
 });
 
+test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
+  const scope = "person:someone.with.a.rather.long.address@example-company.com";
+  const ids = [scope, "conversation:9f8e7d6c-5b4a-3210-fedc-ba9876543210", "owner:" + scope, ""];
+  for (const prefix of ["qm", "qm-long-generic-fleet-tenant-prefix", "x".repeat(70) + "-"]) {
+    for (const p of [prefix, `${prefix}-scratch`]) {
+      const names = ids.map((id) => sandboxScopeName(p, id));
+      for (const n of names) {
+        assert.ok(n.length <= 63, `${n} is ${n.length} chars`);
+        assert.match(n, /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/);
+      }
+      assert.equal(new Set(names).size, names.length);
+    }
+    assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
+  }
+  // Names that already fit are unchanged, so existing resident computers keep their identity.
+  assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
+  assert.match(
+    sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
+    /^qm-long-generic-fleet-tenant-prefix-person-tester-[0-9a-f]{6}$/,
+  );
+});
+
 test("no egress force-through without a proxy url: no policy, no proxy env", async () => {
   assert.equal(sandbox.profile.egressEnforcement, "none");
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
@@ -240,6 +264,27 @@ test("force-through strips agent-supplied proxy vars", async () => {
   });
   assert.ok(!h.env?.HTTPS_PROXY?.includes("evil"));
   assert.equal(h.env?.FOO, "keep");
+});
+
+test("force-through makes git send proxy credentials up front, keeping turn git config", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const h = await s.provision(layers, {
+    egressToken: await proxyToken(),
+    env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Turn User" },
+  });
+  const r = await s.run(h, "echo $GIT_HTTP_PROXY_AUTHMETHOD; git config --get user.name");
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split("\n"), ["basic", "Turn User"]);
+  assert.deepEqual(
+    [h.env?.GIT_CONFIG_COUNT, h.env?.GIT_CONFIG_KEY_0, h.env?.GIT_CONFIG_VALUE_0],
+    ["1", "user.name", "Turn User"],
+  );
+});
+
+test("git proxy auth from the proxy env stays off when egress is not forced", async () => {
+  const h = await sandbox.provision(layers, { egressToken: "ignored" });
+  const r = await sandbox.run(h, 'echo "${GIT_HTTP_PROXY_AUTHMETHOD:-unset}"');
+  assert.equal(r.stdout.trim(), "unset");
 });
 
 test("force-through fails closed if the policy readback doesn't bind", async () => {
@@ -429,7 +474,7 @@ for (const submitted of [false, true]) {
   }
 }
 
-test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
+test("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
   const h = await sandbox.provision(layers);
   let reason = "";
   t.mock.method(SpriteCommand.prototype, "start", async () => {
@@ -440,7 +485,7 @@ test("exec diagnostics retain known transport reasons without raw error causes",
   for (reason of ["TypeError", "unclassified provider failure"]) {
     await assert.rejects(sandbox.run(h, "echo ignored"), (error: Error) => {
       assert.match(error.message, /script not submitted/);
-      assert.ok(error.message.endsWith(reason === "TypeError" ? "TypeError" : "unknown transport error"));
+      assert.ok(error.message.endsWith(`WebSocket error: ${reason}`));
       assert.doesNotMatch(inspect(error), /example-secret|example\.invalid|token=/);
       return true;
     });

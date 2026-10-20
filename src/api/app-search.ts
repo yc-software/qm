@@ -3,31 +3,37 @@ import { createCoreSearch, type BackendSearchHit, type SearchBackend } from "../
 import { createIntersectionBackend } from "../search/backends.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import type { Principal } from "../types.ts";
+import { conversationWebUrl } from "../util/conversation-links.ts";
 import { collectBytes } from "../util/bytes.ts";
+import { swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
-function conversationBackend(app: App): SearchBackend {
+function conversationBackend(app: App, publicWebUrl: string | undefined): SearchBackend {
   return createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
     searchForPrincipal: async (principal, query, limit) =>
-      (await app.searchSessions(principal.id, query, limit)).map((hit) => ({
-        id: `${hit.sessionId}:${hit.seq}`,
-        type: "conversation" as const,
-        ...(hit.title ? { title: hit.title } : {}),
-        snippet: hit.snippet,
-        createdAt: hit.createdAt,
-        metadata: {
-          sessionId: hit.sessionId,
-          seq: hit.seq,
-          scopeId: hit.scopeId,
-          entryType: hit.entryType,
-          ...(hit.surface ? { surface: hit.surface } : {}),
-          ...(hit.channelName ? { channelName: hit.channelName } : {}),
-          ...(hit.author ? { author: hit.author } : {}),
-        },
-      })),
+      (await app.searchSessions(principal.id, query, limit)).map((hit) => {
+        const url = conversationWebUrl(publicWebUrl, hit.sessionId);
+        return {
+          id: `${hit.sessionId}:${hit.seq}`,
+          type: "conversation" as const,
+          ...(hit.title ? { title: hit.title } : {}),
+          snippet: hit.snippet,
+          ...(url ? { url } : {}),
+          createdAt: hit.createdAt,
+          metadata: {
+            sessionId: hit.sessionId,
+            seq: hit.seq,
+            scopeId: hit.scopeId,
+            entryType: hit.entryType,
+            ...(hit.surface ? { surface: hit.surface } : {}),
+            ...(hit.channelName ? { channelName: hit.channelName } : {}),
+            ...(hit.author ? { author: hit.author } : {}),
+          },
+        };
+      }),
   });
 }
 function searchableFile(mimetype: string, name: string): boolean {
@@ -48,8 +54,8 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
             deps.files.listOwnedByScopes(scopes, { limit: 200 }),
             deps.acl.handlesFor(scopes),
           ]);
-          const shared = await deps.files.resolveByOwnerPaths(
-            handles.map((h) => ({ ownerScopeId: h.ownerScopeId, path: h.ownerPath })),
+          const shared = await deps.files.resolveByIds(
+            handles.map((h) => ({ ownerScopeId: h.ownerScopeId, id: h.fileId })),
           );
           return [
             ...owned.files,
@@ -68,7 +74,9 @@ function fileBackend(deps: AppDeps, app: App, helpers: AppHelpers): SearchBacken
         if (searchableFile(file.mimetype, file.name)) {
           const opened = await app.openFileForViewer(file.id, request.principals[0]!.id);
           if (opened) {
-            const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(() => null);
+            const collected = await collectBytes(opened.stream, { maxBytes: 512 * 1024 }).catch(
+              swallowAs("app search: read file contents", null),
+            );
             if (collected) text += `\n${collected.data.toString("utf8")}`;
           }
         }
@@ -126,18 +134,28 @@ function slackBackend(deps: AppDeps, app: App): SearchBackend | null {
     },
   };
 }
-export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers): Pick<App, "search"> {
+export function createSearchMethods(
+  deps: AppDeps,
+  app: App,
+  helpers: AppHelpers,
+): Pick<App, "search" | "searchConversations"> {
   const slack = slackBackend(deps, app);
+  const options = {
+    onBackendError: (backend: string, error: unknown) =>
+      console.error(
+        "%s",
+        `[search] backend ${backend} failed:`,
+        error instanceof Error ? error.message : String(error),
+      ),
+  };
+  const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
   const core = createCoreSearch(
-    [conversationBackend(app), ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
-    {
-      onBackendError: (backend, error) =>
-        console.error(
-          "%s",
-          `[search] backend ${backend} failed:`,
-          error instanceof Error ? error.message : String(error),
-        ),
-    },
+    [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
+    options,
   );
-  return { search: (query, principals, limit) => core.search({ query, principals, limit }) };
+  const conversations = createCoreSearch([conversationsBackend], options);
+  return {
+    search: (query, principals, limit) => core.search({ query, principals, limit }),
+    searchConversations: (query, principals, limit) => conversations.search({ query, principals, limit }),
+  };
 }

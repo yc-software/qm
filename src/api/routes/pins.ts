@@ -3,7 +3,7 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
-async function conversationRef(ctx: ApiCtx): Promise<string | null> {
+export async function conversationRef(ctx: ApiCtx): Promise<string | null> {
   const { res, capability } = ctx;
   if (!capability) {
     sendJson(res, 401, { error: "capability_required", message: "this endpoint is for the agent self-API" });

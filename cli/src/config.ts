@@ -15,11 +15,15 @@ import {
 } from "./services.ts";
 import {
   hostingProviderChoices,
+  isSandboxBackendId,
   isTarget,
+  type SandboxBackendId,
   type Target,
   SANDBOX_BACKEND_POLICY,
+  SANDBOX_BACKENDS,
   targetsAllowingSandboxBackend,
 } from "./providers.ts";
+import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
@@ -46,7 +50,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve";
+  backend?: SandboxBackendId;
   app?: string;
   image?: string;
   baseImage?: string;
@@ -126,8 +130,8 @@ export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
-  anthropic: ["pi", "opencode", "claude", "mock"],
-  openai: ["pi", "opencode", "codex", "mock"],
+  anthropic: ["pi", "claude", "mock"],
+  openai: ["pi", "mock"],
   openrouter: ["pi", "mock"],
 };
 
@@ -236,7 +240,7 @@ export function sandboxCoreEnv(
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve") {
+  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
@@ -816,7 +820,7 @@ function validate(raw: unknown, path: string): QmConfig {
 }
 
 function configuredHarness(config: QmConfig): string {
-  return config.env.core?.HARNESS?.trim() || (config.target === "fly" ? "pi" : "mock");
+  return config.env.core?.HARNESS?.trim() || TARGET_ENV_DEFAULTS[config.target](config, "core", "HARNESS") || "mock";
 }
 
 export function mockHarnessWarning(config: QmConfig): string | undefined {
@@ -830,7 +834,15 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
+const HARNESSES = ["mock", "pi", "claude"];
+
 function validateModelProvider(config: QmConfig, path: string): void {
+  const harness = configuredHarness(config);
+  if (!HARNESSES.includes(harness)) {
+    throw new CliError(
+      `${path}: env.core.HARNESS "${harness}" is not recognized — use ${HARNESSES.join(", ")}, or unset it.`,
+    );
+  }
   const override = config.env.core?.MODEL_PROVIDER?.trim();
   if (override === "") delete config.env.core!.MODEL_PROVIDER;
   if (override !== undefined && override !== "" && !isModelProvider(override)) {
@@ -840,7 +852,6 @@ function validateModelProvider(config: QmConfig, path: string): void {
   }
   const provider = effectiveModelProvider(config);
   if (!provider) return;
-  const harness = configuredHarness(config);
   if (!MODEL_PROVIDER_HARNESSES[provider].includes(harness)) {
     throw new CliError(
       `${path}: model provider "${provider}" cannot serve a base model on env.core.HARNESS "${harness}" — that harness runs no ${provider} model, so every agent turn would be refused. Use ${MODEL_PROVIDER_HARNESSES[provider].join(", ")}, or pick a provider that harness can bill.`,
@@ -1017,7 +1028,7 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
   if (hasPortal && protocol !== "https:") {
     throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
   }
-  const harness = config.env.core?.HARNESS?.trim() || "mock";
+  const harness = configuredHarness(config);
   if (protocol !== "https:" && harness !== "mock") {
     throw new CliError(
       `${path}: AWS HARNESS=${harness} requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
@@ -1500,16 +1511,9 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (
-      o["backend"] !== "local" &&
-      o["backend"] !== "sprites" &&
-      o["backend"] !== "aws" &&
-      o["backend"] !== "agent37" &&
-      o["backend"] !== "superserve"
-    ) {
-      throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", or "superserve" (Superserve sandboxes)`,
-      );
+    if (!isSandboxBackendId(o["backend"])) {
+      const choices = Object.entries(SANDBOX_BACKENDS).map(([id, label]) => (label ? `"${id}" (${label})` : `"${id}"`));
+      throw new CliError(`${path}: "sandbox.backend" must be ${choices.slice(0, -1).join(", ")}, or ${choices.at(-1)}`);
     }
     out.backend = o["backend"];
   }
@@ -1572,7 +1576,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "agent37" || out.backend === "superserve") {
+  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(

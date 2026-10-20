@@ -183,8 +183,8 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
   await ensureSentChat(ctx);
   assert.equal(status, 200);
   const stored = (await items.get(id))!;
-  const mime = buildGmailReplyMime(stored, { body: "Hello" })!;
-  assert.ok(mime.startsWith(`To: ${to}\r\nCc: ${cc}\r\n`));
+  const mime = (await buildGmailReplyMime(stored, { body: "Hello" }))!.toString();
+  assert.ok(mime.replaceAll("\r\n ", " ").startsWith(`To: ${to}\r\nCc: ${cc}\r\n`));
   for (const invalid of [
     { to: "x".repeat(8001) },
     { cc: "x".repeat(8001) },

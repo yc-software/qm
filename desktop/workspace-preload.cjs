@@ -1,7 +1,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("qmDesktop", {
+  platform: process.platform,
   openBrowser: (url) => ipcRenderer.invoke("qm:open-browser", url),
+  computer: {
+    call: (args, clientId, deadline) => ipcRenderer.invoke("qm:computer-call", args, clientId, deadline),
+    stop: (clientId) => ipcRenderer.invoke("qm:computer-stop", clientId),
+  },
 });
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -106,6 +111,10 @@ window.addEventListener("DOMContentLoaded", () => {
       link.dataset.qmShortcut = `${mac ? "⌘" : "Ctrl "}${index + 1}`;
     });
   };
+  ipcRenderer.on("qm:cycle-tab", (_event, step) => {
+    if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
+    window.dispatchEvent(new CustomEvent("qm:cycle-tab", { detail: step }));
+  });
   window.addEventListener(
     "keydown",
     (event) => {

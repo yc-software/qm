@@ -21,11 +21,22 @@ export default tseslint.config(
   js.configs.recommended,
   tseslint.configs.recommended,
   {
-    files: ["desktop/preload.cjs", "desktop/workspace-preload.cjs"],
+    files: [
+      "desktop/preload.cjs",
+      "desktop/workspace-preload.cjs",
+      "desktop/permissions-preload.cjs",
+      "desktop/runtime-preload.cjs",
+    ],
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
-    files: ["desktop/setup.js", "desktop/workspace-preload.cjs"],
+    files: [
+      "desktop/setup.js",
+      "desktop/cursor.js",
+      "desktop/workspace-preload.cjs",
+      "desktop/permissions.js",
+      "desktop/runtime.js",
+    ],
     languageOptions: { globals: globals.browser },
   },
   {

@@ -14,7 +14,6 @@ import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_SYSTEM_PROMPT,
   securityScreenSystemPrompt,
-  renderSecurityPolicyPrompt,
   resolveSecurityPolicy,
   securityScreenChunks,
   securityScreenPayload,
@@ -50,18 +49,6 @@ test("each posture resolves to exactly one mechanism", () => {
     denyPrivateNetworks: false,
     toolApprovals: "all",
   });
-});
-
-test("the posture prompt names the active mechanism", () => {
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Dangerous/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("dangerous")), /Predeclared command approvals/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("auto", "enforce")), /External-content screening/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Strict/);
-  assert.match(renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")), /Every harness tool except the no-effect/);
-  assert.match(
-    renderSecurityPolicyPrompt(resolveSecurityPolicy("strict")),
-    /Direct capability-token HTTP mutations are blocked/,
-  );
 });
 
 test("a custom Auto rubric cannot replace the fixed boundary or verdict contract", () => {
@@ -231,12 +218,6 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
   );
 
   await restarted.setApprovalGrantModes(org, { session: true, always: true });
-  restarted.clearApprovalGrantModes(channel);
-  assert.deepEqual(
-    restarted.getApprovalGrantModes(channel),
-    { session: true, always: true },
-    "clearing the scope override restores the org value",
-  );
 });
 
 test("tool results carry a provenance class and only external content reaches the classifier", () => {

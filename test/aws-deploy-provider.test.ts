@@ -14,6 +14,7 @@ import {
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const REGION = "us-west-2";
 
@@ -25,6 +26,7 @@ interface Vm {
 function fakeApi() {
   const vms = new Map<string, Vm>();
   const counts = { run: 0, resume: 0, terminate: 0, token: 0, describe: 0 };
+  const launches: Array<Parameters<AwsMicrovmApi["runMicrovm"]>[0]> = [];
   let n = 0;
   const api: AwsMicrovmApi = {
     async listImages() {
@@ -39,8 +41,9 @@ function fakeApi() {
     async updateImage() {
       throw new Error("updateImage unused in deploy provider");
     },
-    async runMicrovm() {
+    async runMicrovm(input) {
       counts.run++;
+      launches.push(input);
       const id = `mvm-${++n}`;
       const endpoint = `${id}.lambda-microvm.${REGION}.on.aws`;
       vms.set(id, { state: "RUNNING", endpoint });
@@ -80,7 +83,7 @@ function fakeApi() {
       return { microvmId: id, state: v?.state ?? target, ...(v?.endpoint ? { endpoint: v.endpoint } : {}) };
     },
   };
-  return { api, vms, counts };
+  return { api, vms, counts, launches };
 }
 
 function fakeDaemon(
@@ -180,6 +183,7 @@ function provider(
   extra: Record<string, unknown> = {},
 ) {
   return createAwsDeployProvider({
+    ...singleProcessDeps(),
     region: REGION,
     imageIdentifier: "qm-microvm-sandbox",
     appPort: 8081,
@@ -337,6 +341,79 @@ test("resolveEndpoint (suspended): resumes the body and serves it warm", async (
   assert.equal(counts.run, 1, "no relaunch — same body");
 });
 
+test("apply: an idle app stays suspended for its whole lifetime instead of being terminated after an hour", async () => {
+  const { api, launches } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl);
+  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0]!.idlePolicy?.maxIdleDurationSeconds, 900, "still suspends after 15 idle minutes");
+  assert.equal(
+    launches[0]!.idlePolicy?.suspendedDurationSeconds,
+    launches[0]!.maximumDurationInSeconds,
+    "a suspended body survives until its maximum lifetime",
+  );
+});
+
+test("apply: an explicit suspended-duration setting still wins", async () => {
+  const { api, launches } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const p = provider(api, fetchImpl, createMemoryMap<StoredDeployBody>(), { suspendedDurationSeconds: 600 });
+  await p.apply(deployment(ID), version(localSnapshot("a", "1")));
+  assert.equal(launches[0]!.idlePolicy?.suspendedDurationSeconds, 600);
+});
+
+test("rotation: the replacement body is launched before the old one is terminated, and the old one stays resumable until then", async () => {
+  const { api, vms } = fakeApi();
+  const order: string[] = [];
+  const realRun = api.runMicrovm.bind(api);
+  const realTerminate = api.terminate.bind(api);
+  api.runMicrovm = async (input) => {
+    const r = await realRun(input);
+    order.push(`run ${r.microvmId}`);
+    return r;
+  };
+  api.terminate = async (id) => {
+    order.push(`terminate ${id}`);
+    return realTerminate(id);
+  };
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = (await store.get(ID))!;
+  assert.equal(await p.rotationDue!(d), false);
+  await store.put(ID, { ...first, createdAtMs: Date.now() - 7 * 3600_000 - 60_000 });
+  vms.get(first.microvmId)!.state = "SUSPENDED";
+  assert.equal(await p.rotationDue!(d), true, "due 30 minutes before the visit-path rotation");
+  assert.ok(await p.resolveEndpoint!(d, version("/unused")), "visits still reach the old body meanwhile");
+
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const second = (await store.get(ID))!;
+  assert.notEqual(second.microvmId, first.microvmId);
+  assert.deepEqual(order.slice(-2), [`run ${second.microvmId}`, `terminate ${first.microvmId}`]);
+  assert.equal(await p.rotationDue!(d), false);
+});
+
+test("rotation: a replacement left behind by a crash mid-rotation is terminated on the next attempt", async () => {
+  const { api, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = (await store.get(ID))!;
+  vms.set("mvm-orphan", { state: "RUNNING", endpoint: "mvm-orphan.lambda-microvm.us-west-2.on.aws" });
+  await store.put(ID, { ...first, replacementMicrovmId: "mvm-orphan" });
+
+  await p.apply(d, version(localSnapshot("a", "1")));
+  assert.equal(vms.get("mvm-orphan")!.state, "TERMINATED");
+  const after = (await store.get(ID))!;
+  assert.equal(after.microvmId, first.microvmId);
+  assert.equal(after.replacementMicrovmId, undefined);
+});
+
 test("resolveEndpoint: reaches within the cache window skip the control plane", async () => {
   const { api, counts } = fakeApi();
   const { fetchImpl } = fakeDaemon();
@@ -352,6 +429,60 @@ test("resolveEndpoint: reaches within the cache window skip the control plane", 
   assert.ok(again, "cached resolve still serves the endpoint");
   assert.equal(again!.host, first!.host);
   assert.equal(counts.describe, describesAfterFirst, "a fresh verdict is reused without re-asking the control plane");
+});
+
+test("resolveEndpoint: an app in use is served from cache and re-checked in the background, not on the visit", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { api, counts } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const first = await p.resolveEndpoint!(d, version("/unused"));
+  const describes = counts.describe;
+
+  t.mock.timers.tick(60_000);
+  const hot = await p.resolveEndpoint!(d, version("/unused"));
+  assert.equal(hot!.host, first!.host, "the visit is answered from cache");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(counts.describe, describes + 1, "a background re-check refreshed the verdict");
+
+  const moved = { ...d, endpoint: { host: "elsewhere.on.aws", port: 443 } };
+  await p.resolveEndpoint!(moved, version("/unused"));
+  assert.equal(counts.describe, describes + 2, "a placement changed by another core is re-checked before serving");
+});
+
+test("resolveEndpoint: after the idle window the visit waits for a real check, since the machine may be suspended", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const { api, counts, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  await p.resolveEndpoint!(d, version("/unused"));
+  const body = (await store.get(ID))!;
+  vms.get(body.microvmId)!.state = "SUSPENDED";
+
+  t.mock.timers.tick(15 * 60_000);
+  const resumesBefore = counts.resume;
+  assert.ok(await p.resolveEndpoint!(d, version("/unused")));
+  assert.equal(counts.resume, resumesBefore + 1, "the suspended machine is resumed before the visit is served");
+});
+
+test("park: suspends the app's machine unless it is always-on", async () => {
+  const { api, vms } = fakeApi();
+  const { fetchImpl } = fakeDaemon();
+  const store = createMemoryMap<StoredDeployBody>();
+  const p = provider(api, fetchImpl, store);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+  const body = (await store.get(ID))!;
+  await p.park!({ ...d, alwaysOn: true });
+  assert.equal(vms.get(body.microvmId)!.state, "RUNNING");
+  await p.park!(d);
+  assert.equal(vms.get(body.microvmId)!.state, "SUSPENDED");
 });
 
 test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", async () => {
@@ -371,8 +502,8 @@ test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", 
   assert.ok(a && b && c);
   assert.equal(
     counts.describe,
-    describesAfterApply + 2,
-    "three simultaneous misses share one tryGet + one ensureRunning describe",
+    describesAfterApply + 1,
+    "three simultaneous misses share one describe, reused by ensureRunning",
   );
 });
 
@@ -456,6 +587,20 @@ test("resolveEndpoint: destroy invalidates a hot resolve cache", async () => {
   await p.destroy(d);
   const resolved = await p.resolveEndpoint!(d, version("/unused"));
   assert.equal(resolved, null, "a destroyed deployment must not serve a cached endpoint");
+});
+
+test("resolveEndpoint: an app whose process and supervisor are both gone returns null, and the re-apply reuses the body", async () => {
+  const { api, counts } = fakeApi();
+  const appGoneProbe = (cmd: string): boolean => cmd.includes("qm-app.pid") && cmd.includes("exit 99");
+  const { fetchImpl, execs } = fakeDaemon({ execCode: (cmd) => (appGoneProbe(cmd) ? 99 : 0) });
+  const p = provider(api, fetchImpl);
+  const d = deployment(ID);
+  await p.apply(d, version(localSnapshot("a", "1")));
+
+  assert.equal(await p.resolveEndpoint!(d, version("/unused")), null, "a dead app is not served as a live endpoint");
+  await p.apply(d, version(localSnapshot("a", "1")));
+  assert.equal(counts.run, 1, "the running body is reused, only the app is restarted");
+  assert.equal(execs.filter(appStartScript).length, 2, "the app was started again");
 });
 
 test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply) and clears the pointer", async () => {
@@ -571,7 +716,7 @@ test("apply: the readiness gate fails when the launched process dies instead of 
   );
   assert.match(
     execs.find(readinessProbe)!,
-    /kill -0 -"\$pid"/,
+    /alive "\$pid"/,
     "readiness tracks the process this deploy launched, not just the port",
   );
 });
@@ -705,8 +850,9 @@ test("app data: a failed rotate snapshot defers the rotation — the stale body 
   });
 
   const e = await p.apply(deployment(ID), version(localSnapshot("a", "1")));
-  assert.equal(counts.terminate, 0, "the stale body is not terminated when its data can't be saved");
-  assert.equal(counts.run, 0, "no replacement launched");
+  assert.equal(vms.get("mvm-old")!.state, "RUNNING", "the stale body is not terminated when its data can't be saved");
+  assert.equal(counts.run, 1, "a replacement was launched ahead of the snapshot");
+  assert.equal(vms.get("mvm-1")!.state, "TERMINATED", "and discarded instead of leaked");
   assert.equal(e.host, "mvm-old.lambda-microvm.us-west-2.on.aws", "the stale body keeps serving");
 });
 
@@ -754,9 +900,10 @@ test("app data: a deferred rotation serves the stale body from resolveEndpoint i
 
   await p.apply(d, version(localSnapshot("a", "1")));
   assert.ok((await store.get(ID))!.rotateNotBeforeMs! > Date.now(), "deferral stamped");
+  const runsAfterDeferral = counts.run;
   const resolved = await p.resolveEndpoint!(d, version("/unused"));
   assert.ok(resolved, "stale-but-deferred body keeps serving");
-  assert.equal(counts.run, 0, "no replacement launched during the deferral");
+  assert.equal(counts.run, runsAfterDeferral, "no replacement launched during the deferral");
 });
 
 test("litestream: shadow-WAL dir is excluded from both snapshot and hydrate", async () => {

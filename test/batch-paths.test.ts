@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import pg from "pg";
 import { scopeId } from "../src/types.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
@@ -65,87 +65,98 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 
-  test(
-    `batch tape retains metadata, order, lease checks and recent-entry boundaries: ${backend}`,
-    { skip },
-    async () => {
-      const store =
-        backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
-      const scope = scopeId("personal", "batch");
-      const ids: string[] = [];
-      for (let i = 0; i < 2; i++) {
-        const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
-        ids.push(session.id);
-        const { lease } = await store.acquireLease(session.id);
-        assert.ok(lease);
-        const entries = await store.appendMany(
-          lease,
-          Array.from({ length: 5 }, (_, n) => ({
-            type: "user" as const,
-            payload: { text: `message ${n}` },
-            scopeLabel: scope,
-          })),
-        );
-        const records = entries.map((entry) => ({
-          kind: "message" as const,
-          payload: { text: `mirror ${entry.seq}` },
+  test(`batch appends keep order, roll back atomically and check leases: ${backend}`, { skip }, async () => {
+    const store =
+      backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+    const scope = scopeId("personal", "batch");
+    for (let i = 0; i < 2; i++) {
+      const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
+      const { lease } = await store.acquireLease(session.id);
+      assert.ok(lease);
+      const entries = await store.appendMany(
+        lease,
+        Array.from({ length: 5 }, (_, n) => ({
+          type: "user" as const,
+          payload: { text: `message ${n}` },
           scopeLabel: scope,
-          entrySeq: entry.seq,
-          meta: {
-            overheard: true,
-            sourceRole: "agent" as const,
-            bareText: "hello",
-            ts: "123.4",
-            changeTime: "125.6",
-            author: "Ada",
-            attachments: [{ name: "a.txt" }],
-            hidden: true,
-            securityTainted: true,
-            entryCreatedAt: entry.createdAt,
-            display: "hidden",
-          },
-        }));
-        const appended = await store.appendTapeMany(lease, records);
-        assert.deepEqual(
-          appended.map((row) => row.seq),
-          [5, 6, 7, 8, 9],
-        );
-        assert.deepEqual((await store.getTape(session.id)).slice(-5), appended);
-        assert.deepEqual(await store.appendTapeMany(lease, []), []);
-        if (backend === "postgres") {
-          const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+        })),
+      );
+      assert.deepEqual(
+        entries.map((entry) => entry.seq),
+        [0, 1, 2, 3, 4],
+      );
+      assert.deepEqual((await store.getEntries(session.id)).slice(-5), entries);
+      assert.deepEqual(await store.appendMany(lease, []), []);
+      const batch = [5, 6].map((n) => ({
+        type: "user" as const,
+        payload: { text: `message ${n}` },
+        scopeLabel: scope,
+      }));
+      if (backend === "postgres") {
+        const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+        try {
+          const constraint = `items_batch_${randomUUID().replaceAll("-", "")}`;
+          await pool.query(
+            `ALTER TABLE items ADD CONSTRAINT ${constraint} CHECK (session_id <> '${session.id}' OR seq <> 6) NOT VALID`,
+          );
           try {
-            await store.appendTapeMany(lease, [
-              { ...records[0]!, meta: { bareText: "bad\ud800", author: "bad\udc00", attachments: ["literal\\ud800"] } },
-            ]);
-            const last = (await store.getTape(session.id)).at(-1)!;
-            assert.equal(last.meta?.bareText, "bad�");
-            assert.equal(last.meta?.author, "bad�");
-            assert.deepEqual(last.meta?.attachments, ["literal\\ud800"]);
-            const constraint = `tape_batch_${randomUUID().replaceAll("-", "")}`;
-            await pool.query(
-              `ALTER TABLE session_tape ADD CONSTRAINT ${constraint} CHECK (session_id <> '${session.id}' OR seq <> 12)`,
-            );
-            try {
-              await assert.rejects(store.appendTapeMany(lease, records));
-              assert.equal((await store.getTape(session.id)).length, 11);
-            } finally {
-              await pool.query(`ALTER TABLE session_tape DROP CONSTRAINT ${constraint}`);
-            }
+            await assert.rejects(store.appendMany(lease, batch));
+            assert.equal((await store.getEntries(session.id)).length, 5);
           } finally {
-            await pool.end();
+            await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
+        } finally {
+          await pool.end();
         }
-        await store.releaseLease(lease);
-        await assert.rejects(store.appendTapeMany(lease, records), /lease/);
-        await assert.rejects(store.appendTapeMany(lease, []), /lease/);
       }
-      const recent = await store.getRecentEntries([...ids, "missing", ids[0]!], 2);
-      for (const id of ids) assert.deepEqual(recent.get(id), await store.getEntries(id, { sinceSeq: 2 }));
-      assert.deepEqual(recent.get("missing"), []);
-      assert.deepEqual(await store.getRecentEntries([], 2), new Map());
-    },
-  );
+      await store.releaseLease(lease);
+      await assert.rejects(store.appendMany(lease, batch), /lease/);
+    }
+  });
+  test(`session goals live on the session row behind its lease: ${backend}`, { skip }, async () => {
+    const store =
+      backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+    const scope = scopeId("personal", "batch");
+    const goal = (objective: string) => ({
+      objective,
+      status: "active" as const,
+      tokensUsed: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
+      ids.push(session.id);
+    }
+    for (const [i, id] of ids.slice(0, 2).entries()) {
+      const { lease } = await store.acquireLease(id);
+      assert.ok(lease);
+      await store.setGoal(lease, goal(`first ${i}`));
+      const notice = {
+        type: "system" as const,
+        payload: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
+        scopeLabel: scope,
+      };
+      await store.setGoal(lease, { ...goal(`goal ${i}`), status: "paused" }, [notice]);
+      await store.releaseLease(lease);
+      await assert.rejects(store.setGoal(lease, goal("stale lease"), [notice]), /valid session lease/);
+      assert.deepEqual(
+        (await store.getEntries(id)).map((entry) => entry.payload),
+        [{ ...notice.payload, cause: "system" }],
+        "the notice lands with the goal and not with a rejected write",
+      );
+    }
+    const found = await store.goals([...ids, "missing"]);
+    assert.deepEqual(
+      [...found.entries()].sort(([a], [b]) => ids.indexOf(a) - ids.indexOf(b)),
+      [
+        [ids[0], { ...goal("goal 0"), status: "paused" }],
+        [ids[1], { ...goal("goal 1"), status: "paused" }],
+      ],
+    );
+    assert.deepEqual(await store.goals([]), new Map());
+  });
 
   test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {
     const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(process.env.DATABASE_URL!);

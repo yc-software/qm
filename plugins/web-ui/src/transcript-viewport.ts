@@ -29,7 +29,7 @@ export function preserveTranscriptScroll(root: HTMLElement): () => void {
 const CONDENSED_LINES = 2;
 const NEAR_TOP = 400;
 
-export function createTranscriptViewport() {
+export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
   let scroller: HTMLElement | null = null;
   let pins: HTMLElement | null = null;
   let prompt: HTMLElement | null = null;
@@ -325,7 +325,8 @@ export function createTranscriptViewport() {
     }
     const nextPins = scroller?.querySelector<HTMLElement>(".pinned-strip") ?? null;
     const prompts = stack?.querySelectorAll<HTMLElement>(":scope > .user-row");
-    const nextPrompt = prompts?.item(prompts.length - 1) ?? null;
+    const pinPrompt = options.pinPrompt?.() ?? true;
+    const nextPrompt = pinPrompt ? (prompts?.item(prompts.length - 1) ?? null) : null;
     if (pins !== nextPins) {
       changed = true;
       if (pins) observer?.unobserve(pins);
@@ -374,5 +375,9 @@ export function createTranscriptViewport() {
     });
   }
 
-  return { sync, follow, cancelFollow, beforeRender, afterRender, dispose };
+  function refresh(): void {
+    if (scroller) sync(scroller);
+  }
+
+  return { sync, refresh, follow, cancelFollow, beforeRender, afterRender, dispose };
 }

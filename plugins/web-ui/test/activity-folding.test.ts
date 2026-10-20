@@ -15,7 +15,7 @@ for (const count of [1, 2]) {
         seq: index * 2 + 1,
         type: "tool_result",
         createdAt: 2000,
-        payload: { tool: "execute", callId: String(index), code: 0, stdout: String(index) },
+        payload: { tool: "execute", callId: String(index), code: 0, result: String(index) },
       },
     ]).flat();
     const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
@@ -36,11 +36,9 @@ for (const count of [1, 2]) {
 }
 
 test("a subagent header includes its parent title in the breadcrumb", async () => {
-  const parent = { ...SESSION, id: "parent", title: "Build report" };
-  const h = await harness({
-    path: `/s/${SESSION.id}`,
-    listSessions: [parent, { ...SESSION, parentSessionId: parent.id }],
-  });
+  const parent = { ...SESSION, id: "parent", threadRef: "web:tester:parent", title: "Build report" };
+  const child = { ...SESSION, type: "dm" as const, createdAt: 1, parentSessionId: parent.id };
+  const h = await harness({ path: `/s/${SESSION.id}`, session: child, listSessions: [parent, child] });
   try {
     h.releaseSessions();
     await h.boot();
@@ -65,7 +63,7 @@ test("steering separates tool folds with a visible unlabelled user message", asy
       seq: seq + 1,
       type: "tool_result",
       createdAt: (seq + 1) * 1000,
-      payload: { tool: "execute", callId: String(seq), code: 0, stdout: String(seq) },
+      payload: { tool: "execute", callId: String(seq), code: 0, result: String(seq) },
     },
   ];
   const entries = [
@@ -106,7 +104,7 @@ test("steering separates tool folds with a visible unlabelled user message", asy
     user.speaker = "Another person";
     user.edited = true;
     conv.drawActiveChat();
-    assert.equal(document.querySelector(".inline-steer .speaker-label")?.textContent, "Another person");
+    assert.match(document.querySelector(".inline-steer .speaker-label")?.textContent ?? "", /AP\s+another/);
     assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(edited)");
     user.deleted = true;
     conv.drawActiveChat();
@@ -142,6 +140,46 @@ test("stopping a steered run preserves earlier singleton tools and labels only i
     assert.ok(tools[1]!.closest(".stopped-work"));
     assert.equal(document.querySelectorAll(".stopped-head").length, 1);
     assert.equal(document.querySelector(".inline-steer")!.closest("details"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a steer the model has not read shows once in the transcript, then once inside the work", async () => {
+  const entries = [
+    { seq: 0, type: "user", createdAt: 0, payload: { text: "Original request" } },
+    { seq: 1, type: "tool_call", createdAt: 1000, payload: { tool: "execute", callId: "a", command: "echo a" } },
+    { seq: 2, type: "tool_result", createdAt: 2000, payload: { tool: "execute", callId: "a", code: 0 } },
+  ];
+  const h = await harness({ path: `/s/${SESSION.id}`, listSessions: [SESSION], entries });
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const conv = h.visibleConversation();
+    let waiting = [{ runId: "q1", text: "Use the smaller sample" }];
+    conv.composer.waitingSteers = () => waiting;
+    conv.drawActiveChat();
+    const row = document.querySelector(".message-stack > .waiting-steer")!;
+    assert.ok(row);
+    assert.equal(document.querySelectorAll(".inline-steer").length, 1);
+    assert.ok(row.querySelector(".steered-row .user-bubble"));
+    assert.equal(
+      row.querySelector<HTMLElement & { content: string }>("qm-markdown")?.content,
+      "Use the smaller sample",
+    );
+    assert.equal(document.querySelector(".queued-chip"), null);
+    waiting = [];
+    conv.state.agent!.state.messages.push({
+      role: "user",
+      content: "Use the smaller sample",
+      steered: true,
+      entrySeq: 3,
+      timestamp: 3000,
+    } as never);
+    conv.drawActiveChat();
+    assert.equal(document.querySelectorAll(".waiting-steer").length, 0);
+    assert.equal(document.querySelectorAll(".message-stack > .steered-row").length, 0);
   } finally {
     await h.close();
   }

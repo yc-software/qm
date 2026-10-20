@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
+import { JSDOM } from "jsdom";
+import { buildGovernanceUI } from "../src/governance-bundle.ts";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const source = html.slice(
   html.indexOf("      function slackUnescape("),
   html.indexOf("      governanceUI.slackActivity.configure("),
 );
+
+const bundleWindow = new JSDOM("", { runScripts: "outside-only" }).window;
+bundleWindow.eval((await buildGovernanceUI()) + ";window.governanceUI = governanceUI;");
+const governanceUI = bundleWindow.governanceUI;
 
 class RenderNode {
   children: RenderNode[] = [];
@@ -37,7 +43,7 @@ class RenderNode {
 
 function render(text: string) {
   const context = vm.createContext({
-    SLACK_EMOJI: { wave: "👋" },
+    governanceUI,
     document: {
       createElement: (tag: string) => new RenderNode(tag),
       createDocumentFragment: () => new RenderNode("fragment"),
@@ -65,6 +71,14 @@ test("Slack messages format quotes, safe links, and mentions without dropping pr
   assert.equal(link.href, "https://example.com/report");
   assert.equal(link.target, "_blank");
   assert.equal(link.rel, "noopener");
+});
+
+test("Slack shortcodes in mirrored messages render as the emoji Slack shows", () => {
+  assert.equal(
+    render(":white_check_mark: :large_green_circle: :flag-us: :sweat-smile: :+1: :calendar: :not_an_emoji:")
+      .textContent,
+    "✅ 🟢 🇺🇸 😅 👍 📆 :not_an_emoji:",
+  );
 });
 
 test("Slack message content cannot create executable elements or unsafe links", () => {

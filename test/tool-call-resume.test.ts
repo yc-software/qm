@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { isResumeNote, type ResumableToolCall } from "../src/core/turn-resume.ts";
+import type { ResumableToolCall } from "../src/core/turn-resume.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
@@ -29,6 +29,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -224,7 +225,7 @@ function buildScenario() {
       controlTransport: "in-process",
       toolTransport: "in-process",
       transcriptFormat: "pi",
-      capabilities: new Set(["native-tape"]),
+      capabilities: new Set(),
     },
     {
       async runTurn(turn) {
@@ -239,47 +240,10 @@ function buildScenario() {
             payload: { tool: "history", callId: turn.resumeToolCall.callId, isError: false, result: "- found it" },
             scopeLabel: turn.scopeLabel,
           });
-          await turn.tape?.({
-            kind: "message",
-            harness: "pi",
-            payload: {
-              role: "toolResult",
-              toolCallId: turn.resumeToolCall.callId,
-              toolName: "history",
-              content: [{ type: "text", text: "- found it" }],
-              isError: false,
-              timestamp: Date.now(),
-            },
-            scopeLabel: turn.scopeLabel,
-          });
         }
-        const userEntry = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
-        });
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
         const reply = "we kept the Q2 budget flat";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
-          scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { turnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
-        });
+        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         return { reply, modelCalls: 1 };
       },
       async screenSecurity() {
@@ -293,9 +257,9 @@ function buildScenario() {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tool-call-resume-")));
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     runs,
     workspace,
@@ -307,6 +271,7 @@ function buildScenario() {
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "tool-call-resume-deploy"),
@@ -330,56 +295,17 @@ function buildScenario() {
 async function seedDeadAttempt(
   sessions: ReturnType<typeof buildScenario>["sessions"],
   callPayload: Record<string, unknown>,
-  siblingWithResult?: Record<string, unknown>,
-  harness = "pi",
 ): Promise<{ sessionId: string; userSeq: number }> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", personal);
   const { lease } = await sessions.acquireLease(session.id);
   try {
     const user = await sessions.append(lease!, { type: "user", payload: { text: ASK }, scopeLabel: personal });
-    await sessions.appendTape(lease!, {
-      kind: "message",
-      harness,
-      payload: { role: "user", content: [{ type: "text", text: ASK }], timestamp: user.createdAt },
-      scopeLabel: personal,
-      entrySeq: user.seq,
-      meta: { bareText: ASK },
-    });
-    if (siblingWithResult)
-      await sessions.append(lease!, { type: "tool_call", payload: siblingWithResult, scopeLabel: personal });
     await sessions.append(lease!, { type: "tool_call", payload: callPayload, scopeLabel: personal });
-    await sessions.appendTape(lease!, {
-      kind: "message",
-      harness,
-      payload: {
-        role: "assistant",
-        content: [
-          ...(siblingWithResult
-            ? [{ type: "toolCall", id: "c-sibling", name: "history", arguments: { query: "q2" } }]
-            : []),
-          { type: "toolCall", id: "c-budget", name: "history", arguments: { query: "budget", retrySafe: true } },
-        ],
-        timestamp: Date.now(),
-        stopReason: "stop",
-      },
-      scopeLabel: personal,
-    });
-    if (siblingWithResult)
-      await sessions.append(lease!, {
-        type: "tool_result",
-        payload: { tool: "history", callId: "c-sibling", isError: false, result: "- q2 notes" },
-        scopeLabel: personal,
-      });
     return { sessionId: session.id, userSeq: user.seq };
   } finally {
     await sessions.releaseLease(lease!);
   }
 }
-
-const tapeEvents = async (sessions: ReturnType<typeof buildScenario>["sessions"], sessionId: string) =>
-  (await sessions.getTape(sessionId))
-    .filter((row) => row.kind === "context_event")
-    .map((row) => (row.payload as { event: string }).event);
 
 test("a retry whose dangling call was marked retry-safe re-runs it silently instead of warning about an unknown outcome", async () => {
   const { orchestrator, sessions, runs, received, input } = buildScenario();
@@ -398,29 +324,18 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.ok(isResumeNote(turn.input));
-  assert.match(turn.input, /result of the tool call that was in flight is recorded above/);
-  assert.doesNotMatch(turn.input, /unknown outcome/);
-  assert.deepEqual(await tapeEvents(sessions, sessionId), [], "no interrupt or coverage import is baked into the tape");
+  assert.equal(turn.input, "", "the request is not re-sent");
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
   assert.deepEqual(types, ["user", "tool_call", "tool_result", "user", "assistant"]);
-  const roles = (await sessions.getTape(sessionId))
-    .filter((row) => row.kind === "message")
-    .map((row) => (row.payload as { role: string }).role);
-  assert.deepEqual(
-    roles,
-    ["user", "assistant", "toolResult", "user", "assistant"],
-    "the tape closes the call before the note",
-  );
 });
 
 for (const [label, payload] of [
   ["unsafe", { tool: "history", query: "budget", callId: "c-budget", retrySafe: false }],
   ["unmarked", { tool: "history", query: "budget", callId: "c-budget" }],
 ] as const) {
-  test(`a retry whose dangling call is ${label} gets the routine-deploy interrupted note and no re-run`, async () => {
+  test(`a retry whose dangling call is ${label} records what happened as its result and does not re-run it`, async () => {
     const { orchestrator, sessions, runs, received, input } = buildScenario();
     const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
     const { sessionId, userSeq } = await seedDeadAttempt(sessions, payload);
@@ -431,65 +346,17 @@ for (const [label, payload] of [
     assert.equal(received.length, 1);
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
-    assert.ok(isResumeNote(turn.input));
-    assert.match(turn.input, /routine platform deploy/);
-    assert.match(turn.input, /almost never warrants mentioning|almost never worth mentioning/);
-    assert.match(turn.input, /unknown outcome/);
-    assert.match(turn.input, /check what actually happened before redoing anything with side effects/);
-    const types = (await sessions.getEntries(sessionId)).map((e) => e.type);
-    assert.deepEqual(types, ["user", "tool_call", "user", "assistant"], "the call stays open; nothing is re-run");
+    assert.equal(turn.input, "", "the request is not re-sent");
+    const entries = await sessions.getEntries(sessionId);
+    assert.deepEqual(
+      entries.map((e) => e.type),
+      ["user", "tool_call", "tool_result", "user", "assistant"],
+      "nothing is re-run; the call gets a recorded result",
+    );
+    const result = entries[2]!.payload as { callId?: string; isError?: boolean; result?: string };
+    assert.equal(result.callId, "c-budget");
+    assert.equal(result.isError, true);
+    assert.match(result.result ?? "", /^\[system\] This call was interrupted; its outcome wasn't recorded\./);
+    assert.ok(turn.historyTypes.includes("tool_result"), "the model sees the recorded result");
   });
 }
-
-test("a parallel batch whose sibling result never reached the tape falls back to the note so the tape heals as one", async () => {
-  const { orchestrator, sessions, runs, received, input } = buildScenario();
-  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const { sessionId, userSeq } = await seedDeadAttempt(
-    sessions,
-    {
-      tool: "history",
-      query: "budget",
-      callId: "c-budget",
-      retrySafe: true,
-      rerun: { tool: "history", input: { query: "budget" } },
-    },
-    { tool: "history", query: "q2", callId: "c-sibling" },
-  );
-  await runs.noteTurnUserSeq(run.id, userSeq);
-
-  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
-  assert.equal(retry.status, "ok");
-  assert.equal(
-    received[0]!.resumeToolCall,
-    undefined,
-    "the entries alone look retry-safe, but the tape still has two open calls",
-  );
-  assert.match(received[0]!.input, /unknown outcome/);
-  const roles = (await sessions.getTape(sessionId))
-    .filter((row) => row.kind === "message")
-    .map((row) => (row.payload as { role: string }).role);
-  assert.ok(!roles.includes("toolResult"), "no lone toolResult row is appended next to a still-open sibling");
-});
-
-test("a session taped by another harness still re-runs from entries, since its tape is never served", async () => {
-  const { orchestrator, sessions, runs, received, input } = buildScenario();
-  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const { userSeq } = await seedDeadAttempt(
-    sessions,
-    {
-      tool: "history",
-      query: "budget",
-      callId: "c-budget",
-      retrySafe: true,
-      rerun: { tool: "history", input: { query: "budget" } },
-    },
-    undefined,
-    "claude",
-  );
-  await runs.noteTurnUserSeq(run.id, userSeq);
-
-  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
-  assert.equal(retry.status, "ok");
-  assert.deepEqual(received[0]!.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.doesNotMatch(received[0]!.input, /unknown outcome/);
-});

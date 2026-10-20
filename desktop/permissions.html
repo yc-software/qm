@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Computer access</title>
+    <link rel="stylesheet" href="permissions.css" />
+    <script src="permissions.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">COMPUTER ACCESS</p>
+      <h1>Let <span data-name>QM</span> help on your Mac.</h1>
+      <p class="intro">
+        Enable these two permissions to let <span data-name>QM</span> read app windows and click or type when you ask it
+        to.
+      </p>
+      <section aria-label="Required permissions">
+        <div class="row">
+          <div>
+            <h2>Accessibility</h2>
+            <p>Read controls, click, and type.</p>
+            <span id="accessibility-status" class="status">Checking…</span>
+          </div>
+          <button data-settings="accessibility">Set up ↗</button>
+        </div>
+        <div class="row">
+          <div>
+            <h2>Screen Recording</h2>
+            <p>See the app window you're working in.</p>
+            <span id="screen_recording-status" class="status">Checking…</span>
+          </div>
+          <button data-settings="screen_recording">Set up ↗</button>
+        </div>
+      </section>
+      <section class="instructions" aria-label="Setup steps">
+        <h2 id="guide-title">Start with Accessibility</h2>
+        <ol>
+          <li>Click <strong>Set up</strong> for the permission above.</li>
+          <li>
+            Find <strong data-name>QM</strong> in the Settings list.
+            <strong>If it’s missing, drag the app below into that list.</strong> You can also click
+            <strong>+</strong> and select it in Finder.
+          </li>
+          <li>Turn on its switch. Repeat for the other permission.</li>
+        </ol>
+        <div class="guide">
+          <div
+            id="drag"
+            draggable="true"
+            role="img"
+            aria-label="Drag this app into the permission list in System Settings"
+          >
+            <img id="icon" alt="" draggable="false" /><strong data-name>QM</strong
+            ><span>Drag into the Settings list ↗</span>
+          </div>
+          <div>
+            <p id="destination">Drop this app into the Accessibility list.</p>
+            <button id="finder" class="link">Show this app in Finder</button>
+          </div>
+        </div>
+      </section>
+      <div class="verification">
+        <p id="message" role="status" aria-live="polite">We check access automatically while Settings is open.</p>
+        <button id="check" class="link">Check again</button>
+      </div>
+      <details class="help">
+        <summary>Already on, but still not detected?</summary>
+        <p>
+          After an app update, macOS can keep an old authorization. Select <span data-name>QM</span> in that Settings
+          list, click <strong>−</strong> to remove it, then drag this app back into the list and turn it on again. If
+          macOS asks, quit and reopen this app.
+        </p>
+      </details>
+      <footer>
+        <button id="later" class="link">Not now</button
+        ><button id="enable" class="primary">Enable computer access</button
+        ><button id="continue" class="primary" hidden>Continue to workspace</button>
+      </footer>
+    </main>
+  </body>
+</html>

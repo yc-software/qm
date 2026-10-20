@@ -7,10 +7,10 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { decideRecipientConsent } from "../../triggers/trigger-store.ts";
+import { notifyOwnerOfCronEdit } from "../../triggers/edit-notice.ts";
 import { canAdministerCron } from "../control-service.ts";
 import { CRON_PATCH_NOTHING_TO_CHANGE } from "../control-service.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 function defaultTimezoneFor(capability: CapabilityClaims | null): string {
   return typeof capability?.timezone === "string" && capability.timezone.trim()
@@ -42,7 +42,6 @@ type CapabilityCronBody = {
   action?: unknown;
   message?: unknown;
   destinationKey?: unknown;
-  runAs?: unknown;
   recipient?: unknown;
   channel?: unknown;
   participants?: unknown;
@@ -107,7 +106,6 @@ function isCronPatch(b: unknown): b is {
   enabled?: boolean;
   archived?: boolean;
   unfurlLinks?: boolean;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
   unattendedGrants?: string[];
   session?: boolean;
 } {
@@ -120,7 +118,6 @@ function isCronPatch(b: unknown): b is {
   const hasEnabled = b.enabled !== undefined;
   const hasArchived = b.archived !== undefined;
   const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  const hasRunAs = b.runAs !== undefined;
   const hasUnattendedGrants = b.unattendedGrants !== undefined;
   if (hasTitle && typeof b.title !== "string") return false;
   if (hasAction && typeof b.action !== "string") return false;
@@ -128,7 +125,6 @@ function isCronPatch(b: unknown): b is {
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (hasRunAs && b.runAs !== "owner" && b.runAs !== "scopeFloor" && b.runAs !== "scopeShared") return false;
   if (
     hasUnattendedGrants &&
     (!Array.isArray(b.unattendedGrants) || !b.unattendedGrants.every((grant) => typeof grant === "string"))
@@ -149,7 +145,6 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.enabled !== undefined ||
     b.archived !== undefined ||
     b.unfurlLinks !== undefined ||
-    b.runAs !== undefined ||
     b.unattendedGrants !== undefined ||
     b.session !== undefined
   );
@@ -165,7 +160,6 @@ const CRON_ERROR_STATUS: Record<string, number> = {
   not_a_member: 403,
   identity_unverified: 403,
   unknown_destination: 400,
-  members_unavailable: 400,
   cron_create_failed: 400,
   not_found: 404,
   forbidden: 403,
@@ -212,7 +206,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
           : {}),
         ...(b.scope === "personal" ? { scope: "personal" as const } : {}),
         ...(typeof b.destinationKey === "string" ? { destinationKey: b.destinationKey } : {}),
-        ...(b.runAs === "owner" || b.runAs === "scopeFloor" || b.runAs === "scopeShared" ? { runAs: b.runAs } : {}),
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
@@ -239,12 +232,6 @@ async function createCron(ctx: ApiCtx): Promise<void> {
     });
   }
   if (!isCreateCron(body)) return sendJson(res, 400, { error: "bad_request", message: "expected a CreateCronInput" });
-  if (body.runAs === "scopeShared")
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message:
-        "scopeShared crons must be created through an agent capability (it validates the scope is membership-controlled)",
-    });
   try {
     const cron = await app.createCron(body);
     return sendJson(res, 200, { cron: withoutFireLog(cron) });
@@ -354,10 +341,10 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), runAs (owner/scopeFloor/scopeShared), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
-  const { res, app, pathname, method, body, capability } = ctx;
+  const { res, app, url, pathname, method, body, capability } = ctx;
   const id = decodeURIComponent(pathname.slice("/v1/crons/".length));
   if (capability) {
     if (method === "GET") {
@@ -389,7 +376,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
         ...(body.unfurlLinks !== undefined ? { unfurlLinks: body.unfurlLinks } : {}),
-        ...(body.runAs !== undefined ? { runAs: body.runAs } : {}),
         ...(body.unattendedGrants !== undefined ? { unattendedGrants: body.unattendedGrants } : {}),
         ...(body.session !== undefined ? { session: body.session } : {}),
       },
@@ -408,6 +394,8 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!cron) return;
   if (method === "DELETE") {
     await app.deleteCron(id);
+    const editor = url.searchParams.get("principalId");
+    if (editor) await notifyOwnerOfCronEdit(app, { cron, editorId: editor, changeSummary: ["deleted"] });
     return sendJson(res, 200, { ok: true });
   }
   if ((cron.unattendedGrants?.length ?? 0) > 0) {
@@ -420,11 +408,6 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   if (!hasCronPatchFields(body)) {
     return sendJson(res, 400, { error: "bad_request", message: CRON_PATCH_NOTHING_TO_CHANGE });
   }
-  if (body.runAs !== undefined)
-    return sendJson(res, 403, {
-      error: "forbidden",
-      message: "changing a cron's mode requires an agent capability token",
-    });
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const task = body.action ?? body.task;
   if (body.unfurlLinks !== undefined && !cron.destination) {
@@ -446,51 +429,43 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   };
   try {
     const updated = await app.updateCron(id, patch);
+    const editor = url.searchParams.get("principalId");
+    if (updated && editor)
+      await notifyOwnerOfCronEdit(app, {
+        cron: updated,
+        editorId: editor,
+        changeSummary: [
+          ...(body.runtime !== undefined ? ["runtime"] : []),
+          ...(body.title !== undefined ? ["title"] : []),
+          ...(task !== undefined ? ["task"] : []),
+          ...(schedule !== undefined ? ["schedule"] : []),
+          ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
+          ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
+        ],
+        ...(schedule !== undefined ? { detail: { schedule } } : {}),
+      });
     return sendJson(res, 200, { cron: updated ? withoutFireLog(updated) : null });
   } catch (e) {
     return sendJson(res, 400, { error: "cron_update_failed", message: errMessage(e) });
   }
 }
 
-async function triggerConsent(ctx: ApiCtx): Promise<void> {
-  const { res, app, body, capability } = ctx;
-  const id = ctx.params.id!;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "consent requires an agent capability token" });
-  const decision = isObj(body) ? body.decision : undefined;
-  if (decision !== "accept" && decision !== "decline") {
-    return sendJson(res, 400, { error: "bad_request", message: 'decision must be "accept" or "decline"' });
-  }
-  const cron = await app.getCron(id);
-  const webhook = cron ? null : await app.getWebhook(id);
-  const trigger = cron ?? webhook;
-  if (!trigger) return sendJson(res, 404, { error: "not_found" });
-  const decided = decideRecipientConsent(trigger.recipientConsent, capability.actorId, decision, Date.now());
-  if (!decided.ok) {
-    return decided.reason === "no_consent"
-      ? sendJson(res, 400, { error: "bad_request", message: "this trigger has no recipient consent to decide on" })
-      : sendJson(res, 403, { error: "forbidden", message: "only the delivery recipient can accept or decline this" });
-  }
-  if (cron) await app.setCronRecipientConsent(id, decided.consent);
-  else await app.setWebhookRecipientConsent(id, decided.consent);
-  return sendJson(res, 200, { ok: true, consent: decided.consent });
-}
-
 export const cronRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/triggers/:id/consent", auth: "either", handle: triggerConsent },
-  { method: "POST", path: "/v1/crons", auth: "either", handle: createCron },
-  { method: "GET", path: "/v1/crons", auth: "either", handle: listCrons },
-  { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
-  { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
-  { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
+  { method: "POST", path: "/v1/crons", actor: "body.createdBy", auth: "either", handle: createCron },
+  { method: "GET", path: "/v1/crons", actor: "query.viewer", auth: "either", handle: listCrons },
   { method: "POST", path: "/v1/crons/:id/note", auth: "either", handle: noteCron },
-  { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
-  {
-    match: (m, p) =>
-      p.startsWith("/v1/crons/") &&
-      !p.slice("/v1/crons/".length).includes("/") &&
-      (m === "GET" || m === "PATCH" || m === "DELETE"),
-    auth: "either",
-    handle: cronById,
-  },
+  ...withActor("query.principalId", [
+    { method: "POST", path: "/v1/crons/:id/disable", auth: "either", handle: disableCron },
+    { method: "POST", path: "/v1/crons/:id/destination", auth: "either", handle: retargetCron },
+    { method: "POST", path: "/v1/crons/:id/run", auth: "either", handle: runCronNow },
+    { method: "GET", path: "/v1/crons/:id/runs", auth: "either", handle: cronRuns },
+    {
+      match: (m, p) =>
+        p.startsWith("/v1/crons/") &&
+        !p.slice("/v1/crons/".length).includes("/") &&
+        (m === "GET" || m === "PATCH" || m === "DELETE"),
+      auth: "either",
+      handle: cronById,
+    },
+  ]),
 ];

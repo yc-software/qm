@@ -205,7 +205,7 @@ self-explanations; read the transcript.
 ## Sandbox-provider release qualification
 
 Set `LIVE_E2E_SANDBOX_PROVIDERS=all` with `LIVE_E2E_GATE=1` to require a real
-agent `sandbox exec` on every implemented provider: Sprites, AWS, local Docker,
+agent `execute` on every implemented provider: Sprites, AWS, local Docker,
 Smolmachines, E2B, Modal, Porter, and Agent37. These eight scenarios run concurrently
 in their own lane alongside the selected catalog. The source type requires a
 coverage entry when a provider is added. Missing providers, skips, retries,

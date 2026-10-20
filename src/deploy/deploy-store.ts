@@ -90,6 +90,7 @@ interface VersionInput {
 export interface DeployStore {
   create(
     input: {
+      id?: string;
       ownerScopeId: ScopeId;
       createdBy: string;
       name?: string;
@@ -117,6 +118,7 @@ export interface DeployStore {
   touch(id: string, at: number): Promise<void>;
   versionOf(id: string, version: number): Promise<DeploymentVersion | null>;
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
+  commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, version: number, paths?: string[]): Promise<DeployGitInputFile[] | null>;
   diffVersions(id: string, fromVersion: number | undefined, toVersion: number): Promise<DeployGitDiff | null>;
   bundleOf(id: string, version: number): Promise<Uint8Array | null>;
@@ -314,7 +316,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
 
   return {
     async create(input) {
-      const id = randomUUID();
+      const id = input.id ?? randomUUID();
       const v = await makeVersion(id, 1, input);
       const d: Deployment = {
         id,
@@ -469,6 +471,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
       return v?.commit ? git.treeOf(id, v.commit) : null;
     },
+    commitTreeOf: (id, commit) => git.treeOf(id, commit),
     async filesOf(id, version, paths) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
       return v?.commit ? git.filesOf(id, v.commit, paths) : null;

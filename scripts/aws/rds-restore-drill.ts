@@ -75,7 +75,7 @@ export function verifyScript(host: string): string {
   validateEndpoint(host);
   return [
     "set -eu",
-    `RESTORE_URL=$(printf %s "$DATABASE_URL" | sed -E "s#^((postgres|postgresql)://[^@]+@)[^/:?]+#\\1$RESTORE_HOST#; s/sslmode=no-verify/sslmode=require/")`,
+    'RESTORE_URL="${DATABASE_URL%%\\?*}?host=$RESTORE_HOST&sslmode=require"',
     `pg_isready --dbname="$RESTORE_URL"`,
     `test "$(psql "$RESTORE_URL" -Atc 'SELECT COUNT(*) FROM sessions')" -gt 0`,
     `test "$(psql "$RESTORE_URL" -Atc "SELECT COUNT(*) FROM qm_schema_migrations")" -gt 0`,
@@ -228,10 +228,10 @@ async function verify(config: QmConfig, host: string): Promise<void> {
   });
 }
 
-function deleteDrill(config: QmConfig, identifier: string): void {
+export function deleteDrill(config: QmConfig, identifier: string): void {
   const described = awsJson<{
     DBInstances?: Array<{ DBInstanceIdentifier?: string }>;
-  }>(config, ["rds", "describe-db-instances", "--db-instance-identifier", identifier]);
+  }>(config, ["rds", "describe-db-instances", "--filters", `Name=db-instance-id,Values=${identifier}`]);
   if (!described.DBInstances?.length) return;
   awsText(config, [
     "rds",
@@ -244,7 +244,7 @@ function deleteDrill(config: QmConfig, identifier: string): void {
   awsText(config, ["rds", "wait", "db-instance-deleted", "--db-instance-identifier", identifier]);
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const { config } = loadConfigAt(args.configPath);
   assertAwsCaller(config);
@@ -255,12 +255,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   } else if (args.command === "verify") {
     await verify(config, args.host!);
   } else {
-    try {
-      deleteDrill(config, identifier);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/DBInstanceNotFound/.test(message)) throw error;
-    }
+    deleteDrill(config, identifier);
   }
 }
 

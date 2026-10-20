@@ -10,6 +10,7 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const nonLeaderLease: LeaderLease = {
   async hold() {
@@ -28,6 +29,7 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
     },
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -121,6 +123,7 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
     destroy: async () => {},
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

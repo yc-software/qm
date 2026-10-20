@@ -1,14 +1,15 @@
 ---
 name: admin
-description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/metrics/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
+description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
 ---
 
 # admin — act for an org admin, from chat
 
-A connector skill: no new tool. When the chatting user is an org admin (your system
-prompt says so — "Acting for an org admin"), the `/v1/admin/*` endpoints accept your
-token. You are acting **as them**: authorization is re-checked against the live grant
-store on every call, and every call is audited under their name. Two standing rules:
+Use the native `admin` tool for the operations below. Its fixed actions call the same
+`/v1/admin/*` handlers and accept the same values; configuration and provider value
+objects are validated by those existing handlers. Binary and full captured-prompt downloads, raw-secret setters, connector configuration,
+and service-credential configuration still use the self-API, never native tool arguments. You are acting **as them**: authorization is re-checked against the live grant
+store on every call; existing admin audit events remain attributed to them. Two standing rules:
 **confirm before any mutation** (state exactly what you'll change and where), and report
 afterwards exactly what changed. Reads are fine to just do.
 
@@ -42,10 +43,10 @@ Limits the API enforces (don't offer what it will refuse):
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
-  `admin.sessions.read`, `admin.audit.read`, `admin.metrics.read`, `admin.egress.read`,
-  `admin.files.read`) — set only on a live turn by the cron's owner, who must be a
-  current org admin, on a personal-scope cron running as its owner. Each grant opens
-  exactly its own GET routes to that cron's autonomous fires, audited as the owner
+  `admin.sessions.read`, `admin.audit.read`, `admin.egress.read`, `admin.files.read`)
+  — set only on a live turn by the cron's owner, who must be a current org admin, on a
+  personal-scope cron running as its owner. Each grant opens exactly its own GET
+  routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
@@ -62,6 +63,47 @@ Anyone can check admin status (this is also how you answer "am I an admin?"):
 ```bash
 GET /v1/admin/whoami        → {"isAdmin":true,"role":"org_admin","scopeId":"org:…"} or {"isAdmin":false}
 ```
+
+## Check connector sources
+
+During admin onboarding, check this silently before offering Slack bot setup or personal
+connections. A source is either Composio or the org's own OAuth apps. Never inspect
+deployment secrets.
+
+**Composio.** It is available when `GET /v1/composio/toolkits` succeeds. A
+`composio_unavailable` error only means it is not available to this person; the org may
+still have a key they are not granted. To check the org, read
+`GET /v1/admin/scopes/<org scope>?view=credentials`: a `serviceCredentials` entry with
+`enabled: true`, `hasSecret: true`, `delivery: "env"` and `envKey: "COMPOSIO_API_KEY"`
+means Composio is configured.
+
+**Own OAuth apps.** The live Connected apps block reflects the providers configured with
+client credentials, from Admin → Connectors or deployment secrets. The line "No direct
+OAuth app connections are configured" means none are, even if MCP apps appear under
+"Connected". Without that line, at least one provider is configured.
+`GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
+Connectors, not ones set by deployment secrets, so it cannot prove absence.
+
+Composio is absent only when the toolkits read fails and the org check finds no such
+credential. If either source exists, skip silently. If the block is missing or a read
+fails, treat it as unknown, not absent, and do not offer setup. Only when both are
+confirmed absent, send one short message:
+
+- Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
+  as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
+  verification as described in QM's `docs/composio.md`. If they would rather paste the
+  key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
+  `COMPOSIO_API_KEY`) and share its `url`.
+  A dropped key enables Composio only for them; teammates need the org credential.
+- Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
+  `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
+  shows.
+
+Links: the web origin is the origin of the Connection page URL in the Connected apps
+block (`<web origin>/keychain`). Link `<web origin>/admin/credentials` and
+`<web origin>/admin/connectors`. If that line is absent, name the pages without links and
+offer the drop link. Never invent URLs or ask for keys or client secrets in chat. Never
+ask regular users to configure a source.
 
 ## Guide Slack installation
 
@@ -162,8 +204,8 @@ GET /v1/admin/crons|deployments|skills?scope= → artifacts by owner
 ## Observability
 
 ```bash
-GET /v1/admin/audit?scope=     GET /v1/admin/errors?scope=    GET /v1/admin/metrics?scope=
-GET /v1/admin/egress?scope=    GET /v1/admin/retention
+GET /v1/admin/audit?scope=     GET /v1/admin/errors?scope=    GET /v1/admin/egress?scope=
+GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 

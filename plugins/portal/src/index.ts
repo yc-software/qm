@@ -67,6 +67,7 @@ import {
   serveFavicon,
   readBody,
   PayloadTooLargeError,
+  sameOriginRequest as sameOriginFor,
 } from "../../chassis/src/http.ts";
 import {
   CORE_API_URL as CORE,
@@ -259,17 +260,17 @@ const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
 const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
 
+function portalIdentityHeaders(sub: string): Record<string, string> {
+  return PORTAL_IDENTITY_SECRET
+    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
+    : {};
+}
+
 async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = { cookie: `admin=${encodeURIComponent(sub)}` };
-    if (PORTAL_IDENTITY_SECRET) {
-      headers[PORTAL_IDENTITY_HEADER] = mintPortalIdentity(
-        { p: sub, exp: Date.now() + 60_000 },
-        PORTAL_IDENTITY_SECRET,
-      );
-    }
+    const headers = { cookie: `admin=${encodeURIComponent(sub)}`, ...portalIdentityHeaders(sub) };
     const r = await fetch(`${UPSTREAMS.admin}/api/whoami`, { headers, signal: ctrl.signal });
     if (!r.ok) {
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
@@ -363,21 +364,7 @@ function sendHtml(res: ServerResponse, status: number, html: string, csp = PAGE_
   );
 }
 
-function sameOriginRequest(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const originMatches =
-    typeof origin === "string" &&
-    (() => {
-      try {
-        return new URL(origin).origin === ORIGIN;
-      } catch {
-        return false;
-      }
-    })();
-  const site = req.headers["sec-fetch-site"];
-  if (typeof site !== "string") return originMatches;
-  return site === "same-origin" && (originMatches || origin === undefined || origin === "null");
-}
+const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
 
 function wantsHtml(req: IncomingMessage): boolean {
   const accept = req.headers.accept;
@@ -782,8 +769,11 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
     CORE_SIGNING_SECRET,
   );
   try {
-    const r = await fetch(`${CORE}${path}`, { headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path) });
+    const r = await fetch(`${CORE}${path}`, {
+      headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", path), ...portalIdentityHeaders(o.session.sub) },
+    });
     const data = (await r.json().catch(() => ({}))) as { authorizeUrl?: string; message?: string };
+    if (!r.ok) console.warn(`[portal] self-connect start returned HTTP ${r.status}: ${data.message ?? "no message"}`);
     if (data.authorizeUrl) {
       res.writeHead(302, { location: data.authorizeUrl, "cache-control": "no-store" });
       return void res.end();
@@ -793,7 +783,8 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
       200,
       connectErrorHtml(data.message ?? "We couldn't start the connection. This app may not be configured."),
     );
-  } catch {
+  } catch (error) {
+    console.warn(`[portal] self-connect start failed: ${errMessage(error)}`);
     return sendHtml(
       res,
       502,
@@ -812,9 +803,7 @@ async function coreImpersonate(
   const headers = {
     ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
     "x-admin-actor": `${admin}@${ORG}`,
-    ...(PORTAL_IDENTITY_SECRET
-      ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: admin, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
-      : {}),
+    ...portalIdentityHeaders(admin),
   };
   try {
     const r = await fetch(`${CORE}${path}`, { method: "POST", headers, body });
@@ -999,7 +988,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
     const label = requestHost.slice(0, -appSuffix.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
-    return proxyToAppHost(req, res, CORE);
+    return proxyToAppHost(req, res, CORE, clientIpOf(req));
   }
 
   const crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
@@ -1070,10 +1059,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           method: "POST",
           headers: {
             ...signedHeaders(CORE_SIGNING_SECRET, "POST", path, body),
-            [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-              { p: session.sub, exp: Date.now() + 60_000 },
-              PORTAL_IDENTITY_SECRET,
-            ),
+            ...portalIdentityHeaders(session.sub),
           },
           body,
           signal: AbortSignal.timeout(4_000),
@@ -1302,7 +1288,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
       /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
   ) {
-    return proxyToUpstream(req, res, { baseUrl: UPSTREAMS["web-ui"]!, path: pathname, search: url.search }, ["accept"]);
+    return proxyToUpstream(req, res, { baseUrl: UPSTREAMS["web-ui"]!, path: pathname, search: url.search }, [
+      "accept",
+      "accept-encoding",
+    ]);
   }
 
   if (!session) {

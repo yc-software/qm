@@ -1,7 +1,7 @@
 {
   "name": "qm-desktop",
   "productName": "QM",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "main": "main.mjs",
@@ -10,11 +10,15 @@
     "test": "node --experimental-test-module-mocks --test test/*.test.mjs",
     "package": "node package.mjs",
     "package:release": "node package.mjs --release",
-    "test:electron": "electron test/navigation.electron.mjs"
+    "test:electron": "electron test/navigation.electron.mjs",
+    "test:runtime": "electron test/runtime.electron.mjs"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
     "electron": "44.4.3",
     "jsdom": "^29.1.1"
+  },
+  "dependencies": {
+    "update-electron-app": "3.3.0"
   }
 }

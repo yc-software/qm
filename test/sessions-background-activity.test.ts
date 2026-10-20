@@ -61,6 +61,7 @@ function registryRow(
     scopeId: "personal:U1",
     kind: over.kind ?? ("background" as const),
     command: "sleep 600",
+    sandboxId: "sandbox-1",
     ttlMs: over.ttlMs ?? 60_000,
     ...(sessionRef ? { sessionRef } : {}),
   };

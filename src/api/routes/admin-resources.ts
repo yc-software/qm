@@ -1,3 +1,5 @@
+import type { TeamChange } from "../../teams/teams.ts";
+import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
@@ -9,11 +11,14 @@ import {
   fastModeModelIds,
   harnessSupportsFastMode,
   HARNESS_IDS,
+  harnessIdOrPi,
   isHarnessId,
   modelSupportedByHarness,
   modelServiceable,
   modelProviderAvailabilityFor,
   resolveModel,
+  resolveEmbeddingModel,
+  embeddingModelCatalog,
   thinkingLevelsForHarness,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
@@ -25,6 +30,9 @@ import {
   credentialInjectionError,
   isValidCredentialSlug,
   isValidServiceCredentialEnvKey,
+  isValidBrokerHost,
+  isValidBrokerMethod,
+  isValidBrokerPathPrefix,
   type CredentialInjection,
   type DecryptedServiceCredential,
   type PublicServiceCredential,
@@ -35,7 +43,7 @@ import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oaut
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
-import { errMessage, reportFailure } from "../../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../../util/errors.ts";
 import {
   DEFAULT_SECURITY_SCREEN_RUBRIC,
   parseSecurityPosture,
@@ -44,8 +52,7 @@ import {
 } from "../../security/security-posture.ts";
 import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
-import { DEVICE_FLOW_CUTOVER_MODES, type DeviceFlowCutoverMode } from "../../credentials/device-flow-cutover.ts";
-import { FEATURE_NAMES, type FeatureName } from "../../feature-flags.ts";
+import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
 export interface AutoFlaggerDraft {
@@ -58,7 +65,7 @@ const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
 
 /** The flagger a deployment falls back to when nothing is configured. */
 export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "baseModelDefault">): AutoFlaggerDraft {
-  const harnessId = (isHarnessId(deps.harnessId ?? "") ? deps.harnessId : "pi") as HarnessId;
+  const harnessId = harnessIdOrPi(deps.harnessId);
   return {
     harnessId,
     modelId: defaultModelForHarness(harnessId, deps.baseModelDefault),
@@ -115,6 +122,7 @@ export interface AdminResource {
   authz?: "scope-admin" | "org-admin";
   label?: string;
   enumValues?: readonly unknown[];
+  refreshesModels?: true;
 }
 
 function generic<V>(
@@ -122,12 +130,12 @@ function generic<V>(
     body: unknown,
     ctx: { scope: string; deps: ServerDeps },
   ) => { value: V } | { error: string; code?: string; status?: number },
-  set: (deps: ServerDeps, scope: string, value: V) => unknown,
+  set: (deps: ServerDeps, scope: string, value: V) => Promise<void>,
 ): AdminResource["apply"] {
   return async (ctx, _actor, scope) => {
     const parsed = parse(ctx.body, { scope, deps: ctx.deps });
     if ("error" in parsed) return parsed;
-    await Promise.resolve(set(ctx.deps, scope, parsed.value));
+    await set(ctx.deps, scope, parsed.value);
     return { ok: true };
   };
 }
@@ -136,17 +144,6 @@ const orgOnly = (scope: string, label: string): { error: string } | null =>
   parseScopeId(scope).kind === "org" ? null : { error: `${label}; target an org scope` };
 
 const boolBody = (body: unknown): { value: boolean } => ({ value: !!(body as { on?: unknown }).on });
-
-const credentialServices = async (
-  deps: Pick<ServerDeps, "credentialServices" | "brokeredServices" | "deviceFlowCutover">,
-  scope: ScopeId,
-): Promise<string[]> => [
-  ...new Set([
-    ...(deps.credentialServices?.() ?? []),
-    ...(deps.brokeredServices?.() ?? []),
-    ...((await deps.deviceFlowCutover?.listServices(scope)) ?? []),
-  ]),
-];
 
 const MAX_ORDERS_CHARS = 20_000;
 const MAX_SOUL_CHARS = 100_000;
@@ -198,6 +195,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "auto-flagger",
+    refreshesModels: true,
     kind: "custom",
     target: "org",
     clearable: true,
@@ -210,15 +208,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (bad) return bad;
       const body = ctx.body as { reset?: unknown };
       if (body.reset === true) {
-        ctx.deps.config!.setAutoFlaggerConfig(null);
+        await ctx.deps.config!.setAutoFlaggerConfig(null);
         return { ok: true };
       }
       const parsed = await parseAutoFlaggerDraft(ctx.deps, ctx.body as Record<string, unknown>);
       if ("error" in parsed) return parsed;
-      ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
+      await ctx.deps.config!.setAutoFlaggerConfig(parsed.value);
       return { ok: true };
     },
   },
+  decisionsResource,
   {
     id: "approval-grant-modes",
     kind: "custom",
@@ -261,7 +260,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
       if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
       if (body.expectedVersion === undefined) {
-        await ctx.deps.config!.setSoulLatest(scope, body.content, actor.id);
+        await ctx.deps.config!.setSoul(scope, body.content, actor.id);
         return { ok: true };
       }
       if (typeof body.expectedVersion !== "number")
@@ -284,7 +283,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get: async (deps, scope) => {
       const ref = channelContainer(scope);
       if (!deps.channelPolicy || !ref) return undefined;
-      const p = await deps.channelPolicy.get(ref).catch(() => undefined);
+      const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
         orders: p?.orders ?? "",
@@ -349,7 +348,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     readKey: "featureFlags",
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
-    get: (deps) => deps.featureFlags?.list(),
+    get: async (deps) => {
+      if (!deps.featureFlags) return undefined;
+      const rows = await deps.featureFlags.list();
+      return FEATURE_NAMES.map((featureName) => ({
+        ...FEATURES[featureName],
+        ...(rows.find((row) => row.featureName === featureName) ?? { featureName, enabledScopes: [] }),
+      }));
+    },
     apply: async (ctx, actor, scope) => {
       if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
       const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
@@ -376,56 +382,22 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
   },
   {
-    id: "device-flow-cutover",
+    id: "teams",
     kind: "custom",
-    target: "any",
-    readKey: "deviceFlowCutover",
+    target: "org",
+    readKey: "teams",
     label:
-      "Credential-file migration by service. legacy restores resident files; prefer_ephemeral retains resident files without capturing replacements; ephemeral_only quarantines the stored legacy copy without deleting it; inherit clears a scope override.",
-    get: async (deps, scope) => {
-      if (!deps.deviceFlowCutover) return undefined;
-      const out: Record<string, unknown> = {};
-      for (const service of await credentialServices(deps, scope)) {
-        out[service] = {
-          configured: await deps.deviceFlowCutover.get(scope, service),
-          effective: await deps.deviceFlowCutover.resolve(scope, service),
-        };
-      }
-      return out;
-    },
+      "Teams. Each team is a team:<id> scope shared by its members. Send { id, name?, isolatedInOpen?, addMembers?, addAdmins?, drop?, addRooms?, dropRooms? } or { id, remove: true }. Rooms are channel or group scopes where the team stays available; isolatedInOpen keeps it isolated when the org posture is Open.",
+    get: (deps) => deps.teams?.list(),
     apply: async (ctx, actor, scope) => {
-      if (!ctx.deps.deviceFlowCutover) return { error: "not available on this deployment", status: 404 };
-      const body = (ctx.body ?? {}) as { service?: unknown; mode?: unknown };
-      if (typeof body.service !== "string" || !body.service.trim()) {
-        return {
-          error: "device-flow-cutover requires { service: string, mode: legacy | prefer_ephemeral | ephemeral_only }",
-        };
-      }
-      const service = body.service;
-      if (body.mode !== "inherit" && !(await credentialServices(ctx.deps, scope)).includes(service)) {
-        return { error: `device-flow-cutover has no credential paths for service: ${service}` };
-      }
-      const beforeConfigured = await ctx.deps.deviceFlowCutover.get(scope, service);
-      const beforeEffective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-      if (body.mode === "inherit") {
-        await ctx.deps.deviceFlowCutover.clear(scope, service);
-        const effective = await ctx.deps.deviceFlowCutover.resolve(scope, service);
-        audit(ctx.deps, {
-          principalId: actor.id,
-          action: "credential.cutover.update",
-          resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->inherit/${effective}`,
-          scopeLabel: scope,
-        });
-        return { ok: true };
-      }
-      if (typeof body.mode !== "string" || !(DEVICE_FLOW_CUTOVER_MODES as readonly string[]).includes(body.mode)) {
-        return { error: `device-flow-cutover mode must be one of: ${DEVICE_FLOW_CUTOVER_MODES.join(", ")}, inherit` };
-      }
-      await ctx.deps.deviceFlowCutover.set(scope, service, body.mode as DeviceFlowCutoverMode, actor.id);
+      if (!ctx.deps.teams) return { error: "not available on this deployment", status: 404 };
+      const change = parseTeamChange(ctx.body);
+      if ("error" in change) return change;
+      await ctx.deps.teams.apply(change, actor.id);
       audit(ctx.deps, {
         principalId: actor.id,
-        action: "credential.cutover.update",
-        resource: `${service}:${beforeConfigured?.mode ?? "inherit"}/${beforeEffective}->${body.mode}/${body.mode}`,
+        action: change.remove ? "team.remove" : "team.update",
+        resource: `team:${change.id}`,
         scopeLabel: scope,
       });
       return { ok: true };
@@ -473,7 +445,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (raw.some((m) => typeof m !== "string" || !m.trim() || m.length > 320))
         return { error: "each member must be a non-empty string of at most 320 characters" };
       const before = ctx.deps.config!.getInternalMemberOverrides();
-      ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
+      await ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
       const after = ctx.deps.config!.getInternalMemberOverrides();
       audit(ctx.deps, {
         principalId: actor.id,
@@ -498,7 +470,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, scope, on) => deps.config!.setChannelHeaderPinLatest(scope, on),
+      (deps, scope, on) => deps.config!.setChannelHeaderPin(scope, on),
     ),
   },
   {
@@ -553,7 +525,31 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
+    id: "memory-embedding-model",
+    refreshesModels: true,
+    kind: "enum",
+    target: "org",
+    clearable: true,
+    readKey: "memoryEmbeddingModel",
+    get enumValues() {
+      return embeddingModelCatalog();
+    },
+    get: (deps) => deps.config!.getEmbeddingModelDurable(),
+    apply: async (ctx, _actor, scope) => {
+      const bad = orgOnly(scope, "the memory embedding model is org-wide");
+      if (bad) return bad;
+      const { modelId } = ctx.body as { modelId?: unknown };
+      if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
+        return { error: "Provide an embedding modelId, or null to disable semantic recall" };
+      if (modelId !== null && !resolveEmbeddingModel(modelId))
+        return { error: "Unknown or unverified embedding model" };
+      await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
+      return { ok: true };
+    },
+  },
+  {
     id: "base-model",
+    refreshesModels: true,
     kind: "enum",
     target: "any",
     clearable: true,
@@ -577,13 +573,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             }
           : null;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
-      if (!modelId) await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
+      if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
       else if (runtime) {
         if (!isHarnessId(runtime.harnessId) || !modelSupportedByHarness(modelId, runtime.harnessId))
           return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
         const bad = unserviceable(runtime.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+        await ctx.deps.config!.setRuntimeSelection(scope, {
           harnessId: runtime.harnessId,
           modelId,
           ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
@@ -597,7 +593,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             : {}),
         });
       } else {
-        const harnessId = isHarnessId(ctx.deps.harnessId) ? ctx.deps.harnessId : "pi";
+        const harnessId = harnessIdOrPi(ctx.deps.harnessId);
         const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
           harnessId,
           modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
@@ -606,7 +602,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
         const bad = unserviceable(effective.harnessId);
         if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelectionLatest(scope, {
+        await ctx.deps.config!.setRuntimeSelection(scope, {
           harnessId: effective.harnessId,
           modelId,
           ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
@@ -625,6 +621,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
     id: purpose ? `${purpose}-runtime` : "runtime",
+    refreshesModels: true,
     kind: "custom",
     target: purpose ? "org" : "any",
     clearable: true,
@@ -640,7 +637,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
         if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
-        else await ctx.deps.config!.setRuntimeSelectionLatest(scope, null);
+        else await ctx.deps.config!.setRuntimeSelection(scope, null);
         return { ok: true };
       }
       const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
@@ -678,7 +675,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : {}),
       };
       if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
-      else await ctx.deps.config!.setRuntimeSelectionLatest(scope, choice);
+      else await ctx.deps.config!.setRuntimeSelection(scope, choice);
       return { ok: true };
     },
   })),
@@ -706,6 +703,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "webui-models",
+    refreshesModels: true,
     kind: "string-list",
     target: "org",
     clearable: true,
@@ -810,37 +808,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (markUrlInput && !value?.markUrl) {
         return { error: "branding mark image must be an https URL" };
       }
-      ctx.deps.config!.setBranding(scope, value ?? null);
+      await ctx.deps.config!.setBranding(scope, value ?? null);
       return { ok: true };
     },
   },
   {
-    id: "turn-wall-clock",
-    kind: "string",
-    target: "org",
-    clearable: true,
-    label:
-      "Maximum wall-clock time for a turn in seconds. Zero leaves turns uncapped; empty restores the deployment default.",
-    readKey: "turnWallClockSec",
-    get: (deps, scope) => deps.config!.getTurnWallClockSecDurable(scope),
-    apply: generic<number | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the turn wall-clock limit is org-wide");
-        if (bad) return bad;
-        const raw = (body as { sec?: unknown }).sec;
-        const trimmed = typeof raw === "string" ? raw.trim() : raw;
-        if (trimmed === undefined || trimmed === null || trimmed === "") return { value: null };
-        const sec = typeof trimmed === "number" ? trimmed : Number(trimmed);
-        if (!Number.isInteger(sec) || (sec !== 0 && (sec < 60 || sec > 86_400))) {
-          return { error: "turn-wall-clock requires { sec: 0 or integer 60-86400 } (empty clears the override)" };
-        }
-        return { value: sec };
-      },
-      (deps, scope, sec) => deps.config!.setTurnWallClockSec(scope, sec),
-    ),
-  },
-  {
     id: "browse-model",
+    refreshesModels: true,
     kind: "enum",
     target: "org",
     clearable: true,
@@ -866,7 +840,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (modelId && !modelServiceable(modelId, providers)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
-      await Promise.resolve(ctx.deps.config!.setBrowseModel(scope, modelId || null));
+      await ctx.deps.config!.setBrowseModel(scope, modelId || null);
       return { ok: true };
     },
   },
@@ -977,6 +951,12 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const ref = encodeRef(serviceCredRef(slug));
       const allCreds = await deps.serviceCreds.listServiceCredentials(scope);
       const existing = allCreds.find((c) => c.slug === slug);
+      if (existing?.source === "deployment")
+        return {
+          error: `"${slug}" is supplied by this deployment's configuration and can't be edited, deleted or reused here.`,
+          code: "deployment_credential",
+          status: 409,
+        };
       const conflict = () => ({
         error: "Credential changed after this editor was loaded. Reload it before continuing.",
         code: "version_conflict",
@@ -1152,7 +1132,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }
       const host = typeof b.host === "string" ? b.host.trim().toLowerCase() : "";
       if (!name) return { error: "service-credentials requires { slug, name }" };
-      if (delivery === "broker" && (!host || /[/:\s]/.test(host))) {
+      if (delivery === "broker" && !isValidBrokerHost(host)) {
         return { error: "broker delivery requires { host } (a bare hostname)" };
       }
       if (delivery === "env" && host) return { error: "a pinned host only applies to broker delivery" };
@@ -1165,7 +1145,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             .map((method) => method.trim().toUpperCase())
             .filter(Boolean)
         : undefined;
-      if (methods?.some((method) => !/^[A-Z]+$/.test(method)))
+      if (methods?.some((method) => !isValidBrokerMethod(method)))
         return { error: "allowed methods must be comma-separated HTTP method names" };
       const paths = Array.isArray(b.allowedPathPrefixes)
         ? b.allowedPathPrefixes
@@ -1173,7 +1153,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
             .map((path) => path.trim())
             .filter(Boolean)
         : undefined;
-      if (paths?.some((path) => !path.startsWith("/") || /[\r\n]/.test(path)))
+      if (paths?.some((path) => !isValidBrokerPathPrefix(path)))
         return { error: "each allowed path prefix must be one line starting with /" };
       const desired = Array.isArray(b.grantees) ? [...new Set(b.grantees.map(String))] : undefined;
       const badGrantee = desired?.find((g) => {
@@ -1206,9 +1186,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "env" ? { envKey } : {}),
         host: delivery === "env" ? "" : host,
         ...(typeof b.secret === "string" && b.secret ? { secret: b.secret } : {}),
-        ...(delivery === "broker" &&
-        effectiveInjection &&
-        (effectiveInjection.header || effectiveInjection.scheme || effectiveInjection.actor !== undefined)
+        ...(delivery === "broker" && effectiveInjection && Object.keys(effectiveInjection).length
           ? { injection: effectiveInjection }
           : {}),
         ...(delivery === "broker" ? brokerMethods : {}),
@@ -1269,4 +1247,35 @@ export function adminResourceManifest(): AdminResourceManifestEntry[] {
     ...(r.label ? { label: r.label } : {}),
     ...(r.enumValues ? { enumValues: r.enumValues } : {}),
   }));
+}
+
+const TEAM_ID = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const TEAM_LISTS = ["addMembers", "addAdmins", "drop", "addRooms", "dropRooms"] as const;
+
+function parseTeamChange(body: unknown): TeamChange | { error: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.id !== "string" || !TEAM_ID.test(b.id))
+    return { error: "teams requires id: lowercase letters, digits, -" };
+  if (b.remove === true) return { id: b.id, remove: true };
+  const lists: Partial<Record<(typeof TEAM_LISTS)[number], string[]>> = {};
+  for (const key of TEAM_LISTS) {
+    const v = b[key] ?? [];
+    if (!Array.isArray(v) || !v.every((x) => typeof x === "string" && x.trim()))
+      return { error: `${key} must be an array of non-empty strings` };
+    lists[key] = [...new Set(v as string[])];
+  }
+  const isRoom = (r: string) => {
+    const { kind, ref } = parseScopeId(r as ScopeId);
+    return (kind === "channel" || kind === "group") && !!ref;
+  };
+  if (![...lists.addRooms!, ...lists.dropRooms!].every(isRoom))
+    return { error: "rooms must be channel:<id> or group:<id> scopes" };
+  return {
+    id: b.id,
+    ...(typeof b.name === "string" && b.name.trim() ? { name: b.name.trim() } : {}),
+    ...(typeof b.isolatedInOpen === "boolean" ? { isolatedInOpen: b.isolatedInOpen } : {}),
+    ...lists,
+    addRooms: lists.addRooms as ScopeId[],
+    dropRooms: lists.dropRooms as ScopeId[],
+  };
 }

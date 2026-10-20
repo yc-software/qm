@@ -1,3 +1,6 @@
+import type { ExecResult } from "./sandbox.ts";
+import { shq } from "../util/shell.ts";
+
 export interface E2bCommandResult {
   stdout: string;
   stderr: string;
@@ -19,6 +22,8 @@ export interface E2bMetrics {
 
 export interface E2bSession {
   readonly sandboxId: string;
+  readonly trafficAccessToken?: string;
+  host(port: number): string;
   runCommand(command: string, opts?: E2bRunOpts): Promise<E2bCommandResult>;
 
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
@@ -64,6 +69,8 @@ interface E2bCreateOpts {
   metadata: Record<string, string>;
   timeoutMs?: number;
   autoPause?: boolean;
+  autoResume?: boolean;
+  privateTraffic?: boolean;
   fromSnapshot?: string;
 }
 
@@ -113,6 +120,13 @@ const DEFAULT_TTL_MS = 15 * 60_000;
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const E2B_PRO_MAX_LIFETIME_MS = 24 * 3600_000;
 export const E2B_EXEC_MARGIN_MS = 60_000;
+
+export async function runE2bScript(session: E2bSession, script: string, timeoutSec: number): Promise<ExecResult> {
+  const r = await session.runCommand(`timeout ${timeoutSec} sh -c ${shq(script)}`, {
+    timeoutMs: timeoutSec * 1000 + 30_000,
+  });
+  return { stdout: r.stdout, stderr: r.stderr, code: r.exitCode, timedOut: r.exitCode === 124 };
+}
 const ALL_TRAFFIC = "0.0.0.0/0";
 
 const HOSTNAME_MATCHED_PORTS: Record<string, string> = { "http:": "80", "https:": "443" };
@@ -204,6 +218,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
     };
     return {
       sandboxId: sbx.sandboxId,
+      ...(sbx.trafficAccessToken ? { trafficAccessToken: sbx.trafficAccessToken } : {}),
+      host: (port) => sbx.getHost(port),
       async runCommand(command, runOpts): Promise<E2bCommandResult> {
         const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
         await cover(timeoutMs);
@@ -303,8 +319,13 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         ...common,
         timeoutMs,
         metadata: createOpts.metadata,
-        lifecycle: { onTimeout: createOpts.autoPause ? "pause" : "kill", autoResume: false },
-        ...(network ? { network } : {}),
+        lifecycle: {
+          onTimeout: createOpts.autoPause ? "pause" : "kill",
+          autoResume: !!(createOpts.autoPause && createOpts.autoResume),
+        },
+        ...(network || createOpts.privateTraffic
+          ? { network: { ...network, ...(createOpts.privateTraffic ? { allowPublicTraffic: false } : {}) } }
+          : {}),
       });
       return wrap(lib, sbx, timeoutMs);
     },

@@ -240,15 +240,11 @@ test("governance renders simple settings as compact rows with contextual actions
 });
 
 test("default runtime controls save reasoning level and fast mode", () => {
-  for (const id of ["base-effort", "base-fast-mode", "base-fast-mode-control"])
-    assert.match(html, new RegExp(`id="${id}"`));
   loadSettings(
     {
       baseModelOptions: [{ id: "a" }],
       baseModelDefault: "a",
       runtime: { harnessId: "pi", modelId: "a", effortLevel: "high", fastMode: true },
-      thinkingLevelsByHarness: { pi: ["auto", "high"] },
-      fastModeHarnessIds: ["pi"],
       fastModeModelIds: ["a"],
     },
     "org:test",
@@ -383,6 +379,22 @@ test("governance credential editor previews effective capability and uses an in-
   const state = new CredentialState();
   state.begin({ slug: "test", name: "Test", host: "example.com", updatedAt: 42 });
   assert.equal(state.collect().expectedUpdatedAt, 42);
+  const fixed = new CredentialState();
+  fixed.begin({
+    slug: "versioned",
+    name: "Versioned",
+    host: "api.example.com",
+    updatedAt: 7,
+    injection: { header: "x-api-key", scheme: "Token", actor: true, headers: { "x-api-version": "2025-11-01" } },
+  });
+  fixed.draft.secret = "rotated";
+  fixed.draft.host = "api2.example.com";
+  assert.deepEqual(fixed.collect().injection, {
+    actor: true,
+    headers: { "x-api-version": "2025-11-01" },
+    header: "x-api-key",
+    scheme: "Token",
+  });
   assert.match(html, /it remains an edit and cannot recreate the credential/);
   assert.match(html, /latest state could not be loaded\. Refresh the page before deleting/);
   assert.match(html, /latest revision could not be loaded\. Your draft is preserved/);
@@ -428,7 +440,6 @@ test("admin parity views expose the requested card groups and real navigation ac
     "Ambient reply policy",
     "Egress policy",
     "External Slack audience",
-    "Conversation runtime",
     "Custom providers",
     "Enabled models",
     "Organization SOUL",

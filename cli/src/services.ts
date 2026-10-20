@@ -1,4 +1,4 @@
-export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth"] as const;
+export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth", "egress-proxy"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
 export const isServiceName = (s: string): s is ServiceName => (SERVICE_NAMES as readonly string[]).includes(s);
@@ -86,13 +86,14 @@ interface FlyServiceSpec {
   stackKeys: string[];
   deployFlags: string[];
   flycast?: boolean;
+  publicIngress?: boolean;
 }
 
 export interface ServiceDef {
   name: ServiceName;
   readiness: RegExp;
   order: number;
-  dev: {
+  dev?: {
     cwd: string;
     entry: string[];
     portEnv?: "PORT";
@@ -105,6 +106,7 @@ export interface ServiceDef {
     hostPortOffset?: number;
   };
   fly?: FlyServiceSpec;
+  tcpIngress?: { healthCheck: string[] };
 }
 
 export interface BrandEnv {
@@ -319,6 +321,26 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
       ],
       deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
       flycast: true,
+    },
+  },
+  "egress-proxy": {
+    name: "egress-proxy",
+    readiness: /starting main dispatch loop/,
+    order: 50,
+    docker: { image: "egress-proxy", internalPort: 48080, portEnv: "PORT", hostPortOffset: 4 },
+    fly: {
+      managed: (s) => pluginWiring("egress-proxy", s),
+      stackKeys: [],
+      deployFlags: ["--ha=false"],
+      publicIngress: true,
+    },
+    tcpIngress: {
+      healthCheck: [
+        "CMD",
+        "node",
+        "-e",
+        "require('net').connect(48081,'127.0.0.1').on('connect',()=>require('http').get({socketPath:'/tmp/envoy-admin.sock',path:'/ready'},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))).on('error',()=>process.exit(1))",
+      ],
     },
   },
 };

@@ -67,6 +67,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
         { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", provider: "anthropic" },
         { id: "claude-sonnet-5", name: "Claude Sonnet 5", provider: "anthropic" },
+        { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", provider: "anthropic" },
         { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
@@ -74,6 +75,7 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "gpt-6-astra", name: "GPT-6 Astra", provider: "openai" },
         { id: "gpt-6-astra-ultrafast", name: "GPT-6 Astra · Ultrafast (6× cost)", provider: "openai" },
         { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", provider: "openai" },
+        { id: "gpt-6.1-sol-ultrafast", name: "GPT-6.1 Sol · Ultrafast (6× cost)", provider: "openai" },
         { id: "gpt-6-sol", name: "GPT-6 Sol", provider: "openai" },
         { id: "gpt-6-luna", name: "GPT-6 Luna", provider: "openai" },
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
@@ -350,7 +352,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     }),
   );
   try {
-    srv.built.config.setBaseModel("org:default-org", "anthropic/claude-sonnet-4.5");
+    await srv.built.config.setBaseModel("org:default-org", "anthropic/claude-sonnet-4.5");
     const turn = (threadRef: string, model: string) =>
       srv.built.app.turn({
         surface: "web",
@@ -364,7 +366,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     const persisted = await turn("web:alice:persisted-openrouter-model", "anthropic/claude-sonnet-4.5");
     assert.equal(persisted.status, "queued");
 
-    await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
+    await srv.built.config.setRuntimeSelection("personal:alice", {
       harnessId: "mock",
       modelId: "openai/gpt-oss-20b:free",
     });
@@ -406,7 +408,7 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
 test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
   const srv = start({ harness: "mock" });
   try {
-    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-5" });
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-5" });
     const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
     assert.equal(response.status, 200);
     const data = (await response.json()) as {
@@ -421,7 +423,6 @@ test("admin scope keeps the selected runtime model visible when its provider is 
         id: "claude-opus-5",
         name: "Claude Opus 5",
         provider: "anthropic",
-        effortLevels: ["auto", "default", "adaptive", "low", "medium", "high", "xhigh", "max", "ultracode"],
       },
     ]);
   } finally {
@@ -429,38 +430,9 @@ test("admin scope keeps the selected runtime model visible when its provider is 
   }
 });
 
-test("managed Pi keys do not advertise unsupported OpenCode or browser credentials", async () => {
-  const srv = start({ harness: "opencode" });
-  try {
-    for (const provider of ["anthropic", "openai"] as const) {
-      const response = await fetch(`${srv.base}/v1/admin/model-providers/${provider}`, {
-        method: "PUT",
-        headers: ADMIN,
-        body: JSON.stringify({ apiKey: `managed-${provider}-key` }),
-      });
-      assert.equal(response.status, 200);
-    }
-    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
-    assert.equal(response.status, 200);
-    const data = (await response.json()) as {
-      baseModelOptions: Array<{ id: string }>;
-      browseModelOptions: Array<{ id: string }>;
-      modelsByHarness: Record<string, Array<{ id: string }>>;
-    };
-    assert.deepEqual(data.baseModelOptions, []);
-    assert.deepEqual(data.browseModelOptions, []);
-    assert.ok(data.modelsByHarness.pi!.some((model) => model.id === "gpt-5.6-sol"));
-    assert.ok(!data.modelsByHarness.opencode!.some((model) => model.id === "gpt-5.6-sol"));
-  } finally {
-    await srv.close();
-  }
-});
-
-test("web turns gate the requested and scope-selected harness against its real key source", async () => {
+test("web turns gate the requested harness against approval and its real key source", async () => {
   const srv = start({ harness: "pi" });
   try {
-    await srv.built.modelCredentials.set("openai", "managed-openai-key", "admin-alice");
-    srv.built.config.setApprovedHarnesses(["pi", "opencode"]);
     const turn = (threadRef: string, overrides: { harness?: string; model?: string } = {}) =>
       srv.built.app.turn({
         surface: "web",
@@ -471,17 +443,13 @@ test("web turns gate the requested and scope-selected harness against its real k
         ...overrides,
       });
 
-    const requested = await turn("web:alice:requested-opencode", { harness: "opencode", model: "gpt-5.6-sol" });
-    assert.equal(requested.status, "refused");
-    assert.match(requested.reason ?? "", /provider isn't configured/);
+    const legacy = await turn("web:alice:legacy", { harness: "opencode", model: "gpt-5.6-sol" });
+    assert.equal(legacy.status, "refused");
+    assert.match(legacy.reason ?? "", /runtime opencode is not approved/);
 
-    await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
-      harnessId: "opencode",
-      modelId: "gpt-5.6-sol",
-    });
-    const configured = await turn("web:alice:configured-opencode");
-    assert.equal(configured.status, "refused");
-    assert.match(configured.reason ?? "", /provider isn't configured/);
+    const unkeyed = await turn("web:alice:unkeyed", { harness: "pi", model: "gpt-5.6-sol" });
+    assert.equal(unkeyed.status, "refused");
+    assert.match(unkeyed.reason ?? "", /provider isn't configured/);
   } finally {
     await srv.close();
   }
@@ -552,8 +520,8 @@ test("surface-config respects an admin-disabled environment provider", async () 
   }
 });
 
-test("surface-config reports Codex ChatGPT OAuth without making it a Pi credential", async () => {
-  const srv = start({ harness: "codex", codexAuthFile: "/tmp/codex-auth.json" });
+test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
+  const srv = start({ harness: "pi", codexAuthFile: "/tmp/codex-auth.json" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);
@@ -618,10 +586,9 @@ test("admin model credentials survive a second app instance on the same durable 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
-    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
-    await srv.built.config.flushScope("org:default-org");
-    await srv.built.config.setRuntimeSelectionLatest("personal:alice", {
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setRuntimeSelection("personal:alice", {
       harnessId: "mock",
       modelId: "claude-haiku-4-5",
     });
@@ -641,7 +608,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
     const explicitOrgDefault = await turn("web:alice:org-default", "claude-opus-4-8");
     assert.equal(explicitOrgDefault.status, "queued");
 
-    await srv.built.config.setRuntimeSelectionLatest("personal:alice", null);
+    await srv.built.config.setRuntimeSelection("personal:alice", null);
     const inherited = await turn("web:alice:inherited");
     assert.equal(inherited.status, "queued");
   } finally {
@@ -652,9 +619,8 @@ test("a stored scope runtime remains usable outside the legacy configured picker
 test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
-    srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
     const rejected = await srv.built.app.turn({
       surface: "loop",
       actor: { externalId: "alice" },
@@ -677,8 +643,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
 test("company runtime reads exclude personal-only models without changing the regular picker", async () => {
   const srv = start({ anthropicApiKey: undefined, openaiApiKey: undefined });
   try {
-    srv.built.config.setApprovedHarnesses(["pi"]);
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setApprovedHarnesses(["pi"]);
     await srv.built.userModelCredentials.setApiKey("alice", "openai", "synthetic-openai");
     await srv.built.config.setPersonalModelAuth("alice", true, "openai");
     const url = `${srv.base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`;

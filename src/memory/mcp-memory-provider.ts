@@ -1,4 +1,6 @@
-import { mcpResultText, type McpClient, type McpToolResult } from "../mcp/mcp-client.ts";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
+import { withTimeout } from "../util/async.ts";
 import type { MemoryService } from "./memory-service.ts";
 
 export interface McpMemoryOperation {
@@ -17,22 +19,7 @@ export interface McpMemoryOperation {
   timeoutMs: number;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`memory provider timed out after ${timeoutMs}ms`)), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-function resultText(result: McpToolResult): string {
+function resultText(result: CallToolResult): string {
   const text = mcpResultText(result);
   if (text) return text;
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
@@ -45,12 +32,17 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     if (actorId) args[op.actorArg ?? "acting_user"] = actorId;
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const text = resultText(await withTimeout(op.client.callTool(op.tool, args), op.timeoutMs));
+    const text = resultText(
+      await withTimeout(() => op.client.callTool(op.tool, args), op.timeoutMs, "memory provider"),
+    );
     return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
   };
 
   return {
-    recall: (scopeId, context) => read(scopeId, context?.query ?? "", context?.actorId, context?.maxChars),
+    async recall(scopeId, context) {
+      const text = (await read(scopeId, context?.query ?? "", context?.actorId, context?.maxChars)).trim();
+      return text ? [{ text, score: 0.2 }] : [];
+    },
 
     async capture(scopeId, facts, at, author, context) {
       const op = opts.write;
@@ -64,7 +56,7 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
       const actorId = context?.actorId ?? author;
       if (actorId) args[op.actorArg ?? "acting_user"] = actorId;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      await withTimeout(op.client.callTool(op.tool, args), op.timeoutMs);
+      await withTimeout(() => op.client.callTool(op.tool, args), op.timeoutMs, "memory provider");
       return facts.length;
     },
 
@@ -74,9 +66,5 @@ export function createMcpMemoryProvider(opts: { read: McpMemoryOperation; write?
     },
 
     read: (scopeId) => read(scopeId, ""),
-
-    async replace() {
-      throw new Error("MCP memory providers do not support notebook replacement");
-    },
   };
 }

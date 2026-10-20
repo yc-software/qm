@@ -24,6 +24,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -50,9 +51,11 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario() {
+function buildScenario(interruptAfterToolResult = false) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
+  const environments: Array<string | undefined> = [];
+  const sandbox = fakeSandbox();
   const harness = defineHarness(
     {
       id: "pi",
@@ -65,36 +68,31 @@ function buildScenario() {
       async runTurn(turn) {
         turns.push(turn.input);
         continued.push(turn.continueTurn);
-        const userEntry = await turn.emit({
-          type: "user",
-          payload: { text: turn.input },
-          scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
-        });
+        environments.push(turn.environment);
+        if (!turn.continueTurn)
+          await turn.emit({
+            type: "user",
+            payload: { text: turn.input },
+            scopeLabel: turn.scopeLabel,
+          });
+        if (interruptAfterToolResult && turns.length === 1) {
+          await turn.emit({
+            type: "tool_call",
+            payload: { tool: "execute", callId: "c1", command: "ls" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "execute", callId: "c1", result: "a.txt" },
+            scopeLabel: turn.scopeLabel,
+          });
+          throw new Error("interrupted after recording a tool result");
+        }
         const reply = "it runs on this conversation's computer";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
+        await turn.emit({
           type: "assistant",
           payload: { text: reply },
           scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { subturnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
         });
         return { reply, modelCalls: 1 };
       },
@@ -109,20 +107,21 @@ function buildScenario() {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     runs,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: fakeSandbox(),
+    sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "retry-replay-deploy"),
@@ -146,7 +145,7 @@ function buildScenario() {
       (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
     );
   };
-  return { orchestrator, sessions, runs, turns, continued, input, asks };
+  return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
 }
 
 test("a retry replays the answer the previous attempt recorded instead of asking again", async () => {
@@ -288,24 +287,47 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
 });
 
 test("a resume whose recorded work ends at a tool result asks the harness to continue the assistant turn", async () => {
-  const { orchestrator, sessions, runs, turns, continued, input, asks } = buildScenario();
+  const { orchestrator, runs, turns, continued, environments, input, asks } = buildScenario(true);
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
-  const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
-    { type: "tool_result", payload: { callId: "c1", result: "a.txt" } },
-  ]);
-  await runs.noteTurnUserSeq(run.id, marker);
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after recording a tool result/,
+  );
+  const original = (await asks())[0]!;
+  assert.ok((original.payload as { environmentSnapshot?: unknown }).environmentSnapshot);
+  assert.match(environments[0]!, /## Where you are/);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
-  assert.deepEqual(continued, [true], "the harness is told the tape ends at a recorded tool result");
-  assert.match(turns[0]!, /^\(system note:/, "the note still travels as the fallback input");
+  assert.deepEqual(continued, [undefined, true], "unchanged inventories preserve assistant continuation");
+  assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
+  assert.equal(turns[1], ASK, "only the original request travels, as the harness's fallback");
   assert.equal((await asks()).length, 1);
 });
 
-test("a resume whose last tool call has no recorded result is not asked to continue", async () => {
-  const { orchestrator, sessions, runs, continued, input } = buildScenario();
+test("a changed inventory on retry reaches the model instead of continuing past the update", async () => {
+  const { orchestrator, runs, turns, continued, environments, sandbox, input, asks } = buildScenario(true);
+  sandbox.profile.spec = { os: "Old Linux" };
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(
+    orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })),
+    /interrupted after recording a tool result/,
+  );
+  assert.match(environments[0]!, /Old Linux/);
+  sandbox.profile.spec = { os: "New Linux" };
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, undefined], "the new user message carries changed inventory");
+  assert.equal(turns[1], "", "the request is not re-sent with the changed inventory");
+  assert.match(environments[1]!, /Environment changes/);
+  assert.match(environments[1]!, /New Linux/);
+  assert.doesNotMatch(environments[1]!, /Old Linux|## Where you are/);
+  assert.equal((await asks()).length, 1);
+});
+
+test("a resume whose last tool call has no recorded result settles it and does not re-send the request", async () => {
+  const { orchestrator, sessions, runs, turns, continued, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
     { type: "user", payload: { text: ASK } },
@@ -315,7 +337,13 @@ test("a resume whose last tool call has no recorded result is not asked to conti
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
-  assert.deepEqual(continued, [undefined]);
+  assert.deepEqual(continued, [undefined], "the seeded turn has no recorded environment, so its context is sent");
+  assert.equal(turns[0], "");
+  const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
+    (e) => e.type === "tool_result",
+  );
+  assert.ok(settled);
+  assert.match(String((settled.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
 });
 
 test("a first attempt and a no-work retry are never asked to continue", async () => {
@@ -325,4 +353,28 @@ test("a first attempt and a no-work retry are never asked to continue", async ()
   const again = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   await orchestrator.handleTurn(input(ASK, { runId: again.id, attempt: 2 }));
   assert.deepEqual(continued, [undefined, undefined]);
+});
+
+test("a retry resumes its own interrupted turn even when the run never recorded its boundary", async () => {
+  const { orchestrator, runs, continued, input, asks } = buildScenario(true);
+  runs.noteTurnUserSeq = async () => false;
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 1 })), /interrupted/);
+
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, true]);
+  assert.equal((await asks()).length, 1);
+});
+
+test("a retry does not resume another run's interrupted turn that asked the same thing", async () => {
+  const { orchestrator, runs, continued, input, asks } = buildScenario(true);
+  const first = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  await assert.rejects(orchestrator.handleTurn(input(ASK, { runId: first.id, attempt: 1 })), /interrupted/);
+
+  const second = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
+  const retry = await orchestrator.handleTurn(input(ASK, { runId: second.id, attempt: 2 }));
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(continued, [undefined, undefined]);
+  assert.equal((await asks()).length, 2);
 });

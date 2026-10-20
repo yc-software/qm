@@ -1,25 +1,22 @@
+import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
   parseSecurityScreenVerdict,
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
-import type { TaskStatus, TaskStore } from "../tasks/task-store.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { rehydrateOpenGoal } from "./goal.ts";
+import { goalWorkFromEntries } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
-import { tapeCheckpointPayload, tapeEntryMirrorRecord, type NewTapeRecord } from "../sessions/session-store.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 
 export interface HarnessToolPlumbing {
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
-  mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
   execTimeoutMs?: number;
@@ -36,76 +33,71 @@ export type BridgedTool = {
   execute(
     callId: string,
     args: unknown,
-  ): Promise<{ content?: Array<{ type?: string; text?: string }>; terminate?: boolean }>;
+  ): Promise<{
+    content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>;
+    terminate?: boolean;
+  }>;
 };
 
 export interface SteerIntake {
   text: string;
+  prompt?: string;
   ts?: string;
   attachments?: HarnessTurnInput["attachments"];
+  images?: HarnessTurnInput["images"];
+  author?: string;
   acknowledge?: () => Promise<void>;
 }
 
-export async function recordSteerIntake(
-  turn: HarnessTurnInput,
-  steer: SteerIntake,
-): Promise<Pick<NewTapeRecord, "entrySeq" | "meta">> {
-  const entry = await turn.emit({
+export function imageRefs(images: HarnessTurnInput["images"]): { images?: ReplayImageRef[] } {
+  if (!images?.length) return {};
+  return {
+    images: images.map((image) => ({
+      mimeType: image.mimeType,
+      ...(image.artifactId ? { artifactId: image.artifactId } : {}),
+    })),
+  };
+}
+
+export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerIntake): Promise<void> {
+  await turn.emit({
     type: "user",
     payload: {
       text: steer.text,
+      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.ts ? { ts: steer.ts } : {}),
       steered: true,
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
+      ...imageRefs(steer.images),
     },
     scopeLabel: turn.scopeLabel,
+    ...(steer.author ? { author: steer.author } : {}),
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
-  return {
-    entrySeq: entry.seq,
-    meta: {
-      bareText: steer.text,
-      ...(steer.ts ? { ts: steer.ts } : {}),
-      ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
-      entryCreatedAt: entry.createdAt,
-    },
-  };
 }
 
-export async function tapeReplyCheckpoint(
-  turn: Pick<HarnessTurnInput, "tape" | "scopeLabel">,
-  entry: Pick<SessionEntry, "seq" | "createdAt" | "payload">,
-): Promise<void> {
-  if (!turn.tape) return;
-  await turn.tape({
-    kind: "annotation",
-    payload: tapeCheckpointPayload("subturnEnd", { type: "assistant", payload: entry.payload, at: entry.createdAt }),
-    scopeLabel: turn.scopeLabel,
-    entrySeq: entry.seq,
-  });
-}
+const STOPPED_FALLBACK_REASON = "unexpectedly";
 
-export async function recordStoppedReply(turn: HarnessTurnInput, text: string): Promise<SessionEntry | null> {
+export async function recordStoppedTurn(
+  turn: HarnessTurnInput,
+  partial: string,
+  reason: string = STOPPED_FALLBACK_REASON,
+  replay: Record<string, unknown> = {},
+): Promise<SessionEntry | null> {
   if (turn.shutdown?.aborted) return null;
-  return turn.emit({ type: "assistant", payload: { text, stopped: true }, scopeLabel: turn.scopeLabel });
-}
-
-export function withTapedEntryMirrors(turn: HarnessTurnInput): HarnessTurnInput {
-  const tape = turn.tape;
-  if (!tape) return turn;
-  const emit = turn.emit;
-  return {
-    ...turn,
-    emit: async (entry) => {
-      const saved = await emit(entry);
-      try {
-        await tape(tapeEntryMirrorRecord(saved));
-      } catch (error) {
-        swallow("harness: entry mirror", error);
-      }
-      return saved;
-    },
-  };
+  const answer = partial.trim()
+    ? await turn.emit({
+        type: "assistant",
+        payload: { text: partial, stopped: true, ...replay },
+        scopeLabel: turn.scopeLabel,
+      })
+    : null;
+  const note = await turn.emit({
+    type: "system",
+    payload: { kind: TURN_STOPPED_KIND, reason },
+    scopeLabel: turn.scopeLabel,
+  });
+  return note ?? answer;
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
@@ -117,12 +109,16 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     pausedOnApproval: false,
     silentRequested: false,
     pollFire: Boolean(turn.pollFire),
-    goal: turn.goal ?? rehydrateOpenGoal(turn.history),
+    goal: turn.goal ?? null,
+    ...(turn.goalMeter ? { goalMeter: turn.goalMeter } : {}),
+    ...(turn.goalContinuation || turn.continueTurn ? { goalRound: 1 } : {}),
+    saveGoal: turn.saveGoal,
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
     screenToolResult: turn.screenToolResult,
-    verifyGoal: turn.verifyGoal,
+    governGoal: turn.governGoal,
+    goalRecentWork: () => goalWorkFromEntries(turn.history.slice(-40)),
     toolApprovalGate: turn.toolApprovalGate,
     shutdown: turn.shutdown,
   };
@@ -133,7 +129,7 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
     scratchExec: opts.scratchExec,
     ownerAuthExec: opts.ownerAuthExec,
     reachExec: opts.reachExec,
-    ...(opts.mcpTools ? { mcpTools: opts.mcpTools } : {}),
+    ...(turn?.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
     controlTools: opts.controlTools,
     sandboxResources: opts.sandboxResources,
     execTimeoutMs: opts.execTimeoutMs,
@@ -160,9 +156,7 @@ export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
   const action = args && typeof args === "object" ? (args as Record<string, unknown>).action : undefined;
   if (name === "apps") return action === "publish";
   if (action === "read" || action === "write") return true;
-  return (
-    action === "share" && typeof (args as Record<string, unknown>).path === "string" && !("id" in (args as object))
-  );
+  return false;
 }
 
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
@@ -256,23 +250,14 @@ export async function resumeInterruptedToolCall(
   };
 }
 
-export function bridgedToolText(result: Awaited<ReturnType<BridgedTool["execute"]>>): string {
-  return (result.content ?? [])
-    .filter((item): item is { type?: string; text: string } => typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n");
-}
-
-export async function transitionTask(
-  store: TaskStore | undefined,
-  id: string,
-  expected: TaskStatus,
-  next: TaskStatus,
-  runId: string,
-): Promise<void> {
-  if (!store) return;
-  const updated = await store.transitionStatus(id, expected, next, runId);
-  if (!updated) throw new Error(`task ${id} was not ${expected} while transitioning to ${next}`);
+export function bridgedToolContent(result: Awaited<ReturnType<BridgedTool["execute"]>>) {
+  return (result.content ?? []).flatMap<
+    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+  >((item) => {
+    if (item.type === "image" && item.data && item.mimeType)
+      return [{ type: "image", data: item.data, mimeType: item.mimeType }];
+    return typeof item.text === "string" ? [{ type: "text", text: item.text }] : [];
+  });
 }
 
 export type OneShotRunner = (

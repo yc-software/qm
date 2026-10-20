@@ -1,9 +1,11 @@
 import { isComposioHost } from "../credentials/keychain.ts";
+import { errMessage } from "../util/errors.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import {
   credentialInjectionError,
+  credentialRequestHeaders,
   type DecryptedServiceCredential,
   type ServiceCredentialReader,
 } from "../credentials/keychain.ts";
@@ -80,11 +82,15 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
-  const injHeader = rec.injection?.header || "Authorization";
-  const rawScheme = rec.injection?.scheme ?? "Bearer ";
-  const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
-  return [injHeader, `${injScheme}${rec.secret}`];
+export function brokerRequestHeaders(
+  rec: DecryptedServiceCredential,
+  caller: Record<string, string>,
+): Record<string, string> {
+  const injected = credentialRequestHeaders(rec);
+  const owned = new Set(Object.keys(injected).map((name) => name.toLowerCase()));
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(caller)) if (!owned.has(name.toLowerCase())) headers[name] = value;
+  return { ...headers, ...injected };
 }
 
 type CredentialGrant =
@@ -198,14 +204,31 @@ export async function brokerCredentialCall(opts: {
     return deny(403, "path_not_allowed", "url path is not in the credential's allowlist", rec.host);
   }
 
-  const headers: Record<string, string> = {};
+  if (rec.maxRequestsPerDay !== undefined) {
+    let admitted: boolean;
+    try {
+      if (!opts.usage) throw new Error("no usage ledger");
+      admitted = await opts.usage.admitDailyCall(slug, rec.maxRequestsPerDay);
+    } catch (err) {
+      console.error(`[credential-broker] daily cap check failed for ${slug}:`, errMessage(err));
+      return deny(503, "daily_cap_unavailable", "the credential's daily request cap could not be checked", rec.host);
+    }
+    if (!admitted)
+      return deny(
+        429,
+        "daily_cap_reached",
+        `this credential has used its ${rec.maxRequestsPerDay} requests for today (UTC); it resets at 00:00 UTC`,
+        rec.host,
+      );
+  }
+
+  const caller: Record<string, string> = {};
   if (body.headers && typeof body.headers === "object") {
     for (const [k, v] of Object.entries(body.headers as Record<string, unknown>)) {
-      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) headers[k] = v;
+      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
     }
   }
-  const [injHeader, injValue] = brokerCredentialAuthHeader(rec);
-  headers[injHeader] = injValue;
+  const headers = brokerRequestHeaders(rec, caller);
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 
   let resp: BrokerFetchResponse;

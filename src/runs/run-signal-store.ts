@@ -15,6 +15,7 @@ export interface RunSignal {
   queuedRunId?: string;
   callId?: string;
   result?: ClientToolResult;
+  reason?: string;
 }
 
 export interface RunSignalStore {
@@ -157,7 +158,7 @@ const SIGNAL_POLL_MS = 5_000;
 
 export interface SignalPollHandlers {
   onSteer(text: string, ts?: string, request?: TurnRequest, acknowledge?: () => Promise<void>): Promise<void | boolean>;
-  onAbort(): Promise<void>;
+  onAbort(reason?: string): Promise<void>;
 }
 
 export function startSignalPoll(
@@ -185,7 +186,7 @@ export function startSignalPoll(
         try {
           if (s.kind === "abort") {
             if (!abortDelivered) {
-              await handlers.onAbort();
+              await handlers.onAbort(s.reason);
               abortDelivered = true;
             }
           } else if (!declined.has(id)) {

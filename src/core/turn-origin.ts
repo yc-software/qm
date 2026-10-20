@@ -9,7 +9,6 @@ type LegacyTurnOrigin = Pick<
   | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
-  | "ownerResourcesRequireOpen"
   | "unprompted"
   | "liveActor"
 >;
@@ -33,9 +32,6 @@ export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: 
       ...(screenData !== undefined ? { screenData } : {}),
       ...((typed.destination ?? legacy.destination) ? { destination: typed.destination ?? legacy.destination! } : {}),
       ...(typed.useOwnerKeychain || legacy.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
-      ...(typed.ownerResourcesRequireOpen || legacy.ownerResourcesRequireOpen
-        ? { ownerResourcesRequireOpen: true }
-        : {}),
     };
   }
   if (typed.kind === "human" && legacy.kind === "human") {
@@ -62,7 +58,6 @@ export function normalizeTurnOrigin(input: LegacyTurnOrigin): TurnOrigin {
       ...(input.securityScreenData !== undefined ? { screenData: input.securityScreenData } : {}),
       ...(input.triggerDestination ? { destination: input.triggerDestination } : {}),
       ...(input.ownerKeychainUnion === true ? { useOwnerKeychain: true } : {}),
-      ...(input.ownerResourcesRequireOpen === true ? { ownerResourcesRequireOpen: true } : {}),
     };
   }
   if (input.unprompted === true) {
@@ -102,7 +97,6 @@ export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnO
         ...(origin.screenData !== undefined ? { securityScreenData: origin.screenData } : {}),
         ...(origin.destination ? { triggerDestination: origin.destination } : {}),
         ...(origin.useOwnerKeychain ? { ownerKeychainUnion: true } : {}),
-        ...(origin.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
       };
     case "direct":
       return {};
@@ -111,4 +105,31 @@ export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnO
 
 export function isPersonAuthored(kind: TurnOrigin["kind"]): boolean {
   return kind === "human" || kind === "direct";
+}
+
+export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "delegatingRunId">): boolean {
+  return !!input.sessionSenderId || !!input.delegatingRunId;
+}
+
+export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
+  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
+  if (origin.kind === "human") return { kind: "human" };
+  if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
+  return origin;
+}
+
+export function desktopClientForTurn(
+  input: Partial<LegacyTurnOrigin> &
+    Partial<
+      Pick<TurnRequest, "origin" | "surface" | "desktopClientId" | "proactiveOpener" | "spawned" | "botActor">
+    > & { attempt?: number },
+): string | undefined {
+  return resolveTurnOrigin(input).kind === "human" &&
+    input.surface === "web" &&
+    !input.proactiveOpener &&
+    !input.spawned &&
+    !input.botActor &&
+    (input.attempt ?? 1) <= 1
+    ? input.desktopClientId
+    : undefined;
 }

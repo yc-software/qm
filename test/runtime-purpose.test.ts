@@ -14,16 +14,16 @@ const SCOPE = "personal:alice";
 const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };
 const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
-function setup() {
+async function setup() {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "codex", "claude"]);
-  config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
-  config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
+  await config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
   return config;
 }
 
-test("unset categories preserve legacy conversation, child, and cron behavior", () => {
-  const config = setup();
+test("unset categories preserve legacy conversation, child, and cron behavior", async () => {
+  const config = await setup();
   const legacy = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
   assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "subagent"), legacy);
   assert.deepEqual(
@@ -44,7 +44,7 @@ test("cron and loop entry points defer legacy injections until runtime resolutio
 });
 
 test("each purpose ignores conversation overrides and explicit fields including false win", async () => {
-  const config = setup();
+  const config = await setup();
   const conversation = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
   for (const purpose of ["cron", "subagent", "fallback"] as const) {
     await config.setPurposeRuntime(purpose, category);
@@ -92,10 +92,10 @@ test("durable purpose defaults refresh between child followups", async () => {
 });
 
 test("configured purpose fails closed for unapproved or incompatible merged choices", async () => {
-  const config = setup();
+  const config = await setup();
   await config.setPurposeRuntime("cron", category);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "opencode" }, "cron"),
+    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "mock" }, "cron"),
     /not approved/,
   );
   assert.throws(
@@ -106,14 +106,12 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
     () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, "cron"),
     /fast mode is not supported/,
   );
-  config.setApprovedHarnesses(["claude"]);
+  await config.setApprovedHarnesses(["claude"]);
   assert.throws(() => resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"), /not approved/);
 });
 
 test("runtime get and inherit use job execution defaults, and handoffs survive retries", async () => {
-  const config = setup();
-  await config.flushScope(ORG);
-  await config.flushScope(SCOPE);
+  const config = await setup();
   await config.setPurposeRuntime("cron", category);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: fallback.modelId },
@@ -158,7 +156,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     },
   ] as SessionEntry[];
   const restored = recoveredRuntime(entries, "run", "alice");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored, "cron"), {
+  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",
@@ -168,7 +166,7 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
 });
 
 test("scope inheritance in a human child continuation retains its configured purpose", async () => {
-  const config = setup();
+  const config = await setup();
   await config.setPurposeRuntime("subagent", category);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: fallback.modelId },
@@ -190,10 +188,9 @@ test("scope inheritance in a human child continuation retains its configured pur
 });
 
 test("configured categories remain selectable outside the conversation picker without weakening explicit restrictions", async () => {
-  const config = setup();
+  const config = await setup();
   await config.setPurposeRuntime("cron", category);
-  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  await config.flushScope(ORG);
+  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },
@@ -217,10 +214,9 @@ test("configured categories remain selectable outside the conversation picker wi
 });
 
 test("personal-account human child inheritance recognizes a configured purpose outside the chat picker", async () => {
-  const config = setup();
+  const config = await setup();
   await config.setPurposeRuntime("subagent", category);
-  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  await config.flushScope(ORG);
+  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: fallback.modelId },
     { authorizesCapabilityScope: async () => true },

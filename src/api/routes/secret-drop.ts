@@ -13,7 +13,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
-import { swallow } from "../../util/errors.ts";
+import { reportFailureAs, swallow } from "../../util/errors.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -105,7 +105,7 @@ function dropScopeAuthorized(ctx: ApiCtx, rec: SecretDropRecord, claims?: Capabi
       ...(claims?.liveActor ? { liveActor: true } : {}),
       ...(claims?.members ? { members: claims.members } : {}),
     })
-    .catch(() => false);
+    .catch(reportFailureAs("secret drop: conversation membership check", false));
 }
 
 async function dropLinkClaims(
@@ -308,10 +308,9 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
   }
   const attestation = linkClaims === true ? undefined : linkClaims;
   if (!(await dropScopeAuthorized(ctx, peeked.rec, attestation))) {
-    await deps.secretDrops.redeem(params.id!).catch(() => null);
     return sendJson(res, 409, {
       error: "scope_changed",
-      message: "conversation membership changed — ask the agent for a fresh link",
+      message: "couldn't confirm you're still in this conversation — try again, or ask the agent for a fresh link",
     });
   }
   const dropFieldDefs = peeked.rec.fields;
@@ -378,6 +377,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
           ...(drop.destination ? { destination: drop.destination } : {}),
           ...(drop.threadRef ? { threadRef: drop.threadRef } : {}),
           ...(grantId ? { grantId } : {}),
+          ...(meta.credentialHandle ? { credentialHandle: meta.credentialHandle } : {}),
           granted: !!grantId,
           ...(pending.length ? { pendingSiblings: pending } : {}),
         });
@@ -391,7 +391,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
 }
 
 export const secretDropRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/keychain/drops", auth: "either", handle: mintDrop },
+  { method: "POST", path: "/v1/keychain/drops", actor: "system", auth: "either", handle: mintDrop },
   { method: "GET", path: "/v1/keychain/drops/:id/form", auth: "source", handle: dropForm },
-  { method: "POST", path: "/v1/keychain/drops/:id", auth: "source", handle: redeemDrop },
+  { method: "POST", path: "/v1/keychain/drops/:id", actor: "system", auth: "source", handle: redeemDrop },
 ];

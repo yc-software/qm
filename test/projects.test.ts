@@ -23,10 +23,12 @@ import {
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 test("ProjectStore atomically maintains a managed-group roster", async () => {
   let at = 10;
-  const projects = createProjectStore(undefined, { id: () => "p1", now: () => at++ });
+  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "p1", now: () => at++ });
   const project = await projects.create({ name: "  Launch Cohort  ", ownerId: "owner" });
   const initialVersion = await projects.version(projectGroupRef(project.id));
   assert.equal(project.name, "Launch Cohort");
@@ -84,7 +86,7 @@ test("session lists check each project once per request and observe membership c
 
 test("ProjectStore rename is owner-only and cleans the name", async () => {
   let at = 100;
-  const projects = createProjectStore(undefined, { id: () => "pr", now: () => at++ });
+  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "pr", now: () => at++ });
   const project = await projects.create({ name: "Before", ownerId: "owner" });
   const versionBefore = await projects.version(projectGroupRef(project.id));
   assert.equal((await projects.rename(project.id, "mallory", "Hijacked")).status, "forbidden");
@@ -106,7 +108,7 @@ test("ProjectStore rename is owner-only and cleans the name", async () => {
 
 test("ProjectStore slack-channel link is member-managed and not a roster change", async () => {
   let at = 500;
-  const projects = createProjectStore(undefined, { id: () => "sl", now: () => at++ });
+  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "sl", now: () => at++ });
   const project = await projects.create({ name: "Linked", ownerId: "owner" });
   await projects.addMember(project.id, "owner", "member");
   const groupRef = projectGroupRef(project.id);
@@ -149,7 +151,7 @@ test("ProjectStore slack-channel link is member-managed and not a roster change"
 
 test("ProjectStore derives membership from the linked channel roster", async () => {
   let at = 900;
-  const projects = createProjectStore(undefined, { id: () => "dr", now: () => at++ });
+  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "dr", now: () => at++ });
   const project = await projects.create({ name: "Derived", ownerId: "owner" });
   const groupRef = projectGroupRef(project.id);
 
@@ -186,7 +188,7 @@ test("ProjectStore derives membership from the linked channel roster", async () 
 });
 
 test("managed groups override Slack membership and historical sessions grant no access", async () => {
-  const projects = createProjectStore(undefined, { id: () => "managed" });
+  const projects = createProjectStore(createMemoryMap(), { ...singleProcessDeps(), id: () => "managed" });
   const project = await projects.create({ name: "Managed", ownerId: "owner" });
   const managedScope = projectScopeId(project.id);
   const deps = {
@@ -266,6 +268,36 @@ test("capability scope checks follow current shared rosters", async () => {
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-private" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "group:G1" }), false);
   assert.equal(await built.app.authorizesCapabilityScope({ actorId: "member", scopeId: "channel:C-public" }), true);
+});
+
+test("capability scope checks honor a linked identity's room membership", async () => {
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "capability-linked-")) }));
+  await built.app.upsertDirectory([
+    { principalId: "slack-person@example.com", displayName: "Person", type: "internal" },
+  ]);
+  await built.directory.replaceChannels(
+    [{ channelId: "C-private", name: "private", isPrivate: true }],
+    [{ channelId: "C-private", principalId: "slack-person@example.com" }],
+    1,
+  );
+  await built.directory.replaceGroups([{ groupId: "G1", principalId: "slack-person@example.com" }], 1);
+  const check = (actorId: string, scopeId: string) => built.app.authorizesCapabilityScope({ actorId, scopeId });
+
+  assert.equal(await check("web-person", "channel:C-private"), false);
+  await built.principalLinks.link({
+    principalId: "slack-person@example.com",
+    canonicalId: "web-person",
+    evidence: "test: verified Slack account",
+    linkedBy: "web-person",
+  });
+  assert.equal(await check("web-person", "channel:C-private"), true);
+  assert.equal(await check("web-person", "group:G1"), true);
+  assert.equal(await check("someone-else", "channel:C-private"), false);
+
+  await built.directory.replaceChannels([{ channelId: "C-private", name: "private", isPrivate: true }], [], 2);
+  assert.equal(await check("web-person", "channel:C-private"), false);
+  await built.principalLinks.unlink("slack-person@example.com");
+  assert.equal(await check("web-person", "group:G1"), false);
 });
 
 test("channel capabilities bridge legacy public rosters but still honor deactivation", async () => {
@@ -419,6 +451,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(forgedApproval.status, "refused");
   const deployAcl = createAclStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: {
       profile: { managedScaleToZero: false },
@@ -755,14 +788,14 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
 });
 
 test("Project turns rebuild the full thread for a member who joined later", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tape-tenure-")) }));
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "project-tenure-")) }));
   await built.app.upsertDirectory([
     { principalId: "owner", displayName: "Owner", type: "internal" },
     { principalId: "late-member", displayName: "Late Member", type: "internal" },
   ]);
-  const project = await built.app.createProject("owner", "Tape tenure");
+  const project = await built.app.createProject("owner", "Tenure");
   assert.ok(project);
-  const threadRef = "web:owner:tape-tenure";
+  const threadRef = "web:owner:tenure";
   const conversation = { kind: "group" as const, channelRef: projectGroupRef(project.id), threadRef, audience: [] };
   assert.equal(
     (await built.app.turn({ surface: "web", actor: { externalId: "owner" }, conversation, text: "PRE_JOIN_SECRET" }))
@@ -784,10 +817,8 @@ test("Project turns rebuild the full thread for a member who joined later", asyn
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as {
-    tapeMode?: string;
     messages?: unknown[];
   };
-  assert.equal(request.tapeMode, "shadow", "roster-scoped history must use the entry reconstruction path");
   assert.match(JSON.stringify(request.messages), /PRE_JOIN_SECRET/);
 });
 
@@ -845,7 +876,6 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   assert.ok(session);
   assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));
   const entriesBeforeRace = await built.sessions.getEntries(session.id);
-  const tapeBeforeRace = await built.sessions.getTape(session.id);
   const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
   const originalAcquireLease = built.sessions.acquireLease.bind(built.sessions);
@@ -866,7 +896,6 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     assert.match(raced.reason ?? "", /membership changed/);
     assert.equal(changed, true);
     assert.deepEqual(await built.sessions.getEntries(session.id), entriesBeforeRace);
-    assert.deepEqual(await built.sessions.getTape(session.id), tapeBeforeRace);
     assert.deepEqual(await built.sessions.listLlmRequests(session.id), llmRequestsBeforeRace);
     assert.doesNotMatch(JSON.stringify(await built.sessions.visibleEntries(session.id, "late-member")), /race-marker/);
     assert.deepEqual(
@@ -1182,18 +1211,12 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal((await turn("chan-pal", "web:chan-pal:linked")).status, "ok");
   await assertRoster("web:chan-pal:linked", ["owner", "chan-pal"]);
 
-  const linkedMembers = [
-    { id: "owner", type: "internal" as const },
-    { id: "chan-pal", type: "internal" as const },
-  ];
   const ownerCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
     owner: "owner",
     createdBy: "owner",
     action: "linked roster work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const inheritedCron = await built.app.createCron({
     ownerScopeId: project.scopeId,
@@ -1201,8 +1224,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-pal",
     action: "inherited member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: linkedMembers,
   });
   const cronRoster = async (cronId: string) => {
     const fire = (await built.crons.listFires(cronId)).runs.at(-1);
@@ -1229,7 +1250,7 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
   assert.equal(revokedOwnerCron.fire.status, "ok");
   assert.deepEqual(revokedOwnerCron.participants, new Set(["owner"]));
   await runNowSettled(built.scheduler, inheritedCron.id);
-  assert.equal((await built.crons.get(inheritedCron.id))?.enabled, false);
+  assert.equal(await built.crons.get(inheritedCron.id), null, "leaving the project deletes the member's cron");
 
   await built.app.upsertChannels(channels, [
     { channelId: "C-ENG", principalId: "owner" },
@@ -1242,11 +1263,6 @@ test("Slack-linked project turns use the inherited channel roster", async () => 
     createdBy: "chan-gone",
     action: "inactive member work",
     schedule: { everyMs: 60_000 },
-    runAs: "scopeShared",
-    members: [
-      { id: "owner", type: "internal" },
-      { id: "chan-gone", type: "internal" },
-    ],
   });
   await built.identity.deactivate("chan-gone");
   assert.equal(await built.projects.membership(groupRef, "chan-gone"), false);

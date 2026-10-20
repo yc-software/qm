@@ -1222,16 +1222,6 @@
       .history-empty-scope:hover {
         color: var(--text);
       }
-      details.history-quiet {
-        margin: -4px 0 14px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      details.history-quiet summary {
-        cursor: pointer;
-        color: var(--muted);
-        font-weight: 500;
-      }
       .segmented {
         display: flex;
         align-items: center;
@@ -1248,22 +1238,6 @@
         border-color: var(--border);
         background: color-mix(in srgb, var(--text) 4%, transparent);
         font-weight: 500;
-      }
-      .dense-preview .delivery-chip {
-        margin: 0 8px 0 0;
-      }
-      .delivery-chip {
-        display: inline-flex;
-        align-items: center;
-        flex: none;
-        margin-left: 8px;
-        font-size: 11px;
-        font-weight: 500;
-        white-space: nowrap;
-        color: color-mix(in srgb, var(--ok) 75%, var(--muted));
-      }
-      .dense-row.history-silent {
-        opacity: 0.45;
       }
       .list-root {
         display: grid;
@@ -1681,47 +1655,6 @@
       .cell-link:hover {
         text-decoration: underline;
         text-underline-offset: 2px;
-      }
-      .spark {
-        color: var(--muted);
-        display: block;
-      }
-      tr.openable:hover .spark {
-        color: var(--text);
-      }
-      .dist {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        max-width: 560px;
-      }
-      .dist-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 12.5px;
-        font-variant-numeric: tabular-nums;
-      }
-      .dist-label {
-        flex: none;
-        width: 84px;
-        text-align: right;
-        color: var(--muted);
-      }
-      .dist-track {
-        flex: 1 1 auto;
-        height: 12px;
-      }
-      .dist-bar {
-        display: block;
-        height: 100%;
-        background: var(--ink);
-        border-radius: 2px;
-      }
-      .dist-count {
-        flex: none;
-        width: 64px;
-        color: var(--muted);
       }
       tr.openable.unlinkable {
         cursor: default;
@@ -5310,20 +5243,51 @@
         height: 18px;
         accent-color: var(--cta);
       }
-      #view-governance .model-runtime-fields {
+      #view-governance {
+        --foreground: var(--text);
+        --muted-foreground: var(--muted);
+        --secondary: var(--subtle);
+        --background: var(--surface);
+        --popover: var(--surface);
+        --font-12-5: 12.5px;
+        --font-13: 13px;
+        --font-14: 14px;
+        --radius-sm: 6px;
+        --chat-surface-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+      }
+      #view-governance #card-runtimes > .runtime-rows,
+      #view-governance .runtime-row {
         display: grid;
-        gap: 12px;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
+        align-items: center;
       }
-      #view-governance .model-runtime-fields label {
-        margin: 0 0 4px;
+      #view-governance .runtime-row {
+        min-height: 40px;
       }
-      #view-governance .model-runtime-fields .dd,
-      #view-governance .model-runtime-fields select {
-        width: 100%;
-        max-width: none;
+      #view-governance .runtime-label {
+        font-size: var(--section-font, 14px);
+        font-weight: 500;
       }
-      #view-governance #base-fast-mode-control {
-        margin-top: 16px;
+      #view-governance .runtime-row .loadout-control {
+        justify-self: start;
+      }
+      #view-governance .runtime-hint {
+        grid-column: 2;
+        margin: 0;
+      }
+      #view-governance .runtime-row select.loadout-button {
+        appearance: none;
+        padding-right: 26px;
+        border-radius: 8px;
+        font-weight: 500;
+      }
+      #view-governance .runtime-row select.loadout-button + svg {
+        position: absolute;
+        right: 8px;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
       }
       #view-governance .setting-toggle input:checked + .setting-switch {
         border-color: var(--cta);
@@ -5331,23 +5295,6 @@
       }
       #view-governance .setting-toggle input:focus-visible + .setting-switch {
         outline-color: var(--cta);
-      }
-      #view-governance #base-fast-mode-control strong,
-      #view-governance #base-fast-mode-control small {
-        font-size: 13px;
-        font-weight: 400;
-        line-height: 1.4;
-      }
-      #view-governance #base-fast-mode-control .setting-copy {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        column-gap: 8px;
-        row-gap: 0;
-      }
-      #view-governance #base-fast-mode-control small {
-        color: var(--muted);
-        margin: 0;
       }
       .model-list {
         display: flex;
@@ -5607,13 +5554,36 @@
         display: grid;
         gap: 10px;
       }
-      #feature-flag-list .feature-flag-row {
+      #card-decisions .decision-form,
+      #card-decisions .decision-option {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 8px 12px;
+        align-items: end;
+        margin: 10px 0;
+      }
+      #card-decisions .decision-option,
+      #card-decisions .decision-question {
+        grid-column: 1 / -1;
+      }
+      #card-decisions .decision-option {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 10px;
+      }
+      #card-decisions textarea {
+        width: 100%;
+        min-height: 60px;
+      }
+      #feature-flag-list .feature-flag-row,
+      #card-decisions .feature-flag-row {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
         gap: 12px;
         align-items: center;
       }
-      #feature-flag-list .feature-flag-row code {
+      #feature-flag-list .feature-flag-row code,
+      #card-decisions .feature-flag-row code {
         min-width: 0;
         overflow-wrap: anywhere;
       }
@@ -6099,11 +6069,6 @@
       #view-data .memory-editor > .body {
         padding: 0;
       }
-      #view-data .memory-editor label {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 13px;
-      }
       #view-data .memory-editor textarea {
         width: 100%;
         box-sizing: border-box;
@@ -6112,17 +6077,21 @@
         line-height: 1.6;
         resize: vertical;
       }
-      #view-data .memory-editor .foot {
-        display: flex;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 12px;
-        border: 0;
-        padding: 12px 0 0;
+      #view-data .memory-editor .memory-facts {
+        margin: 0;
+        padding: 0;
+        list-style: none;
       }
-      #view-data .memory-editor .status {
-        order: -1;
-        margin-right: auto;
+      #view-data .memory-editor .memory-facts li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #e3e8ee;
+      }
+      #view-data .memory-editor .memory-facts li > span,
+      #view-data .memory-editor .memory-facts li > textarea {
+        flex: 1;
       }
       #view-data .memory-editor button.primary {
         min-height: 32px;
@@ -6538,10 +6507,11 @@
                   <h2>Models &amp; browsing</h2>
                   <p>The models, browser runtime, and organization context available on future turns.</p>
                 </div>
-                <template data-settings-card="card-base-model"></template>
+                <template data-settings-card="card-runtimes"></template>
                 <template data-settings-card="card-webui-models"></template>
                 <template data-settings-card="card-branding"></template>
                 <template data-settings-card="card-feature-flags"></template>
+                <template data-settings-card="card-decisions"></template>
                 <div class="governance-group" id="governance-credentials">
                   <h2>Credentials</h2>
                   <p>Shared server-side authority available to agents in this organization.</p>
@@ -6661,15 +6631,13 @@
         $("card-feature-flags").classList.remove("hidden");
 
         [
-          $("card-base-model"),
-          $("card-cron-runtime"),
-          $("card-subagent-runtime"),
-          $("card-fallback-runtime"),
+          $("card-runtimes"),
           providers,
           $("card-webui-models"),
           $("card-soul"),
           $("card-branding"),
           $("card-feature-flags"),
+          $("card-decisions"),
           $("card-service-credentials"),
           keychains,
         ].forEach((card) => content.insertBefore(card, anchor));
@@ -6782,7 +6750,6 @@
         users: "Users",
         keychain: "Keychain",
         user: "User",
-        metrics: "Metrics",
         spend: "Spend",
         egress: "Egress",
         history: "Sessions",
@@ -6803,7 +6770,6 @@
       };
       const SCOPED = new Set([
         "governance",
-        "metrics",
         "egress",
         "history",
         "files",
@@ -6848,8 +6814,6 @@
 
       const FOCUS_STALE_MS = 60000;
       const viewLoadedAt = {};
-      let memDraft = null;
-      let memDraftScope = null;
       let cronDestinationEditId = null;
       const transcriptVisibility = { thinking: true, toolResults: true };
 
@@ -6866,9 +6830,12 @@
           let data = null;
           try {
             data = text ? JSON.parse(text) : null;
-          } catch {}
+          } catch (error) {
+            console.warn("[swallowed] admin api: non-JSON response", method, path, res.status, error);
+          }
           return { ok: res.ok, status: res.status, data };
-        } catch {
+        } catch (error) {
+          console.warn("[swallowed] admin api: request failed", method, path, error);
           return { ok: false, status: 0, data: { message: "Network request failed." } };
         }
       }
@@ -7072,12 +7039,6 @@
         }
         return d;
       }
-      function sessionCountsLabel(sessions, background) {
-        const parts = [];
-        if (sessions) parts.push(plural(sessions, "conversation"));
-        if (background) parts.push(Number(background).toLocaleString() + " background");
-        return parts.join(" · ") || "no conversations";
-      }
       function deploymentHref(dep) {
         return dep.publicUrl || "";
       }
@@ -7183,8 +7144,6 @@
         route();
       }
       const signOut = async () => {
-        memDraft = null;
-        memDraftScope = null;
         await api("POST", "/api/logout");
 
         if (API_BASE) {
@@ -7279,8 +7238,11 @@
         if (st.view === "crons" && st.cron) p.set("cron", st.cron);
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
-        if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
-        if (st.view === "spend" && st.range) p.set("range", st.range);
+        const spendWindow = st.view === "spend" ? governanceUI.spend.spendWindow(st) : null;
+        if (spendWindow && spendWindow.preset === null) {
+          p.set("from", spendWindow.from);
+          p.set("to", spendWindow.to);
+        } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
         if (st.view === "slack" && st.container) p.set("container", st.container);
         if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
         if (st.view === "judgments" && st.container) p.set("container", st.container);
@@ -7344,8 +7306,9 @@
           cron: p.get("cron") || null,
           own: p.get("own") || null,
           mem: p.get("mem") || null,
-          phase: p.get("phase") || null,
           range: p.get("range") || null,
+          from: p.get("from") || null,
+          to: p.get("to") || null,
           historyKind: normalizedHistoryKind,
           page: Math.max(1, parseInt(p.get("page"), 10) || 1),
           cursor: p.get("cursor") || null,
@@ -7386,7 +7349,6 @@
           "memory",
           "audit",
           "egress",
-          "metrics",
           "history",
           "slack",
           "judgments",
@@ -7430,19 +7392,12 @@
         if (view === "ackemoji") return void renderAckEmojiPicks(st);
         if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
         if (view === "history" && st.session) return void showTranscript(st.session);
-        renderCurrentData();
+        renderData();
       }
 
       const GOV_LIKE = new Set(["governance", "models", "credentials", "customize", "slack-settings"]);
       function isGovLike(v) {
         return GOV_LIKE.has(v);
-      }
-      function historyIsIndex() {
-        return view === "history" && orgWideView() && !urlToState().session;
-      }
-      function renderCurrentData() {
-        if (historyIsIndex()) return void renderScopeIndex();
-        renderData();
       }
       function hasGovernanceDraft() {
         return isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
@@ -7579,7 +7534,6 @@
         if (!r.ok) {
           scopeDirNote =
             r.status === 403 ? "Only an org admin can list scopes." : r.data?.message || "Failed to load scopes.";
-          if (historyIsIndex()) renderScopeIndex();
           return;
         }
         viewLoadedAt.history = Date.now();
@@ -7590,7 +7544,7 @@
           const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
 
           if (!(memoryEditor && orgWideView())) defaultShell();
-          if (view !== "governance" && !memoryEditor) renderCurrentData();
+          if (view !== "governance" && !memoryEditor) renderData();
         }
       }
       function dirLabel(id) {
@@ -7644,9 +7598,7 @@
       function pageShell(opts = {}) {
         const bar = $("shellbar");
         bar.textContent = "";
-        const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "metrics", "memory"].includes(
-          view,
-        );
+        const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "memory"].includes(view);
         bar.classList.toggle("logs-shell", logView);
         const counts = document.createElement("div");
         counts.className = "log-counts";
@@ -7837,8 +7789,7 @@
           return;
         }
         if (view === "crons" && cronDestinationEditId) return;
-        if (historyIsIndex()) loadScopeDirectory();
-        else renderData();
+        renderData();
       });
 
       let loadedGovernanceScope = null;
@@ -8053,6 +8004,7 @@
           governanceUI.settings.load(r.data, scope, "subagent-runtime");
           governanceUI.settings.load(r.data, scope, "fallback-runtime");
           governanceUI.settings.load(r.data, scope, "webui-models");
+          governanceUI.settings.load(r.data, scope, "memory-embedding-model");
         }
         refreshModelChoices.push(() => governanceUI.settings.updateCatalog(r.data));
         if (requestedView === "customize") {
@@ -8073,6 +8025,7 @@
           });
         }
         if (requestedView === "customize") void governanceUI.settings.loadFlags(r.data, scope);
+        if (requestedView === "customize") governanceUI.settings.loadDecisions(r.data, scope);
         if (requestedView === "credentials") renderServiceCreds(r.data.serviceCredentials || []);
         if (view === "models") void loadCustomProviders();
         if (view === "credentials") {
@@ -8114,7 +8067,7 @@
               refreshModelChoices.forEach((refresh) => refresh());
               initCustomDropdowns($("view-governance"));
             })
-            .catch(() => {});
+            .catch((error) => console.warn("[swallowed] admin: model catalog refresh", error));
         }
       }
       async function refreshSoulConflict() {
@@ -8160,6 +8113,9 @@
         return refreshedEditing ? "present" : "missing";
       }
       let savedBranding = {};
+      governanceUI.settings.configureDecisions({
+        save: (targetScope, body) => api("PUT", "/api/scopes/" + encodeURIComponent(targetScope) + "/decisions", body),
+      });
       governanceUI.settings.configureFlags({
         buildSelector: buildScopeMultiSelect,
         loadChoices: async () => {
@@ -8558,6 +8514,7 @@
         "subagent-runtime": "st-subagent-runtime",
         "fallback-runtime": "st-fallback-runtime",
         "webui-models": "st-webui-models",
+        "memory-embedding-model": "st-memory-embedding-model",
         "ack-emoji": "st-ack-emoji",
         branding: "st-branding",
       };
@@ -8814,97 +8771,99 @@
         );
       };
 
-      document.querySelectorAll("[data-save]").forEach((btn) => {
-        btn.onclick = async () => {
-          const key = btn.dataset.save;
-          const requestedScope = scope;
-          const requestedGeneration = governanceReq;
-          let body;
-          try {
-            body = SAVE[key]();
-          } catch (err) {
-            setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
-            return;
-          }
-          if (
-            !(await governanceSaveReview(key, body)) ||
-            requestedScope !== scope ||
-            requestedGeneration !== governanceReq
-          )
-            return;
-          const saveRequest = String(++governanceSaveSeq);
+      async function saveSetting(key, btn) {
+        const requestedScope = scope;
+        const requestedGeneration = governanceReq;
+        let body;
+        try {
+          body = SAVE[key]();
+        } catch (err) {
+          setStatus(SAVE_ST[key], err instanceof Error ? err.message : "Could not save.", "err");
+          return;
+        }
+        if (
+          !(await governanceSaveReview(key, body)) ||
+          requestedScope !== scope ||
+          requestedGeneration !== governanceReq
+        )
+          return;
+        const saveRequest = String(++governanceSaveSeq);
+        if (btn) {
           btn.dataset.saveRequest = saveRequest;
           btn.disabled = true;
-          setStatus(SAVE_ST[key], "Saving...", "saving", true);
-          const isBranding = key === "branding";
-          const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
-          const r = await api(
-            "PUT",
-            "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
-            brandingBody,
-          );
-          if (requestedGeneration !== governanceReq) return;
-          if (requestedScope !== scope) {
-            if (btn.dataset.saveRequest === saveRequest) {
+        }
+        setStatus(SAVE_ST[key], "Saving...", "saving", true);
+        const isBranding = key === "branding";
+        const brandingBody = isBranding ? { ...savedBranding, ...body } : body;
+        const r = await api(
+          "PUT",
+          "/api/scopes/" + encodeURIComponent(requestedScope) + "/" + (isBranding ? "branding" : key),
+          brandingBody,
+        );
+        if (requestedGeneration !== governanceReq) return;
+        if (requestedScope !== scope) {
+          if (!btn || btn.dataset.saveRequest === saveRequest) {
+            if (btn) {
               delete btn.dataset.saveRequest;
               btn.disabled = !btn.classList.contains("dirty");
-              setStatus(SAVE_ST[key], "", "");
+            }
+            setStatus(SAVE_ST[key], "", "");
+          }
+          return;
+        }
+        if (btn?.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
+        if (r.ok) {
+          if (governanceUI.owns(key)) {
+            governanceUI.commit(key, body);
+            sectionSnapshots.set(key, JSON.stringify(body));
+            if (isBranding) {
+              savedBranding = brandingBody;
+              if (!hasGovernanceDraft()) location.reload();
+              return;
+            }
+            if (key === "soul") {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok) {
+                governanceUI.settings.refreshSoul(fresh.data);
+                sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
+                if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
+              } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
+              return;
+            }
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+              const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
+              if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
+              if (fresh.ok && !governanceUI.states.get(key).dirty) {
+                governanceUI.load(fresh.data, requestedScope, key);
+                sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
+                governanceUI.status(key, "Saved", "ok");
+              }
             }
             return;
+          } else if (SAVE_RELOADS.has(key)) await loadScope();
+          else {
+            if (key === "command-policy") loadedCommandPolicyPresent = true;
+            captureSection(key);
           }
-          if (btn.dataset.saveRequest === saveRequest) delete btn.dataset.saveRequest;
-          if (r.ok) {
-            if (governanceUI.owns(key)) {
-              governanceUI.commit(key, body);
-              sectionSnapshots.set(key, JSON.stringify(body));
-              if (isBranding) {
-                savedBranding = brandingBody;
-                if (!hasGovernanceDraft()) location.reload();
-                return;
-              }
-              if (key === "soul") {
-                const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=customize");
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok) {
-                  governanceUI.settings.refreshSoul(fresh.data);
-                  sectionSnapshots.set(key, governanceUI.states.get(key).baseline);
-                  if (!governanceUI.states.get(key).dirty) governanceUI.status(key, "Saved", "ok");
-                } else governanceUI.status(key, "Saved, but the latest version could not be refreshed.", "warn");
-                return;
-              }
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
-                const fresh = await api(
-                  "GET",
-                  "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance",
-                );
-                if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-                if (fresh.ok && !governanceUI.states.get(key).dirty) {
-                  governanceUI.load(fresh.data, requestedScope, key);
-                  sectionSnapshots.set(key, JSON.stringify(governanceUI.collect(key)));
-                  governanceUI.status(key, "Saved", "ok");
-                }
-              }
-              return;
-            } else if (SAVE_RELOADS.has(key)) await loadScope();
-            else {
-              if (key === "command-policy") loadedCommandPolicyPresent = true;
-              captureSection(key);
-            }
-            setStatus(SAVE_ST[key], "Saved", "ok");
-          } else {
-            if (key === "soul" && r.status === 409) await refreshSoulConflict();
-            updateSectionDirty(key);
-            let message = r.data?.message || "Save failed.";
-            if (key === "soul" && r.status === 409) {
-              message = "SOUL changed; latest revision loaded and your draft was preserved.";
-            } else if (r.status === 403) {
-              message = "Not authorized for this scope.";
-            }
-            setStatus(SAVE_ST[key], message, "err");
+          setStatus(SAVE_ST[key], "Saved", "ok");
+        } else {
+          if (key === "soul" && r.status === 409) await refreshSoulConflict();
+          updateSectionDirty(key);
+          let message = r.data?.message || "Save failed.";
+          if (key === "soul" && r.status === 409) {
+            message = "SOUL changed; latest revision loaded and your draft was preserved.";
+          } else if (r.status === 403) {
+            message = "Not authorized for this scope.";
           }
-        };
+          setStatus(SAVE_ST[key], message, "err");
+        }
+      }
+      document.querySelectorAll("[data-save]").forEach((btn) => {
+        btn.onclick = () => saveSetting(btn.dataset.save, btn);
       });
+      governanceUI.settings.configureRuntimes({ save: (key) => saveSetting(key) });
       $("view-governance").addEventListener("input", (e) => {
         if (!(
           e.target instanceof HTMLInputElement ||
@@ -8940,7 +8899,8 @@
           sel.dataset.ddHost ||
           sel.hasAttribute("hidden") ||
           sel.multiple ||
-          sel.size > 1
+          sel.size > 1 ||
+          sel.closest(".loadout-control")
         )
           return;
         sel.dataset.ddHost = "1";
@@ -9160,13 +9120,11 @@
 
       let dataReq = 0;
       let historyKind = "conversation";
-      let scopeSort = "human";
 
       const dataCache = new Map();
       function paintData(root, data) {
         root.textContent = "";
         ({
-          metrics: renderMetrics,
           spend: renderSpend,
           egress: renderEgress,
           history: renderHistory,
@@ -9255,96 +9213,9 @@
         return d;
       }
 
-      const PHASE_META = {
-        total: ["Total turn", "End-to-end wall time, request to reply"],
-        ttft: ["First token", "Time until the first streamed token"],
-        slackInflight: ["Slack pickup", "Socket receive to submit: how long the message sat in the Slack plugin"],
-        intakePreamble: ["Intake preamble", "Surface-side work before the request left for core"],
-        queue: ["Queue wait", "Waiting for a worker to claim the run"],
-        dispatch: ["Dispatch", "Surface receive to core hand-off"],
-        ingress: ["Ingress", "Core receive to model start: parse, resolve, prepare"],
-        detect: ["Reply decision", "Deciding whether to speak in a channel"],
-        compact: ["History compaction", "Compacting a long transcript before the model call"],
-        provision: ["Machine provision", "Booting or resuming the sandbox machine"],
-        materialize: ["Skills materialize", "Copying resolved skills onto the machine"],
-        creds: ["Credentials restore", "Restoring keychain credentials onto the machine"],
-        layers: ["Workspace layers", "Restoring workspace layers at provision time"],
-        compile: ["Prompt compile", "Assembling the system prompt"],
-        recall: ["Memory recall", "Injecting durable memory into the prompt"],
-        lease: ["Session lease", "Loading the session and acquiring the writer lease"],
-        exec: ["Command exec", "Commands the agent ran in the machine"],
-        stream: ["Stream + append", "Streaming tokens out and appending the turn"],
-        deliver: ["Slack deliver", "The final Slack post/update round-trip"],
-        capture: ["Memory capture", "Post-turn fact extraction, off the critical path"],
-      };
-      const phaseLabel = (key) => (PHASE_META[key] || [titleCase(key)])[0];
-      const phaseDesc = (key) => (PHASE_META[key] || [])[1] || "";
-      function turnKindWords(s) {
-        if (s.provisioned === true) return s.coldStart === true ? "cold machine boot" : "warm machine";
-        if (s.provisioned === false) return "no machine";
-        return "";
-      }
-      function sparkline(daily, valueOf = (r) => r.p50) {
-        const vals = (daily || [])
-          .slice(-14)
-          .map(valueOf)
-          .filter((v) => v != null);
-        if (vals.length < 2) {
-          const s = document.createElement("span");
-          s.className = "subline";
-          s.textContent = "None";
-          return s;
-        }
-        const w = 84,
-          h = 20,
-          pad = 2;
-        const min = Math.min(...vals),
-          max = Math.max(...vals);
-        const y = (v) => (max === min ? h / 2 : pad + (h - 2 * pad) * (1 - (v - min) / (max - min)));
-        const x = (i) => pad + (w - 2 * pad) * (vals.length === 1 ? 0.5 : i / (vals.length - 1));
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("width", w);
-        svg.setAttribute("height", h);
-        svg.setAttribute("class", "spark");
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-        line.setAttribute("points", vals.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" "));
-        line.setAttribute("fill", "none");
-        line.setAttribute("stroke", "currentColor");
-        line.setAttribute("stroke-width", "1.5");
-        svg.appendChild(line);
-        return svg;
-      }
-      function renderMetrics(root, d) {
-        governanceUI.metrics.metrics(root, d, {
-          phase: urlToState().phase,
-          scope,
-          pageShell,
-          defaultShell,
-          go,
-          phaseLabel,
-          phaseDesc,
-          fmtMs,
-          fmtPct,
-          fmtTokens,
-          plural,
-          shortName,
-          relTime,
-          turnKindWords,
-          sparkline,
-        });
-      }
-      const SPEND_RANGES = { "7d": 7, "30d": 30, "90d": 90 };
       function spendQuery(st) {
-        const DAY = 86400000;
-        const range = SPEND_RANGES[st.range] ? st.range : "30d";
-        const to = Math.floor(Date.now() / DAY) * DAY + DAY;
-        const iso = (t) => new Date(t).toISOString().slice(0, 10);
-        const params = new URLSearchParams({
-          from: iso(to - SPEND_RANGES[range] * DAY),
-          to: iso(to),
-          bucket: range === "90d" ? "week" : "day",
-        });
-        return params.toString();
+        const { from, to, bucket } = governanceUI.spend.spendWindow(st);
+        return new URLSearchParams({ from, to, bucket }).toString();
       }
       function renderSpend(root, d) {
         governanceUI.spend.spend(root, d, {
@@ -9352,10 +9223,15 @@
           fmtPct,
           fmtTokens,
           shortName,
+          shortSchedule,
+          cronName,
           plural,
-          range: urlToState().range || "30d",
+          window: governanceUI.spend.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
-          setRange: (range) => go({ ...urlToState(), view: "spend", range }),
+          openCronRuns: (cron, cronScope) =>
+            go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
+          setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
+          setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {
             const a = document.createElement("a");
             a.href =
@@ -9515,7 +9391,7 @@
         return kind === "cron" || kind === "background" ? "background" : kind;
       }
 
-      const KIND_LABEL = { conversation: "Conversations", cron: "Crons", background: "Background" };
+      const KIND_LABEL = { conversation: "Conversations", cron: "Cron runs", background: "Background" };
       function historyModeLabel(kind) {
         return KIND_LABEL[kind] || KIND_LABEL.conversation;
       }
@@ -9690,12 +9566,6 @@
           reload: () => (current() ? renderData() : Promise.resolve()),
           setCronEditing: (id) => {
             if (current()) cronDestinationEditId = id;
-          },
-          memoryDraft: () => (memDraftScope === capturedScope ? memDraft : null),
-          setMemoryDraft: (draft) => {
-            if (!current()) return;
-            memDraft = draft;
-            memDraftScope = draft === null ? null : capturedScope;
           },
         };
       }
@@ -10367,42 +10237,6 @@
         return { block, sync: () => {} };
       }
 
-      function renderScopeIndex() {
-        ++dataReq;
-        const root = $("view-data");
-        root.textContent = "";
-        governanceUI.history.scopeIndex(root, {
-          ready: !!scopeDir,
-          note: scopeDirNote,
-          title: VIEW_TITLE.history,
-          rows: scopeDir ? scopeRows() : [],
-          sort: scopeSort,
-          pageShell,
-          plural,
-          environments: environmentDir,
-          historyKind,
-          shortName,
-          selectScope,
-          stateToUrl,
-          relTime,
-          sessionCountsLabel,
-          scopeTitle,
-          sortControl: () =>
-            twoWayToggle({
-              label: "Sort sessions",
-              options: [
-                { value: "human", label: "Human activity" },
-                { value: "all", label: "All activity" },
-              ],
-              value: scopeSort,
-              onChange: (value) => {
-                scopeSort = value;
-                renderScopeIndex();
-                $("shellbar").querySelector(".two-way-toggle input:checked")?.focus({ preventScroll: true });
-              },
-            }),
-        });
-      }
       function renderHistory(root, d) {
         governanceUI.history.history(root, d, {
           historyKind,
@@ -10429,6 +10263,7 @@
           errorStripBox,
           adminErrorCount,
           adminErrors,
+          scopeRows,
         });
       }
 
@@ -10487,154 +10322,6 @@
         return null;
       }
 
-      const SLACK_EMOJI = {
-        white_check_mark: "✅",
-        heavy_check_mark: "✔️",
-        ballot_box_with_check: "☑️",
-        hourglass_flowing_sand: "⏳",
-        hourglass: "⌛",
-        x: "❌",
-        heavy_multiplication_x: "✖️",
-        warning: "⚠️",
-        exclamation: "❗",
-        question: "❓",
-        tada: "🎉",
-        eyes: "👀",
-        rocket: "🚀",
-        fire: "🔥",
-        thumbsup: "👍",
-        "+1": "👍",
-        thumbsdown: "👎",
-        "-1": "👎",
-        pray: "🙏",
-        wave: "👋",
-        clap: "👏",
-        raised_hands: "🙌",
-        muscle: "💪",
-        sparkles: "✨",
-        star: "⭐",
-        star2: "🌟",
-        zap: "⚡",
-        boom: "💥",
-        bug: "🐛",
-        robot_face: "🤖",
-        thinking_face: "🤔",
-        grimacing: "😬",
-        smile: "😄",
-        smiley: "😃",
-        grin: "😁",
-        joy: "😂",
-        sweat_smile: "😅",
-        slightly_smiling_face: "🙂",
-        upside_down_face: "🙃",
-        wink: "😉",
-        sob: "😭",
-        cry: "😢",
-        disappointed: "😞",
-        confused: "😕",
-        neutral_face: "😐",
-        heart: "❤️",
-        broken_heart: "💔",
-        100: "💯",
-        ok_hand: "👌",
-        point_up: "☝️",
-        point_right: "👉",
-        point_left: "👈",
-        point_down: "👇",
-        crossed_fingers: "🤞",
-        white_circle: "⚪",
-        black_circle: "⚫",
-        red_circle: "🔴",
-        green_circle: "🟢",
-        large_green_circle: "🟢",
-        blue_circle: "🔵",
-        yellow_circle: "🟡",
-        orange_circle: "🟠",
-        large_blue_circle: "🔵",
-        speech_balloon: "💬",
-        thought_balloon: "💭",
-        lock: "🔒",
-        unlock: "🔓",
-        key: "🔑",
-        calendar: "📅",
-        date: "📅",
-        spiral_calendar_pad: "🗓️",
-        memo: "📝",
-        pencil: "✏️",
-        pencil2: "✏️",
-        clipboard: "📋",
-        bell: "🔔",
-        no_bell: "🔕",
-        mag: "🔍",
-        link: "🔗",
-        email: "📧",
-        envelope: "✉️",
-        phone: "📞",
-        telephone_receiver: "📞",
-        bulb: "💡",
-        chart_with_upwards_trend: "📈",
-        chart_with_downwards_trend: "📉",
-        bar_chart: "📊",
-        moneybag: "💰",
-        dollar: "💵",
-        gear: "⚙️",
-        wrench: "🔧",
-        hammer: "🔨",
-        hammer_and_wrench: "🛠️",
-        package: "📦",
-        checkered_flag: "🏁",
-        triangular_flag_on_post: "🚩",
-        trophy: "🏆",
-        medal: "🏅",
-        alarm_clock: "⏰",
-        stopwatch: "⏱️",
-        clock: "🕐",
-        coffee: "☕",
-        beer: "🍺",
-        pushpin: "📌",
-        round_pushpin: "📍",
-        paperclip: "📎",
-        scroll: "📜",
-        books: "📚",
-        book: "📖",
-        green_heart: "💚",
-        yellow_heart: "💛",
-        blue_heart: "💙",
-        purple_heart: "💜",
-        sparkling_heart: "💖",
-        heavy_plus_sign: "➕",
-        heavy_minus_sign: "➖",
-        arrow_right: "➡️",
-        arrow_left: "⬅️",
-        arrow_up: "⬆️",
-        arrow_down: "⬇️",
-        recycle: "♻️",
-        repeat: "🔁",
-        arrows_counterclockwise: "🔄",
-        construction: "🚧",
-        no_entry: "⛔",
-        no_entry_sign: "🚫",
-        stop_sign: "🛑",
-        shipit: "🐿️",
-        rotating_light: "🚨",
-        skull: "💀",
-        ghost: "👻",
-        tophat: "🎩",
-        crown: "👑",
-        salt: "🧂",
-        snail: "🐌",
-        turtle: "🐢",
-        cat: "🐱",
-        dog: "🐶",
-        sunny: "☀️",
-        cloud: "☁️",
-        rainbow: "🌈",
-        snowflake: "❄️",
-        zzz: "💤",
-        raised_hand: "✋",
-        vulcan_salute: "🖖",
-        handshake: "🤝",
-      };
       function slackUnescape(s) {
         return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
       }
@@ -10717,8 +10404,11 @@
             c.textContent = slackUnescape(m[1]);
             parent.appendChild(c);
           } else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
-          else if (SLACK_EMOJI[m[3]]) parent.appendChild(document.createTextNode(SLACK_EMOJI[m[3]]));
-          else slackAppendMrkdwn(m[0], parent);
+          else {
+            const emoji = governanceUI.charForName(m[3]);
+            if (emoji) parent.appendChild(document.createTextNode(emoji));
+            else slackAppendMrkdwn(m[0], parent);
+          }
           last = re.lastIndex;
         }
         if (last < text.length) slackAppendMrkdwn(text.slice(last), parent);
@@ -10949,7 +10639,7 @@
         );
       }
       function requestBody(q) {
-        return q && q.promptEnvelope != null ? q.promptEnvelope : q ? q.request : null;
+        return q && q.promptEnvelope != null ? q.promptEnvelope : null;
       }
       function contextSections(request, transport) {
         const req = request && typeof request === "object" ? request : {};

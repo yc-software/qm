@@ -6,9 +6,9 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -40,9 +40,11 @@ export interface MonitorPollerDeps {
   directory?: TriggerDeps["directory"];
   currentScopeMembers?: CurrentScopeMembers;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
   maxFiresPerTick?: number;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
+  onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
 }
@@ -129,7 +131,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const maxFiresPerTick = deps.maxFiresPerTick ?? 20;
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
-  const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
+  const leaderLease = deps.leaderLease;
 
   const triggerDeps: TriggerDeps = {
     deliveries: deps.deliveries,
@@ -139,6 +141,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.sessions ? { sessions: deps.sessions } : {}),
+    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
   async function fire(
@@ -186,7 +189,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         waitMs: 0,
       });
     } catch (e) {
-      if (processIsGone(e)) {
+      if (e instanceof ProcessSessionGoneError) {
         await reportLost(m);
         return true;
       }
@@ -254,7 +257,10 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
       await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
       if (exited || expired) await deps.monitors.setEnabled(m.id, false);
     }
-    if (exited) await deps.processes.markStatus(m.processId, "exited");
+    if (exited) {
+      await deps.processes.markStatus(m.processId, "exited");
+      await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
+    }
     return true;
   }
 
@@ -274,19 +280,18 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
           break;
         }
         const rec = await deps.processes.get(m.processId);
-        if (!rec) {
+        if (!rec?.sandboxId) {
           await reportLost(m);
           fires++;
           continue;
         }
-        const targetKey = rec.sandboxId ?? rec.scopeId;
+        const targetKey = rec.sandboxId;
         let handle = handles.get(targetKey);
         if (!handle) {
           try {
-            handle = await sandbox.provision(
-              [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-              rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-            );
+            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+              sandboxId: rec.sandboxId,
+            });
           } catch (e) {
             await deps.monitors.recordError(m.id, errMessage(e));
             continue;

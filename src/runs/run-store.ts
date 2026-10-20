@@ -2,8 +2,25 @@ import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
+
+export type RunPriority = 0 | 1 | 2;
+export const MAX_PREEMPTIONS = 3;
+
+export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput {
+  const { trace: _stale, ...rest } = request;
+  const trace = request.swarm ? undefined : traceCarrier();
+  return trace ? { ...rest, trace } : rest;
+}
+
+export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
+  if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
+  if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
+  return isPersonAuthored(resolveTurnOrigin(request).kind) ? 0 : 2;
+}
 
 export interface ReapEvent {
   runId: string;
@@ -19,6 +36,18 @@ export interface RunDeliveryState {
   editRef?: string;
 }
 
+export type RunStop =
+  | { kind: "shutdown" }
+  | { kind: "parked" }
+  | { kind: "lease_expired" }
+  | { kind: "error"; code?: string; status?: number };
+
+export const PARKED: RunStop = { kind: "parked" };
+
+export function handbackStop(shutdown: AbortSignal): RunStop {
+  return shutdown.reason === PARKED ? PARKED : { kind: "shutdown" };
+}
+
 export interface Run {
   id: string;
   sessionId: string;
@@ -31,12 +60,15 @@ export interface Run {
   attempts: number;
   errorAttempts: number;
   maxAttempts: number;
+  priority: RunPriority;
+  preemptions: number;
   leaseToken: string | null;
   leaseExpiresAt: number | null;
   workerId: string | null;
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  lastStop?: RunStop | null;
 }
 
 interface TerminalCursor {
@@ -59,7 +91,7 @@ export interface EnqueueResult {
 export interface RunStore {
   readonly maxClaims?: number;
 
-  subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  subscribeAvailable?(listener: () => boolean | void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
@@ -70,9 +102,11 @@ export interface RunStore {
 
   claimForSession(sessionId: string, workerId: string, ttlMs: number): Promise<Run | null>;
 
+  personWaiting(createdBefore: number): Promise<boolean>;
+
   heartbeat(runId: string, leaseToken: string, ttlMs: number): Promise<boolean>;
 
-  releaseLease(runId: string, leaseToken: string): Promise<boolean>;
+  releaseLease(runId: string, leaseToken: string, stop?: RunStop): Promise<boolean>;
 
   complete(runId: string, leaseToken: string, result: TurnResult): Promise<boolean>;
 
@@ -80,7 +114,7 @@ export interface RunStore {
     runId: string,
     leaseToken: string,
     error: string,
-    opts?: { retry?: boolean; retryAfterMs?: number },
+    opts?: { retry?: boolean; retryAfterMs?: number; stop?: RunStop },
   ): Promise<{ requeued: boolean }>;
 
   setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean>;
@@ -133,8 +167,15 @@ export function releasesDedupKey(result: TurnResult): boolean {
   return result.refusalKind === "session_busy";
 }
 
-export function errorParks(run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts">, maxClaims?: number): boolean {
-  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && run.attempts >= maxClaims);
+export function countedClaims(run: Pick<Run, "attempts" | "preemptions">): number {
+  return run.attempts - run.preemptions;
+}
+
+export function errorParks(
+  run: Pick<Run, "errorAttempts" | "maxAttempts" | "attempts" | "preemptions">,
+  maxClaims?: number,
+): boolean {
+  return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {

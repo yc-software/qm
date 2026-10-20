@@ -120,9 +120,8 @@ and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`
 and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and
 sandbox file transfers go to the bucket, so replicas share that state and pods can
-be replaced with rolling updates. Without `SESSION_STORE=postgres`, sessions and
-runs stay in process memory even when `DATABASE_URL` is set; an explicit
-`RUN_STORE=memory` also keeps runs there. S3
+be replaced with rolling updates. Production core refuses to start without
+`DATABASE_URL` and `SESSION_STORE=postgres`, or with `RUN_STORE=memory`. S3
 credentials come from the standard AWS chain, such as a pod IAM role bound through
 `serviceAccount.create=true` with `serviceAccount.annotations`, or
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the runtime Secret. Any S3-compatible

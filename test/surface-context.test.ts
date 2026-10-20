@@ -105,6 +105,8 @@ describe("surface-context pulls", async () => {
       messages: [{ ts: "1699.0001", author: "Alice", text: "deploy went out" }],
       hasMore: true,
       nextBefore: "1699.0001",
+      selfTs: ["1699.0001", 7],
+      liveSearch: "unconnected",
     }));
     assert.equal(
       query.conversationTarget,
@@ -119,6 +121,8 @@ describe("surface-context pulls", async () => {
     assert.equal(body.messages[0].text, "deploy went out");
     assert.equal(body.hasMore, true);
     assert.equal(body.nextBefore, "1699.0001");
+    assert.deepEqual(body.selfTs, ["1699.0001"]);
+    assert.equal(body.liveSearch, "unconnected");
     const pending = await (await signedGet(pendingPath())).json();
     assert.deepEqual((pending as any).requests, []);
   });

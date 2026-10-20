@@ -68,6 +68,10 @@ The proxy endpoint receives one or more HTTPS `POST`s per bounded classification
 
 A chunk whose score is at or above its threshold resolves to Strict, and any Strict chunk makes the whole classification Strict. When chunks agree, the highest-scoring result supplies the diagnostics. The configured provider is an audit label and metadata namespace, not a built-in adapter name, so any service implementing this contract can be selected. Throttled requests retry with bounded backoff inside the classification deadline. Invalid responses, timeouts, redirects, and other provider errors are unavailable classifications, audited as `error`. Observe mode changes authority, not disclosure: it still sends the full screened content to the configured endpoint, so operators must trust that provider with external messages, files, and surface results.
 
+## Spend export
+
+`secretEnv.core.SPEND_EXPORT_TOKEN` (at least 32 characters, without surrounding whitespace, and distinct from every other environment value) turns on `GET /v1/spend/export?from=YYYY-MM-DD&to=YYYY-MM-DD` for an external spend or chargeback system. Requests send `Authorization: Bearer <token>`; the window is whole UTC days, half-open, and at most 93 days long. The response carries `scopeId`, the `window`, `asOf` when the report is served from saved daily totals, `rows` at the Spend page's ledger grain — one per UTC day, scope, source, cron and model — each with `scopeId`, `kind`, `principalId` (people only, after identity links), `displayName`, `source` (`live`, or the background kind: `cron`, `loop`, `swarm`, `webhook` or `monitor`), `cronId` (the cron that ran it, including its subagents' calls, else `null`), `calls`, `costUsd` and the four token counts, and `crons`: each billed cron's `id`, `title`, `owner`, `ownerScopeId`, `schedule`, `enabled` and `archived`, without its task. A deleted cron keeps its `cronId` on rows but has no `crons` entry. `costUsd` is the same estimate the admin Spend page shows, not a provider bill. Without the secret the route answers 404, and every export is audited as `spend.export`. Portal does not forward the route, so callers use the origin that reaches core directly.
+
 ## Secrets
 
 First-party services publish a typed `SecretSpec` schema. The CLI combines the enabled services and feature predicates with plugin `secrets` and `sandbox.secretEnv` to form the computed secret set. That same schema determines which task receives each secret. Core validates its own required runtime secrets at production boot.
@@ -186,6 +190,25 @@ rules. Deployment preflight verifies the exact paths, target-group attachments
 and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
+
+### Sandbox egress proxy
+
+Add `"egress-proxy"` to `services` to deploy the sandbox egress proxy
+(`deploy/egress-proxy`) with every `qm up`, from the same release as core. It
+receives `CAPABILITY_SECRET` and `CORE_SIGNING_SECRET` from the computed secret
+set and relays its audit records to core.
+
+On AWS the reference module puts it behind its own network load balancer, which
+terminates TLS on 443 with the module's `certificate_arn` (required) and forwards
+plain TCP to the proxy. The proxy runs in its own security group, outside the
+services' private network, so it relays audit records through `apiUrl` (or
+`publicUrl`). Point a hostname covered by the certificate at the
+`egress_proxy_hostname` output. On Fly it serves TLS on 443 at
+`<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
+port and leaves TLS to the operator. Then set the sandbox backend's proxy URL, for
+example `env.core.SPRITES_EGRESS_PROXY_URL` or `MODAL_EGRESS_PROXY_URL`, to
+`https://<proxy hostname>`. Update vendored Terraform from the current scaffold
+before enabling it on AWS.
 
 ### Shared AWS foundations
 

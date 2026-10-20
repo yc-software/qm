@@ -1,10 +1,11 @@
+import { desktopTurnId, serveDesktopRun } from "./desktop-computer.ts";
 import { reportHandledError, reportRequestTiming, stopBrowserErrors } from "./browser-errors.ts";
 import { captureMessage, stopAnalytics } from "./product-analytics.ts";
 import { streamedAnswer } from "./timeline.ts";
-import { EventType } from "@tanstack/ai/client";
-import { fetchServerSentEvents, StreamProcessor } from "@tanstack/ai-client";
+import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
-import type { ModelMetadata } from "./pi-models.ts";
+import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
+import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
@@ -16,6 +17,7 @@ import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 import { messageEntrySeqs } from "./message-link.ts";
+import type { GoalStripState } from "./goal-strip.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -64,7 +66,7 @@ export function oversizeAttachmentNote(name: string): string {
   return `"${name}" is too large — files up to ~1 GB can be sent. It was left out.`;
 }
 
-export function emptyAttachmentNote(name: string): string {
+function emptyAttachmentNote(name: string): string {
   return `"${name}" is empty. It was left out.`;
 }
 
@@ -73,7 +75,7 @@ export function tooManyFilesNote(names: string[]): string {
   return `Skipped ${skipped} — too many files in one message (max ${MAX_FILES_PER_MESSAGE}).`;
 }
 
-export interface SkippedAttachment {
+interface SkippedAttachment {
   id?: string;
   name: string;
   note: string;
@@ -126,7 +128,6 @@ export interface DeliveredFile {
 }
 
 export interface CoreSession {
-  status?: { emoji: string; text: string } | null;
   id: string;
   type: "dm" | "channel" | "group";
   scopeId: string;
@@ -137,10 +138,12 @@ export interface CoreSession {
   archived?: boolean;
   pinned?: boolean;
   color?: string | null;
+  unread?: boolean;
   lastActivityAt?: number;
   working?: boolean;
   awaitingInput?: boolean;
   lastTurnFailed?: boolean;
+  canContinue?: boolean;
   backgroundJobs?: number;
   watches?: number;
   crons?: number;
@@ -149,6 +152,52 @@ export interface CoreSession {
   forkBoundarySeq?: number;
   parentSessionId?: string;
   surface?: string;
+  subagents?: { running: number; waiting: number };
+}
+
+export interface SessionPageQuery {
+  limit: number;
+  before?: string | null;
+  status?: ChatBrowseStatus;
+  surface?: string;
+  scope?: string | null;
+  q?: string;
+}
+
+export interface SessionPage {
+  sessions: CoreSession[];
+  pinned?: CoreSession[];
+  nextCursor: string | null;
+  hasArchived?: boolean;
+}
+
+export function fetchSessionPage(query: SessionPageQuery): Promise<SessionPage> {
+  const qs = new URLSearchParams({ limit: String(query.limit) });
+  if (query.before) qs.set("before", query.before);
+  if (query.status && query.status !== "active") qs.set("status", query.status);
+  if (query.surface) qs.set("surface", query.surface);
+  if (query.scope) qs.set("scope", query.scope);
+  if (query.q?.trim()) qs.set("q", query.q.trim());
+  return api<SessionPage>(`/api/sessions?${qs.toString()}`);
+}
+
+export async function fetchSessionChildren(id: string): Promise<CoreSession[] | null> {
+  try {
+    return (await api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/children`)).sessions;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function fetchSessionRow(ref: { id: string } | { threadRef: string }): Promise<CoreSession | null> {
+  const qs = new URLSearchParams("id" in ref ? { id: ref.id } : { threadRef: ref.threadRef });
+  try {
+    return (await api<{ session: CoreSession }>(`/api/sessions/row?${qs.toString()}`)).session;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export function inheritedTranscript(
@@ -255,7 +304,7 @@ export interface CoreProject {
   memberIds: string[];
   channelMemberIds?: string[];
   scopeId: string;
-  members: Array<{ principalId: string; displayName: string; viaChannel?: boolean }>;
+  members: Array<{ principalId: string; displayName: string; avatarUrl?: string; viaChannel?: boolean }>;
   slackChannel?: { channelId: string; channelName: string; linkedBy?: string; linkedAt?: number };
   createdAt?: number;
   updatedAt?: number;
@@ -263,7 +312,7 @@ export interface CoreProject {
 
 export function slackThreadUrl(workspaceUrl: string | null, threadRef: string): string | null {
   if (!workspaceUrl) return null;
-  const m = threadRef.match(/^(?:dm|ch):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
+  const m = threadRef.match(/^(?:dm|ch|grp):([A-Z0-9]+)(?::(\d+)\.(\d+))?$/i);
   if (!m) return null;
   return `${workspaceUrl}/archives/${m[1]}${m[2] ? `/p${m[2]}${m[3]}` : ""}`;
 }
@@ -285,7 +334,7 @@ function browserTimezone(): string {
 
 export async function updateSession(
   id: string,
-  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null },
+  patch: { title?: string | null; archived?: boolean; pinned?: boolean; color?: string | null; unread?: boolean },
 ): Promise<{ session: CoreSession }> {
   return api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(id)}`, {
     method: "POST",
@@ -348,6 +397,8 @@ export interface TranscriptPage {
   entries: SessionEntry[];
   earlierEntries?: number;
   pins?: SessionPin[];
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
 }
 
 export async function fetchTranscript(
@@ -389,15 +440,12 @@ export async function regenerateTitle(id: string): Promise<{ title: string | nul
   return api<{ title: string | null }>(`/api/sessions/${encodeURIComponent(id)}/title`, { method: "POST" });
 }
 
-export async function adoptSession(id: string, parentSessionId: string): Promise<{ adopted: true }> {
-  return api<{ adopted: true }>(`/api/sessions/${encodeURIComponent(id)}/adopt`, {
-    method: "POST",
-    body: JSON.stringify({ parentSessionId }),
-  });
-}
-
 export async function detachSession(id: string): Promise<{ detached: true }> {
   return api<{ detached: true }>(`/api/sessions/${encodeURIComponent(id)}/detach`, { method: "POST" });
+}
+
+export async function cancelSessionGoal(id: string): Promise<{ cancelled: true }> {
+  return api<{ cancelled: true }>(`/api/sessions/${encodeURIComponent(id)}/goal/cancel`, { method: "POST" });
 }
 export interface SessionEntry {
   type:
@@ -408,7 +456,6 @@ export interface SessionEntry {
     | "text"
     | "tool_call"
     | "tool_result"
-    | "soul"
     | "system"
     | "approval_request"
     | "approval_resolved"
@@ -438,12 +485,34 @@ export interface ToolActivity {
 }
 type WorkStatus = "thinking" | "working" | "complete" | "failed";
 export interface WorkBlock {
+  streamStartOffset?: number;
   status: WorkStatus;
   startedAt?: number;
   finishedAt?: number;
   stale?: boolean;
   activity: ToolActivity[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   pendingApprovals?: PendingApproval[];
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
+}
+
+interface LiveReasoning {
+  step: string;
+  index: number;
+  text: string;
+}
+
+export interface TurnRuntime {
+  harnessId: string;
+  modelId: string;
+  label?: string;
+  change?: { rule: string } | { agent: "task" | "scope" };
+}
+
+export function switchedDefault(runtime: TurnRuntime | null | undefined): boolean {
+  return !!runtime?.change && "agent" in runtime.change && runtime.change.agent === "scope";
 }
 
 export function workPausedForApproval(work: WorkBlock): boolean {
@@ -489,6 +558,8 @@ export type AssistantWork = AssistantMessage & {
 
 export interface RunPoll {
   status: "pending" | "running" | "done" | "failed";
+  goal?: GoalStripState;
+  runtime?: TurnRuntime;
   input?: {
     runId: string;
     seq: number | null;
@@ -500,15 +571,19 @@ export interface RunPoll {
     status: string;
     reply?: string;
     reason?: string;
+    refusalKind?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
   partial?: string;
+  partialStartOffset?: number;
   alive?: boolean;
   stale?: boolean;
   replyComplete?: boolean;
   activity?: unknown[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   startedAt?: number | null;
   finishedAt?: number | null;
 }
@@ -597,15 +672,6 @@ export function continuableMessages(
     popped.unshift(kept.pop()!);
   }
   return { messages: kept.length ? kept : [resumeAnchor()], popped };
-}
-
-export const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
-
-export function isContinuable(s: Pick<CoreSession, "threadRef" | "scopeId">, user: string): boolean {
-  if (s.threadRef.startsWith(SUBAGENT_THREAD_PREFIX))
-    return s.scopeId === `personal:${user}` || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
-  if (!s.threadRef.startsWith("web:")) return false;
-  return s.threadRef.startsWith(`web:${user}:`) || s.scopeId.startsWith("channel:") || s.scopeId.startsWith("group:");
 }
 
 function zeroUsage(): Usage {
@@ -719,7 +785,7 @@ export function setSigninRequiredHandler(fn: (detail: SigninRequired) => void): 
   onSigninRequired = fn;
 }
 
-export function reportSigninRequired(detail: SigninRequired): void {
+function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
@@ -772,6 +838,95 @@ export function putUiState(
   return api("/api/ui-state", { method: "PUT", body: JSON.stringify({ key, value, updatedAt }), ...init });
 }
 
+const PIN_LATEST_PROMPT_KEY = "pin-latest-prompt";
+const ALWAYS_STEER_KEY = "always-steer";
+
+type ChatPrefKey = typeof PIN_LATEST_PROMPT_KEY | typeof ALWAYS_STEER_KEY;
+
+const CHAT_PREF_DEFAULTS: Record<ChatPrefKey, boolean> = {
+  [PIN_LATEST_PROMPT_KEY]: true,
+  [ALWAYS_STEER_KEY]: false,
+};
+
+const CHAT_PREF_CACHE_PREFIX = "chat-pref:";
+
+const chatPrefValues = new Map<ChatPrefKey, boolean>();
+const chatPrefTouched = new Set<ChatPrefKey>();
+const chatPrefListeners = new Set<() => void>();
+
+function cachedChatPref(key: ChatPrefKey): boolean {
+  try {
+    const raw = localStorage.getItem(CHAT_PREF_CACHE_PREFIX + key);
+    if (raw === "1") return true;
+    if (raw === "0") return false;
+  } catch {
+    void 0;
+  }
+  return CHAT_PREF_DEFAULTS[key];
+}
+
+function readChatPref(key: ChatPrefKey): boolean {
+  let value = chatPrefValues.get(key);
+  if (value === undefined) {
+    value = cachedChatPref(key);
+    chatPrefValues.set(key, value);
+  }
+  return value;
+}
+
+function applyChatPref(key: ChatPrefKey, value: boolean): void {
+  const changed = readChatPref(key) !== value;
+  chatPrefValues.set(key, value);
+  try {
+    if (value === CHAT_PREF_DEFAULTS[key]) localStorage.removeItem(CHAT_PREF_CACHE_PREFIX + key);
+    else localStorage.setItem(CHAT_PREF_CACHE_PREFIX + key, value ? "1" : "0");
+  } catch {
+    void 0;
+  }
+  if (changed) for (const listener of chatPrefListeners) listener();
+}
+
+function writeChatPref(key: ChatPrefKey, value: boolean): void {
+  chatPrefTouched.add(key);
+  applyChatPref(key, value);
+  void putUiState(key, value, Date.now()).catch((error: unknown) => reportHandledError("web:save_chat_pref", error));
+}
+
+export function pinLatestPrompt(): boolean {
+  return readChatPref(PIN_LATEST_PROMPT_KEY);
+}
+
+export function alwaysSteer(): boolean {
+  return readChatPref(ALWAYS_STEER_KEY);
+}
+
+export function setPinLatestPrompt(value: boolean): void {
+  writeChatPref(PIN_LATEST_PROMPT_KEY, value);
+}
+
+export function setAlwaysSteer(value: boolean): void {
+  writeChatPref(ALWAYS_STEER_KEY, value);
+}
+
+export function onChatPrefsChange(listener: () => void): () => void {
+  chatPrefListeners.add(listener);
+  return () => chatPrefListeners.delete(listener);
+}
+
+export async function loadChatPrefs(): Promise<void> {
+  await Promise.all(
+    (Object.keys(CHAT_PREF_DEFAULTS) as ChatPrefKey[]).map(async (key) => {
+      try {
+        const rec = await fetchUiState(key);
+        if (chatPrefTouched.has(key)) return;
+        applyChatPref(key, typeof rec.value === "boolean" ? rec.value : CHAT_PREF_DEFAULTS[key]);
+      } catch (error) {
+        reportHandledError("web:load_chat_pref", error);
+      }
+    }),
+  );
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const r = await webFetch(withBase(path), { headers: { "content-type": "application/json" }, ...init });
   const text = await r.text();
@@ -786,27 +941,15 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     const msg = details?.message ?? details?.reason ?? details?.error ?? `HTTP ${r.status}`;
     throw new ApiError(msg, r.status, body);
   }
+  if (path === "/api/turn" && typeof init?.body === "string") {
+    const request = JSON.parse(init.body) as { desktopClientId?: string };
+    const response = body as { runId?: string } | null;
+    if (request.desktopClientId && response?.runId)
+      void serveDesktopRun(response.runId, request.desktopClientId, withBase, api).catch((error) =>
+        reportHandledError("desktop-computer", error),
+      );
+  }
   return body as T;
-}
-
-export interface RuntimeConfig {
-  interactiveFastMode?: boolean;
-  unavailableReason?: string;
-  scopeId: string;
-  approvedHarnesses: string[];
-  modelsByHarness: Record<string, string[]>;
-  modelCatalog: Record<string, ModelMetadata>;
-  orgDefault: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean; revision: number };
-  scopeOverride: {
-    harnessId: string;
-    modelId: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    orgRevision: number;
-  } | null;
-  effective: { harnessId: string; modelId: string; effortLevel?: string; fastMode?: boolean };
-  upgradeAvailable: boolean;
-  fastModeModelIds?: string[];
 }
 
 export async function fetchRuntimeConfig(scopeId?: string | null, account?: "company"): Promise<RuntimeConfig | null> {
@@ -822,17 +965,7 @@ export async function fetchRuntimeConfig(scopeId?: string | null, account?: "com
   }
 }
 
-export async function updateRuntimeConfig(
-  scopeId: string | null,
-  change: {
-    harnessId?: string;
-    modelId?: string;
-    effortLevel?: string;
-    fastMode?: boolean;
-    inherit?: boolean;
-    keep?: boolean;
-  },
-): Promise<RuntimeConfig> {
+export async function updateRuntimeConfig(scopeId: string | null, change: RuntimeChange): Promise<RuntimeConfig> {
   return api<RuntimeConfig>("/api/runtime-config", {
     method: "PUT",
     body: JSON.stringify({ ...change, ...(scopeId ? { scopeId } : {}) }),
@@ -1085,7 +1218,7 @@ async function driveApproval(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1135,15 +1268,15 @@ function turnRequestBody(
   const { idempotencyKey, attachments = [] } = send;
   const turnOptions = getTurnOptions?.() ?? {};
   const thinkingLevel =
-    !turnOptions.harness || harnessSupportsEffort(turnOptions.harness)
+    turnOptions.harness && harnessSupportsEffort(turnOptions.harness)
       ? (turnOptions.effortLevel ?? agent.state.thinkingLevel ?? defaultEffortForModel(model))
       : undefined;
   const timezone = browserTimezone();
   return {
+    desktopClientId: desktopTurnId(),
     text,
     threadRef,
-    ...(turnOptions.harness ? { harness: turnOptions.harness } : {}),
-    model: model.id,
+    ...(turnOptions.harness ? { harness: turnOptions.harness, model: model.id } : {}),
     ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
@@ -1162,7 +1295,7 @@ export function mintSendKey(): string {
   return crypto.randomUUID();
 }
 
-export function sendKeyOf(message: unknown): string | undefined {
+function sendKeyOf(message: unknown): string | undefined {
   const key = (message as SendKeyed | null)?.idempotencyKey;
   return typeof key === "string" && key ? key : undefined;
 }
@@ -1223,7 +1356,7 @@ async function drive(
       method: "POST",
       body: JSON.stringify({
         ...turnRequestBody(threadRef, text, model, agent, getTurnOptions, { idempotencyKey, attachments }),
-        ...(opener ? { proactiveOpener: true } : {}),
+        ...(opener ? { proactiveOpener: true, desktopClientId: undefined } : {}),
       }),
     });
 
@@ -1254,7 +1387,7 @@ async function drive(
     work.status = "complete";
     work.finishedAt = Date.now();
     notify();
-    finish(stream, partial, { acc: "", lastProgressAt: now() }, submit.reply ?? "");
+    finish(stream, partial, { acc: "", startOffset: 0, lastProgressAt: now() }, submit.reply ?? "");
   } catch (e) {
     work.status = "failed";
     work.finishedAt = Date.now();
@@ -1294,7 +1427,7 @@ async function resumeDrive(
     notify();
     stream.push({ type: "start", partial });
     stream.push({ type: "text_start", contentIndex: 0, partial });
-    const st: Acc = { acc: "", lastProgressAt: now() };
+    const st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() };
     // Keep any assistant text the transcript already showed for this in-flight
     // run visible: seed the accumulator with it so attaching the live stream
     // never blanks text the person has already read. The server's own partial
@@ -1318,7 +1451,7 @@ async function followRun(
   runId: string,
   signal?: AbortSignal,
   notify?: () => void,
-  st: Acc = { acc: "", lastProgressAt: now() },
+  st: Acc = { acc: "", startOffset: 0, lastProgressAt: now() },
   slot?: RunSlot,
   gen = 0,
 ): Promise<void> {
@@ -1348,6 +1481,7 @@ function runPath(runId: string, suffix: string): string {
 }
 
 export interface Acc {
+  startOffset: number;
   acc: string;
   lastProgressAt: number;
   staleSince?: number;
@@ -1376,6 +1510,21 @@ function parseActivity(raw: unknown): ToolActivity[] {
     });
   }
   return out;
+}
+
+function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offset = 0): boolean {
+  if (!work || typeof block.step !== "string" || !Number.isSafeInteger(block.index) || typeof block.text !== "string")
+    return false;
+  const blocks = work.reasoning ?? [];
+  const at = blocks.findIndex((b) => b.step === block.step && b.index === block.index);
+  const current = at >= 0 ? blocks[at]!.text : "";
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > current.length) return false;
+  const text = current.slice(0, offset) + block.text;
+  if (text.length <= current.length) return false;
+  const next = { step: block.step, index: block.index, text };
+  work.reasoning =
+    at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks.filter((b) => b.step === block.step), next];
+  return true;
 }
 
 function setWorkStale(work: WorkBlock | undefined, stale: boolean, notify?: () => void): void {
@@ -1416,10 +1565,28 @@ function applyRun(
     if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
     notify?.();
   }
+  if (work && typeof run.attempt === "number" && work.attempt !== run.attempt) {
+    if (work.attempt !== undefined && work.reasoning?.length) work.reasoning = [];
+    work.attempt = run.attempt;
+  }
+  if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
+    notify?.();
   setWorkStale(work, run.stale === true, notify);
+  if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
+    work.goal = run.goal;
+    notify?.();
+  }
+  if (work && run.runtime && JSON.stringify(run.runtime) !== JSON.stringify(work.runtime)) {
+    work.runtime = run.runtime;
+    notify?.();
+  }
   const p = typeof run.partial === "string" ? run.partial : "";
-  if (p.length > st.acc.length) {
-    st.lastProgressAt = now();
+  const startOffset = run.partialStartOffset ?? 0;
+  if (p && startOffset + p.length >= st.startOffset + st.acc.length) {
+    if (startOffset + p.length > st.startOffset + st.acc.length) st.lastProgressAt = now();
+    if (startOffset !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+    st.startOffset = startOffset;
+    if (work) work.streamStartOffset = startOffset;
     pushDelta(stream, partial, st, p);
   }
   if (!runIsTerminal(run)) return "open";
@@ -1431,7 +1598,7 @@ function applyRun(
   }
   const approvals = res?.pendingApprovals ?? [];
   const paused = approvals.length > 0;
-  const approvalDenied = approvalDeniedMessage(res?.reason);
+  const approvalDenied = res?.refusalKind === "approval_denied";
   const quiet = res?.status === "silent" || res?.status === "react";
   if (work) {
     work.finishedAt = typeof run.finishedAt === "number" ? run.finishedAt : Date.now();
@@ -1452,7 +1619,7 @@ function applyRun(
   }
   if (approvalDenied) {
     (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(stream, partial, st, approvalDenied);
+    finish(stream, partial, st, "Denied.");
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
@@ -1506,8 +1673,9 @@ export async function pollRun(
 export interface SessionStateEvent {
   threadRef: string;
   sessionId?: string;
-  state: "working" | "awaiting_approval" | "idle" | "metadata";
+  state: "working" | "awaiting_approval" | "idle" | "metadata" | "ui";
   at: number;
+  ui?: unknown;
 }
 
 export interface InboxItemEvent {
@@ -1580,16 +1748,6 @@ async function streamRunViaSse(
     clearTimeout(timer);
     timer = setTimeout(abort, SSE_SILENCE_MS);
   };
-  const processor = new StreamProcessor({
-    initialMessages: [{ id: runId, role: "assistant", parts: [{ type: "text", content: st.acc }] }],
-    events: { onTextUpdate: (_id, text) => pushDelta(stream, partial, st, text) },
-  });
-  processor.processChunk({ type: EventType.TEXT_MESSAGE_START, messageId: runId, role: "assistant" });
-  const append = (delta: string): void => {
-    if (!delta) return;
-    st.lastProgressAt = now();
-    processor.processChunk({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: runId, delta });
-  };
   const transport = fetchServerSentEvents(withBase(runPath(runId, "/events")), {
     credentials: "same-origin",
   });
@@ -1598,7 +1756,7 @@ async function streamRunViaSse(
       received();
       if (event.type !== "CUSTOM") continue;
       if (event.name === "delta") {
-        const value = event.value as { offset?: unknown; delta?: unknown };
+        const value = event.value as { offset?: unknown; delta?: unknown; startOffset?: number };
         if (
           typeof value.offset !== "number" ||
           !Number.isSafeInteger(value.offset) ||
@@ -1606,13 +1764,17 @@ async function streamRunViaSse(
           typeof value.delta !== "string"
         )
           return "fallback";
-        if (value.offset > st.acc.length) return "fallback";
-        const delta = value.delta.slice(st.acc.length - value.offset);
-        append(delta);
+        if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
+        applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
+      } else if (event.name === "reasoning") {
+        const value = event.value as { step: string; index: number; offset: number; delta: string };
+        const work = (partial as AssistantWork).work;
+        if (mergeReasoning(work, { step: value.step, index: value.index, text: value.delta }, value.offset)) {
+          st.lastProgressAt = now();
+          notify?.();
+        }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
-        if (typeof run.partial === "string" && run.partial.length > st.acc.length)
-          append(run.partial.slice(st.acc.length));
         // Completion must carry the final result, including files and approvals.
         const terminal = run.status === "done" || run.status === "failed" || run.result != null;
         if (applyRun(stream, partial, st, { ...run, replyComplete: terminal }, notify) === "terminal") return "done";
@@ -1668,6 +1830,28 @@ function abortStream(stream: AssistantMessageEventStream, partial: AssistantMess
   stream.end(error);
 }
 
+function applyStreamText(
+  stream: AssistantMessageEventStream,
+  partial: AssistantMessage,
+  st: Acc,
+  text: string,
+  offset: number,
+  startOffset: number,
+): void {
+  const end = st.startOffset + st.acc.length;
+  if (offset + text.length < end || (offset + text.length === end && startOffset <= st.startOffset)) return;
+  const start = Math.max(st.startOffset ?? 0, startOffset);
+  const next = offset > end ? text : st.acc + text.slice(Math.max(0, end - offset));
+  const nextStart = offset > end ? offset : st.startOffset;
+  const work = (partial as AssistantWork).work;
+  if (work) work.streamStartOffset = start;
+  if (start !== st.startOffset) (partial as AssistantWork).streamingBaseline = "";
+  st.acc = offset > end ? "" : st.acc.slice(start - st.startOffset);
+  st.lastProgressAt = now();
+  pushDelta(stream, partial, st, next.slice(start - nextStart));
+  st.startOffset = start;
+}
+
 function pushDelta(stream: AssistantMessageEventStream, partial: AssistantMessage, st: Acc, next: string): void {
   const delta = next.slice(st.acc.length);
   const block = partial.content[0];
@@ -1698,13 +1882,6 @@ function deliveredFilesFromAttachments(
       ...(typeof a.sizeBytes === "number" ? { sizeBytes: a.sizeBytes } : {}),
       ...(a.artifactId ? { artifactId: a.artifactId } : {}),
     }));
-}
-
-function approvalDeniedMessage(reason?: string): string | null {
-  const trimmed = reason?.trim();
-  if (!trimmed) return null;
-  if (trimmed === "approval denied") return "Denied.";
-  return trimmed.startsWith("approval denied for ") ? "Denied." : null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1740,6 +1917,7 @@ interface HistoryUserMessage {
   attachments?: HistoryAttachment[];
   steered?: boolean;
   speaker?: string;
+  speakerId?: string;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -1762,7 +1940,7 @@ function xmlAttrUnescape(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
+function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   const text = (payload as { text?: unknown } | null)?.text;
   if (typeof text !== "string") return undefined;
   const m = SUBAGENT_MAIL_RE.exec(text);
@@ -1770,7 +1948,7 @@ export function subagentMailOf(payload: unknown): SubagentMailRef | undefined {
   return { title: xmlAttrUnescape(m[1]!), sessionId: m[2]!, kind: m[3]! };
 }
 
-export interface HistorySystemNote {
+interface MessageRevisionNote {
   role: "system-note";
   note: "message_revision";
   action: "edited" | "deleted";
@@ -1779,6 +1957,15 @@ export interface HistorySystemNote {
   speaker?: string;
   timestamp?: number;
 }
+
+interface GoalCancelledNote {
+  role: "system-note";
+  note: "goal_cancelled";
+  content: string;
+  timestamp?: number;
+}
+
+export type HistorySystemNote = MessageRevisionNote | GoalCancelledNote;
 
 export interface HistoryApprovalDecision {
   role: "approval-decision";
@@ -1851,7 +2038,13 @@ export function messagesWithStreaming(messages: AgentMessage[], streaming?: Agen
   });
 }
 
-function messageRevisionPayload(payload: unknown): HistorySystemNote | null {
+function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
+  const p = payload as { kind?: unknown; objective?: unknown } | null;
+  if (p?.kind !== "goal_cancelled" || typeof p.objective !== "string") return null;
+  return { role: "system-note", note: "goal_cancelled", content: p.objective };
+}
+
+function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
   const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
@@ -1884,6 +2077,7 @@ export function userEntryMessage(
     runId?: string;
     steered?: boolean;
     name?: string;
+    speakerId?: string;
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
@@ -1900,6 +2094,7 @@ export function userEntryMessage(
     timestamp: entry.createdAt,
     ...(mail ? { subagentMail: mail } : {}),
     ...(payload?.steered ? { steered: true } : {}),
+    ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
     ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
     ...(attachments.length
@@ -1928,12 +2123,29 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
+const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+
+function deliveredSilence(a: ToolActivity): boolean {
+  if (a.type !== "tool_result") return false;
+  const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
+  return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
+}
+
+function isFinishedReplyEntry(entry: SessionEntry): boolean {
+  if (entry.type !== "text") return false;
+  const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
+  if (step?.stopReason !== "stop") return false;
+  return Boolean((entry.payload as { text?: string } | null)?.text?.trim());
+}
+
 export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): AgentMessage[] {
   const out: AgentMessage[] = [];
   const userByTs = new Map<string, HistoryUserMessage>();
   let pending: ToolActivity[] = [];
   let deliveryFiles: DeliveredFile[] = [];
   let posted = false;
+  let stoppedShown = false;
+  let hiddenPrompt = false;
   const heldPosts = new Map<string, { text: string; activity: ToolActivity }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.activity);
@@ -1976,12 +2188,15 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     entrySeqs: number[] = [],
   ): void => {
     if (!text && !pending.length && !deliveryFiles.length && !stopped) return;
+    if (stopped) stoppedShown = true;
+    if (hiddenPrompt && !text && !stopped && pending.some(deliveredSilence)) {
+      pending = pending.filter((a) => !SILENCE_TOOLS.has((a.payload as { tool?: string } | null)?.tool ?? ""));
+      if (!pending.some((a) => a.type === "tool_call") && !deliveryFiles.length) {
+        pending = [];
+        return;
+      }
+    }
     entrySeqs = [...entrySeqs, ...pending.map((entry) => entry.seq)];
-    const deliveredSilence = (a: ToolActivity): boolean => {
-      if (a.type !== "tool_result") return false;
-      const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
-      return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
-    };
     const lastText = pending.findLastIndex((a) => a.type === "text");
     if (lastText >= 0) {
       const segment = ((pending[lastText]!.payload as { text?: string } | null)?.text ?? "").trim();
@@ -2028,6 +2243,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     const payload = e.payload as {
       text?: string;
       display?: string;
+      tool?: string;
       callId?: string;
       attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
       files?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -2048,6 +2264,12 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         flushWork("", e.createdAt);
         out.push(decision as unknown as AgentMessage);
       }
+      continue;
+    }
+    if (isFinishedReplyEntry(e)) {
+      spillHeldPosts();
+      flushWork(text, e.createdAt, true, undefined, false, e.seq === undefined ? [] : [e.seq]);
+      posted = false;
       continue;
     }
     if (e.type !== "user" && ACTIVITY_TYPES.has(e.type)) {
@@ -2094,6 +2316,10 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
+      if (!payload?.steered) {
+        stoppedShown = false;
+        hiddenPrompt = payload?.hidden === true;
+      }
       if (payload?.hidden) continue;
       if (!payload?.steered) {
         posted = false;
@@ -2139,6 +2365,20 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {
+      if ((e.payload as { kind?: unknown } | null)?.kind === "turn_stopped") {
+        spillHeldPosts();
+        if (pending.length || !stoppedShown)
+          flushWork("", e.createdAt, !posted, undefined, true, e.seq === undefined ? [] : [e.seq]);
+        posted = false;
+        continue;
+      }
+      const goalNote = goalCancelledPayload(e.payload);
+      if (goalNote) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        out.push({ ...goalNote, timestamp: e.createdAt } as unknown as AgentMessage);
+        continue;
+      }
       const revision = messageRevisionPayload(e.payload);
       if (revision) {
         spillHeldPosts();

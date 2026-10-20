@@ -13,6 +13,9 @@ export interface DurableMap<T> {
   all(): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
   select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
+  selectEntries<K extends Extract<keyof T, string> = never>(
+    query: DurableMapSelect<T, K>,
+  ): Promise<Array<[string, Omit<T, K>]>>;
   get(id: string): Promise<T | null>;
   put(id: string, value: T): Promise<void>;
   putIfAbsent(id: string, value: T): Promise<T>;
@@ -59,14 +62,15 @@ function isAscii(text: string): boolean {
   return true;
 }
 
-export function selectValues<T, K extends Extract<keyof T, string>>(
-  values: readonly T[],
+export function selectEntries<T, K extends Extract<keyof T, string>>(
+  entries: ReadonlyArray<readonly [string, T]>,
   query: DurableMapSelect<T, K>,
-): Array<Omit<T, K>> {
+): Array<[string, Omit<T, K>]> {
   const folded = query.where ? new Set(query.where.anyOfFold.map((v) => v.toLowerCase())) : null;
-  const out: Array<Omit<T, K>> = [];
-  for (const value of values) {
+  const out: Array<[string, Omit<T, K>]> = [];
+  for (const [id, value] of entries) {
     if (query.limit !== undefined && out.length >= query.limit) break;
+    if (query.afterId !== undefined && id <= query.afterId) continue;
     if (folded && query.where) {
       const text = fieldText((value as Record<string, unknown>)[query.where.field]);
       if (text === null || !(folded.has(text.toLowerCase()) || !isAscii(text))) continue;
@@ -78,7 +82,7 @@ export function selectValues<T, K extends Extract<keyof T, string>>(
         projected[field] = Object.fromEntries(Object.entries(nested).filter(([key]) => keys.includes(key)));
     }
     for (const key of query.omit ?? []) delete projected[key];
-    out.push(projected as Omit<T, K>);
+    out.push([id, projected as Omit<T, K>]);
   }
   return out;
 }
@@ -108,12 +112,10 @@ export function createMemoryMap<T>(): DurableMap<T> {
       return sortedEntries();
     },
     async select(query) {
-      return selectValues(
-        sortedEntries()
-          .filter(([id]) => query.afterId === undefined || id > query.afterId)
-          .map(([, v]) => v),
-        query,
-      );
+      return selectEntries(sortedEntries(), query).map(([, value]) => value);
+    },
+    async selectEntries(query) {
+      return selectEntries(sortedEntries(), query);
     },
     async get(id) {
       return m.get(id) ?? null;
@@ -213,6 +215,14 @@ export function createPostgresMap<T>(
            ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]'`,
           ],
         },
+        {
+          id: `durable-map/${table}/stats-${field.toLowerCase()}`,
+          statements: [
+            `SET LOCAL lock_timeout = '3s'`,
+            `CREATE STATISTICS IF NOT EXISTS ${table}_${field.toLowerCase()}_stats ON (json->>'${field}') FROM ${table}`,
+            `ANALYZE ${table}`,
+          ],
+        },
       ];
     }),
   ];
@@ -259,6 +269,44 @@ export function createPostgresMap<T>(
     }
     return structuredClone(cache.entries);
   }
+  async function selectRows<K extends Extract<keyof T, string>>(
+    query: DurableMapSelect<T, K>,
+  ): Promise<Array<[string, Omit<T, K>]>> {
+    await ready();
+    const params: unknown[] = [[...(query.omit ?? [])]];
+    let projection = "json";
+    for (const [field, keys] of Object.entries(query.pickNested ?? {})) {
+      params.push(field, keys);
+      const fieldParam = `$${params.length - 1}`;
+      const keysParam = `$${params.length}`;
+      const nested = `CASE WHEN jsonb_typeof(json->${fieldParam}) = 'object' THEN
+          COALESCE((SELECT jsonb_object_agg(key, value) FROM jsonb_each(json->${fieldParam})
+            WHERE key = ANY(${keysParam}::text[])), '{}'::jsonb) ELSE json->${fieldParam} END`;
+      projection = `(${projection} || CASE WHEN json ? ${fieldParam} THEN
+          jsonb_build_object(${fieldParam}::text, ${nested}) ELSE '{}'::jsonb END)`;
+    }
+    let sql = `SELECT id, ${projection} - $1::text[] AS json FROM ${table}`;
+    if (query.where) {
+      const field = query.where.field;
+      if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid select field: ${field}`);
+      params.push(query.where.anyOfFold.map((v) => v.toLowerCase()));
+      sql += ` WHERE id IN (
+          SELECT id FROM ${table} WHERE lower(json->>'${field}') = ANY($${params.length}::text[])
+          UNION
+          SELECT id FROM ${table} WHERE json->>'${field}' ~ '[^\\x01-\\x7f]')`;
+    }
+    if (query.afterId !== undefined) {
+      params.push(query.afterId);
+      sql += `${query.where ? " AND" : " WHERE"} id > $${params.length}`;
+    }
+    sql += " ORDER BY id";
+    if (query.limit !== undefined) {
+      params.push(query.limit);
+      sql += ` LIMIT $${params.length}`;
+    }
+    const rows = await pg.q(sql, params);
+    return rows.map((row) => [row.id as string, row.json as Omit<T, K>]);
+  }
   return {
     async all() {
       return (await snapshot()).map(([, value]) => value);
@@ -267,42 +315,9 @@ export function createPostgresMap<T>(
       return snapshot();
     },
     async select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>) {
-      await ready();
-      const params: unknown[] = [[...(query.omit ?? [])]];
-      let projection = "json";
-      for (const [field, keys] of Object.entries(query.pickNested ?? {})) {
-        params.push(field, keys);
-        const fieldParam = `$${params.length - 1}`;
-        const keysParam = `$${params.length}`;
-        const nested = `CASE WHEN jsonb_typeof(json->${fieldParam}) = 'object' THEN
-          COALESCE((SELECT jsonb_object_agg(key, value) FROM jsonb_each(json->${fieldParam})
-            WHERE key = ANY(${keysParam}::text[])), '{}'::jsonb) ELSE json->${fieldParam} END`;
-        projection = `(${projection} || CASE WHEN json ? ${fieldParam} THEN
-          jsonb_build_object(${fieldParam}::text, ${nested}) ELSE '{}'::jsonb END)`;
-      }
-      let sql = `SELECT ${projection} - $1::text[] AS json FROM ${table}`;
-      if (query.where) {
-        params.push(
-          query.where.field,
-          query.where.anyOfFold.map((v) => v.toLowerCase()),
-        );
-        sql += ` WHERE id IN (
-          SELECT id FROM ${table} WHERE lower(json->>$${params.length - 1}) = ANY($${params.length}::text[])
-          UNION
-          SELECT id FROM ${table} WHERE json->>$${params.length - 1} ~ '[^\\x01-\\x7f]')`;
-      }
-      if (query.afterId !== undefined) {
-        params.push(query.afterId);
-        sql += `${query.where ? " AND" : " WHERE"} id > $${params.length}`;
-      }
-      sql += " ORDER BY id";
-      if (query.limit !== undefined) {
-        params.push(query.limit);
-        sql += ` LIMIT $${params.length}`;
-      }
-      const rows = await pg.q(sql, params);
-      return rows.map((row) => row.json as Omit<T, K>);
+      return (await selectRows(query)).map(([, value]) => value);
     },
+    selectEntries: selectRows,
     async get(id) {
       await ready();
       const rows = await pg.q(`SELECT json FROM ${table} WHERE id = $1`, [id]);

@@ -30,7 +30,7 @@ export async function assertDocumentListing(store: FileArtifactStore): Promise<v
   const disabled = (await put("disabled", "same", 0)).artifact;
   await store.setEnabled(disabled.id, false);
   await put("other-scope", "same", 5, { createdInScope: elsewhere });
-  const refs = [shared, second].map(({ ownerScopeId, path }) => ({ ownerScopeId, path }));
+  const refs = [shared, second].map(({ ownerScopeId, id }) => ({ ownerScopeId, id }));
   assert.deepEqual((await store.listDocuments([], [], { limit: 1 })).files, []);
   assert.deepEqual(
     (await store.listDocuments([], refs, { createdInScope: project })).files.map((f) => f.id),
@@ -43,15 +43,11 @@ export async function assertDocumentListing(store: FileArtifactStore): Promise<v
   );
   assert.ok(first.nextCursor);
   await put("second-later-copy", "different", 100, { ownerScopeId: teammate });
-  const next = await store.listDocuments(
-    [mine],
-    [...refs, { ownerScopeId: teammate, path: "artifacts/second-later-copy/report.txt" }],
-    {
-      createdInScope: project,
-      limit: 1,
-      cursor: first.nextCursor,
-    },
-  );
+  const next = await store.listDocuments([mine], [...refs, { ownerScopeId: teammate, id: "second-later-copy" }], {
+    createdInScope: project,
+    limit: 1,
+    cursor: first.nextCursor,
+  });
   assert.deepEqual(
     next.files.map((f) => f.id),
     ["owned"],
@@ -65,7 +61,7 @@ export async function assertDocumentListing(store: FileArtifactStore): Promise<v
     "raw artifact listing keeps the per-turn ledger",
   );
   assert.deepEqual(
-    (await store.resolveByOwnerPaths([shared, hidden])).map((f) => f.id).sort(),
+    (await store.resolveByIds([shared, hidden])).map((f) => f.id).sort(),
     ["hidden", "shared"],
     "exact handle lookups do not collapse",
   );
@@ -92,4 +88,34 @@ export async function assertDocumentListing(store: FileArtifactStore): Promise<v
     ["other-scope"],
   );
   assert.equal(scoped.nextCursor, undefined);
+}
+
+export async function assertSharedRecordIdentity(store: FileArtifactStore): Promise<void> {
+  const ownerScopeId = scopeId("personal", "record-owner");
+  const input = {
+    ownerScopeId,
+    createdBy: "record-owner",
+    path: "report.txt",
+    name: "report.txt",
+    mimetype: "text/plain",
+    direction: "out" as const,
+  };
+  await store.put({ ...input, id: "record-first", data: Buffer.from("first") });
+  await store.put({ ...input, id: "record-second", data: Buffer.from("second") });
+  const refs = [{ ownerScopeId, id: "record-first" }];
+  assert.deepEqual(
+    (await store.resolveByIds(refs)).map((file) => file.id),
+    ["record-first"],
+  );
+  assert.deepEqual(
+    (await store.listDocuments([], refs)).files.map((file) => file.id),
+    ["record-first"],
+  );
+  assert.deepEqual(
+    await store.resolveByIds([{ ownerScopeId: scopeId("personal", "stranger"), id: "record-first" }]),
+    [],
+  );
+  await store.delete("record-first");
+  assert.deepEqual(await store.resolveByIds(refs), []);
+  assert.deepEqual((await store.listDocuments([], refs)).files, []);
 }

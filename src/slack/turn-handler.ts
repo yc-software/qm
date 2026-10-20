@@ -6,7 +6,6 @@ import {
 } from "./external-access.ts";
 import type { SlackRateLimitNotice } from "./rate-limit-notice.ts";
 import type { SlackHistoryReader } from "./history.ts";
-import { performance } from "node:perf_hooks";
 import { slackFailureText } from "./turn-flow.ts";
 import { errMessage, reportFailure, reportFailureAs, swallowAs } from "../util/errors.ts";
 import {
@@ -15,25 +14,22 @@ import {
   type ConversationTurn,
   type OverheardMessage,
   type ReactionTally,
-  type RunTaskView,
   type GoalNoticeView,
   type GoalNoticePresenter,
   createGoalNoticePresenter,
   type SlackFile,
-  type TaskListPresenter,
   DEFAULT_ACK_REACTIONS,
   REACTION_DETECT_GUIDANCE,
+  REACTION_INSTRUCTION,
   botIdentityArgs,
   buildReactionTurnText,
   createAckPresenter,
   createDeduper,
-  createTaskListPresenter,
   createThreadTracker,
   decodeSlackEntities,
   dedupeKey,
   dedupedRun,
   deliveryCandidatesFor,
-  deliveryMetadata,
   statusPlaceholderKey,
   channelThreadRef,
   dmThreadRef,
@@ -55,10 +51,10 @@ import {
   refusalDelivery,
   refusalNote,
   renderConversationView,
+  resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
-  stripMention,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
@@ -74,14 +70,13 @@ import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
 import { reactionTallies } from "./conversation-view.ts";
 import type { SlackReactionEvent } from "./payloads.ts";
-import type { Approvals } from "./approvals.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
   type SlackConversationKind,
   applyAndLogReactions,
+  HANDOFF_INSTRUCTION,
   cleanAgentReplyForSlack,
   conversationPlaceLabel,
-  slackSurfaceInstructions,
 } from "./messaging.ts";
 
 interface Incoming {
@@ -99,10 +94,7 @@ interface Incoming {
   unprompted?: boolean;
   botAuthored?: boolean;
   synthetic?: boolean;
-  recvAt?: number;
-  recvWall?: number;
   ackGate?: AckGate;
-  eventTs?: number;
   prefetched?: {
     actor: ActorAssertion;
     timezone?: string;
@@ -147,7 +139,6 @@ export function createTurnHandler(deps: {
   mirror: Mirror;
   readHistory?: SlackHistoryReader;
   serializer: ConversationSerializer;
-  approvals: Approvals;
   ackEmoji: AckEmojiPicker;
   ackEmojiCandidates?: () => readonly string[] | null;
   ids: BotIdentity;
@@ -166,19 +157,8 @@ export function createTurnHandler(deps: {
     ensureOpts?: { pinNew?: boolean },
   ) => void;
 }): TurnHandler {
-  const {
-    core,
-    flow,
-    directory,
-    mirror,
-    serializer,
-    approvals,
-    ackEmoji,
-    ids,
-    threads,
-    deduper,
-    externalParticipantsEnabled,
-  } = deps;
+  const { core, flow, directory, mirror, serializer, ackEmoji, ids, threads, deduper, externalParticipantsEnabled } =
+    deps;
   const { classifyUserCached, classifyActor, getChannelInfo, channelMembership } = directory;
   const { mirrorMessageEvent } = mirror;
   const { callCore, inFlightRuns, inFlightRunByThread, ackRunDelivery } = flow;
@@ -214,11 +194,6 @@ export function createTurnHandler(deps: {
 
   async function handleIncoming(inc: Incoming, client: any): Promise<void> {
     deps.markEvent?.();
-    const t0 = inc.recvAt ?? performance.now();
-    const slackInflightMs =
-      inc.recvWall !== undefined && inc.eventTs !== undefined
-        ? Math.max(0, Math.round(inc.recvWall - inc.eventTs * 1000))
-        : undefined;
     let classified: { actor: ActorAssertion; timezone?: string };
     if (inc.actor) classified = { actor: inc.actor };
     else if (inc.prefetched)
@@ -232,7 +207,10 @@ export function createTurnHandler(deps: {
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(actor)) return;
     const timezone = classified.timezone;
-    const text = stripMention(inc.rawText, ids.botUserId);
+    const text = resolveMentions(
+      decodeSlackEntities(inc.rawText).trim(),
+      ids.botUserId && ids.botHandle ? new Map([[ids.botUserId, ids.botHandle]]) : undefined,
+    );
     if (!hasContent(text, inc.files)) return;
 
     let audience: ActorAssertion[] = [actor];
@@ -304,7 +282,6 @@ export function createTurnHandler(deps: {
 
     let queuedRunId: string | undefined;
     let accepted = false;
-    let taskList: TaskListPresenter | undefined;
     let goalNotice: GoalNoticePresenter | undefined;
 
     if (inc.kind === "channel") {
@@ -334,7 +311,7 @@ export function createTurnHandler(deps: {
         ? {
             location: "a direct message with the user",
             details: { channel: inc.channel, ...(inc.threadTs ? { thread_ts: inc.threadTs } : {}) },
-            instructions: slackSurfaceInstructions(inc.kind),
+            instructions: REACTION_INSTRUCTION,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           }
@@ -347,7 +324,7 @@ export function createTurnHandler(deps: {
                 : {}),
               ...(replyThreadTs ? { thread_ts: replyThreadTs } : {}),
             },
-            instructions: slackSurfaceInstructions(inc.kind),
+            instructions: `${REACTION_INSTRUCTION}\n\n${HANDOFF_INSTRUCTION}`,
             reactionGuidance: REACTION_DETECT_GUIDANCE,
             ...(ids.botHandle ? { botHandle: ids.botHandle } : {}),
           };
@@ -385,6 +362,7 @@ export function createTurnHandler(deps: {
     if (!inc.unprompted) {
       const intercepted = await maybeInterceptStop({
         text,
+        botHandle: ids.botHandle,
         threadRef,
         getInFlightRun: async (ref) =>
           (await core.activeRunForThread(ref).catch(swallowAs("slack: active-run lookup", undefined))) ??
@@ -402,10 +380,16 @@ export function createTurnHandler(deps: {
         taskManaged,
         postAck: async (text) => {
           const rendered = toSlackMrkdwn(text);
-          if (await taskList?.addLead(rendered)) return;
           const ts = await postReply(rendered, undefined, statusKey());
-          if (ts) {
-            await taskList?.attach(ts, rendered);
+          if (ts && queuedRunId && !inc.unprompted) {
+            try {
+              await core.reportRunEditRef(queuedRunId, ts);
+            } catch (error) {
+              await client.chat
+                .delete({ channel: inc.channel, ts })
+                .catch(swallowAs("slack: delete status message after edit-ref failure", undefined));
+              throw error;
+            }
           }
         },
         addReaction: (name) => client.reactions.add({ channel: inc.channel, timestamp: inc.ts, name }).then(() => {}),
@@ -424,28 +408,6 @@ export function createTurnHandler(deps: {
       }));
     const acknowledges = !inc.unprompted || !inc.synthetic;
     if (!inc.unprompted) startAck();
-    if (!inc.unprompted) {
-      taskList = createTaskListPresenter({
-        post: (text, blocks) => postReply(text, blocks, statusKey()),
-        update: (ts, text, blocks, metadata) =>
-          client.chat
-            .update({
-              channel: inc.channel,
-              ts,
-              text,
-              blocks,
-              ...(metadata ? { metadata } : {}),
-              ...botIdentityArgs(),
-            })
-            .then(() => {}),
-        checkpoint: async (ts) => {
-          if (queuedRunId) await core.reportRunEditRef(queuedRunId, ts);
-        },
-        remove: (ts) => client.chat.delete({ channel: inc.channel, ts }).then(() => {}),
-        onSurfacePosted: () => ack?.onSurfacePosted(),
-        onError: (error) => console.error("[slack-plugin] task-list update failed:", (error as Error).message),
-      });
-    }
     if (!inc.unprompted) {
       goalNotice = createGoalNoticePresenter({
         post: (text, blocks) => postReply(text, blocks),
@@ -544,6 +506,7 @@ export function createTurnHandler(deps: {
               ...(deps.externalAccess
                 ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
+              ...(replyThreadTs ? { replyThreadTs } : {}),
             },
           }
         : {}),
@@ -595,61 +558,46 @@ export function createTurnHandler(deps: {
         ? { redeliveryKey: `slack:${ids.botUserId || "bot"}:${inc.channel}:${inc.ts}` }
         : {}),
     };
-    const tSubmit = performance.now();
     let result: TurnResult;
     try {
-      result = await callCore(
-        { ...turn, intakePreambleMs: Math.round(tSubmit - t0), clientSentAt: Date.now() },
-        {
-          deferDeliveryAck: true,
-          ...(inc.synthetic
-            ? {}
-            : {
-                onReplying: () => {
-                  if (acknowledges) startAck();
-                  if (queuedRunId && replyThreadTs) deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs);
-                },
-              }),
-          onQueued: async (runId) => {
-            queuedRunId = runId;
-            inFlightRunByThread.set(threadRef, runId);
-            accepted = true;
-            inc.ackGate?.persisted();
-            await moveTaskAck(runId, inc.ts, true);
-          },
-          // Folded into a live run: the envelope is durably accepted just the same, but the run
-          // stays pinned to its own handler — claiming it here would unpin it on the way out.
-          onSteered: async (runId) => {
-            accepted = true;
-            inc.ackGate?.persisted();
-            await moveTaskAck(runId, inc.ts);
-          },
-          ...(acknowledges
-            ? {
-                onFirstBlock: (blockText: string) => {
-                  startAck().onFirstBlock(extractPrivateContinuation(cleanAgentReplyForSlack(blockText).text).text);
-                },
-                onSurfacePosted: () => startAck().onSurfacePosted(),
-              }
-            : {}),
-          ...(taskList
-            ? {
-                onTasks: async (tasks: RunTaskView[]) => {
-                  await ack?.drain();
-                  await taskList?.onTasks(tasks);
-                },
-              }
-            : {}),
-          ...(goalNotice
-            ? {
-                onGoal: (goal: GoalNoticeView) => {
-                  void goalNotice?.onGoal(goal);
-                },
-              }
-            : {}),
+      result = await callCore(turn, {
+        deferDeliveryAck: true,
+        ...(inc.synthetic
+          ? {}
+          : {
+              onReplying: () => {
+                if (acknowledges) startAck();
+                if (queuedRunId && replyThreadTs) deps.onEngaged?.(queuedRunId, inc.channel, replyThreadTs);
+              },
+            }),
+        onQueued: async (runId) => {
+          queuedRunId = runId;
+          inFlightRunByThread.set(threadRef, runId);
+          accepted = true;
+          inc.ackGate?.persisted();
+          await moveTaskAck(runId, inc.ts, true);
         },
-      );
-      await taskList?.settle();
+        onSteered: async (runId) => {
+          accepted = true;
+          inc.ackGate?.persisted();
+          await moveTaskAck(runId, inc.ts);
+        },
+        ...(acknowledges
+          ? {
+              onFirstBlock: (blockText: string) => {
+                startAck().onFirstBlock(extractPrivateContinuation(cleanAgentReplyForSlack(blockText).text).text);
+              },
+              onSurfacePosted: () => startAck().onSurfacePosted(),
+            }
+          : {}),
+        ...(goalNotice
+          ? {
+              onGoal: (goal: GoalNoticeView) => {
+                void goalNotice?.onGoal(goal);
+              },
+            }
+          : {}),
+      });
       await goalNotice?.settle();
     } catch (err) {
       await settleAck();
@@ -706,19 +654,12 @@ export function createTurnHandler(deps: {
         return;
       }
       if (inc.kind === "channel" && replyThreadTs) threads.mark(inc.channel, replyThreadTs, true);
-      const { text: replyBody, reactions, agentRequests } = cleanAgentReplyForSlack(result.reply ?? "");
-      const actionableAgentRequests = !deps.externalAccess && inc.kind === "channel" ? agentRequests : [];
-      const hasNonText = !!(
-        result.attachments?.length ||
-        reactions.length ||
-        actionableAgentRequests.length ||
-        result.pendingApprovals?.length
-      );
+      const { text: replyBody, reactions } = cleanAgentReplyForSlack(result.reply ?? "");
+      const hasNonText = !!(result.attachments?.length || reactions.length || result.pendingApprovals?.length);
       let reply = result.stopped ? "Stopped." : "(no response)";
       if (replyBody) reply = toSlackMrkdwn(replyBody);
       else if (hasNonText) reply = "";
       const postText = reply;
-      const tDeliverStart = performance.now();
       const runKey = queuedRunId ? `run:${queuedRunId}` : undefined;
       const deliverReply = async (): Promise<void> => {
         let uploadError: unknown;
@@ -731,30 +672,11 @@ export function createTurnHandler(deps: {
           }
         }
         await ack?.drain();
-        const finalizedTaskList = postText
-          ? ((await taskList?.finalize(postText, runKey ? deliveryMetadata(runKey) : undefined)) ?? false)
-          : false;
-        if (postText && !finalizedTaskList) await postReply(postText, undefined, runKey);
+        if (postText) await postReply(postText, undefined, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);
         await applyAndLogReactions(client, inc.channel, inc.ts, directives);
-        if (actionableAgentRequests.length) {
-          await approvals.postAgentRequests(
-            client,
-            {
-              requesterId: inc.userId,
-              channel: inc.channel,
-              ...(replyThreadTs ? { replyThreadTs } : {}),
-              threadOnly: true,
-              kind: conversationKind,
-              ...(channelName ? { channelName } : {}),
-              audience,
-              ...(slackIdsByPrincipal ? { slackIdsByPrincipal } : {}),
-            },
-            actionableAgentRequests,
-          );
-        }
         await settleAck();
         await finishTaskAck();
       };
@@ -778,14 +700,6 @@ export function createTurnHandler(deps: {
           return;
         }
         throw err;
-      }
-      if (queuedRunId) {
-        void core
-          .reportTurnMetrics(queuedRunId, {
-            deliverMs: Math.round(performance.now() - tDeliverStart),
-            ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
-          })
-          .catch(swallowAs("slack: turn-metrics report", undefined));
       }
     } else if (result.status === "pending_approval") {
       const pendingApprovals = result.pendingApprovals ?? [];
@@ -851,13 +765,9 @@ export function createTurnHandler(deps: {
   }
 
   async function dispatch(key: string, inc: Incoming, client: any): Promise<void> {
-    const eventTs = Number.parseFloat(inc.ts);
     const gate = inc.ackGate;
     const stamped: Incoming = {
       ...inc,
-      recvAt: performance.now(),
-      recvWall: Date.now(),
-      ...(Number.isFinite(eventTs) && eventTs > 0 ? { eventTs } : {}),
       ...(gate
         ? {
             ackGate: {

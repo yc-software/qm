@@ -29,7 +29,6 @@ function fakeCore(pending: Map<string, { text: string }>, events: string[]) {
     async readFileArtifact() {
       return Buffer.alloc(0);
     },
-    async reportTurnMetrics() {},
     async reportRunEditRef() {},
   } as any;
 }

@@ -18,6 +18,8 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
 import { ModalSandboxGoneError, type ModalClient } from "../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -27,6 +29,9 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "modal-ws-"))), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
     nativeSnapshotsEnabled: true,
@@ -113,8 +118,9 @@ test("force-through proxy env is set when a proxy url and token are present", as
     "secret",
   );
   const h = await s.provision(layers, { egressToken: token });
-  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY");
+  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY; echo $GIT_HTTP_PROXY_AUTHMETHOD");
   assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
+  assert.match(r.stdout, /^basic$/m);
 });
 
 test("large command output survives intact", async () => {
@@ -155,6 +161,9 @@ test("a create race with another core instance adopts the winner instead of erro
   };
   await make().provision(layers);
   const s = createModalSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "modal-ws-"))), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client: racing,
     namePrefix: "qmt",
   });
@@ -242,6 +251,25 @@ test("a sandbox older than rotateAfterMs is rotated at provision with files inta
   assert.equal(b.coldStart, false);
   assert.equal(await s.readFile(b, "keep.txt"), "survives rotation\n");
   assert.equal(fake.runningCount(), 1, "the stale box was terminated, not leaked");
+});
+
+test("an aged sandbox rotates only when its home can be carried over", async () => {
+  for (const [snapshots, rotates] of [
+    [undefined, false],
+    [createMemorySnapshotStore(), true],
+  ] as const) {
+    const store = createMemoryMap<StoredModalSandbox>();
+    const s = make({ store, snapshots, nativeSnapshotsEnabled: false });
+    const a = await s.provision(layers);
+    await s.writeFile(a, "keep.txt", "home\n");
+    await s.teardown(a);
+    await store.merge(scope, { createdAtMs: Date.now() - 21 * 3600_000 });
+    const before = fake.createdCount(scopeName());
+    const b = await s.provision(layers);
+    assert.equal(fake.createdCount(scopeName()) - before, rotates ? 1 : 0);
+    assert.equal(await s.readFile(b, "keep.txt"), "home\n");
+    await s.teardown(b, { destroy: true });
+  }
 });
 
 test("rotation snapshots changes written since the last teardown snapshot", async () => {

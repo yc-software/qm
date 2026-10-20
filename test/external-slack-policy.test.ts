@@ -1,3 +1,5 @@
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -339,40 +341,6 @@ test("delivery recovery routes private result only through its originating accou
   assert.deepEqual(acks, ["delivery"]);
 });
 
-test("external workspace refuses legacy personal-agent approval before reading its stored request", async () => {
-  const { createApprovals } = await import("../src/slack/approvals.ts");
-  const handlers: Array<{ pattern: RegExp; handler: (args: any) => Promise<void> }> = [];
-  const approvals = createApprovals({
-    externalAccess: true,
-    core: {
-      getAgentRequest: async () => {
-        throw new Error("legacy private request read");
-      },
-    } as never,
-    flow: {} as never,
-    directory: {} as never,
-    threads: {} as never,
-    ids: {} as never,
-  });
-  approvals.registerActions({
-    action: (pattern, handler) => {
-      handlers.push({ pattern, handler });
-    },
-  });
-  let acknowledged = false;
-  await handlers
-    .find(({ pattern }) => pattern.test("agent_request_run"))!
-    .handler({
-      ack: async () => {
-        acknowledged = true;
-      },
-      body: {},
-      action: { action_id: "agent_request_run", value: "legacy-private-bridge" },
-      client: {},
-    });
-  assert.equal(acknowledged, true);
-});
-
 test("external account poller neither claims default identity nor releases pre-policy answers", async () => {
   for (const [hasDefault, target, slackPolicyNamespace] of [
     [false, "CSHARED", undefined],
@@ -421,5 +389,27 @@ test("external account poller neither claims default identity nor releases pre-p
     });
     await poller.pollDeliveries(client);
     assert.deepEqual(acks, hasDefault ? ["legacy"] : []);
+  }
+});
+
+test("delegated human-origin runs cannot restart themselves as a person's private continuation", async () => {
+  const { runs } = createMemoryRunStore();
+  const client = createSlackCoreClient({ runs } as SlackCoreClientDeps);
+  const request = {
+    surface: "slack",
+    actor: { id: "employee", type: "internal" as const },
+    conversation: { kind: "dm" as const, threadRef: "external:dm", audience: [] },
+    origin: { kind: "human" as const },
+    externalSlack: { accountId: "partner", teamId: "TPARTNER", userId: "UEMPLOYEE", ...policy },
+    text: "continue privately",
+  };
+  const direct = await runs.enqueue({ sessionId: request.conversation.threadRef, request });
+  assert.ok(await client.privateContinuationSource!(direct.run.id));
+  for (const provenance of [{ sessionSenderId: "child" }, { delegatingRunId: direct.run.id }]) {
+    const delegated = await runs.enqueue({
+      sessionId: request.conversation.threadRef,
+      request: { ...request, ...provenance },
+    });
+    assert.equal(await client.privateContinuationSource!(delegated.run.id), null);
   }
 });

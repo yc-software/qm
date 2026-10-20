@@ -2,7 +2,7 @@ import "../support/auto-fake-sprites.ts";
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
+import { startMcpTestServer, type McpTestServer } from "../support/mcp-test-server.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 
@@ -22,62 +23,35 @@ interface WriteCall {
 describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHROPIC_API_KEY" : false }, () => {
   const facts: string[] = ["Josh's secret project codename is BLACKBEARD-42."];
   const writes: WriteCall[] = [];
-  let tokenMints = 0;
-  let knowledge: Server;
+  let knowledge: McpTestServer;
+  const closeKnowledge: Array<() => Promise<void>> = [];
   let server: Server;
   let base: string;
 
   before(async () => {
-    knowledge = createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        if (req.url === "/token") {
-          const params = new URLSearchParams(body);
-          if (params.get("client_id") !== "knowledge-id" || params.get("client_secret") !== "knowledge-secret") {
-            res.writeHead(401).end();
-            return;
+    knowledge = await startMcpTestServer(
+      { after: (fn) => void closeKnowledge.push(fn) },
+      {
+        tools: ["search_knowledge", "write_knowledge"].map((name) => ({
+          name,
+          inputSchema: { type: "object" as const },
+        })),
+        clients: { "knowledge-id": "knowledge-secret" },
+        call: (name, args) => {
+          if (name === "write_knowledge") {
+            writes.push({ content: String(args.content), acting_user: args.acting_user as string | undefined });
+            facts.push(String(args.content));
+            return { content: [{ type: "text", text: "stored" }] };
           }
-          tokenMints++;
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ access_token: "stub-token", expires_in: 3600 }));
-          return;
-        }
-        if (req.url === "/mcp") {
-          if (req.headers.authorization !== "Bearer stub-token") {
-            res.writeHead(401).end();
-            return;
-          }
-          const rpc = JSON.parse(body) as { id: number; method: string; params?: any };
-          const reply = (result: unknown) => {
-            res.writeHead(200, { "content-type": "application/json" });
-            res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
-          };
-          if (rpc.method === "tools/call") {
-            const { name, arguments: args } = rpc.params;
-            if (name === "search_knowledge") {
-              const q = String(args.query ?? "").toLowerCase();
-              const hits = q
-                ? facts.filter((f) => q.split(/\W+/).some((w) => w.length > 2 && f.toLowerCase().includes(w)))
-                : facts;
-              reply({ content: [{ type: "text", text: (hits.length ? hits : facts).join("\n") }] });
-              return;
-            }
-            if (name === "write_knowledge") {
-              writes.push({ content: String(args.content), acting_user: args.acting_user });
-              facts.push(String(args.content));
-              reply({ content: [{ type: "text", text: "stored" }] });
-              return;
-            }
-          }
-          reply({});
-          return;
-        }
-        res.writeHead(404).end();
-      });
-    });
-    await new Promise<void>((r) => knowledge.listen(0, r));
-    const knowledgeUrl = `http://127.0.0.1:${(knowledge.address() as AddressInfo).port}`;
+          const q = String(args.query ?? "").toLowerCase();
+          const hits = q
+            ? facts.filter((f) => q.split(/\W+/).some((w) => w.length > 2 && f.toLowerCase().includes(w)))
+            : facts;
+          return { content: [{ type: "text", text: (hits.length ? hits : facts).join("\n") }] };
+        },
+      },
+    );
+    const knowledgeUrl = knowledge.url;
 
     const providerJson = JSON.stringify({
       providers: [
@@ -132,7 +106,7 @@ describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHR
 
   after(async () => {
     await new Promise<void>((r) => server.close(() => r()));
-    await new Promise<void>((r) => knowledge.close(() => r()));
+    await Promise.all(closeKnowledge.map((close) => close()));
   });
 
   async function turn(text: string, threadRef: string): Promise<{ http: number; json: any }> {
@@ -154,7 +128,7 @@ describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHR
     assert.equal(r.http, 200);
     assert.equal(r.json.status, "ok");
     assert.match(r.json.reply, /BLACKBEARD-42/i);
-    assert.ok(tokenMints >= 1, "client-credentials token should have been minted");
+    assert.ok(knowledge.tokenRequests.length >= 1, "client-credentials token should have been minted");
   });
 
   it("explicit remember writes through to the external provider", { timeout: 180_000 }, async () => {

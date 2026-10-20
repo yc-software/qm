@@ -113,20 +113,21 @@ test(
       ]);
       assert.deepEqual(
         raced.map((response) => response.status),
-        raced[0]!.status === 200 ? [200, 400] : [409, 200],
+        [200, 200],
       );
       await read(first.base);
-      await read(second.base);
+      const both = (await read(second.base)).modelCatalog;
+      assert.ok(both["overlay-race-model"]);
+      assert.equal(both["custom/race-gateway/overlay-race-model"]?.name, "overlay-race-model");
       const cold = await start(isolatedDatabaseUrl, upstream.url);
       processes.push(cold.child);
       const coldConfig = await read(cold.base);
       assert.equal(coldConfig.effective.modelId, "overlay-pg-model");
       assert.equal(coldConfig.modelCatalog["overlay-pg-model"]?.contextWindow, 600_000);
       const reloaded = createModelOverlayStore(factory.map("model_registry"));
-      assert.equal(
-        (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")?.spec.contextWindow,
-        600_000,
-      );
+      const reloadedSpec = (await reloaded.statuses()).find((m) => m.spec.id === "overlay-pg-model")!.spec;
+      assert.ok("contextWindow" in reloadedSpec);
+      assert.equal(reloadedSpec.contextWindow, 600_000);
       assert.equal((await fetch(path, { method: "DELETE", headers })).status, 200);
       for (const instance of [second, cold]) {
         const deleted = await read(instance.base);

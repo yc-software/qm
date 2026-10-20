@@ -93,6 +93,30 @@ export async function readBackgroundWork(
   return parseBackgroundWorkStatus(response.body, deploymentId);
 }
 
+export async function readProductionOwner(
+  transport: BackgroundWorkTransport,
+  stoppedDeploymentId: string,
+): Promise<BackgroundWorkStatus> {
+  const response = await transport("GET");
+  if (response.status !== 200)
+    throw new CliError(`production background ownership read failed with HTTP ${response.status}`);
+  let value: unknown;
+  try {
+    value = JSON.parse(response.body);
+  } catch {
+    throw new CliError("background ownership returned invalid JSON");
+  }
+  if (!record(value) || value.protocol !== 2)
+    throw new CliError("production background ownership must use the single-owner protocol");
+  const responder = value.deploymentId;
+  if (!text(responder) || responder === stoppedDeploymentId)
+    throw new CliError("production background ownership was not reported by another deployment");
+  const status = parseBackgroundWorkStatus(response.body, responder);
+  if (status.ownerDeploymentId !== responder || !status.active)
+    throw new CliError("production does not have an active background owner");
+  return status;
+}
+
 export async function setBackgroundOwner(
   transport: BackgroundWorkTransport,
   deploymentId: string,

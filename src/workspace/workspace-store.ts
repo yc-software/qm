@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, readdir, opendir, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import type { ScopeId } from "../types.ts";
-import { scopeStorageKey } from "../util/scope-storage-key.ts";
+import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 
 export interface WorkspaceStore {
   scopeDir(scopeId: ScopeId): string;

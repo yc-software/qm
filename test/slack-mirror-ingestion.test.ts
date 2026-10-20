@@ -158,6 +158,24 @@ test("hidden messages never enter context or dispatch", async () => {
   assert.deepEqual(f.inbox, []);
 });
 
+test("inbox events take DM-ness from Slack's channel_type, not the channel id", async () => {
+  const f = fixture();
+  for (const [channel, channel_type] of [
+    ["D1", "channel"],
+    ["G1", "mpim"],
+    ["C1", "im"],
+  ])
+    await f.fire({ type: "message", channel, channel_type, user: "U1", ts: "5.000001", text: "hi" });
+  assert.deepEqual(
+    f.inbox.map(([, msg]) => [msg.channel, msg.isDirectMessage]),
+    [
+      ["D1", false],
+      ["G1", true],
+      ["C1", true],
+    ],
+  );
+});
+
 test("a system-message edit arriving first is already handled", async () => {
   const f = fixture();
   await f.fire({

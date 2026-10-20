@@ -50,6 +50,18 @@ test("descendants roll grandchildren up to the top-level parent", () => {
   );
 });
 
+test("descendants keep list order across parents and follow a replaced list", () => {
+  const interleaved = [row("q1", "q"), row("p1", "p"), row("p", "root"), row("q", "root")];
+  assert.deepEqual(
+    descendantsOf(interleaved, "root").map(({ session }) => session.id),
+    ["p", "q", "q1", "p1"],
+  );
+  const before = [row("root"), row("a", "root")];
+  assert.deepEqual(subagentCounts(before, "root"), { running: 0, waiting: 0 });
+  const after = [...before, row("b", "root", { working: true })];
+  assert.deepEqual(subagentCounts(after, "root"), { running: 1, waiting: 0 }, "a new list array sees its new children");
+});
+
 test("running and waiting counts feed the sidebar and tab badge", () => {
   assert.deepEqual(subagentCounts(list, "root"), { running: 2, waiting: 1 });
   assert.deepEqual(subagentCounts(list, "other"), { running: 0, waiting: 0 });

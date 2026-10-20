@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { readEnvFile } from "../../../cli/src/util.ts";
 import { killTree } from "./proc.ts";
 
 function nodePids(): Array<{ pid: number; command: string }> {
@@ -43,12 +44,7 @@ function processCwd(pid: number): string {
 }
 
 function envFileToken(cwd: string): string {
-  try {
-    const match = readFileSync(`${cwd}/.env`, "utf8").match(/^SLACK_APP_TOKEN=(.+)$/m);
-    return match?.[1]?.trim() ?? "";
-  } catch {
-    return "";
-  }
+  return readEnvFile(`${cwd}/.env`).get("SLACK_APP_TOKEN") ?? "";
 }
 
 export interface OrphanSweepResult {

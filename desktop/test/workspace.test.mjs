@@ -9,7 +9,11 @@ async function workspace(platform = "darwin") {
   const dom = new JSDOM('<div id="sidebar-body"></div><textarea></textarea>', { runScripts: "outside-only" });
   const { window } = dom;
   window.process = { platform };
-  window.require = () => ({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: { invoke() {} } });
+  const listeners = new Map();
+  window.require = () => ({
+    contextBridge: { exposeInMainWorld() {} },
+    ipcRenderer: { invoke() {}, on: (name, listener) => listeners.set(name, listener) },
+  });
   window.HTMLElement.prototype.checkVisibility = function () {
     return !this.closest("[hidden], .collapsed, .sidebar-closed");
   };
@@ -42,6 +46,7 @@ async function workspace(platform = "darwin") {
     opened,
     add,
     key,
+    cycle: (step) => listeners.get("qm:cycle-tab")({}, step),
     close: () => {
       window.dispatchEvent(new window.Event("blur"));
       window.close();
@@ -141,6 +146,24 @@ test("the compact sidebar remains a shortcut target when it is an accessible mod
     app.add("first");
     app.key("1", { metaKey: true });
     assert.deepEqual(app.opened, ["first"]);
+  } finally {
+    app.close();
+  }
+});
+
+test("cycle-tab commands reach the page unless a modal dialog is open", async () => {
+  const app = await workspace();
+  try {
+    const steps = [];
+    app.window.addEventListener("qm:cycle-tab", (event) => steps.push(event.detail));
+    app.cycle(1);
+    const dialog = app.window.document.createElement("dialog");
+    dialog.open = true;
+    app.window.document.body.append(dialog);
+    app.cycle(1);
+    dialog.remove();
+    app.cycle(-1);
+    assert.deepEqual(steps, [1, -1]);
   } finally {
     app.close();
   }

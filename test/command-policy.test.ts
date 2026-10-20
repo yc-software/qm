@@ -189,6 +189,31 @@ test("a dangerous-looking pattern inside data (heredoc body, quoted literal) is 
   assert.equal(evaluateCommand('git commit -m "drop table users"', p).decision, "allow");
 });
 
+test("quotes, comments, and line continuations are read the way the shell reads them", () => {
+  const p = defaultOrgPolicy();
+  for (const command of [
+    `echo 'a"b'; rm -rf /tmp/x; echo "c'"`,
+    "r\\\nm -rf /tmp/x",
+    "rm -r\\\nf /tmp/x",
+    "sudo psql -c 'drop table t'",
+    "printf 'rm -rf /tmp/x' | bash > log",
+    "psql <<< 'drop table users'",
+    "pgcli app <<EOF\ndrop table users;\nEOF",
+    `echo 'import os; os.system("rm -rf /")' | python3`,
+    "rm \\\n  -rf /tmp/x",
+    'bash -c "r\\\nm -rf /tmp/x"',
+    "psql -c 'select 1 # 2; drop table t'",
+    "ba\\\n\\\nsh -c 'rm -rf /tmp/x'",
+    "echo 'rm -rf /tmp/x' | ba\\\n\\\nsh",
+    "bash <<\\\n< 'rm -rf /tmp/x'",
+  ]) {
+    assert.equal(evaluateCommand(command, p).decision, "require_approval", command);
+  }
+  for (const command of ["ls # rm -rf /", "git push origin main # --force", "cat > x <<END-OF\nrm -rf /\nEND-OF"]) {
+    assert.equal(evaluateCommand(command, p).decision, "allow", command);
+  }
+});
+
 test("a real dangerous command is still gated even when the turn also writes a heredoc", () => {
   const p = defaultOrgPolicy();
   const cmd = ["cat > note.txt <<EOF", "harmless body", "EOF", "git push --force origin main"].join("\n");

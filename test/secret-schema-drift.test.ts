@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { FIRST_PARTY_SECRET_SPECS } from "../cli/src/secrets.ts";
 import { MODEL_PROVIDERS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts";
+import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
 
@@ -18,7 +19,7 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
 
 test("background ownership requires strong control credentials only for configured deployments", () => {
   assert.deepEqual(validateCoreSecretEnv({}), []);
-  for (const secret of [undefined, "", " ".repeat(32), "short"]) {
+  for (const secret of [undefined, "", " ".repeat(32), "short", "separate-control-secret-value-0000000000\n"]) {
     assert.deepEqual(
       validateCoreSecretEnv({
         BACKGROUND_DEPLOYMENT_ID: "core:release",
@@ -26,6 +27,7 @@ test("background ownership requires strong control credentials only for configur
       }),
       ["DEPLOYMENT_CONTROL_SECRET"],
     );
+    assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", secret), true, `the CLI preflight agrees on ${secret}`);
   }
   assert.deepEqual(
     validateCoreSecretEnv({
@@ -34,6 +36,7 @@ test("background ownership requires strong control credentials only for configur
     }),
     [],
   );
+  assert.equal(cliRejectsSecret("DEPLOYMENT_CONTROL_SECRET", "separate-control-secret-value-0000000000"), false);
 });
 
 test('deploy/core/Dockerfile pins NODE_ENV=production — the "production" secret gate is load-bearing on that line', () => {
@@ -84,11 +87,15 @@ test("a declared base model provider is enforced at boot, not just at deploy tim
   assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
 });
 
-test("an OpenAI base model on the Codex harness reports its one missing key once", () => {
+test("an OpenAI base model needs an API key unless a company ChatGPT login serves it", () => {
+  assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: "openai" } as NodeJS.ProcessEnv), ["OPENAI_API_KEY"]);
   assert.deepEqual(
-    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", HARNESS: "codex" } as NodeJS.ProcessEnv),
-    ["OPENAI_API_KEY"],
-    "two rules wanting the same key must not name it twice",
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
+    [],
+  );
+  assert.deepEqual(
+    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_FILE: "/tmp/auth.json" } as NodeJS.ProcessEnv),
+    [],
   );
 });
 
@@ -120,6 +127,7 @@ test("production rejects weak encryption key material for managed credentials", 
     CORE_SIGNING_SECRET: strong,
     PORTAL_IDENTITY_SECRET: "identity",
     SKILL_SIGNING_SECRET: strong,
+    DATABASE_URL: "postgres://qm@localhost/qm",
   } as NodeJS.ProcessEnv;
   assert.deepEqual(validateCoreSecretEnv(env), []);
   assert.deepEqual(validateCoreSecretEnv({ ...env, CONNECTOR_SECRET_KEY: "short" }), ["CONNECTOR_SECRET_KEY"]);
@@ -140,6 +148,12 @@ test("both porter roles share PORTER_DEPLOY_API_TOKEN", () => {
     } as NodeJS.ProcessEnv),
     [],
   );
+});
+
+test("E2B sandboxes and E2B publishing share E2B_API_KEY", () => {
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
+  assert.deepEqual(validateCoreSecretEnv({ SANDBOX_BACKEND: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
+  assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "k" } as NodeJS.ProcessEnv), []);
 });
 
 test("shared Fly publishing validates its private peer secret", () => {

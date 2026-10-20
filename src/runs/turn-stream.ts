@@ -1,10 +1,19 @@
+import type { GoalRecord } from "../harness/goal.ts";
+import type { TurnRuntime } from "../types.ts";
+
 export interface GoalView {
   objective: string;
-  status: "active" | "paused" | "complete" | "blocked";
+  status: "active" | "paused" | "complete" | "cancelled";
 
   floor?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ReasoningBlock {
+  step: string;
+  index: number;
+  text: string;
 }
 
 export interface TurnStream {
@@ -12,13 +21,19 @@ export interface TurnStream {
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
+  publishReasoning(runId: string, step: string, index: number, delta: string): void;
+  settleReasoning(runId: string, step: string, index: number): void;
+  reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
+  noteRuntime(runId: string, runtime: TurnRuntime): void;
+  runtime(runId: string): TurnRuntime | null;
   firstBlock(runId: string): { text: string; closed: boolean } | null;
   markSurfacePosted(runId: string): void;
   surfacePosted(runId: string): boolean;
   snapshot(runId: string): string | null;
+  startOffset(runId: string): number;
   markReplyDone(runId: string): void;
   isReplyDone(runId: string): boolean;
   end(runId: string): void;
@@ -32,10 +47,13 @@ interface TurnStreamListener {
 
 interface Entry {
   text: string;
+  totalChars: number;
   goal: GoalView | null;
+  runtime: TurnRuntime | null;
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
+  reasoning: ReasoningBlock[];
   surfacePosted: boolean;
   replying: boolean;
   replyDone: boolean;
@@ -45,7 +63,8 @@ interface Entry {
 export interface TurnStreamOptions {
   maxChars?: number;
   graceMs?: number;
-  onDelta?(runId: string, text: string, offset: number): void;
+  onDelta?(runId: string, text: string, offset: number, startOffset: number): void;
+  onReasoning?(runId: string, block: Omit<ReasoningBlock, "text">, text: string, offset: number): void;
   onChange?(runId: string): void;
 }
 
@@ -53,14 +72,19 @@ const DEFAULT_MAX_CHARS = 200_000;
 const DEFAULT_GRACE_MS = 30_000;
 const FIRST_BLOCK_MAX_CHARS = 20_000;
 const BLOCK_JOIN = "\n\n";
+export const REASONING_MAX_BLOCKS = 8;
+const REASONING_MAX_CHARS = 20_000;
 
 function makeEntry(partial: Partial<Entry> = {}): Entry {
   return {
     text: "",
+    totalChars: 0,
     goal: null,
+    runtime: null,
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
+    reasoning: [],
     surfacePosted: false,
     replying: true,
     replyDone: false,
@@ -70,7 +94,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
 }
 
 export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
-  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
+  const maxChars = Math.max(2, opts.maxChars ?? DEFAULT_MAX_CHARS);
   const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
   const runs = new Map<string, Entry>();
   const listeners = new Map<string, Set<TurnStreamListener>>();
@@ -84,11 +108,24 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     return entry;
   };
 
+  const append = (runId: string, entry: Entry, delta: string): void => {
+    const offset = entry.totalChars;
+    entry.totalChars += delta.length;
+    entry.text += delta;
+    if (entry.text.length > maxChars)
+      entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
+    opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
+  };
+
   return {
     begin(runId) {
       const entry = runs.get(runId);
-      if (entry) entry.replying = true;
-      else runs.set(runId, makeEntry());
+      if (entry) {
+        entry.replying = true;
+        entry.reasoning = [];
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = null;
+      } else runs.set(runId, makeEntry());
       opts.onChange?.(runId);
     },
 
@@ -106,12 +143,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       }
       if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
         entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
-      const offset = entry.text.length;
-      if (offset < maxChars) {
-        const added = delta.slice(0, maxChars - offset);
-        entry.text += added;
-        opts.onDelta?.(runId, added, offset);
-      }
+      append(runId, entry, delta);
     },
 
     publishBlockStart(runId) {
@@ -119,10 +151,30 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (!entry) return;
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
-      const offset = entry.text.length;
-      const added = BLOCK_JOIN.slice(0, Math.max(0, maxChars - offset));
-      entry.text += added;
-      if (added) opts.onDelta?.(runId, added, offset);
+      append(runId, entry, BLOCK_JOIN);
+    },
+
+    publishReasoning(runId, step, index, delta) {
+      const entry = ensure(runId);
+      let block = entry.reasoning.find((b) => b.step === step && b.index === index);
+      if (!block) {
+        block = { step, index, text: "" };
+        entry.reasoning = [...entry.reasoning, block].slice(-REASONING_MAX_BLOCKS);
+      }
+      const piece = delta.slice(0, Math.max(0, REASONING_MAX_CHARS - block.text.length));
+      if (!piece) return;
+      const offset = block.text.length;
+      block.text += piece;
+      opts.onReasoning?.(runId, { step, index }, piece, offset);
+    },
+
+    settleReasoning(runId, step, index) {
+      const entry = runs.get(runId);
+      if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
+    },
+
+    reasoning(runId) {
+      return (runs.get(runId)?.reasoning ?? []).map((b) => ({ ...b }));
     },
 
     noteToolCall(runId) {
@@ -141,6 +193,15 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     goal(runId) {
       return runs.get(runId)?.goal ?? null;
+    },
+
+    noteRuntime(runId, runtime) {
+      ensure(runId).runtime = runtime;
+      opts.onChange?.(runId);
+    },
+
+    runtime(runId) {
+      return runs.get(runId)?.runtime ?? null;
     },
 
     firstBlock(runId) {
@@ -163,6 +224,11 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     snapshot(runId) {
       const text = runs.get(runId)?.text;
       return text ? text : null;
+    },
+
+    startOffset(runId) {
+      const entry = runs.get(runId);
+      return entry ? entry.totalChars - entry.text.length : 0;
     },
 
     markReplyDone(runId) {
@@ -200,36 +266,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
   };
 }
 
-export function goalViewFromEntry(type: string, payload: unknown): GoalView | null {
-  if (type !== "tool_result" && type !== "system") return null;
-  const p = payload as { tool?: unknown; kind?: unknown; goal?: unknown } | null;
-  if (!p || typeof p !== "object") return null;
-  const carrier =
-    type === "system"
-      ? p.kind === "goal"
-      : p.tool === "goal" || p.tool === "create_goal" || p.tool === "update_goal" || p.tool === "get_goal";
-  if (!carrier) return null;
-  const goal = p.goal as
-    | {
-        objective?: unknown;
-        status?: unknown;
-        floor?: Record<string, unknown> | null;
-        createdAt?: unknown;
-        updatedAt?: unknown;
-      }
-    | null
-    | undefined;
-  if (!goal || typeof goal !== "object") return null;
-  if (typeof goal.objective !== "string" || !goal.objective.trim()) return null;
-  const status = goal.status;
-  if (status !== "active" && status !== "paused" && status !== "complete" && status !== "blocked") return null;
-  const floor = formatFloor(goal.floor ?? null);
+export function goalView(goal: GoalRecord): GoalView {
+  const floor = formatFloor((goal.floor as Record<string, unknown> | undefined) ?? null);
   return {
     objective: goal.objective,
-    status,
+    status: goal.status,
     ...(floor ? { floor } : {}),
-    createdAt: typeof goal.createdAt === "number" ? goal.createdAt : Date.now(),
-    updatedAt: typeof goal.updatedAt === "number" ? goal.updatedAt : Date.now(),
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
   };
 }
 

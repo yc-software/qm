@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   awaitBackgroundWork,
   parseBackgroundWorkStatus,
+  readProductionOwner,
   setBackgroundOwner,
   type BackgroundWorkStatus,
   type BackgroundWorkTransport,
@@ -175,4 +176,30 @@ test("activation waits for every expected process to report activity and refuses
     ),
     /timed out awaiting 1 new-cohort process\(es\) to stop background work; 0 confirmed/,
   );
+});
+
+test("production ownership for a stopped cohort must come from another active single-owner deployment", async () => {
+  const read = (status: number, value: unknown) =>
+    readProductionOwner(
+      async () => ({ status, body: typeof value === "string" ? value : JSON.stringify(value) }),
+      "old-cohort",
+    );
+  assert.deepEqual(await read(200, state()), state());
+  await assert.rejects(read(503, state()), /HTTP 503/);
+  await assert.rejects(read(200, "not json"), /invalid JSON/);
+  await assert.rejects(read(200, null), /single-owner protocol/);
+  await assert.rejects(
+    read(200, { ...state(), protocol: 1, enabled: true, desiredDeploymentId: "new-cohort", members: [] }),
+    /single-owner protocol/,
+  );
+  await assert.rejects(
+    read(200, state({ deploymentId: "old-cohort", ownerDeploymentId: "old-cohort" })),
+    /another deployment/,
+  );
+  await assert.rejects(read(200, { ...state(), deploymentId: "" }), /another deployment/);
+  await assert.rejects(read(200, state({ ownerDeploymentId: "old-cohort" })), /active background owner/);
+  await assert.rejects(read(200, state({ ownerDeploymentId: "third-cohort" })), /active background owner/);
+  await assert.rejects(read(200, state({ ownerDeploymentId: null })), /active background owner/);
+  await assert.rejects(read(200, state({ active: false })), /active background owner/);
+  await assert.rejects(read(200, { ...state(), active: "yes" }), /does not match/);
 });

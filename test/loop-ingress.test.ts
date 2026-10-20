@@ -133,6 +133,7 @@ test("Slack validates signatures, challenge, workspace, channels, bot exclusion 
       channel: "C123",
       user: "U123",
       text: "Please review",
+      channel_type: "channel",
       ts: "1750000000.001",
       thread_ts: "1740000000.001",
     },
@@ -151,6 +152,12 @@ test("Slack validates signatures, challenge, workspace, channels, bot exclusion 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.sourceKey, "C123:1740000000.001");
   assert.equal(items[0]?.source, "slack");
+  assert.deepEqual(items[0]?.sourcePayload?.slack, {
+    channelId: "C123",
+    ts: "1750000000.001",
+    isDirectMessage: false,
+    threadTs: "1740000000.001",
+  });
   assert.equal(items[0]?.sourcePayload?.context, undefined);
   assert.equal(items[0]?.sourcePayload?.snippet, event.event.text);
 });

@@ -17,7 +17,7 @@ import {
   safeModelMetadata,
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { validateCustomProviderSpec } from "../src/model/custom-providers.ts";
+import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 
 const config = {
@@ -104,7 +104,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupportedByHarness(id, "pi"), true);
-  for (const harness of ["opencode", "claude", "codex"]) assert.equal(modelSupportedByHarness(id, harness), false);
+  assert.equal(modelSupportedByHarness(id, "claude"), false);
   assert.equal(modelServiceable(id, { anthropic: true, openai: true, openrouter: true }), false);
   assert.equal(
     modelServiceable(id, { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) }),
@@ -128,7 +128,13 @@ test("only models present in both responses with valid chat capabilities are sel
   ]);
   f.listing(["vendor/new-model", "embed", "no-tools", "no-context", "bad-price", "bad-output"]);
   await f.catalog.refresh();
-  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model"]);
+  assert.deepEqual(Object.keys(f.catalog.transport.models), ["gateway/vendor/new-model", "gateway/embed"]);
+  assert.deepEqual(
+    builtInModelCatalog()
+      .filter((m) => m.id.startsWith("gateway/"))
+      .map((m) => m.id),
+    ["gateway/vendor/new-model"],
+  );
 });
 
 test("successful revocation clears legacy aliases and cached models and cannot be undone by a failure", async () => {
@@ -203,7 +209,7 @@ test("malformed and oversized catalogs cannot grant access", async () => {
   }
 });
 
-test("gateway namespace cannot be registered by custom providers even before discovery", () => {
+test("custom provider models live in their own namespace, never the gateway one", () => {
   assert.doesNotThrow(() =>
     validateCustomProviderSpec({
       id: "gateway",
@@ -221,22 +227,26 @@ test("gateway namespace cannot be registered by custom providers even before dis
     baseUrl: config.url,
     models: [{ id: "gateway/future" }],
   };
-  assert.throws(() => validateCustomProviderSpec(spec), /already registered/);
+  assert.doesNotThrow(() => validateCustomProviderSpec(spec));
+  setCustomProviders([spec]);
+  assert.equal(resolveModel("custom/custom/gateway/future")?.provider, "custom");
+  assert.equal(resolveModel("gateway/future"), undefined);
+  setCustomProviders([]);
   assert.throws(
     () => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }),
     /must match/,
   );
 });
 
-test("removed gateway selections never fall back to a different org or direct model", () => {
+test("removed gateway selections never fall back to a different org or direct model", async () => {
   const store = createMemoryConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-5" };
-  store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
-  store.setRuntimeSelection(org, fallback);
-  store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, fallback);
+  await store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
 });
 
@@ -318,4 +328,23 @@ test("gateway document support uses provider metadata rather than vision alone",
   assert.equal(nativeDocumentFormat(resolveModel("gateway/google-docs")!, pdf), "chat");
   for (const id of ["unknown-docs", "mixed-docs"])
     assert.equal(nativeDocumentFormat(resolveModel(`gateway/${id}`)!, pdf), undefined);
+});
+
+test("gateway models send session-affinity headers on every API", async () => {
+  const f = fixture([
+    group("chat-model"),
+    group("anthropic-model", { providers: ["anthropic"] }),
+    group("openai-model", { providers: ["openai"] }),
+  ]);
+  await f.catalog.refresh();
+  const apis = new Set<string>();
+  for (const id of ["chat-model", "anthropic-model", "openai-model"]) {
+    const model = resolveModel(`gateway/${id}`)!;
+    apis.add(model.api);
+    assert.equal(
+      (model.compat as { sendSessionAffinityHeaders?: boolean } | undefined)?.sendSessionAffinityHeaders,
+      true,
+    );
+  }
+  assert.deepEqual([...apis].sort(), ["anthropic-messages", "openai-completions", "openai-responses"]);
 });

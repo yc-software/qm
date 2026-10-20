@@ -20,7 +20,6 @@ import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts
 import { externalMemberActive } from "../identity/external-members.ts";
 import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
-import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
 import type { Cron } from "../types.ts";
@@ -48,11 +47,10 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "members" | "destination">): boolean =>
+    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
       allowed(c.ownerScopeId) &&
       (viewersOwn(c.owner) ||
         scopeNames.has(c.ownerScopeId) ||
-        c.members?.some((m) => viewersOwn(m.id)) === true ||
         (c.destination?.type === "principal" && viewersOwn(c.destination.target))),
   };
 }
@@ -76,13 +74,12 @@ export function createMessagingMethods(
   | "latestCronFireForThread"
   | "setCronDestination"
   | "setCronRuntime"
-  | "setCronRecipientConsent"
   | "createWebhook"
   | "getWebhook"
   | "listWebhooks"
   | "listWebhookEvents"
   | "setWebhookEnabled"
-  | "setWebhookRecipientConsent"
+  | "updateWebhook"
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
@@ -124,8 +121,6 @@ export function createMessagingMethods(
   | "resolveReachTarget"
 > {
   const { adminBase, resolveReachTargetFor } = h;
-  const openMember = (actorId: string, scope: ScopeId) =>
-    isOpenScopeMember({ actorId, scope, config: deps.config, isCurrentSharedScopeMember: h.principalCanWriteScope });
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
@@ -173,14 +168,6 @@ export function createMessagingMethods(
     async createCron(input) {
       await validateRuntime(input);
       validateUserSchedule(input.schedule);
-      if (input.runAs === "scopeShared") {
-        if (input.ownerScopeId.startsWith("personal:"))
-          throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
-        const open = await openMember(input.owner, input.ownerScopeId);
-        if (!input.members?.length && !open)
-          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
-        if (open) input = { ...input, ownerResourcesRequireOpen: true };
-      }
       const cron = await deps.crons.create(input);
       deps.auditLog.record({
         at: Date.now(),
@@ -224,15 +211,6 @@ export function createMessagingMethods(
       if (!before) return null;
       if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
       if (patch.schedule) validateUserSchedule(patch.schedule);
-      if (patch.runAs === "scopeShared") {
-        if (before.ownerScopeId.startsWith("personal:"))
-          throw new Error("scopeShared requires a shared (channel/group) scope, not a personal one");
-        const members = patch.members ?? before.members;
-        const open = await openMember(before.owner, before.ownerScopeId);
-        if (!members?.length && !open)
-          throw new Error("scopeShared requires a member snapshot or current Open scope membership");
-        if (open) patch = { ...patch, ownerResourcesRequireOpen: true };
-      }
       const grantsReaffirmed = patch.unattendedGrants !== undefined;
       const guardedPatch =
         (before.unattendedGrants?.length ?? 0) > 0 && !grantsReaffirmed ? { ...patch, unattendedGrants: [] } : patch;
@@ -295,9 +273,6 @@ export function createMessagingMethods(
       });
       return deps.crons.get(id);
     },
-    setCronRecipientConsent(id, recipientConsent) {
-      return deps.crons.setRecipientConsent(id, recipientConsent);
-    },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
       deps.auditLog.record({
@@ -328,8 +303,8 @@ export function createMessagingMethods(
     setWebhookEnabled(id, enabled) {
       return deps.webhooks.setEnabled(id, enabled);
     },
-    setWebhookRecipientConsent(id, recipientConsent) {
-      return deps.webhooks.setRecipientConsent(id, recipientConsent);
+    updateWebhook(id, patch) {
+      return deps.webhooks.update(id, patch);
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
@@ -557,7 +532,13 @@ export function createMessagingMethods(
       if (!delivery || delivery.destination.type !== "principal") return;
       const recipientId = delivery.destination.target;
       const recipientScope = scopeId("personal", recipientId);
-      const session = await deps.sessions.getOrCreateByThread(recipientThreadRef, "dm", recipientScope);
+      const session = await deps.sessions.getOrCreateByThread(
+        recipientThreadRef,
+        "dm",
+        recipientScope,
+        undefined,
+        "slack",
+      );
       await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
       await deps.sessions.addParticipant(session.id, recipientId);
     },

@@ -3,9 +3,14 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-const calls: Array<{ url: string; cookie: unknown; identity: unknown }> = [];
+const calls: Array<{ url: string; cookie: unknown; identity: unknown; encoding: unknown }> = [];
 const upstream = createServer((req, res) => {
-  calls.push({ url: req.url!, cookie: req.headers.cookie, identity: req.headers["x-portal-identity"] });
+  calls.push({
+    url: req.url!,
+    cookie: req.headers.cookie,
+    identity: req.headers["x-portal-identity"],
+    encoding: req.headers["accept-encoding"],
+  });
   res.end("public content");
 });
 await new Promise<void>((resolve) => upstream.listen(0, resolve));
@@ -50,4 +55,10 @@ test("anonymous public shares forward no identity and do not open private routes
   }
   assert.equal((await fetch(`${base}/share/external/${token}`, { method: "POST", redirect: "manual" })).status, 401);
   assert.equal(calls.length, before);
+});
+
+test("app assets pass the browser's accept-encoding through so the prebuilt gzip is served", async () => {
+  await fetch(`${base}/assets/index-Abc123.js`, { headers: { "accept-encoding": "gzip" } });
+  assert.equal(calls.at(-1)!.url, "/assets/index-Abc123.js");
+  assert.match(String(calls.at(-1)!.encoding), /gzip/);
 });

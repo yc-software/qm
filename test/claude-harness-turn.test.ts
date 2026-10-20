@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
-import { findTrailingPartialTurn, resumeNote, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
+import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -115,6 +116,36 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   };
   return { turn, entries, modelCalls, llmRequests };
 }
+
+test("Claude notices use each turn's timezone without leaking it into later turns", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield resultMessage("done");
+  };
+  const harness = createClaudeHarness({});
+  for (const [timezone, summer, winter] of [
+    ["America/Los_Angeles", 14, 13],
+    ["america/los_angeles", 14, 13],
+    ["Asia/Kolkata", 2, 2],
+  ] as const) {
+    await harness.turns.runTurn(harnessTurn({ timezone }).turn);
+    const env = capturedOptions.env as NodeJS.ProcessEnv;
+    const actual = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          'process.stdout.write(JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, hours: ["2026-10-09T21:00:00Z", "2026-12-09T21:00:00Z"].map(value => new Date(value).getHours()) }))',
+        ],
+        { env, encoding: "utf8" },
+      ),
+    );
+    assert.equal(env.TZ, new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions().timeZone);
+    assert.deepEqual(actual.hours, [summer, winter]);
+  }
+  await harness.turns.runTurn(harnessTurn().turn);
+  assert.equal((capturedOptions.env as NodeJS.ProcessEnv).TZ, undefined);
+});
 
 test("a steered turn persists every reply, not only the last result's", async () => {
   const signals = createMemoryRunSignalStore();
@@ -266,55 +297,47 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
   });
 }
 
-for (const persistence of ["final entry", "reply checkpoint"]) {
-  for (const ending of ["close", "throw"]) {
-    test(`Claude completes a committed reply when cancelled during ${persistence} persistence and the SDK will ${ending}`, async () => {
-      const waiting = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const cancel = new AbortController();
-      currentScript = (prompts) => {
-        const generator = (async function* () {
-          await prompts[Symbol.asyncIterator]().next();
-          yield {
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
-          };
-          yield resultMessage("Final full answer");
-          if (ending === "throw") throw new Error("query interrupted");
-        })();
-        if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
-        return generator;
-      };
-      const harness = createClaudeHarness({});
-      const { turn, entries } = harnessTurn({ cancel: cancel.signal });
-      const pause = async () => {
-        waiting.resolve();
-        await release.promise;
-      };
-      if (persistence === "final entry") {
-        const emit = turn.emit;
-        turn.emit = async (entry) => {
-          if (entry.type === "assistant") await pause();
-          return emit(entry);
+for (const ending of ["close", "throw"]) {
+  test(`Claude completes a committed reply when cancelled during final entry persistence and the SDK will ${ending}`, async () => {
+    const waiting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const cancel = new AbortController();
+    currentScript = (prompts) => {
+      const generator = (async function* () {
+        await prompts[Symbol.asyncIterator]().next();
+        yield {
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "Visible partial" } },
         };
-      } else {
-        turn.tape = async (entry) => {
-          if (entry.kind === "annotation") await pause();
-        };
-      }
-      const running = harness.turns.runTurn(turn);
-      await waiting.promise;
-      cancel.abort();
-      release.resolve();
-      const result = await running;
-      assert.equal(result.stopped, undefined);
-      assert.equal(result.reply, "Final full answer");
-      assert.deepEqual(
-        entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-        [{ text: "Final full answer" }],
-      );
-    });
-  }
+        yield resultMessage("Final full answer");
+        if (ending === "throw") throw new Error("query interrupted");
+      })();
+      if (ending === "throw") generator.return = async () => ({ done: true, value: undefined });
+      return generator;
+    };
+    const harness = createClaudeHarness({});
+    const { turn, entries } = harnessTurn({ cancel: cancel.signal });
+    const pause = async () => {
+      waiting.resolve();
+      await release.promise;
+    };
+    const emit = turn.emit;
+    turn.emit = async (entry) => {
+      if (entry.type === "assistant") await pause();
+      return emit(entry);
+    };
+    const running = harness.turns.runTurn(turn);
+    await waiting.promise;
+    cancel.abort();
+    release.resolve();
+    const result = await running;
+    assert.equal(result.stopped, undefined);
+    assert.equal(result.reply, "Final full answer");
+    assert.deepEqual(
+      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
+      [{ text: "Final full answer" }],
+    );
+  });
 }
 
 test("model calls are counted per API response and charged their real input tokens", async () => {
@@ -420,7 +443,7 @@ test("each steered prompt gets its own LLM request record", async () => {
   assert.equal(
     (llmRequests[1]!.promptEnvelope as { system: string }).system,
     "be brief",
-    "steer steps reuse the turn's envelope — the steer text itself lives on the tape",
+    "steer steps reuse the turn's envelope",
   );
   assert.equal(llmRequests[0]!.usage?.costUsd, 0.1);
   assert.ok(Math.abs((llmRequests[1]!.usage?.costUsd ?? 0) - 0.2) < 1e-9);
@@ -480,7 +503,7 @@ test("the claude harness offers compaction and detection so a utility role canno
 });
 
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {
-  const choice = { harnessId: "codex" as const, modelId: "gpt-6-astra" };
+  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
     await toolHandlers.get("runtime")!({ action: "set", model: "Astra" });
@@ -561,7 +584,7 @@ test("steering forwards prepared images and file paths while retaining the origi
   assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
 });
 
-test("Claude sends documents without persisting their contents in the tape", async () => {
+test("Claude sends documents without persisting their contents in session entries", async () => {
   const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const secret = "private-document-text";
   let sent = "";
@@ -572,28 +595,23 @@ test("Claude sends documents without persisting their contents in the tape", asy
       return;
     }
   };
-  const tape: unknown[] = [];
-  const { turn } = harnessTurn({
+  const { turn, entries } = harnessTurn({
     documents: [
       { name: "a.pdf", mimeType: "application/pdf", dataBase64: pdf },
       { name: "a.txt", mimeType: "text/plain", dataBase64: Buffer.from(secret).toString("base64") },
     ],
-    tape: async (entry) => {
-      tape.push(entry);
-    },
   });
   await createClaudeHarness({}).turns.runTurn(turn);
   assert.ok(sent.includes(pdf));
   assert.ok(sent.includes(secret));
-  assert.ok(!JSON.stringify(tape).includes(pdf));
-  assert.ok(!JSON.stringify(tape).includes(secret));
+  assert.ok(!JSON.stringify(entries).includes(pdf));
+  assert.ok(!JSON.stringify(entries).includes(secret));
 });
 
 test("Claude includes steered native and fallback documents without capturing their echoed contents", async () => {
   const signals = createMemoryRunSignalStore();
   const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const docx = (await readFile(new URL("./fixtures/documents/sample.docx", import.meta.url))).toString("base64");
-  const tape: unknown[] = [];
   let sent = "";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
@@ -606,12 +624,7 @@ test("Claude includes steered native and fallback documents without capturing th
     yield resultMessage("read both");
     yield resultMessage("done");
   };
-  const { turn } = harnessTurn({
-    runId: "steer-documents",
-    tape: async (row) => {
-      tape.push(row);
-    },
-  });
+  const { turn, entries } = harnessTurn({ runId: "steer-documents" });
   turn.documents = [
     { name: "initial.txt", mimeType: "text/plain", dataBase64: Buffer.from("A".repeat(80_000)).toString("base64") },
   ];
@@ -636,8 +649,8 @@ test("Claude includes steered native and fallback documents without capturing th
   assert.ok(!sent.includes("OUTSIDE-BUDGET-492"));
   assert.match(sent, /truncated to fit/);
   assert.ok(sent.includes("DOCX-QUARTZ-731"));
-  assert.ok(!JSON.stringify(tape).includes(pdf));
-  assert.ok(!JSON.stringify(tape).includes("DOCX-QUARTZ-731"));
+  assert.ok(!JSON.stringify(entries).includes(pdf));
+  assert.ok(!JSON.stringify(entries).includes("DOCX-QUARTZ-731"));
 });
 
 test("Claude coordinators expose neither command tools nor native subagents", async () => {
@@ -676,14 +689,7 @@ for (const surfaceTools of [false, true]) {
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
   const signals = createMemoryRunSignalStore();
-  const tape: unknown[] = [];
-  const { turn, entries } = harnessTurn({
-    runId: "echo-intake",
-    input: "same text",
-    tape: async (row) => {
-      tape.push(row);
-    },
-  });
+  const { turn, entries } = harnessTurn({ runId: "echo-intake", input: "same text" });
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
     yield (await iterator.next()).value as unknown as FakeSdkMessage;
@@ -718,7 +724,6 @@ test("Claude emits repeated-text steers only at distinct native user echoes", as
     [undefined, "one", "two"],
   );
   assert.equal((await signals.pending("echo-intake")).length, 0);
-  assert.equal(tape.filter((row) => (row as { meta?: { ts?: string } }).meta?.ts).length, 2);
 });
 
 test("Claude retains a queued message which the SDK never consumes", async () => {
@@ -736,7 +741,7 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
 });
 
-test("Claude ignores continueTurn and still prompts the resume note as a user message", async () => {
+test("Claude continues a resumed turn with its recorded request live and no new prompt or user entry", async () => {
   const prompted: string[] = [];
   currentScript = async function* (prompts) {
     for await (const prompt of prompts) {
@@ -746,14 +751,59 @@ test("Claude ignores continueTurn and still prompts the resume note as a user me
     yield assistantMessage("msg_A", "picking up", { input_tokens: 3, output_tokens: 2 });
     yield resultMessage("picking up");
   };
-  const note = resumeNote({ strategy: { kind: "continue" } });
-  const harness = createClaudeHarness({});
-  const { turn, entries } = harnessTurn({ input: note, continueTurn: true, runId: "run-resume" });
-  const result = await harness.turns.runTurn(turn);
+  const ask = "list the files";
+  const history = [
+    {
+      sessionId: "session-1",
+      seq: 1,
+      parentSeq: null,
+      type: "user",
+      payload: { text: ask, runId: "run-resume" },
+      scopeLabel: "org:test",
+      createdAt: 1,
+    },
+    {
+      sessionId: "session-1",
+      seq: 2,
+      parentSeq: null,
+      type: "tool_call",
+      payload: { tool: "execute", callId: "c1", command: "ls" },
+      scopeLabel: "org:test",
+      createdAt: 2,
+    },
+    {
+      sessionId: "session-1",
+      seq: 3,
+      parentSeq: null,
+      type: "tool_result",
+      payload: { tool: "execute", callId: "c1", result: "a.txt" },
+      scopeLabel: "org:test",
+      createdAt: 3,
+    },
+  ] as SessionEntry[];
+  const { turn, entries, llmRequests } = harnessTurn({
+    input: "fallback input",
+    history,
+    continueTurn: true,
+    resumeUserSeq: 1,
+    runId: "run-resume",
+    environment: "ENV-NOTE",
+  });
+  const result = await createClaudeHarness({}).turns.runTurn(turn);
   assert.equal(result.reply, "picking up");
-  assert.equal(entries[0]?.type, "user");
-  assert.equal((entries[0]!.payload as { text: string }).text, note);
-  assert.ok(prompted[0]!.includes("(system note:"), "the note reaches the model as a user prompt");
+  assert.deepEqual(
+    entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
+    ["assistant"],
+  );
+  assert.equal(prompted.length, 1);
+  const prompt = JSON.parse(prompted[0]!) as Array<{ text: string }>;
+  const text = prompt[0]!.text;
+  assert.equal(text.match(/list the files/g)?.length, 1, "the request appears once");
+  assert.ok(text.indexOf(ask) < text.indexOf("Tool result"), "the request precedes the work already done");
+  assert.ok(!text.slice(0, text.indexOf(ask)).includes("BEGIN TRANSCRIPT"), "the request is not quoted history");
+  assert.match(text, /Tool result \(execute, call c1\): a\.txt/);
+  assert.doesNotMatch(text, /fallback input|ENV-NOTE/);
+  assert.equal(llmRequests[0]?.turnSeq, 1);
 });
 
 for (const shutdown of [false, true]) {
@@ -790,16 +840,45 @@ for (const shutdown of [false, true]) {
     assert.equal(result.stoppedByUser, undefined);
     assert.deepEqual(
       entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
-      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant"],
+      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "system"],
     );
-    const partial = findTrailingPartialTurn(entries, turn.input);
+    const partial = findTrailingPartialTurn(
+      entries.map((entry) => (entry.type === "user" ? { ...entry, payload: { runId: "run-1" } } : entry)),
+      "run-1",
+    );
     if (shutdown) {
       assert.ok(partial);
       assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
       assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
     } else {
-      assert.deepEqual(entries.at(-1)!.payload, { text: "Visible partial", stopped: true });
+      assert.deepEqual(entries.at(-2)!.payload, { text: "Visible partial", stopped: true });
+      assert.deepEqual(entries.at(-1)!.payload, {
+        kind: "turn_stopped",
+        reason: "because the run was cancelled",
+      });
       assert.equal(partial, null);
     }
   });
 }
+
+test("Claude records the stop when the worker cancels a turn before any output", async () => {
+  const waiting = Promise.withResolvers<void>();
+  const cancel = new AbortController();
+  currentScript = async function* () {
+    waiting.resolve();
+    await new Promise((resolve) => cancel.signal.addEventListener("abort", resolve, { once: true }));
+    yield* [];
+  };
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({ input: "go", cancel: cancel.signal });
+  const running = harness.turns.runTurn(turn);
+  await waiting.promise;
+  cancel.abort();
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.equal(result.reply, "");
+  assert.deepEqual(
+    entries.filter((e) => e.type !== "user").map((e) => e.payload),
+    [{ kind: "turn_stopped", reason: "because the run was cancelled" }],
+  );
+});

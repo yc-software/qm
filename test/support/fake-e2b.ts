@@ -22,6 +22,9 @@ interface FakeRecord {
   fromSnapshot?: string;
   timeoutMs: number[];
   loseNextCommand: boolean;
+  autoResume: boolean;
+  privateTraffic: boolean;
+  createTimeoutMs?: number;
 }
 
 export interface FakeE2b {
@@ -34,6 +37,7 @@ export interface FakeE2b {
   expirePaused(): void;
   loseNextCommand(name: string): void;
   timeouts(name: string): number[];
+  createOptions(name: string): { autoPause: boolean; autoResume: boolean; privateTraffic: boolean; timeoutMs?: number };
   snapshots(): string[];
   restoredFrom(name: string): string | undefined;
   metrics: E2bMetrics | null;
@@ -41,7 +45,7 @@ export interface FakeE2b {
   cleanup(): void;
 }
 
-export function installFakeE2b(): FakeE2b {
+export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
   const root = mkdtempSync(join(tmpdir(), "fake-e2b-"));
   const records = new Map<string, FakeRecord>();
   const snapshots = new Map<string, string>();
@@ -106,6 +110,16 @@ export function installFakeE2b(): FakeE2b {
       if (r) r.loseNextCommand = true;
     },
     timeouts: (name) => [...(byName(name)?.timeoutMs ?? [])],
+    createOptions: (name) => {
+      const r = byName(name);
+      if (!r) throw new Error(`fake-e2b: no sandbox named ${name}`);
+      return {
+        autoPause: r.autoPause,
+        autoResume: r.autoResume,
+        privateTraffic: r.privateTraffic,
+        ...(r.createTimeoutMs ? { timeoutMs: r.createTimeoutMs } : {}),
+      };
+    },
     snapshots: () => [...snapshots.keys()],
     restoredFrom: (name) => byName(name)?.fromSnapshot,
     execScripts: () => [...execScripts],
@@ -114,6 +128,8 @@ export function installFakeE2b(): FakeE2b {
 
   const session = (r: FakeRecord): E2bSession => ({
     sandboxId: r.sandboxId,
+    ...(r.privateTraffic ? { trafficAccessToken: `traffic-${r.sandboxId}` } : {}),
+    host: (port) => `${port}-${r.sandboxId}.e2b.test`,
     async runCommand(command, opts): Promise<E2bCommandResult> {
       alive(r);
       if (opts?.timeoutMs) r.timeoutMs.push(opts.timeoutMs);
@@ -174,7 +190,17 @@ export function installFakeE2b(): FakeE2b {
     },
   });
 
+  const info: Pick<E2bClient, "info"> = fakeOpts.info
+    ? {
+        async info(sandboxId) {
+          const r = records.get(sandboxId);
+          if (!r || r.expired) throw new E2bSandboxGoneError(sandboxId, "sandbox was not found");
+          return { state: r.state, expiresAtMs: Date.now() + 60_000, onTimeout: r.autoPause ? "pause" : "kill" };
+        },
+      }
+    : {};
   fake.client = {
+    ...info,
     async create(opts): Promise<E2bSession> {
       const id = `sbx-${nextId++}`;
       const r: FakeRecord = {
@@ -186,7 +212,10 @@ export function installFakeE2b(): FakeE2b {
         home: join(root, id),
         createdAt: ++clock,
         timeoutMs: [],
+        ...(opts.timeoutMs ? { createTimeoutMs: opts.timeoutMs } : {}),
         loseNextCommand: false,
+        autoResume: opts.autoResume ?? false,
+        privateTraffic: opts.privateTraffic ?? false,
         ...(opts.fromSnapshot ? { fromSnapshot: opts.fromSnapshot } : {}),
       };
       if (opts.fromSnapshot) {

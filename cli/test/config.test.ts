@@ -895,11 +895,11 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
       sandbox: { backend: "k8s", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
     },
     {
       sandbox: { backend: "fly", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*or "superserve"/,
+      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
     },
     {
       sandbox: { backend: "aws", app: "acme-sandboxes" },
@@ -944,6 +944,21 @@ test("agent37 is a deployment backend on every target and rejects unused Fly set
   }
   withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.app"/);
+  });
+});
+
+test("e2b is a deployment backend on every target and rejects unused Fly settings", () => {
+  for (const target of ["docker", "fly"] as const) {
+    withConfig({ target, sandbox: { backend: "e2b" } }, ({ path }) => {
+      const { config } = loadConfigAt(path);
+      assert.deepEqual(sandboxCoreEnv(config), {
+        env: { SANDBOX_BACKEND: "e2b" },
+        missingSecrets: [],
+      });
+    });
+  }
+  withConfig({ sandbox: { backend: "e2b", app: "unused" } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.app"/);
   });
 });
 
@@ -1337,18 +1352,23 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
   withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.modelProvider, "openrouter");
   });
-  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+  withConfig({ modelProvider: "openrouter", env: { core: { HARNESS: "claude" } } }, ({ path }) => {
     assert.throws(
       () => loadConfigAt(path),
-      /model provider "openrouter" cannot serve a base model on env.core.HARNESS "codex"/,
+      /model provider "openrouter" cannot serve a base model on env.core.HARNESS "claude"/,
     );
   });
-  withConfig({ modelProvider: "anthropic", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "claude" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /cannot serve a base model/);
   });
-  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "codex" } } }, ({ path }) => {
+  withConfig({ modelProvider: "openai", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.modelProvider, "openai");
   });
+  for (const harness of ["codex", "opencode"]) {
+    withConfig({ env: { core: { HARNESS: harness } } }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), new RegExp(`env.core.HARNESS "${harness}" is not recognized`));
+    });
+  }
   withConfig({ modelProvider: "openrouter" }, ({ path }) => {
     assert.equal(
       loadConfigAt(path).config.modelProvider,
@@ -1360,15 +1380,15 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
 
 test("env.core.MODEL_PROVIDER is validated as the provider core will actually use", () => {
   withConfig(
-    { modelProvider: "openai", env: { core: { HARNESS: "codex", MODEL_PROVIDER: "anthropic" } } },
+    { modelProvider: "anthropic", env: { core: { HARNESS: "claude", MODEL_PROVIDER: "openai" } } },
     ({ path }) => {
-      assert.throws(() => loadConfigAt(path), /model provider "anthropic" cannot serve a base model/);
+      assert.throws(() => loadConfigAt(path), /model provider "openai" cannot serve a base model/);
     },
   );
   withConfig(
-    { modelProvider: "anthropic", env: { core: { HARNESS: "codex", MODEL_PROVIDER: "openai" } } },
+    { modelProvider: "openai", env: { core: { HARNESS: "claude", MODEL_PROVIDER: "anthropic" } } },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.modelProvider, "anthropic", "the override decides, the declaration stays");
+      assert.equal(loadConfigAt(path).config.modelProvider, "openai", "the override decides, the declaration stays");
     },
   );
   withConfig({ env: { core: { HARNESS: "pi", MODEL_PROVIDER: "bedrock" } } }, ({ path }) => {

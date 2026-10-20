@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  automationRunLabel,
+  surfaceOf,
   activityOf,
   cronRowMeta,
   sidebarSessions,
@@ -17,7 +19,9 @@ import {
   recencyGroup,
   rowIndicators,
   recentProjectSeeds,
-  reconcileSessions,
+  mergeChildren,
+  mergeFirstPage,
+  upsertSessions,
   splitPinned,
   watchActivityLabel,
   withPendingSession,
@@ -105,45 +109,102 @@ test("re-adding the same threadRef dedupes rather than duplicating", () => {
   assert.equal(list.length, 2);
 });
 
-test("reconcile keeps saved sessions and re-adds unsent pending chats", () => {
-  const prev = [pending("web:u:a"), pending("web:u:b"), saved("1", "web:u:x")];
-  const server = [saved("1", "web:u:x")];
-  const out = reconcileSessions(server, prev);
-  assert.deepEqual(new Set(out.map((s) => s.threadRef)), new Set(["web:u:a", "web:u:b", "web:u:x"]));
-});
+function at(id: string, threadRef: string, lastActivityAt: number, extra: Partial<CoreSession> = {}): CoreSession {
+  return { ...saved(id, threadRef), lastActivityAt, ...extra };
+}
+const firstPage = { archived: false, floor: null };
 
-test("reconcile drops a pending chat once the server knows its threadRef", () => {
-  const prev = [pending("web:u:a")];
-  const server = [saved("9", "web:u:a", "Bubble waffle order")];
-  const out = reconcileSessions(server, prev);
-  assert.equal(out.length, 1);
-  assert.equal(out[0]!.id, "9");
-  assert.equal(out[0]!.title, "Bubble waffle order");
-});
-
-test("reconcile keeps the rows of conversations still on screen when the server omits them", () => {
-  const prev = [saved("1", "web:u:x"), saved("2", "web:u:y"), saved("3", "web:u:z")];
-  const server = [saved("3", "web:u:z")];
-  assert.deepEqual(
-    reconcileSessions(server, prev, ["1", "2"]).map((s) => s.id),
-    ["1", "2", "3"],
-    "every open pane keeps its row, not just one",
+test("a first page keeps unsent pending chats and replaces one once the server knows its thread", () => {
+  const prev = [pending("web:u:a"), pending("web:u:b"), at("1", "web:u:x", 5)];
+  const kept = mergeFirstPage(prev, { sessions: [at("1", "web:u:x", 5)] }, firstPage);
+  assert.deepEqual(new Set(kept.map((s) => s.threadRef)), new Set(["web:u:a", "web:u:b", "web:u:x"]));
+  const replaced = mergeFirstPage(
+    [pending("web:u:a")],
+    { sessions: [at("9", "web:u:a", 7, { title: "Bubble waffle order" })] },
+    firstPage,
   );
   assert.deepEqual(
-    reconcileSessions(server, prev).map((s) => s.id),
-    ["3"],
-    "a row nobody is reading still goes when the server drops it",
-  );
-  assert.deepEqual(
-    reconcileSessions([saved("9", "web:u:x")], prev, ["1"]).map((s) => s.id),
-    ["9"],
-    "a threadRef the server now answers for under a new id must not render twice",
+    replaced.map((s) => [s.id, s.title]),
+    [["9", "Bubble waffle order"]],
   );
 });
 
-test("reconcile against an empty prev is just the server list", () => {
-  const server = [saved("1", "web:u:x"), saved("2", "web:u:y")];
-  assert.deepEqual(reconcileSessions(server, []), server);
+test("a first page drops rows it covers but no longer returns, and keeps older loaded rows", () => {
+  const prev = [at("new", "web:u:new", 30), at("gone", "web:u:gone", 20), at("old", "web:u:old", 5)];
+  const page = { sessions: [at("new", "web:u:new", 30), at("mid", "web:u:mid", 10)] };
+  assert.deepEqual(
+    mergeFirstPage(prev, page, { ...firstPage, floor: 10 })
+      .map((s) => s.id)
+      .sort(),
+    ["mid", "new", "old"],
+    "a row older than the page floor was loaded by paging and stays",
+  );
+  assert.deepEqual(
+    mergeFirstPage(prev, page, firstPage)
+      .map((s) => s.id)
+      .sort(),
+    ["mid", "new"],
+    "a page that reached the end covers everything",
+  );
+});
+
+test("a first page keeps open conversations, children and archived rows it doesn't cover", () => {
+  const prev = [
+    at("open", "web:u:open", 20),
+    at("child", "subagent:root:1", 20, { parentSessionId: "open" }),
+    at("archived", "web:u:archived", 20, { archived: true }),
+    at("pinned", "web:u:pinned", 1, { pinned: true }),
+  ];
+  assert.deepEqual(
+    mergeFirstPage(prev, { sessions: [], pinned: [] }, firstPage, ["open"])
+      .map((s) => s.id)
+      .sort(),
+    ["archived", "child", "open"],
+    "a pinned row the pinned list no longer has is stale; the rest are outside the page",
+  );
+});
+
+test("a thread the server now answers for under a new id doesn't render twice", () => {
+  const prev = [at("1", "web:u:x", 5), at("2", "web:u:y", 5)];
+  assert.deepEqual(
+    mergeFirstPage(prev, { sessions: [at("9", "web:u:x", 6), at("2", "web:u:y", 5)] }, firstPage, ["1"])
+      .map((s) => s.id)
+      .sort(),
+    ["2", "9"],
+  );
+});
+
+test("children of a root are replaced by what the server returns", () => {
+  const prev = [
+    at("root", "web:u:root", 9),
+    at("a", "subagent:root:a", 1, { parentSessionId: "root" }),
+    at("a1", "subagent:a:1", 1, { parentSessionId: "a" }),
+    at("other", "subagent:other:1", 1, { parentSessionId: "elsewhere" }),
+  ];
+  const next = mergeChildren(prev, "root", [at("b", "subagent:root:b", 2, { parentSessionId: "root", working: true })]);
+  assert.deepEqual(next.map((s) => s.id).sort(), ["b", "other", "root"]);
+});
+
+test("a row uses the server's subagent counts until its children are loaded", () => {
+  const row = at("root", "web:u:root", 9, { subagents: { running: 2, waiting: 1 } });
+  assert.equal(rowIndicators(row, null, [row]).awaiting, true);
+  assert.equal(rowIndicators(row, null, [row]).background?.subagents, 3);
+  const loaded = [row, at("c", "subagent:root:c", 1, { parentSessionId: "root", working: true })];
+  assert.equal(rowIndicators(row, null, loaded).awaiting, false, "loaded children are fresher than the rollup");
+  assert.equal(rowIndicators(row, null, loaded).background?.subagents, 1);
+});
+
+test("upsertSessions replaces rows by id and keeps the rest", () => {
+  const prev = [at("1", "web:u:x", 1), at("2", "web:u:y", 1)];
+  const next = upsertSessions(prev, [at("2", "web:u:y", 3, { title: "Renamed" })]);
+  assert.deepEqual(
+    next.map((s) => [s.id, s.title ?? null]),
+    [
+      ["1", null],
+      ["2", "Renamed"],
+    ],
+  );
+  assert.equal(upsertSessions(prev, []), prev);
 });
 
 test("bumpActivity stamps lastActivityAt on the matching row only", () => {
@@ -243,9 +304,9 @@ test("applySessionState: frames without `at` (and rows fresh from a snapshot) st
   assert.equal(out[0]!.working, true, "an unstamped frame applies unconditionally");
 });
 
-test("reconcile replaces a pushed working state with server truth", () => {
+test("a first page replaces a pushed working state with server truth", () => {
   const { list: prev } = applySessionState([saved("1", "web:u:x")], { threadRef: "web:u:x", state: "working" });
-  const out = reconcileSessions([saved("1", "web:u:x")], prev);
+  const out = mergeFirstPage(prev, { sessions: [saved("1", "web:u:x")] }, firstPage);
   assert.equal(out[0]!.working, undefined, "server row (no working flag) supersedes the pushed state");
 });
 
@@ -302,9 +363,9 @@ test("recencyGroup treats a future timestamp (optimistic bump) as Today", () => 
   assert.equal(recencyGroup(now + 60_000, now), "Today");
 });
 
-test("reconcile replaces an optimistic working stamp with server truth", () => {
+test("a first page replaces an optimistic working stamp with server truth", () => {
   const prev = markWorking([saved("1", "web:u:x")], "web:u:x");
-  const out = reconcileSessions([saved("1", "web:u:x")], prev);
+  const out = mergeFirstPage(prev, { sessions: [saved("1", "web:u:x")] }, firstPage);
   assert.equal(out[0]!.working, undefined, "server row (no working flag) supersedes the stamp");
 });
 
@@ -545,7 +606,13 @@ test("first personal chat opens proactively even when background suggestions alr
     sessions: [],
   };
   assert.equal(shouldStartProactiveOpener(first), true);
-  assert.equal(shouldStartProactiveOpener({ ...first, sessions: [saved("refresh", "cron:refresh:fire:1")] }), true);
+  assert.equal(
+    shouldStartProactiveOpener({
+      ...first,
+      sessions: [{ ...saved("refresh", "cron:refresh:fire:1"), surface: "cron" }],
+    }),
+    true,
+  );
   assert.equal(shouldStartProactiveOpener({ ...first, sessions: [pending("web:alice:draft")] }), true);
   for (const threadRef of ["web:alice:previous", "dm:D123:123.456", "ch:C123:123.456"]) {
     assert.equal(shouldStartProactiveOpener({ ...first, sessions: [saved("previous", threadRef)] }), false);
@@ -564,6 +631,23 @@ test("sidebar excludes attached subagents including pinned and orphaned children
   const orphan = { ...child, id: "orphan", parentSessionId: "missing" };
   const detached = saved("detached", "agent:main:subagent:detached");
   assert.deepEqual(sidebarSessions([parent, child, pinned, orphan, detached]), [parent, detached]);
+});
+
+test("surfaceOf shows only stored web and Slack surfaces as themselves", () => {
+  assert.deepEqual([{ surface: "slack" }, { surface: "web" }, { surface: "swarm" }, {}].map(surfaceOf), [
+    "slack",
+    "web",
+    "core",
+    "core",
+  ]);
+});
+
+test("sidebar excludes cron, webhook, and loop runs but keeps conversations", () => {
+  const web = { ...saved("web", "web:alice:one"), surface: "web" };
+  const slack = { ...saved("slack", "grp:C1:1700000000.000100"), surface: "slack" };
+  const runs = ["cron", "webhook", "loop"].map((surface) => ({ ...saved(surface, `${surface}:x`), surface }));
+  assert.deepEqual(sidebarSessions([web, slack, ...runs]), [web, slack]);
+  assert.deepEqual([...runs, slack].map(automationRunLabel), ["Cron run", "Webhook run", "Loop run", null]);
 });
 
 test("cronRowMeta shows the next fire and the last result of a session's cron", () => {

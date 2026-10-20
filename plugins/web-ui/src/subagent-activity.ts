@@ -12,18 +12,36 @@ export interface SubagentRow {
 
 type SessionLink = Pick<CoreSession, "id" | "parentSessionId" | "working" | "awaitingInput">;
 
+const childIndexes = new WeakMap<readonly SessionLink[], Map<string, number[]>>();
+
+function childPositions(list: readonly SessionLink[]): Map<string, number[]> {
+  const index = childIndexes.get(list);
+  if (index) return index;
+  const built = new Map<string, number[]>();
+  list.forEach((session, position) => {
+    if (!session.parentSessionId) return;
+    const siblings = built.get(session.parentSessionId);
+    if (siblings) siblings.push(position);
+    else built.set(session.parentSessionId, [position]);
+  });
+  childIndexes.set(list, built);
+  return built;
+}
+
 export function descendantsOf<T extends SessionLink>(
   list: readonly T[],
   rootId: string,
 ): { session: T; depth: number }[] {
+  const index = childPositions(list);
   const out: { session: T; depth: number }[] = [];
   const seen = new Set([rootId]);
   let frontier = [rootId];
   for (let depth = 1; frontier.length; depth++) {
-    const parents = new Set(frontier);
+    const level = frontier.flatMap((id) => index.get(id) ?? []).sort((a, b) => a - b);
     frontier = [];
-    for (const session of list) {
-      if (!session.parentSessionId || !parents.has(session.parentSessionId) || seen.has(session.id)) continue;
+    for (const position of level) {
+      const session = list[position];
+      if (seen.has(session.id)) continue;
       seen.add(session.id);
       out.push({ session, depth });
       frontier.push(session.id);

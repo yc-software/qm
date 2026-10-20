@@ -27,17 +27,23 @@ export const DROPPED_PROXY_ENV = new Set([
   "NO_PROXY",
 ]);
 
-export function forceThroughProxyEnv(egressProxyUrl: string, token: string): Record<string, string> {
+export function forceThroughProxyEnv(
+  egressProxyUrl: string,
+  token: string,
+  base: Record<string, string>,
+): Record<string, string> {
   const u = new URL(egressProxyUrl);
   const url = `${u.protocol}//x:${token}@${u.host}`;
   const noProxy = "localhost,127.0.0.1,::1";
   return {
+    ...base,
     HTTPS_PROXY: url,
     HTTP_PROXY: url,
     NO_PROXY: noProxy,
     https_proxy: url,
     http_proxy: url,
     no_proxy: noProxy,
+    GIT_HTTP_PROXY_AUTHMETHOD: "basic",
   };
 }
 

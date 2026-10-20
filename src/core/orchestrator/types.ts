@@ -1,3 +1,6 @@
+import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
+import type { GoalCreateInput } from "../../harness/goal.ts";
+import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
@@ -18,9 +21,11 @@ import type { ResolutionService } from "../../resolution/resolution-service.ts";
 import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
+import type { ProjectStore } from "../../projects/project-store.ts";
 import type { DirectoryStore } from "../../directory/directory-store.ts";
 import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
+import type { SessionStateBus } from "../../runs/session-state-bus.ts";
 import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
@@ -30,10 +35,9 @@ import type { MonitorStore } from "../../monitors/monitor-store.ts";
 import type { CronStore } from "../../cron/cron-store.ts";
 import type { WebhookStore } from "../../webhooks/webhook-store.ts";
 import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../../credentials/keychain.ts";
-import type { DeviceFlowCutoverStore } from "../../credentials/device-flow-cutover.ts";
 import type { FeatureFlagStore } from "../../feature-flags.ts";
+import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { LivenessCache } from "../../credentials/resident-auth.ts";
 import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
 import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
@@ -44,13 +48,11 @@ import type { ControlService } from "../../api/control-service.ts";
 import type { Harness } from "../../harness/harness.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
-import type { MetricsSink } from "../../admin/metrics-sink.ts";
 import type { ToolLedger } from "../../runs/tool-ledger.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
 import type { TurnStream } from "../../runs/turn-stream.ts";
 import type { RunActivityStore } from "../../runs/run-activity-store.ts";
 import type { RunStore } from "../../runs/run-store.ts";
-import type { TaskStore } from "../../tasks/task-store.ts";
 import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
@@ -61,8 +63,9 @@ import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
 import type { SkillBundleStore } from "../../skills/skill-bundle-store.ts";
-import type { BrokeredLayerTool, LayerCredentialTool, DeploymentLayerRuntime } from "../../deployment/load-layer.ts";
+import type { BrokeredLayerTool, DeploymentLayerRuntime } from "../../deployment/load-layer.ts";
 import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
+import type { ToolOutputStore } from "../../sessions/tool-output.ts";
 import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
 import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
@@ -83,7 +86,6 @@ export interface OrchestratorInput extends Omit<
   | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
-  | "ownerResourcesRequireOpen"
   | "unprompted"
   | "liveActor"
 > {
@@ -97,6 +99,7 @@ export interface OrchestratorInput extends Omit<
   origin: TurnOrigin;
   runId?: string;
   attempt?: number;
+  resumeCause?: RunStop;
   runLeaseToken?: string;
 
   runStartedAt?: number;
@@ -104,10 +107,11 @@ export interface OrchestratorInput extends Omit<
   background?: boolean;
   cancel?: AbortSignal;
   shutdown?: AbortSignal;
-  queueMs?: number;
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;
+  swarmGoal?: GoalCreateInput & { assignedAt: number };
+  trace?: TraceCarrier;
 }
 
 export interface OrchestratorDeps {
@@ -123,11 +127,12 @@ export interface OrchestratorDeps {
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
   resolveBaseModelId?: () => string | undefined;
-  sessionTapeMode?: "shadow" | "serve";
   sessions: SessionStore;
+  sessionStateBus?: SessionStateBus;
   sessionSyscalls?: SessionSyscallsFactory;
   workspace: WorkspaceStore;
   files: FileArtifactStore;
+  toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
   modelGateway: ModelGateway;
@@ -164,17 +169,15 @@ export interface OrchestratorDeps {
   skillBundles?: SkillBundleStore;
   skillsReady?: Promise<void>;
   advisoryLock?: AdvisoryLock;
-  approvals?: DurableMap<PendingApprovalRecord>;
-  approvalGrants?: DurableMap<CommandApprovalGrant>;
+  approvals: DurableMap<PendingApprovalRecord>;
+  approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
-  metrics?: MetricsSink;
   ledger?: ToolLedger;
   signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
-  tasks?: TaskStore;
-  blobTransfer?: BlobTransferStore;
+  blobTransfer: BlobTransferStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   crons?: CronStore;
@@ -186,25 +189,29 @@ export interface OrchestratorDeps {
     choice: import("../../harness/harness.ts").RuntimeChoice,
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
-  livenessCache?: LivenessCache;
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   scratchExec?: boolean;
-  deviceFlowCutover?: DeviceFlowCutoverStore;
   featureFlags?: FeatureFlagStore;
+  installSharedCanvas?: (
+    actorId: string,
+    fileId: string,
+    at: { threadRef: string; sessionId: string },
+  ) => Promise<string | null>;
+  teams?: TeamStore;
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
   deliveries?: DeliveryStore;
   directory?: DirectoryStore;
+  projects?: Pick<ProjectStore, "recognizes" | "name">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
   eagerProvision?: boolean;
   environments?: EnvironmentStore;
-  credentialTools?: readonly LayerCredentialTool[];
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;

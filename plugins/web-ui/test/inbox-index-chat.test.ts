@@ -16,6 +16,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
       id: "inbox-session",
       threadRef: "web:taylor@example.com:inbox",
       scopeId: "personal:taylor@example.com",
+      canContinue: true,
       surface: "web",
       title: "Inbox",
       updatedAt: 100,
@@ -27,7 +28,7 @@ test("inbox sidebar restores its conversation and releases it on native navigati
       if (path.includes("runtime-config")) return Response.json(inboxRuntime);
       if (path.includes("/approvals")) return Response.json({ approvals: [] });
       if (path.includes("/sessions/inbox-session")) return Response.json({ session, entries: [], earlierEntries: 4 });
-      if (path.endsWith("/sessions")) return Response.json({ sessions: [session] });
+      if (path.includes("/sessions/row?")) return Response.json({ session });
       if (path.includes("/runs")) return Response.json({ runs: [] });
       return Response.json({});
     };

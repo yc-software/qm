@@ -1,4 +1,5 @@
 import { html, nothing, render } from "lit";
+import { swallowAs } from "../../chassis/src/errors.ts";
 type Data = Record<string, any>;
 const providerLabels: Record<string, string> = {
   anthropic: "Anthropic",
@@ -22,6 +23,12 @@ const flagLabels: Record<string, string> = {
   auxiliary: "Eligible for auxiliary tasks",
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : "Request failed.");
+function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: Data }) {
+  if (!modelId) return "Key saved. The base model is unchanged.";
+  if (selected.ok) return "Key and base model saved.";
+  return "Key saved, but the base model could not be changed: " + (selected.data?.message || "the server rejected it.");
+}
+
 export class Onboarding {
   context: Data;
   models: Record<string, Data[]> = {};
@@ -35,6 +42,9 @@ export class Onboarding {
   providerTone = "";
   providerBusy = false;
   registryProvider = "openai";
+  registryKind = "chat";
+  baseModel = "";
+  keepBaseModel = false;
   registryId = "";
   editing = false;
   providerLocked = false;
@@ -97,7 +107,9 @@ export class Onboarding {
     this.providerLocked = Boolean(spec?.provider);
     this.registryId = spec?.id || "";
     this.registryProvider = spec?.provider || "openai";
-    if (spec)
+    if (spec) this.registryKind = spec.kind === "embedding" ? "embedding" : "chat";
+    this.draft = spec?.kind === "embedding" ? { name: spec.name } : {};
+    if (spec && spec.kind !== "embedding")
       this.showLookup({
         kind: "saved",
         spec,
@@ -140,7 +152,7 @@ export class Onboarding {
     const token = ++this.request,
       view = this.context.view();
     const selection = { provider: this.provider, model: this.model, apiKey: this.apiKey };
-    void this.loadRegistry().catch(() => {});
+    void this.loadRegistry().catch(swallowAs("admin: load model registry", undefined));
     const [models, slack, catalog, config] = await Promise.all([
       this.context.api("GET", "/api/model-providers?catalog=cached"),
       this.context.api("GET", "/api/slack-installation"),
@@ -162,6 +174,7 @@ export class Onboarding {
       ...Object.values(config.data.modelsByHarness || {}).flat(),
     ]);
     const baseModel = config.data.baseModel || config.data.baseModelDefault || "";
+    this.baseModel = baseModel;
     const provider =
       Object.entries(this.models).find(([, choices]) => choices.some((model) => model.id === baseModel))?.[0] ||
       this.providers.find((row) => row.configured)?.provider ||
@@ -182,10 +195,8 @@ export class Onboarding {
     this.steps.model = { text: ready ? "Ready" : "Needs a key", tone: ready ? "ok" : "warn", summary };
     if (selection.provider === this.provider && selection.model === this.model && selection.apiKey === this.apiKey) {
       this.provider = provider || this.providers[0]?.provider || "anthropic";
-      this.model = (this.models[this.provider] || []).some((m) => m.id === baseModel)
-        ? baseModel
-        : this.models[this.provider]?.[0]?.id || "";
-    } else if (!this.model) this.model = this.models[this.provider]?.[0]?.id || "";
+      this.model = this.firstModel();
+    } else if (!this.model && !this.keepBaseModel) this.model = this.firstModel();
     this.steps.slack = {
       text: slack.data.configured ? "Connected" : "Optional",
       tone: slack.data.configured ? "ok" : "muted",
@@ -215,6 +226,21 @@ export class Onboarding {
         })
         .catch(() => {});
   }
+  keepsBaseModel() {
+    return Boolean(this.baseModel) && !(this.models[this.provider] || []).some((m) => m.id === this.baseModel);
+  }
+  verifiedMessage(builtin: boolean, message: string) {
+    if (this.embedding) return "Embedding model verified. Select it under Models → Recall runtime.";
+    if (builtin) return message;
+    return "Model verified and enabled with organization credentials. Personal-key access may differ.";
+  }
+  get embedding() {
+    return this.registryKind === "embedding";
+  }
+  firstModel() {
+    if ((this.models[this.provider] || []).some((m) => m.id === this.baseModel)) return this.baseModel;
+    return this.models[this.provider]?.[0]?.id || "";
+  }
   mergeModels(models: Data[]) {
     for (const model of models) {
       if (!model.provider) continue;
@@ -240,17 +266,15 @@ export class Onboarding {
     try {
       const saved = await this.context.api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
       if (!saved.ok) throw new Error(saved.data?.message || "The provider rejected this key.");
-      const selected = await this.context.api(
-        "PUT",
-        "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "/base-model",
-        { modelId },
-      );
+      const selected = modelId
+        ? await this.context.api("PUT", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "/base-model", {
+            modelId,
+          })
+        : { ok: true };
       this.apiKey = "";
       await this.load();
       await this.context.loadCustomProviders();
-      this.providerMessage = selected.ok
-        ? "Key and base model saved."
-        : "Key saved, but the base model could not be changed.";
+      this.providerMessage = providerSavedMessage(modelId, selected);
       this.providerTone = selected.ok ? "ok" : "err";
     } catch (error) {
       this.providerMessage = errorText(error);
@@ -337,6 +361,11 @@ export class Onboarding {
     }
   }
   collect() {
+    if (this.embedding) {
+      const name = String(this.draft.name ?? "").trim();
+      if (!this.registryId.trim() || !name) throw new Error("Model ID and display name are required.");
+      return { kind: "embedding", name, provider: this.registryProvider, verify: true };
+    }
     if (!this.lookup) throw new Error("Look up the model first.");
     const identity = { provider: this.registryProvider, id: this.registryId.trim() };
     if (JSON.stringify(identity) !== JSON.stringify(this.lookup.identity))
@@ -365,10 +394,10 @@ export class Onboarding {
     };
   }
   async verify() {
-    if (this.registryBusy || !this.lookup) return;
+    if (this.registryBusy || (!this.lookup && !this.embedding)) return;
     try {
       const body = this.collect(),
-        builtin = this.lookup.kind === "builtin",
+        builtin = this.lookup?.kind === "builtin",
         id = this.registryId.trim();
       this.registryBusy = true;
       this.registryMessage = "Checking the model with organization credentials…";
@@ -381,9 +410,7 @@ export class Onboarding {
       );
       if (!response.ok) throw new Error(response.data?.message || "Could not verify model.");
       await this.load();
-      this.registryMessage = builtin
-        ? response.data.message
-        : "Model verified and enabled with organization credentials. Personal-key access may differ.";
+      this.registryMessage = this.verifiedMessage(builtin, response.data?.message);
       this.registryTone = "ok";
     } catch (error) {
       this.registryMessage = errorText(error);
@@ -470,7 +497,8 @@ export class Onboarding {
               ?disabled=${this.providerBusy}
               @change=${(e: Event) => {
                 this.provider = (e.target as HTMLSelectElement).value;
-                this.model = this.models[this.provider]?.[0]?.id || "";
+                this.model = this.firstModel();
+                this.keepBaseModel = false;
                 this.draw();
               }}
             >
@@ -484,10 +512,12 @@ export class Onboarding {
               ?disabled=${this.providerBusy}
               @change=${(e: Event) => {
                 this.model = (e.target as HTMLSelectElement).value;
+                this.keepBaseModel = !this.model;
                 this.draw();
               }}
             >
-              ${(this.models[this.provider] || []).map((model) => html`<option value=${model.id} .selected=${model.id === this.model}>${model.name}</option>`)}
+              ${(this.models[this.provider] || []).map((model) => html`<option value=${model.id} ?selected=${model.id === this.model}>${model.name}</option>`)}
+              ${this.keepsBaseModel() ? html`<option value="" ?selected=${!this.model}>Keep current base model (${this.baseModel})</option>` : nothing}
             </select></label
           ><label
             >API key
@@ -567,7 +597,7 @@ export class Onboarding {
               return html`<tr>
                 <td>${(spec.name || spec.id) + " (" + spec.id + ")" + verification}</td>
                 <td>${spec.provider || "Unknown"}</td>
-                <td>${spec.template || "Missing"}</td>
+                <td>${spec.kind === "embedding" ? "Embedding" : spec.template || "Missing"}</td>
                 <td>
                   <button ?disabled=${this.registryBusy} @click=${() => this.reset(spec)}>Edit</button
                   ><button class="danger" ?disabled=${this.registryBusy} @click=${() => this.deleteModel(spec)}>
@@ -582,11 +612,28 @@ export class Onboarding {
       </div>
       <div class="body setup-form">
         <label
+          >Kind
+          <select
+            id="model-registry-kind"
+            .value=${this.registryKind}
+            ?disabled=${this.registryBusy || this.editing}
+            @change=${(e: Event) => {
+              this.registryKind = (e.target as HTMLSelectElement).value;
+              this.registryProvider = "openai";
+              this.draft = {};
+              this.resetLookup();
+              this.draw();
+            }}
+          >
+            <option value="chat" .selected=${!this.embedding}>Chat model</option>
+            <option value="embedding" .selected=${this.embedding}>Embedding model (memory recall)</option>
+          </select></label
+        ><label
           >Provider
           <select
             id="model-registry-provider"
             .value=${this.registryProvider}
-            ?disabled=${this.registryBusy || this.providerLocked}
+            ?disabled=${this.registryBusy || this.providerLocked || this.embedding}
             @change=${identityChange("registryProvider")}
           >
             <option value="openai" .selected=${this.registryProvider === "openai"}>OpenAI</option>
@@ -598,14 +645,15 @@ export class Onboarding {
             type="text"
             id="model-registry-id"
             autocomplete="off"
-            placeholder="e.g. claude-opus-4-6"
+            placeholder=${this.embedding ? "e.g. text-embedding-3-small" : "e.g. claude-opus-4-6"}
             required
             .value=${this.registryId}
             ?disabled=${this.registryBusy || this.editing}
             @input=${identityChange("registryId")}
         /></label>
       </div>
-      <div class="foot">
+      ${this.embedding ? html`<div class="body setup-form">${this.field("name")}</div>` : nothing}
+      <div class="foot" ?hidden=${this.embedding}>
         <button
           id="model-registry-lookup"
           class="primary"
@@ -648,7 +696,7 @@ export class Onboarding {
           </p>
           <div class="setup-form" id="model-registry-advanced-fields">
             ${Object.keys(fieldLabels)
-              .filter((key) => !missing.includes(key))
+              .filter((key) => !this.embedding && !missing.includes(key))
               .map((key) => this.field(key))}
             <p class="muted" id="model-registry-capabilities">
               ${template ? `Inherited: ${template.input.join(", ")} input; reasoning ${template.reasoning ? "yes" : "no"}.` : ""}
@@ -693,13 +741,14 @@ export class Onboarding {
         a small provider charge (up to 128 output tokens per request; an additional check with fast mode; provider
         retries may apply). A successful check confirms access now, not pricing, maximum context, every capability, or
         personal-key access. Failed checks do not save or enable the new definition. Existing saved settings remain
-        unchanged. A failed recheck of those settings removes their verification.
+        unchanged. A failed recheck of those settings removes their verification. Embedding models send one short
+        embedding request instead.
       </p>
       <div class="foot">
         <button
           class="primary"
           id="model-registry-save"
-          ?disabled=${!lookup || this.registryBusy}
+          ?disabled=${(!lookup && !this.embedding) || this.registryBusy}
           @click=${() => this.verify()}
         >
           ${(() => {

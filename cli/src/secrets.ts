@@ -7,7 +7,6 @@ type SecretCondition =
   | { kind: "background-work-control" }
   | { kind: "sandbox-backend"; backend: string }
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
-  | { kind: "env-in"; service: DeclaredServiceName; name: string; values: string[] }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
   | { kind: "env-all-absent"; service: DeclaredServiceName; names: string[] }
   | { kind: "env-present"; service: DeclaredServiceName; name: string }
@@ -60,22 +59,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "OPENAI_API_KEY",
     service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "env-equals", service: "core", name: "HARNESS", value: "codex" },
-          { kind: "model-provider", provider: "openai" },
-        ],
-      },
-    },
+    required: { when: { kind: "model-provider", provider: "openai" }, optionalOtherwise: true },
     description:
-      'OpenAI API key: the Codex harness needs it (its CLI cannot do browser OAuth in a container), and it bills the base model when modelProvider is "openai".',
+      'OpenAI API key: bills the base model when modelProvider is "openai", an optional deployment fallback otherwise.',
   },
   {
     name: "PUBLIC_API_URL",
     service: "core",
-    required: { when: { kind: "env-in", service: "core", name: "HARNESS", values: ["pi", "opencode", "codex"] } },
+    required: { when: { kind: "env-equals", service: "core", name: "HARNESS", value: "pi" } },
     description: "Public core self-API URL reachable from agent sandboxes.",
   },
   {
@@ -169,6 +160,14 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: { when: { kind: "sandbox-backend", backend: "e2b" } },
     description: "E2B API key used by the e2b sandbox backend (from e2b.dev dashboard).",
+  },
+  {
+    name: "DO_AGENTS_API_TOKEN",
+    service: "core",
+    required: { when: { kind: "sandbox-backend", backend: "do-managed-agents" } },
+    description:
+      "DigitalOcean IAM token for the DigitalOcean Managed Agents sandbox backend. Carries the team identity that owns the sandbox sessions, and authenticates both the session REST calls and the port-forward tunnel that carries exec and file transfer.",
+    generate: "doctl auth init   # then create a personal access token at cloud.digitalocean.com/account/api/tokens",
   },
   {
     name: "MODAL_TOKEN_ID",
@@ -404,6 +403,20 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
+    name: "CAPABILITY_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "Signing key for scoped agent capabilities and egress grants; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
     name: "AUTH_SIGNING_JWK",
     service: "auth",
     required: true,
@@ -561,7 +574,6 @@ function conditionMatches(config: QmConfig, condition: SecretCondition): boolean
   )?.trim();
   if (condition.kind === "env-absent") return !value;
   if (condition.kind === "env-present") return Boolean(value);
-  if (condition.kind === "env-in") return value !== undefined && condition.values.includes(value);
   return value === condition.value;
 }
 
@@ -781,8 +793,6 @@ function conditionClause(condition: SecretCondition): string {
     return `none of env.${condition.service}.{${condition.names.join(", ")}} are set`;
   if (condition.kind === "env-absent") return `env.${condition.service}.${condition.name} is not set`;
   if (condition.kind === "env-present") return `env.${condition.service}.${condition.name} is set`;
-  if (condition.kind === "env-in")
-    return `env.${condition.service}.${condition.name} is one of ${condition.values.map((value) => JSON.stringify(value)).join(", ")}`;
   if (condition.kind === "model-provider") return `modelProvider is ${JSON.stringify(condition.provider)}`;
   return `env.${condition.service}.${condition.name} is ${JSON.stringify(condition.value)}`;
 }

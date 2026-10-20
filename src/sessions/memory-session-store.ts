@@ -1,11 +1,12 @@
+import { transcriptEntries } from "./transcript-source.ts";
 import { randomUUID } from "node:crypto";
 import type { Session, SessionEntry, ScopeId } from "../types.ts";
+import type { GoalRecord } from "../harness/goal.ts";
 import type {
   AttributedTurn,
   EntrySearchHit,
-  CronGroupSummary,
+  ScopeActivity,
   GetEntriesOptions,
-  GetTapeOptions,
   LeaseAttempt,
   LeaseHolder,
   LeasePeek,
@@ -13,24 +14,23 @@ import type {
   NewEntry,
   NewLlmRequest,
   NewSearchEntry,
-  NewTapeRecord,
   NewSessionPin,
+  ParticipantPage,
+  ParticipantScope,
+  SessionDescendant,
   ParticipantWindow,
-  ScopeSessionRollup,
-  ScopeSessionStats,
   SessionPage,
   SessionStore,
   SessionSummary,
   SessionPin,
   SpendRow,
   StoreOptions,
-  TapeRecord,
 } from "./session-store.ts";
 import {
   entrySearchAuthor,
   entrySearchText,
   matchesSearchTerms,
-  SEARCHABLE_ENTRY_TYPES,
+  searchEntryType,
   searchTerms,
 } from "./entry-search.ts";
 import {
@@ -38,14 +38,14 @@ import {
   cronIdOf,
   entryWithinTenure,
   isOverheardEntry,
+  DuplicateCallError,
   promptEnvelopeBody,
-  sessionBucket,
   sessionCategory,
   sessionOrigin,
   userMessagePreview,
-  tapeTranscriptEntryRecord,
-  transcriptEntryFromTape,
+  isWebThread,
 } from "./session-store.ts";
+import { entryFromItem, itemFromEntry } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 function toParticipantWindow(
@@ -74,7 +74,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
   const entries = new Map<string, SessionEntry[]>();
-  const tape = new Map<string, TapeRecord[]>();
+  const goals = new Map<string, GoalRecord>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
   const llmRequestSeq = new Map<string, number>();
@@ -96,6 +96,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         archived?: boolean;
         pinned?: boolean;
         color?: string | null;
+        readAt?: number;
       }
     >
   >();
@@ -109,12 +110,16 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     const log = all.filter((e) => e.type === "user");
     const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
     const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
+    const replies = all.filter((e) => e.type === "assistant" || e.type === "text");
+    const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
+    const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && isWebThread(s.threadRef);
     return {
       ...s,
       ...(view?.title != null ? { title: view.title } : {}),
       ...(view?.archived ? { archived: true } : {}),
       ...(view?.pinned ? { pinned: true } : {}),
       ...(view?.color != null ? { color: view.color } : {}),
+      ...(unread ? { unread: true } : {}),
       lastActivityAt,
       hasEntries: visible,
     };
@@ -122,7 +127,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface) {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools) {
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -138,6 +143,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         scopeId,
         threadRef,
         createdAt: now(),
+        ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
       };
@@ -159,11 +165,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     async updateTitle(sessionId, title) {
       const s = sessions.get(sessionId);
       if (s) s.title = title;
-    },
-
-    async updateStatus(sessionId, status) {
-      const s = sessions.get(sessionId);
-      if (s) s.status = status ? { ...status } : null;
     },
 
     async updateForkProvenance(sessionId, provenance) {
@@ -234,7 +235,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       }
       sessions.delete(sessionId);
       entries.delete(sessionId);
-      tape.delete(sessionId);
+      goals.delete(sessionId);
       searchIndex.delete(sessionId);
       llmRequests.delete(sessionId);
       windows.delete(sessionId);
@@ -268,34 +269,42 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(lease.sessionId);
       if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
       const copied = structuredClone(batch);
-      return copied.map((entry) => {
+      const scopeLabel = sessions.get(lease.sessionId)?.scopeId ?? (copied[0]?.scopeLabel as ScopeId);
+      const items = copied.map((entry) =>
+        itemFromEntry(entry.type, entry.payload, { turnId: lease.turnId, author: entry.author }),
+      );
+      const calls = new Set(
+        log.flatMap((e) => {
+          const id = (e.payload as { callId?: unknown } | null)?.callId;
+          return (e.type === "tool_call" || e.type === "tool_result") && typeof id === "string"
+            ? [`${e.type}:${id}`]
+            : [];
+        }),
+      );
+      for (const [index, item] of items.entries()) {
+        if (!item.callId) continue;
+        const key = `${copied[index]!.type}:${item.callId}`;
+        if (calls.has(key)) throw new DuplicateCallError(lease.sessionId, [item.callId]);
+        calls.add(key);
+      }
+      return items.map((item) => {
         const seq = log.length;
-        const full: SessionEntry = {
+        const full = entryFromItem({
           sessionId: lease.sessionId,
           seq,
-          parentSeq: seq === 0 ? null : seq - 1,
-          type: entry.type,
-          payload: entry.payload,
-          scopeLabel: entry.scopeLabel as ScopeId,
-          createdAt: now(),
-        };
-        const mirrored = structuredClone(tapeTranscriptEntryRecord(full));
-        log.push(full);
-        const tapeLog = tape.get(lease.sessionId) ?? [];
-        tapeLog.push({
-          ...mirrored,
-          sessionId: lease.sessionId,
-          seq: tapeLog.length,
+          ...item,
+          scopeLabel,
           createdAt: now(),
         });
-        tape.set(lease.sessionId, tapeLog);
-        const text = SEARCHABLE_ENTRY_TYPES.has(full.type) ? entrySearchText(full.payload) : null;
-        if (text?.trim()) {
+        log.push(full);
+        const searchType = searchEntryType(full);
+        const text = searchType ? entrySearchText(full.payload) : null;
+        if (searchType && text?.trim()) {
           const index = searchIndex.get(full.sessionId) ?? [];
           const author = entrySearchAuthor(full);
           index.push({
             seq: full.seq,
-            type: full.type,
+            type: searchType,
             text,
             createdAt: full.createdAt,
             ...(author ? { author } : {}),
@@ -306,45 +315,32 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       });
     },
 
-    async getRecentEntries(sessionIds, lookback) {
-      return new Map(
-        sessionIds.map((id) => {
-          const log = entries.get(id) ?? [];
-          const since = Math.max(0, (log.at(-1)?.seq ?? -1) - lookback);
-          return [id, log.filter((entry) => entry.seq >= since)];
-        }),
-      );
+    async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
+      return (entries.get(sessionId) ?? []).some((entry) => {
+        const payload = entry.payload as { deliveryKey?: string; ts?: string } | null;
+        return (
+          payload?.deliveryKey === deliveryKey ||
+          (slackTs !== undefined && entry.type === "user" && payload?.ts === slackTs)
+        );
+      });
     },
+
     async getEntries(sessionId, opts?: GetEntriesOptions) {
-      const log = entries.get(sessionId) ?? [];
+      const all = (entries.get(sessionId) ?? []).filter(
+        (e) => opts?.turnId === undefined || (e.payload as { runId?: string } | null)?.runId === opts.turnId,
+      );
+      const log = opts?.transcript ? transcriptEntries(all) : all;
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
-    async getTranscriptEntries(sessionId, opts?: GetEntriesOptions) {
-      const projected = new Map<number, SessionEntry>();
-      for (const row of tape.get(sessionId) ?? []) {
-        const entry = transcriptEntryFromTape(row);
-        if (entry) projected.set(entry.seq, entry);
-      }
-      const filtered = [...projected.values()]
-        .filter(
-          (entry) =>
-            entry.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || entry.seq < opts.beforeSeq),
-        )
-        .sort((a, b) => a.seq - b.seq);
-      if (opts?.limit === 0) return [];
-      return opts?.limit === undefined ? filtered : filtered.slice(-opts.limit);
-    },
-
-    async canReadTranscriptSuffix(sessionId, beforeSeq) {
-      const prefix = new Map<number, string>();
-      for (const row of tape.get(sessionId) ?? []) {
-        const entry = transcriptEntryFromTape(row);
-        if (entry && entry.seq >= 0 && entry.seq < beforeSeq) prefix.set(entry.seq, entry.type);
-      }
-      return prefix.size === beforeSeq && [...prefix.values()].every((type) => type !== "soul");
+    async countEntriesBefore(sessionId, beforeSeq, principalId) {
+      const win = principalId === undefined ? undefined : windows.get(sessionId)?.get(principalId);
+      if (principalId !== undefined && !win) return 0;
+      return transcriptEntries((entries.get(sessionId) ?? []).filter((e) => !win || entryWithinTenure(e, win))).filter(
+        (e) => e.seq < beforeSeq,
+      ).length;
     },
 
     async getContextWindow(sessionId) {
@@ -359,69 +355,23 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return (entries.get(sessionId)?.length ?? 0) - 1;
     },
 
-    async clearSecurityTaint(sessionId) {
-      const log = entries.get(sessionId);
-      if (!log) return false;
-      for (const entry of log) {
-        if (!entry.payload || typeof entry.payload !== "object") continue;
-        const payload = { ...(entry.payload as Record<string, unknown>) };
-        delete payload.securityTainted;
-        if (!("securityTainted" in (entry.payload as object))) continue;
-        entry.payload = payload;
-        const tapeLog = tape.get(sessionId) ?? [];
-        tapeLog.push({
-          ...structuredClone(tapeTranscriptEntryRecord(entry)),
-          sessionId,
-          seq: tapeLog.length,
-          createdAt: now(),
-        });
-        tape.set(sessionId, tapeLog);
+    async goals(sessionIds) {
+      const found = new Map<string, GoalRecord>();
+      for (const id of sessionIds) {
+        const goal = goals.get(id);
+        if (goal) found.set(id, structuredClone(goal));
       }
-      return true;
+      return found;
     },
 
-    async appendTape(lease, rec: NewTapeRecord): Promise<TapeRecord> {
-      return (await this.appendTapeMany(lease, [rec]))[0]!;
-    },
-    async appendTapeMany(lease, records): Promise<TapeRecord[]> {
+    async setGoal(lease, goal, notices = []) {
       const held = leases.get(lease.sessionId);
-      if (!held || held.token !== lease.token || now() >= held.expiresAt)
-        throw new Error("tape append without a valid session lease");
-      held.expiresAt = now() + leaseTtlMs;
-      const log = tape.get(lease.sessionId) ?? [];
-      tape.set(lease.sessionId, log);
-      const full = records.map((rec, index) => ({
-        ...rec,
-        sessionId: lease.sessionId,
-        seq: log.length + index,
-        createdAt: now(),
-      }));
-      log.push(...full);
-      return full;
-    },
-
-    async getTape(sessionId, opts?: GetTapeOptions) {
-      const log = tape.get(sessionId) ?? [];
-      const since = opts?.sinceSeq;
-      const filtered = since !== undefined ? log.filter((r) => r.seq > since) : log;
-      return opts?.limit !== undefined ? filtered.slice(-opts.limit) : [...filtered];
-    },
-
-    async tapeCoverage(sessionId) {
-      const log = tape.get(sessionId) ?? [];
-      return log.reduce(
-        (m, r) =>
-          Math.max(
-            m,
-            r.kind === "annotation" && (r.payload as { turnEnd?: unknown } | null)?.turnEnd === true
-              ? (r.entrySeq ?? -1)
-              : -1,
-            r.kind === "context_event" && (r.payload as { event?: unknown } | null)?.event === "legacy_import"
-              ? (r.coversEntrySeq ?? -1)
-              : -1,
-          ),
-        -1,
-      );
+      if (!held || held.token !== lease.token || now() >= held.expiresAt) {
+        throw new Error("set goal without a valid session lease");
+      }
+      if (!sessions.has(lease.sessionId)) throw new Error(`unknown session: ${lease.sessionId}`);
+      if (notices.length) await this.appendMany(lease, notices);
+      goals.set(lease.sessionId, structuredClone(goal));
     },
 
     async recordLlmRequest(sessionId, rec: NewLlmRequest) {
@@ -435,7 +385,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         model: rec.model,
         scopeLabel: rec.scopeLabel as ScopeId,
         createdAt: now(),
-        request: null,
         promptHash: envelope?.hash ?? null,
         truncated: rec.truncated ?? false,
         ttftMs: rec.ttftMs ?? null,
@@ -467,7 +416,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
             )
           : all;
       return filtered.map((r) => {
-        if (opts?.omitRequest) return { ...r, request: null };
+        if (opts?.omitRequest) return { ...r };
         const body = r.promptHash != null ? promptEnvelopes.get(r.promptHash) : undefined;
         return body !== undefined ? { ...r, promptEnvelope: JSON.parse(body) } : { ...r };
       });
@@ -547,13 +496,102 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const out: Session[] = [];
       for (const id of ids) {
         const row = participantSession(id, principalId);
-        if (row) out.push(row);
+        if (!row) continue;
+        const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed } = row;
+        out.push(listed);
       }
       return opts
         ? out
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, Math.max(0, Math.floor(opts.limit)))
         : out;
+    },
+
+    async participantScopes(principalId) {
+      const byScope = new Map<ScopeId, ParticipantScope>();
+      for (const id of participants.get(principalId) ?? []) {
+        const row = participantSession(id, principalId);
+        if (!row) continue;
+        const scope = byScope.get(row.scopeId) ?? { scopeId: row.scopeId, sessionCount: 0, lastActivityAt: null };
+        if (!scope.channelName && row.channelName) scope.channelName = row.channelName;
+        if (row.hasEntries !== false || Boolean(row.title?.trim())) {
+          scope.sessionCount++;
+          scope.lastActivityAt = Math.max(scope.lastActivityAt ?? 0, row.lastActivityAt ?? row.createdAt);
+        }
+        byScope.set(row.scopeId, scope);
+      }
+      return [...byScope.values()];
+    },
+
+    async listParticipantPage(principalId, query): Promise<ParticipantPage> {
+      const automation = new Set(["cron", "webhook", "loop"]);
+      const title = query.titleQuery?.trim().toLowerCase();
+      const ids = query.sessionIds ? new Set(query.sessionIds) : null;
+      const key = (s: Session): [number, string] => [s.lastActivityAt ?? s.createdAt, s.id];
+      const after = (s: Session): boolean => {
+        if (!query.before) return true;
+        const [activity, id] = key(s);
+        return activity < query.before.activity || (activity === query.before.activity && id < query.before.id);
+      };
+      const rows = [...(participants.get(principalId) ?? [])]
+        .map((id) => participantSession(id, principalId))
+        .filter((s): s is Session => s !== null)
+        .filter(
+          (s) =>
+            !s.parentSessionId &&
+            !(s.surface && automation.has(s.surface)) &&
+            ((entries.get(s.id)?.length ?? 0) > 0 || Boolean(s.title?.trim())) &&
+            Boolean(s.archived) === (query.archived === true) &&
+            (query.pinned === undefined || Boolean(s.pinned) === query.pinned) &&
+            (query.surface === undefined || s.surface === query.surface) &&
+            (query.scopeId === undefined || s.scopeId === query.scopeId) &&
+            (!ids || ids.has(s.id)) &&
+            (!title || `${s.title ?? ""} ${s.channelName ?? ""}`.toLowerCase().includes(title)) &&
+            after(s),
+        )
+        .sort((a, b) => {
+          const [aa, ai] = key(a);
+          const [ba, bi] = key(b);
+          if (ba !== aa) return ba - aa;
+          if (bi === ai) return 0;
+          return bi < ai ? -1 : 1;
+        })
+        .map(({ spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed }) => listed);
+      const limit = Math.max(1, Math.min(Math.floor(query.limit), 200));
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      return {
+        sessions: page,
+        next: rows.length > limit && last ? { activity: key(last)[0], id: last.id } : null,
+      };
+    },
+
+    async descendantsOf(rootIds): Promise<SessionDescendant[]> {
+      const out: SessionDescendant[] = [];
+      const seen = new Set(rootIds);
+      let frontier = rootIds.map((id) => ({ id, rootId: id }));
+      while (frontier.length) {
+        const next: { id: string; rootId: string }[] = [];
+        for (const s of sessions.values()) {
+          const parent = frontier.find((f) => f.id === s.parentSessionId);
+          if (!parent || seen.has(s.id)) continue;
+          seen.add(s.id);
+          out.push({ id: s.id, rootId: parent.rootId, threadRef: s.threadRef });
+          next.push({ id: s.id, rootId: parent.rootId });
+        }
+        frontier = next;
+      }
+      return out;
+    },
+
+    async listDescendantsForParticipant(rootId, principalId, limit) {
+      const ids = (await this.descendantsOf([rootId])).map((d) => d.id).slice(0, Math.max(0, Math.floor(limit)));
+      return ids
+        .filter((id) => participants.get(principalId)?.has(id))
+        .map((id) => participantSession(id, principalId))
+        .filter((s): s is Session => s !== null)
+        .map(({ spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed }) => listed)
+        .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
     },
 
     async getForParticipant(sessionId, principalId) {
@@ -568,6 +606,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (patch.archived !== undefined) view.archived = patch.archived;
       if (patch.pinned !== undefined) view.pinned = patch.pinned;
       if (patch.color !== undefined) view.color = patch.color;
+      if (patch.readAt !== undefined) view.readAt = patch.readAt;
     },
 
     async addPin(sessionId, pin: NewSessionPin, maxPins?: number): Promise<SessionPin | null> {
@@ -593,11 +632,31 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return true;
     },
 
-    async visibleEntries(sessionId, principalId) {
+    async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions) {
       const win = windows.get(sessionId)?.get(principalId);
       if (!win) return [];
-      const log = entries.get(sessionId) ?? [];
-      return log.filter((e) => entryWithinTenure(e, win));
+      const all = (entries.get(sessionId) ?? []).filter((e) => entryWithinTenure(e, win));
+      const visible = (opts?.transcript ? transcriptEntries(all) : all).filter(
+        (e) => e.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+      );
+      return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
+    },
+
+    async searchSessionTitles(principalId, query, limit = 20): Promise<Session[]> {
+      const needle = query.trim();
+      if (needle.length < 2) return [];
+      const lower = needle.toLowerCase();
+      const ids = participants.get(principalId);
+      if (!ids) return [];
+      const out: Session[] = [];
+      for (const id of ids) {
+        const row = participantSession(id, principalId);
+        if (!row) continue;
+        if ((row.title ?? "").toLowerCase().includes(lower)) out.push(row);
+      }
+      return out
+        .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
+        .slice(0, Math.max(1, Math.min(Math.floor(limit), 100)));
     },
 
     async searchEntries(principalId, query, limit = 40): Promise<EntrySearchHit[]> {
@@ -612,6 +671,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!session) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
+          const entry = entries.get(sessionId)?.[row.seq];
+          if (!entry) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
           hits.push({
             sessionId,
@@ -632,47 +693,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return hits.slice(0, Math.max(1, Math.min(limit, 200)));
     },
 
-    async appendSearchEntries(lease, rows): Promise<void> {
-      const held = leases.get(lease.sessionId);
-      if (!held || held.token !== lease.token || now() >= held.expiresAt) {
-        throw new Error("search index append without a valid session lease");
-      }
-      held.expiresAt = now() + leaseTtlMs;
-      const index = searchIndex.get(lease.sessionId) ?? [];
-      const seen = new Set(index.map((row) => row.seq));
-      for (const row of rows) {
-        if (seen.has(row.seq)) continue;
-        seen.add(row.seq);
-        index.push({ ...row });
-      }
-      index.sort((a, b) => a.seq - b.seq);
-      searchIndex.set(lease.sessionId, index);
-    },
-
-    async searchIndexCoverage(sessionId): Promise<number> {
-      const index = searchIndex.get(sessionId);
-      return index?.length ? index[index.length - 1]!.seq : -1;
-    },
-
-    async missingSearchEntries(sessionId): Promise<number> {
-      const indexed = new Set((searchIndex.get(sessionId) ?? []).map((row) => row.seq));
-      return (entries.get(sessionId) ?? []).filter(
-        (entry) =>
-          SEARCHABLE_ENTRY_TYPES.has(entry.type) && entrySearchText(entry.payload)?.trim() && !indexed.has(entry.seq),
-      ).length;
-    },
-
-    async lastSearchableEntrySeq(sessionId): Promise<number> {
-      const log = entries.get(sessionId) ?? [];
-      for (let i = log.length - 1; i >= 0; i--) {
-        const e = log[i]!;
-        if (!SEARCHABLE_ENTRY_TYPES.has(e.type)) continue;
-        const text = entrySearchText(e.payload);
-        if (text && text.trim()) return e.seq;
-      }
-      return -1;
-    },
-
     async scanAll() {
       return [...sessions.values()];
     },
@@ -689,41 +709,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
     async scopeHasSessions(scope) {
       return [...sessions.values()].some((s) => s.scopeId === scope);
-    },
-
-    async countPersonalConversations(scope, limit = 3) {
-      const boundedLimit = Math.max(0, Math.floor(limit));
-      if (!boundedLimit) return 0;
-      let count = 0;
-      for (const session of sessions.values()) {
-        if (
-          session.scopeId !== scope ||
-          session.type !== "dm" ||
-          session.parentSessionId ||
-          sessionOrigin(session.threadRef) !== "conversation"
-        )
-          continue;
-        const log = new Map((entries.get(session.id) ?? []).map((entry) => [entry.seq, entry]));
-        for (const row of tape.get(session.id) ?? []) {
-          const entry = transcriptEntryFromTape(row);
-          if (entry) log.set(entry.seq, entry);
-        }
-        if (
-          [...log.values()].some((entry) => {
-            const payload = entry.payload as { hidden?: unknown; overheard?: unknown } | null;
-            return (
-              entry.seq > (session.forkBoundarySeq ?? -1) &&
-              entry.type === "user" &&
-              payload?.hidden !== true &&
-              payload?.overheard !== true
-            );
-          })
-        ) {
-          count++;
-          if (count >= boundedLimit) break;
-        }
-      }
-      return count;
     },
 
     async sessionsByThreadRefs(threadRefs) {
@@ -767,7 +752,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           messages: log.length,
           lastActivity: log.length ? log[log.length - 1]!.createdAt : s.createdAt,
           createdAt: s.createdAt,
-          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : "",
+          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : (s.title ?? ""),
           lastMessage: userEntries.length ? userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100) : "",
         });
       }
@@ -783,114 +768,31 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       ).slice(0, page.limit);
     },
 
-    async lastUserMessages(sessionIds): Promise<Map<string, string>> {
-      const out = new Map<string, string>();
-      for (const id of sessionIds) {
-        const log = entries.get(id) ?? [];
-        const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
-        if (userEntries.length) out.set(id, userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100));
-      }
-      return out;
+    async scopeConversationCount(scope): Promise<number> {
+      let n = 0;
+      for (const s of sessions.values()) if (s.scopeId === scope && sessionOrigin(s.threadRef) === "conversation") n++;
+      return n;
     },
 
-    async scopeCronGroups(scope, orgWide): Promise<CronGroupSummary[]> {
-      const groups = new Map<string, CronGroupSummary>();
+    async scopeActivity(): Promise<ScopeActivity[]> {
+      const byScope = new Map<string, ScopeActivity>();
       for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
-        const cronId = cronIdOf(s.threadRef);
-        if (!cronId) continue;
-        const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
-        const g = groups.get(cronId) ?? {
-          cronId,
+        const r = byScope.get(s.scopeId) ?? {
           scopeId: s.scopeId,
-          sessions: 0,
-          turns: 0,
-          messages: 0,
+          conversations: 0,
+          crons: 0,
+          background: 0,
           lastActivity: 0,
-          createdAt: s.createdAt,
         };
-        g.sessions += 1;
-        g.turns += turns;
-        g.messages += log.length;
-        g.lastActivity = Math.max(g.lastActivity, lastActivity);
-        g.createdAt = Math.min(g.createdAt, s.createdAt);
-        groups.set(cronId, g);
-      }
-      return [...groups.values()].sort((a, b) => {
-        if (b.lastActivity !== a.lastActivity) return b.lastActivity - a.lastActivity;
-        if (a.cronId < b.cronId) return 1;
-        if (a.cronId > b.cronId) return -1;
-        return 0;
-      });
-    },
-
-    async scopeSessionRollups(scope, orgWide): Promise<ScopeSessionRollup[]> {
-      const rollups = new Map<string, ScopeSessionRollup>();
-      const winners = new Map<string, { at: number; id: string }>();
-      for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
+        byScope.set(s.scopeId, r);
         const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
-        const r = rollups.get(s.scopeId) ?? {
-          scopeId: s.scopeId,
-          sessions: 0,
-          backgroundSessions: 0,
-          lastActivity: 0,
-          lastConversationActivity: 0,
-          previewSessionId: null,
-        };
-        rollups.set(s.scopeId, r);
-        r.lastActivity = Math.max(r.lastActivity, lastActivity);
-        if (sessionCategory(sessionOrigin(s.threadRef)) === "background") {
-          r.backgroundSessions += 1;
-          continue;
-        }
-        r.sessions += 1;
-        r.lastConversationActivity = Math.max(r.lastConversationActivity, lastActivity);
-        if (turns === 0) continue;
-        const prev = winners.get(s.scopeId);
-        if (!prev || lastActivity > prev.at || (lastActivity === prev.at && idDesc(s.id, prev.id) < 0)) {
-          winners.set(s.scopeId, { at: lastActivity, id: s.id });
-          r.previewSessionId = s.id;
-        }
-      }
-      return [...rollups.values()];
-    },
-
-    async scopeSessionStats(scope, orgWide, category, originFilter, cronId): Promise<ScopeSessionStats> {
-      const byType: Record<string, number> = {};
-      const byTypeAll: Record<string, number> = {};
-      const totalByCategory = { conversation: 0, background: 0, all: 0 };
-      const cronIds = new Set<string>();
-      let total = 0;
-      let turns = 0;
-      for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
+        r.lastActivity = Math.max(r.lastActivity, log.length ? log[log.length - 1]!.createdAt : s.createdAt);
         const origin = sessionOrigin(s.threadRef);
-        const cat = sessionCategory(origin);
-        totalByCategory[cat]++;
-        totalByCategory.all++;
-        const bucket = sessionBucket(origin, s.type);
-        byTypeAll[bucket] = (byTypeAll[bucket] ?? 0) + 1;
-        const sessionCronId = cronIdOf(s.threadRef);
-        if (sessionCronId != null) cronIds.add(sessionCronId);
-        if (category && cat !== category) continue;
-        if (
-          originFilter === "other_background"
-            ? origin === "conversation" || origin === "cron"
-            : originFilter && origin !== originFilter
-        )
-          continue;
-        if (cronId && sessionCronId !== cronId) continue;
-        total++;
-        const log = entries.get(s.id) ?? [];
-        turns += log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        byType[bucket] = (byType[bucket] ?? 0) + 1;
+        if (origin === "conversation") r.conversations++;
+        else if (origin === "cron") r.crons++;
+        else r.background++;
       }
-      return { total, turns, byType, byTypeAll, totalByCategory, crons: cronIds.size };
+      return [...byScope.values()];
     },
 
     async attributedTurns(): Promise<AttributedTurn[]> {
@@ -934,12 +836,13 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           ancestor = parent;
           origin = sessionOrigin(parent.threadRef);
         }
+        const cronId = cronIdOf(ancestor.threadRef);
         for (const r of records) {
           if (!r.usage) continue;
           if (r.createdAt < range.from || r.createdAt >= range.to) continue;
           const day = Math.floor(r.createdAt / DAY);
           const model = r.model ?? null;
-          const key = JSON.stringify([day, session.scopeId, origin, model]);
+          const key = JSON.stringify([day, session.scopeId, origin, cronId, model]);
           let row = buckets.get(key);
           if (!row) {
             row = {
@@ -947,6 +850,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
               model,
               scopeId: session.scopeId,
               origin,
+              cronId,
               calls: 0,
               costUsd: 0,
               input: 0,

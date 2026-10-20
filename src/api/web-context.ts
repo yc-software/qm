@@ -1,6 +1,6 @@
 import type { SessionEntry, SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { createTranscriptSource } from "../harness/tape-projection.ts";
+import { createTranscriptSource } from "../sessions/transcript-source.ts";
 
 const WEB_CONTEXT_MESSAGE_CHARS = 600;
 const WEB_CONTEXT_READ_CAP = 500;
@@ -34,6 +34,7 @@ export function webConversationWindow(
       sentCallIds.add(p.callId);
   }
   const all: WindowMessage[] = [];
+  const self = new Set<string>();
   for (const e of entries) {
     const p = (e.payload ?? {}) as {
       text?: unknown;
@@ -64,6 +65,7 @@ export function webConversationWindow(
       sentCallIds.has(p.callId)
     ) {
       all.push({ ts: contextTs(e.seq), time, author: "you", text: clip(text), threadTs: threadRoot });
+      self.add(contextTs(e.seq));
     }
   }
   const bounded = q.before ? all.filter((m) => m.ts < q.before!) : all;
@@ -72,20 +74,31 @@ export function webConversationWindow(
   const count = Math.max(1, Math.min(WEB_CONTEXT_READ_CAP, Number(q.count) || 100));
   const kept = matched.slice(-count);
   const hasMore = matched.length > kept.length;
-  return { messages: kept, hasMore, ...(hasMore && kept[0] ? { nextBefore: kept[0].ts } : {}) };
+  const selfTs = kept.filter((m) => self.has(m.ts)).map((m) => m.ts);
+  return {
+    messages: kept,
+    hasMore,
+    ...(hasMore && kept[0] ? { nextBefore: kept[0].ts } : {}),
+    ...(selfTs.length ? { selfTs } : {}),
+  };
 }
 
 export async function answerWebContextRequest(
   sessions: Pick<
     SessionStore,
-    "sessionsByThreadRefs" | "visibleEntries" | "getEntries" | "getTape" | "latestEntrySeq" | "participantWindowsOf"
+    | "sessionsByThreadRefs"
+    | "visibleEntries"
+    | "getEntries"
+    | "countEntriesBefore"
+    | "latestEntrySeq"
+    | "participantWindowsOf"
   >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {
   if (query.file)
     return { error: "the web surface can't fetch files this way — shared files are already in the workspace" };
   if (typeof query.searchAll === "string" && query.searchAll)
-    return { result: { messages: [], note: "live-search-unconfigured" } };
+    return { result: { messages: [], liveSearch: "unconfigured" } };
   const target = query.conversationTarget;
   if (!target) return { error: "only this conversation is readable on the web surface" };
   const owner = ownerOfWebThread(target);

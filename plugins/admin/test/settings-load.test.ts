@@ -44,7 +44,7 @@ test("settings navigation never starts the all-scopes history scan", () => {
       },
       renderTabs() {},
       defaultShell() {},
-      renderCurrentData() {},
+      renderData() {},
     });
     vm.runInContext(source, context);
     vm.runInContext(`render({view:${JSON.stringify(view)}, scope:"org:example"})`, context);
@@ -103,10 +103,7 @@ test("catalog completion appends options only to the requesting settings view", 
 });
 
 test("branding saves commit the Lit draft and preserve unrelated settings", async () => {
-  const source = extract(
-    'document.querySelectorAll("[data-save]").forEach',
-    '$("view-governance").addEventListener("input"',
-  );
+  const source = extract("async function saveSetting(key, btn) {", '$("view-governance").addEventListener("input"');
   for (const otherDraft of [false, true]) {
     const f = litFixture();
     try {
@@ -299,20 +296,34 @@ test("admin shell calls resolve against the shipped Lit bundle", () => {
   }
 });
 
-test("models view loads and saves purpose cards through the real page handlers", async () => {
+const meta = (id: string) => ({
+  id,
+  name: id,
+  label: id,
+  buttonLabel: id,
+  provider: "openai",
+  api: "openai-responses",
+});
+
+test("models view saves runtime rows through the composer picker and real page handlers", async () => {
   const f = litFixture();
   try {
-    f.root.innerHTML = '<template data-settings-card="card-base-model"></template>';
-    f.ui.settings.mountCards();
+    f.window.requestAnimationFrame = () => 0;
+    f.root.innerHTML = '<template data-settings-card="card-runtimes"></template>';
+    f.ui.mountCards();
     const data = {
       baseModelDefault: "model",
       baseModelOptions: [{ id: "model" }],
       harnessOptions: ["pi"],
-      thinkingLevelsByHarness: { pi: ["auto", "low"] },
-      runtime: null,
+      modelsByHarness: { pi: [{ id: "model" }, { id: "fast" }] },
+      modelCatalog: { model: meta("model"), fast: meta("fast") },
+      fastModeModelIds: ["fast"],
+      runtime: { harnessId: "pi", modelId: "fast", effortLevel: "auto", fastMode: false },
       cronRuntime: null,
       subagentRuntime: null,
       fallbackRuntime: null,
+      memoryEmbeddingModel: null,
+      memoryEmbeddingOptions: [{ id: "gateway/embed", name: "embed", provider: "qm:gateway" }],
     };
     const requests: any[] = [];
     const context = vm.createContext({
@@ -323,6 +334,7 @@ test("models view loads and saves purpose cards through the real page handlers",
       scope: "org:test",
       governanceReq: 1,
       governanceSaveSeq: 0,
+      refreshModelChoices: [],
       sectionSnapshots: new Map(),
       governanceSaveReview: async () => true,
       setStatus: (id: string, message: string, tone: string) => f.ui.status(id.replace(/^st-/, ""), message, tone),
@@ -334,23 +346,85 @@ test("models view loads and saves purpose cards through the real page handlers",
     vm.runInContext(extract('if (requestedView === "models") {', "refreshModelChoices.push"), context);
     vm.runInContext(extract("const SAVE = Object.fromEntries(", "const sectionSnapshots ="), context);
     vm.runInContext(
-      extract('document.querySelectorAll("[data-save]").forEach', '$("view-governance").addEventListener("input"'),
+      extract("async function saveSetting(key, btn) {", '$("view-governance").addEventListener("input"'),
       context,
     );
-    for (const key of ["cron-runtime", "subagent-runtime", "fallback-runtime"]) {
-      assert.equal(f.document.getElementById(`card-${key}`)!.classList.contains("hidden"), false);
-      const button = f.document.querySelector<HTMLButtonElement>(`[data-save="${key}"]`)!;
-      (f.document.getElementById(`${key}-inherit`) as HTMLInputElement).click();
-      await button.onclick!(new f.window.PointerEvent("click"));
-      assert.equal(requests.at(-1)[1], `/api/scopes/org%3Atest/${key}`);
-      assert.equal(requests.at(-1)[2].modelId, "model");
+    const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+    const row = (key: string) => f.document.querySelector(`[data-runtime-row="${key}"]`)!;
+    const open = (key: string) => row(key).querySelector<HTMLButtonElement>(".loadout-button")!.click();
+    const save = async () => {
+      f.document.getElementById("runtimes-save")!.click();
+      for (let i = 0; i < 5; i++) await setImmediate();
+    };
+
+    assert.equal(row("cron-runtime").querySelector(".menu-label")!.textContent, "Job's scope default");
+    open("cron-runtime");
+    assert.deepEqual(
+      [...row("cron-runtime").querySelectorAll(".loadout-pick .loadout-name")].map((name) => name.textContent),
+      ["model", "fast"],
+    );
+    for (const preset of ['[data-loadout-section="add"]', ".loadout-head", ".loadout-remove"])
+      assert.equal(row("cron-runtime").querySelector(preset), null);
+    row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-pick")!.click();
+    assert.deepEqual(plain(f.ui.collect("cron-runtime")), {
+      harnessId: "pi",
+      modelId: "model",
+      effortLevel: "auto",
+      fastMode: false,
+    });
+
+    open("runtime");
+    row("runtime").querySelector<HTMLButtonElement>('button[aria-label="Fast"]')!.click();
+    row("runtime").querySelector<HTMLButtonElement>('[data-loadout-section="effort"]')!.click();
+    [...row("runtime").querySelectorAll<HTMLButtonElement>(".loadout-effort")]
+      .find((button) => button.textContent!.trim() === "High")!
+      .click();
+    assert.deepEqual(plain(f.ui.collect("runtime")), {
+      harnessId: "pi",
+      modelId: "fast",
+      effortLevel: "high",
+      fastMode: true,
+    });
+
+    const recall = row("memory-embedding-model").querySelector("select")!;
+    const pickRecall = (modelId: string) => {
+      recall.value = modelId;
+      recall.dispatchEvent(new f.window.Event("change"));
+    };
+    assert.deepEqual(
+      [...recall.options].map((option) => option.value),
+      ["", "gateway/embed"],
+    );
+    pickRecall("gateway/embed");
+    assert.deepEqual(plain(f.ui.collect("memory-embedding-model")), { modelId: "gateway/embed" });
+
+    await save();
+    assert.deepEqual(plain(requests.map(([method, path, body]) => [method, path, body])), [
+      [
+        "PUT",
+        "/api/scopes/org%3Atest/runtime",
+        { harnessId: "pi", modelId: "fast", effortLevel: "high", fastMode: true },
+      ],
+      [
+        "PUT",
+        "/api/scopes/org%3Atest/cron-runtime",
+        { harnessId: "pi", modelId: "model", effortLevel: "auto", fastMode: false },
+      ],
+      ["PUT", "/api/scopes/org%3Atest/memory-embedding-model", { modelId: "gateway/embed" }],
+    ]);
+    for (const key of ["runtime", "cron-runtime", "memory-embedding-model"])
       assert.equal(f.ui.states.get(key).dirty, false);
-      (f.document.getElementById(`${key}-inherit`) as HTMLInputElement).click();
-      await button.onclick!(new f.window.PointerEvent("click"));
-      assert.equal(JSON.stringify(requests.at(-1)[2]), '{"inherit":true}');
-      assert.equal(f.ui.states.get(key).dirty, false);
-      assert.ok(html.includes(`$("card-${key}"),`));
-    }
+
+    assert.equal(f.window.localStorage.length, 0);
+    open("cron-runtime");
+    row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-foot-btn")!.click();
+    pickRecall("");
+    await save();
+    assert.deepEqual(plain(requests.slice(3).map(([, path, body]) => [path, body])), [
+      ["/api/scopes/org%3Atest/cron-runtime", { inherit: true }],
+      ["/api/scopes/org%3Atest/memory-embedding-model", { modelId: null }],
+    ]);
+    assert.equal(row("cron-runtime").querySelector(".menu-label")!.textContent, "Job's scope default");
   } finally {
     f.dom.window.close();
   }

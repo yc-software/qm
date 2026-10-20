@@ -1,6 +1,6 @@
-import { sessionStatusMark } from "./session-status.ts";
 import { openSessionShare } from "./session-share";
 import { preserveTranscriptScroll } from "./transcript-viewport";
+import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
@@ -56,7 +56,8 @@ import {
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
-import { icon, workingWave } from "./ui";
+import { workingWave } from "./ui";
+import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
 import type { DensityTier } from "./density";
 import { appState } from "./shell-state";
@@ -146,8 +147,8 @@ function persist(): void {
     const payload = { v: 2, active: splitState.active, layout: lastLayout, updatedAt: persistedUpdatedAt };
     localStorage.setItem(STORE_KEY, JSON.stringify(payload));
     pushRemoteSoon(payload);
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("web-ui: persist split layout", e);
   }
 }
 
@@ -158,11 +159,16 @@ function pushRemoteSoon(payload: { updatedAt: number }): void {
     remoteTimer = null;
     const p = remotePayload;
     remotePayload = null;
-    if (p) void putUiState(REMOTE_STATE_KEY, p, p.updatedAt).catch(() => void 0);
+    if (p) void putUiState(REMOTE_STATE_KEY, p, p.updatedAt).catch(swallowAs("web-ui: sync split layout", undefined));
   }, 400);
 }
 
 function flushRemoteNow(): void {
+  if (persistTimer !== null) {
+    window.clearTimeout(persistTimer);
+    persistTimer = null;
+    persist();
+  }
   if (remoteTimer !== null) {
     window.clearTimeout(remoteTimer);
     remoteTimer = null;
@@ -170,7 +176,9 @@ function flushRemoteNow(): void {
   const p = remotePayload;
   if (!p) return;
   remotePayload = null;
-  void putUiState(REMOTE_STATE_KEY, p, p.updatedAt, { keepalive: true }).catch(() => void 0);
+  void putUiState(REMOTE_STATE_KEY, p, p.updatedAt, { keepalive: true }).catch(
+    swallowAs("web-ui: flush split layout", undefined),
+  );
 }
 
 window.addEventListener("pagehide", flushRemoteNow);
@@ -467,7 +475,7 @@ export function loadPersistedSplit(): void {
 
 export function fetchRemoteSplit(timeoutMs = 2000): Promise<UiStateRecord | null> {
   return Promise.race([
-    fetchUiState(REMOTE_STATE_KEY).catch(() => null),
+    fetchUiState(REMOTE_STATE_KEY).catch(swallowAs("web-ui: fetch synced split layout", null)),
     new Promise<null>((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
   ]);
 }
@@ -481,8 +489,8 @@ export async function adoptRemoteSplit(pending: Promise<UiStateRecord | null>): 
   persistedUpdatedAt = at;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({ ...rec.value, updatedAt: at }));
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("web-ui: cache synced split layout", e);
   }
 }
 
@@ -812,7 +820,7 @@ function computeHeaderSignature(): string {
       const parent = session?.parentSessionId
         ? sessionsState.list.find((row) => row.id === session.parentSessionId)
         : undefined;
-      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${JSON.stringify(session?.status ?? null)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
+      return `${p.id}|${session?.id ?? ""}|${paneCrumb(p) ?? ""}|${paneTitle(p)}|${paneIsWorking(p)}|${paneAwaitsInput(p)}|${paneBackground(p)?.label ?? ""}|${paneKindBadge(p)}|${session?.parentSessionId ?? ""}|${parent?.title ?? ""}`;
     })
     .join("~");
 }
@@ -1266,7 +1274,6 @@ class PaneTab implements ITabRenderer {
             : nothing
         }
         <span class="split-pane-title-text" dir="auto">${title}</span>
-        ${sessionStatusMark(paneSession(panel)?.status)}
         ${
           this.inStrip
             ? html`<span class="split-tab-actions">
@@ -1596,4 +1603,14 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && splitState.active && dockApi?.hasMaximizedGroup()) dockApi.exitMaximizedGroup();
+});
+
+window.addEventListener("qm:cycle-tab", (e) => {
+  const step = (e as CustomEvent<unknown>).detail;
+  if (!dockApi || !canvasHost?.isConnected || (step !== 1 && step !== -1)) return;
+  const group = dockApi.groups.find((g) => g.element.contains(document.activeElement)) ?? dockApi.activeGroup;
+  const panels = group?.panels ?? [];
+  const at = group?.activePanel ? panels.indexOf(group.activePanel) : -1;
+  if (panels.length < 2 || at < 0) return;
+  activatePanel(panels[(at + step + panels.length) % panels.length]);
 });

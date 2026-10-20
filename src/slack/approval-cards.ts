@@ -1,6 +1,5 @@
 import { clip, inlineCode } from "./util.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
-import type { AgentRequestActionId } from "./agent-requests.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
 export type ApprovalActionId = (typeof APPROVAL_ACTION_IDS)[number];
@@ -22,9 +21,9 @@ export interface SlackApprovalMessage {
 
 const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 
-export function button(
+function button(
   text: string,
-  actionId: ApprovalActionId | AgentRequestActionId,
+  actionId: ApprovalActionId,
   value: string,
   style?: "primary" | "danger",
 ): Record<string, unknown> {
@@ -134,8 +133,6 @@ export function recoveredApprovalContext(
     redeliveryKey: _redeliveryKey,
     approval: _approval,
     relayInput: _relayInput,
-    intakePreambleMs: _intakePreambleMs,
-    clientSentAt: _clientSentAt,
     ...turn
   } = req;
   const origin =

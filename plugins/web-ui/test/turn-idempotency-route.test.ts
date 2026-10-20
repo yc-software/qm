@@ -123,14 +123,13 @@ test("ordinary chats and invalid app references cannot inject app context", asyn
     assert.equal(response.status, 202);
     assert.equal(turns.at(-1)?.conversationHeader, undefined);
   }
-  const count = turns.length;
   const response = await fetch(`${base}/api/turn`, {
     method: "POST",
     headers,
     body: JSON.stringify({ text: "hello", threadRef: "web:bob:app-edit:sample-app" }),
   });
-  assert.equal(response.status, 403);
-  assert.equal(turns.length, count);
+  assert.equal(response.status, 202);
+  assert.equal(turns.at(-1)?.conversationHeader, undefined, "someone else's app thread carries no app context");
 });
 
 test("inbox chat loads fresh caller-scoped previews separately from the user message", async () => {

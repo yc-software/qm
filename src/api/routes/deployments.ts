@@ -1,4 +1,5 @@
-import { EXTERNAL_APP_SHARING_OFF, externalAppSharingAllowed } from "../../feature-flags.ts";
+import { externalAppSharingAllowed } from "../../feature-flags.ts";
+import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -12,7 +13,7 @@ import {
 import { spawn } from "node:child_process";
 import { basename, dirname } from "node:path";
 import { deploymentView, type App, type DeployInput, type RedeployInput } from "../app.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, reportFailureAs, swallowAs } from "../../util/errors.ts";
 import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
@@ -25,6 +26,7 @@ import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-sha
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
+import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
@@ -95,7 +97,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     method === "GET" &&
     String(req.headers["sec-fetch-dest"] ?? "") === "document"
   ) {
-    const d = await app.getDeployment(id).catch(() => null);
+    const d = await app.getDeployment(id).catch(swallowAs("deployments: load deployment", null));
     const slug = d?.name ?? d?.id;
     if (d && slug && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(slug)) {
       res.writeHead(302, {
@@ -159,6 +161,7 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
 
 const GATEWAY_AUTH_HEADERS = [
   "x-qm-app-host",
+  "x-qm-client-ip",
   "x-signature",
   "x-timestamp",
   "x-as-principal",
@@ -198,8 +201,10 @@ interface DeploymentHttp2Connection {
 }
 const deploymentHttp2Sessions = new Map<string, DeploymentHttp2Connection>();
 
+const TRACE_HEADERS = ["sentry-trace", "baggage", "traceparent", "tracestate"];
+
 function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string[]> {
-  const out = proxyHeaders(req.headers, ["host", ...GATEWAY_AUTH_HEADERS]);
+  const out = proxyHeaders(req.headers, ["host", ...GATEWAY_AUTH_HEADERS, ...TRACE_HEADERS]);
   const kept = String(out.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
@@ -838,7 +843,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     cleanUrlRedirect();
     return true;
   }
-  const deployment = await app.getDeployment(slug).catch(() => null);
+  const deployment = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
   const externalAllowed = deployment
     ? await externalAppSharingAllowed(deps.featureFlags, deployment.ownerScopeId)
     : false;
@@ -900,6 +905,28 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       authenticatedPermission = await app.effectiveDeploymentPermission(deployment, sub);
     }
   }
+  const isPageLoad =
+    ctx.method === "GET" &&
+    wantsHtml &&
+    (dest === undefined || dest === "document" || (dest === "iframe" && site !== "same-origin"));
+  const recordPageView = (authMode: AppViewAuthMode): void => {
+    if (!isPageLoad || !deployment || !deps.appPageViews) return;
+    const forwardedIp = fromAppHost ? req.headers["x-qm-client-ip"] : undefined;
+    const ip = typeof forwardedIp === "string" && forwardedIp ? forwardedIp : (req.socket.remoteAddress ?? null);
+    const userAgent = req.headers["user-agent"];
+    void deps.appPageViews
+      .record({
+        deploymentId: deployment.id,
+        version: deployment.appliedVersion ?? deployment.currentVersion ?? null,
+        viewer: sub ?? null,
+        authMode,
+        at: Date.now(),
+        path: safePathname,
+        ip,
+        userAgent: typeof userAgent === "string" ? userAgent : null,
+      })
+      .catch(reportFailureAs("app page view log", undefined, deployment.id));
+  };
   if (ctx.method === "GET" && ((!bareApp && isTopDocument) || isShellRequest) && canManage && loginUrl) {
     const annotationsEnabled =
       !!sub && (await deps.featureFlags?.enabled("app_annotations", scopeId("personal", sub))) === true;
@@ -921,6 +948,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
       } else sendJson(res, 404, { error: "not_found" });
       return true;
     }
+    recordPageView("signed_in");
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     res.end(
       appShellHtml({
@@ -943,7 +971,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
           canManage || isPublic || session?.appOnly ? { bypassAcl: true } : undefined,
         );
   if (reach.status === "denied") {
-    const owner = (await app.getDeployment(slug).catch(() => null))?.ownerScopeId;
+    const owner = (await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null)))?.ownerScopeId;
     const ev = {
       at: Date.now(),
       principalId: viewer,
@@ -957,7 +985,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     else deps.auditLog?.record(ev);
   }
   if (reach.status === "denied" && ctx.method === "POST" && pathname === REQUEST_ACCESS_PATH) {
-    const d = await app.getDeployment(slug).catch(() => null);
+    const d = await app.getDeployment(slug).catch(swallowAs("deployments: load deployment", null));
     if (!d) {
       sendJson(res, 404, { error: "not_found" });
       return true;
@@ -997,6 +1025,12 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   if (reach.status === "ok" && signInAttempted && ctx.method === "GET") {
     cleanUrlRedirect();
     return true;
+  }
+  if (reach.status === "ok") {
+    let authMode: AppViewAuthMode = "public";
+    if (session?.appOnly) authMode = "app_only";
+    else if (sub && (canManage || authenticatedPermission)) authMode = "signed_in";
+    recordPageView(authMode);
   }
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
     frameAncestors: embedAncestors,
@@ -1587,20 +1621,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
         grantees: await app.deploymentGrantees(deployment.id),
       });
     } catch (e) {
-      const msg = errMessage(e);
-      let status = 400;
-      let error = "share_failed";
-      if (/no such app/.test(msg)) {
-        status = 404;
-        error = "not_found";
-      } else if (/only the owner/.test(msg)) {
-        status = 403;
-        error = "forbidden";
-      } else if (msg === EXTERNAL_APP_SHARING_OFF) {
-        status = 403;
-        error = "external_sharing_disabled";
-      }
-      return sendJson(res, status, { error, message: msg });
+      return sendShareFailure(res, e);
     }
   }
   if (b.email !== undefined && typeof b.email !== "string")
@@ -1656,16 +1677,21 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
       grantees,
     });
   } catch (e) {
-    const msg = errMessage(e);
-    let status = 400;
-    if (/no such app/.test(msg)) status = 404;
-    else if (/only the owner/.test(msg) || msg === EXTERNAL_APP_SHARING_OFF) status = 403;
-    let error = "share_failed";
-    if (status === 404) error = "not_found";
-    else if (msg === EXTERNAL_APP_SHARING_OFF) error = "external_sharing_disabled";
-    else if (status === 403) error = "forbidden";
-    return sendJson(res, status, { error, message: msg });
+    return sendShareFailure(res, e);
   }
+}
+
+const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
+  not_found: 404,
+  forbidden: 403,
+  external_sharing_disabled: 403,
+  public_links_unavailable: 409,
+};
+
+function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
+  if (e instanceof DeployAccessError)
+    return sendJson(res, DEPLOY_ACCESS_STATUS[e.code], { error: e.code, message: e.message });
+  return sendJson(res, 400, { error: "share_failed", message: errMessage(e) });
 }
 
 export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
@@ -1682,13 +1708,13 @@ export const deploymentRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
 ];
 
 export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/deployments", auth: "source", handle: createDeployment },
-  { method: "GET", path: "/v1/deployments", auth: "either", handle: listDeployments },
+  { method: "POST", path: "/v1/deployments", actor: "body.createdBy", auth: "source", handle: createDeployment },
+  { method: "GET", path: "/v1/deployments", actor: "query.principalId", auth: "either", handle: listDeployments },
   { method: "GET", path: "/v1/deployments/:id", auth: "either", handle: getDeployment },
   { method: "GET", path: "/v1/deployments/:id/fetch", auth: "either", handle: fetchDeployment },
   { method: "GET", path: "/v1/deployments/:id/logs", auth: "either", handle: deploymentLogs },
   { method: "GET", path: "/v1/deployments/:id/git-url", auth: "either", handle: deploymentGitUrl },
-  { method: "GET", path: "/v1/deployments/:id/share", auth: "either", handle: getDeploymentShares },
+  { method: "GET", path: "/v1/deployments/:id/share", actor: "person", auth: "either", handle: getDeploymentShares },
   { method: "POST", path: "/v1/deployments/:id/share", auth: "either", handle: shareDeployment },
   { method: "POST", path: "/v1/deployments/:id/rollback", auth: "source", handle: rollbackDeployment },
   { method: "POST", path: "/v1/deployments/:id/redeploy", auth: "source", handle: redeployDeployment },

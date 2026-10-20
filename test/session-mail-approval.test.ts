@@ -31,6 +31,7 @@ import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -53,6 +54,8 @@ function fakeSandbox(): Sandbox {
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audience: [actor] };
+
+let callSeq = 0;
 
 async function scenario() {
   const sessions = createMemorySessionStore();
@@ -87,7 +90,7 @@ async function scenario() {
         };
         const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;
         const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
-        const result = await execute("wait-call", { action: "wait", timeoutMs: 0 });
+        const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
         const reply = JSON.stringify(result.content);
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         return { reply, modelCalls: 1 };
@@ -101,6 +104,7 @@ async function scenario() {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
     sessions,
@@ -114,6 +118,7 @@ async function scenario() {
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "session-mail-deploy"),

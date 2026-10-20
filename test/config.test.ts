@@ -1,13 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   harnessCarriedModelAuth,
   baseModelProviders,
   boolEnv,
   enabledSandboxBackends,
   loadConfig,
+  configuredModelForHarness,
   numEnv,
+  providerKeysPresent,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
 
@@ -19,6 +23,8 @@ const productionEnv = {
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
+  DATABASE_URL: "postgres://qm@localhost/qm",
+  SESSION_STORE: "postgres",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
@@ -291,6 +297,25 @@ test("sandbox backend is parsed once before production backend guards", () => {
   );
 });
 
+test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+  const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
+  assert.throws(
+    () => loadConfig(noDatabase),
+    /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
+  );
+  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
+  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
+    /production requires SESSION_STORE=postgres/,
+  );
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(
+    () => loadConfig({ SANDBOX_BACKEND: "local" }),
+    "a single-process dev instance needs no durable store",
+  );
+});
+
 test("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ NODE_ENV: "production" }),
@@ -384,19 +409,10 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
-test("HARNESS=codex requires OPENAI_API_KEY: its CLI cannot do browser OAuth in a container", () => {
-  assert.throws(() => loadConfig({ HARNESS: "codex" }), /missing or insecure required core secrets: OPENAI_API_KEY/);
-  assert.throws(() => loadConfig({ HARNESS: " codex " }), /missing or insecure required core secrets: OPENAI_API_KEY/);
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
-  assert.throws(
-    () => loadConfig({ ...productionEnv, HARNESS: "codex" }),
-    /missing or insecure required core secrets: OPENAI_API_KEY/,
-  );
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "codex", OPENAI_API_KEY: "sk-openai" }));
-  assert.equal(
-    loadConfig({ HARNESS: "codex", OPENAI_API_KEY: "sk-openai", CODEX_MODEL: "gpt-5.4" }).codexModel,
-    "gpt-5.4",
-  );
+test("HARNESS accepts only the remaining harnesses", () => {
+  for (const harness of ["codex", " opencode "])
+    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use mock, pi, or claude/);
+  assert.equal(loadConfig({ HARNESS: "pi" }).harness, "pi");
 });
 
 test("HARNESS=claude uses native Claude authentication and does not require an Anthropic key", () => {
@@ -466,23 +482,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     }).sandboxBackend,
     "superserve",
   );
-  const superserveProd = {
-    ...productionEnv,
-    SANDBOX_BACKEND: "superserve",
-    SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-    SUPERSERVE_API_KEY: "ss_live_k",
-  };
-  assert.throws(
-    () => loadConfig(superserveProd),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "without a durable store the generation and provisioning lock are per-process",
-  );
-  assert.throws(
-    () => loadConfig({ ...superserveProd, SANDBOX_BACKEND: "local" }),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "the requirement follows the credentials that enable it, not just the primary backend",
-  );
-  assert.doesNotThrow(() => loadConfig({ ...superserveProd, DATABASE_URL: "postgres://qm@localhost/qm" }));
   assert.doesNotThrow(
     () =>
       loadConfig({
@@ -568,23 +567,14 @@ test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
 
 test("MODEL_PROVIDER is refused when the harness can never run that vendor's models", () => {
   assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "codex", OPENROUTER_API_KEY: "k", OPENAI_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=codex/,
+    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "claude", OPENROUTER_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=claude/,
   );
   assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "anthropic", HARNESS: "codex", ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=codex/,
+    () => loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "claude", OPENAI_API_KEY: "k" }),
+    /cannot serve a base model on HARNESS=claude/,
   );
-  assert.throws(
-    () => loadConfig({ MODEL_PROVIDER: "openrouter", HARNESS: "opencode", OPENROUTER_API_KEY: "k" }),
-    /cannot serve a base model on HARNESS=opencode/,
-    "opencode has no OpenRouter route",
-  );
-  assert.equal(
-    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "codex", OPENAI_API_KEY: "k" }).modelProvider,
-    "openai",
-    "the one combination Codex can bill is accepted",
-  );
+  assert.equal(loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", OPENAI_API_KEY: "k" }).modelProvider, "openai");
 });
 
 test("baseModelProviders constrains the base model only when a provider is declared", () => {
@@ -620,6 +610,11 @@ test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its en
     visibility: "private",
     ttlSec: 3600,
   });
+});
+
+test("DEPLOY_PROVIDER=e2b selects E2B publishing and needs the E2B key", () => {
+  assert.equal(loadConfig({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "e2b-key" }).deployProvider, "e2b");
+  assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "e2b" }), /missing or insecure required core secrets: E2B_API_KEY/);
 });
 
 test("the deploy runner image falls back to the sandbox image", () => {
@@ -750,6 +745,7 @@ test("the active provider's own apps domain reaches the gate when DEPLOY_APPS_DO
 test("DEPLOY_APPS_DOMAIN refuses shared platform domains that cannot carry per-app subdomains", () => {
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.onporter.run" }), /shared platform domain/);
   assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "myapp.fly.dev" }), /shared platform domain/);
+  assert.throws(() => loadConfig({ DEPLOY_APPS_DOMAIN: "8081-abc.e2b.app" }), /shared platform domain/);
   assert.equal(
     loadConfig({ DEPLOY_APPS_DOMAIN: "apps.example.com", AWS_DEPLOY_GATE_SECRET: "0123456789abcdef0123456789abcdef" })
       .deployAppsDomain,
@@ -814,10 +810,42 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("Codex file OAuth satisfies model onboarding without an API key", () => {
-  const config = { ...loadConfig({}), harness: "codex" as const, codexAuthFile: "/local/auth.json" };
-  assert.equal(harnessCarriedModelAuth(config), "openai");
-  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthFile: undefined }), undefined);
+test("company ChatGPT auth satisfies model onboarding on any harness without an API key", () => {
+  const config = { ...loadConfig({}), harness: "pi" as const };
+  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
+  assert.equal(harnessCarriedModelAuth({ ...config, codexAuthFile: "/local/auth.json" }), "openai");
+  assert.equal(harnessCarriedModelAuth({ ...config, harness: "claude", codexAuthCredential: "cred-1" }), "openai");
+  assert.equal(harnessCarriedModelAuth(config), undefined);
+  assert.equal(providerKeysPresent({ ...config, codexAuthCredential: "cred-1" }).codexOAuth, true);
+  assert.equal(
+    loadConfig({ MODEL_PROVIDER: "openai", HARNESS: "pi", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential,
+    "cred-1",
+  );
+});
+
+test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-config-chatgpt-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "auth.json");
+  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
+  const token = `e30.${claims.toString("base64url")}.sig`;
+  writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
+  chmodSync(path, 0o600);
+  assert.equal(loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }).codexAuthFile, path);
+  assert.throws(
+    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(dir, "missing.json") }),
+    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
+  );
+  assert.equal(
+    loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile,
+    undefined,
+  );
+  assert.throws(
+    () => loadConfig({ ...productionEnv, CODEX_AUTH_FILE: path }),
+    /CODEX_AUTH_FILE is supported for local development only/,
+  );
+  chmodSync(path, 0o644);
+  assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
 });
 
 test("retired brain environment does not configure a runtime integration and warns once", () => {
@@ -949,9 +977,50 @@ test("background ownership requires durable storage and an independent deploymen
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });
 
+test("the spend export token is optional, strong, trimmed and never shared with another environment value", () => {
+  const env = {
+    CORE_SIGNING_SECRET: "source-signing-secret-0123456789abcdef",
+    CAPABILITY_SECRET: "capability-secret-0123456789abcdef0123",
+    PORTAL_IDENTITY_SECRET: "portal-identity-secret-0123456789abcdef",
+    SPEND_EXPORT_TOKEN: "spend-export-token-0123456789abcdef01234",
+  };
+  assert.equal(loadConfig(env).spendExportToken, env.SPEND_EXPORT_TOKEN);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: undefined }).spendExportToken, undefined);
+  assert.equal(loadConfig({ ...env, SPEND_EXPORT_TOKEN: "" }).spendExportToken, undefined);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: "short" }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: " ".repeat(40) }), /SPEND_EXPORT_TOKEN/);
+  assert.throws(() => loadConfig({ ...env, SPEND_EXPORT_TOKEN: `${env.SPEND_EXPORT_TOKEN}\n` }), /SPEND_EXPORT_TOKEN/);
+  for (const name of [
+    "CORE_SIGNING_SECRET",
+    "QM_SLACK_SERVICE_TOKEN",
+    "DEPLOY_APPS_SESSION_SECRET",
+    "SLACK_SIGNING_SECRET",
+  ]) {
+    assert.throws(
+      () => loadConfig({ ...env, [name]: env.SPEND_EXPORT_TOKEN }),
+      /SPEND_EXPORT_TOKEN/,
+      `${name} must not share the export token`,
+    );
+  }
+});
+
 test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
   assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
   assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
   assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
+});
+
+test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
+  const base = { ...loadConfig({}), harness: "pi" as const };
+  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-5.6-sol");
+  assert.equal(
+    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }, "pi"),
+    undefined,
+  );
+  assert.equal(
+    configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", modelId: "claude-opus-5" }, "pi"),
+    "claude-opus-5",
+  );
+  assert.equal(configuredModelForHarness(base, "pi"), undefined);
 });

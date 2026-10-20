@@ -1,6 +1,7 @@
+import { isEmbeddingModel } from "../../../model/model-overlay.ts";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelVerificationError } from "../../../model/model-verification.ts";
-import { MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
+import { embeddingModelCatalog, MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -23,7 +24,11 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
       const model = safeModelMetadata(id);
       return model && (model.provider === "openai" || model.provider === "anthropic") ? [model] : [];
     });
-    return sendJson(ctx.res, 200, { models: await store.statuses(), templates });
+    return sendJson(ctx.res, 200, {
+      models: await store.statuses(),
+      templates,
+      embeddingModels: embeddingModelCatalog(),
+    });
   }
   const id = ctx.params.model;
   if (!id) return sendJson(ctx.res, 400, { error: "bad_request" });
@@ -94,14 +99,19 @@ export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
         kind: "saved",
         spec: saved.spec,
         source: "Saved administrator definition",
-        missing: [
-          ...["name", "template", "contextWindow", "maxTokens"].filter(
-            (field) => saved.spec[field as keyof typeof saved.spec] == null,
-          ),
-          ...["input", "output", "cacheRead", "cacheWrite"].filter(
-            (field) => saved.spec.cost?.[field as "input" | "output" | "cacheRead" | "cacheWrite"] == null,
-          ),
-        ],
+        missing: isEmbeddingModel(saved.spec)
+          ? []
+          : [
+              ...["name", "template", "contextWindow", "maxTokens"].filter(
+                (field) => saved.spec[field as keyof typeof saved.spec] == null,
+              ),
+              ...["input", "output", "cacheRead", "cacheWrite"].filter(
+                (field) =>
+                  ("cost" in saved.spec ? saved.spec.cost : undefined)?.[
+                    field as "input" | "output" | "cacheRead" | "cacheWrite"
+                  ] == null,
+              ),
+            ],
         message: "Review or edit this existing definition, then verify it again.",
       });
     return sendJson(
@@ -162,8 +172,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
         : builtInModelCatalog();
       const configured = await config.getWebuiModelsDurable(scope);
       const ids = configured ?? catalog.map((model) => model.id);
-      config.setWebuiModels(scope, [...new Set([...ids, spec.id])]);
-      await config.flushScope(scope);
+      await config.setWebuiModels(scope, [...new Set([...ids, spec.id])]);
     };
     if (ctx.deps.advisoryLock) await ctx.deps.advisoryLock.withLock("admin-model-picker", apply);
     else await apply();

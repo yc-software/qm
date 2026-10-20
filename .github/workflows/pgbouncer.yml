@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "24.18.1"
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       - run: bash scripts/test-pgbouncer.sh

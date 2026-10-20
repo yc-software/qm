@@ -9,6 +9,8 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   createSdkModalClient,
+  ModalNameConflictError,
+  ModalSandboxGoneError,
   modalEgressAllowlist,
   MODAL_EXEC_GRACE_MS,
   MODAL_MAX_EXEC_ARG_BYTES,
@@ -20,18 +22,35 @@ import {
   E2bCommandLostError,
   E2bSandboxGoneError,
 } from "../src/sandbox/e2b-client.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];
 const modalExecs: { args: string[]; params: Record<string, unknown> }[] = [];
 const modalWrites: { path: string; bytes: number }[] = [];
 const modalRunning = new Map<string, boolean>();
-class SandboxFilesystemFileTooLargeError extends Error {
-  override name = "SandboxFilesystemFileTooLargeError";
-}
+class SandboxFilesystemFileTooLargeError extends Error {}
+class ModalSandboxFilesystemNotFoundError extends Error {}
+class ModalNotFoundError extends Error {}
+class ModalClientClosedError extends Error {}
+class ModalAlreadyExistsError extends Error {}
+class ModalInvalidError extends Error {}
+class ModalTimeoutError extends Error {}
+let modalFault: { exec?: Error; read?: Error; write?: Error; create?: Error; terminate?: Error } = {};
+let modalPoll: number | null | Error = null;
 const modalSandbox = {
   sandboxId: "sb-native",
+  async poll() {
+    if (modalPoll instanceof Error) throw modalPoll;
+    return modalPoll;
+  },
+  async terminate() {
+    if (modalFault.terminate) throw modalFault.terminate;
+  },
   async exec(args: string[], params: Record<string, unknown>) {
+    if (modalFault.exec) throw modalFault.exec;
     if (typeof params.timeoutMs === "number" && params.timeoutMs % 1000 !== 0)
       throw new Error(`timeoutMs must be a multiple of 1000ms, got ${params.timeoutMs}`);
     modalExecs.push({ args, params });
@@ -39,9 +58,11 @@ const modalSandbox = {
   },
   filesystem: {
     async writeBytes(data: Uint8Array, path: string) {
+      if (modalFault.write) throw modalFault.write;
       modalWrites.push({ path, bytes: data.byteLength });
     },
     async readBytes(path: string) {
+      if (modalFault.read) throw modalFault.read;
       if (path.endsWith("huge.bin")) throw new SandboxFilesystemFileTooLargeError("file too large");
       return new Uint8Array([1]);
     },
@@ -56,14 +77,23 @@ const modalSandbox = {
 };
 mock.module("modal", {
   namedExports: {
+    SandboxFilesystemFileTooLargeError,
+    SandboxFilesystemNotFoundError: ModalSandboxFilesystemNotFoundError,
+    NotFoundError: ModalNotFoundError,
+    ClientClosedError: ModalClientClosedError,
+    AlreadyExistsError: ModalAlreadyExistsError,
+    InvalidError: ModalInvalidError,
+    TimeoutError: ModalTimeoutError,
     ModalClient: class {
       apps = { fromName: async () => ({ appId: "ap-1" }) };
       images = { fromRegistry: () => ({}), fromId: async (imageId: string) => ({ imageId }) };
       sandboxes = {
         create: async (_app: unknown, _image: unknown, params: Record<string, unknown>) => {
+          if (modalFault.create) throw modalFault.create;
           modalCreateParams.push(params);
           return modalSandbox;
         },
+        fromId: async () => modalSandbox,
         list: async function* (params: { appId?: string; tags?: Record<string, string> }) {
           modalCalls.push(["list", params]);
           for (const [sandboxId, running] of modalRunning) yield { sandboxId, poll: async () => (running ? null : 0) };
@@ -291,6 +321,53 @@ test("Modal lists running tagged sandboxes within the app and reports oversized 
   await assert.rejects(session.readFileBytes("/root/huge.bin"), /exceeds Modal's filesystem read limit/);
 });
 
+test("Modal classifies gone sandboxes, missing files, deadlines and name conflicts by SDK error class and sandbox state", async (t) => {
+  t.after(() => {
+    modalFault = {};
+    modalPoll = null;
+  });
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const session = await client.create({});
+  const plain = new Error("unrecognized failure");
+  modalFault = { exec: plain, read: plain, write: plain };
+  await assert.rejects(session.runCommand("true"), (e) => e === plain, "a running sandbox keeps the original error");
+  await assert.rejects(session.readFileBytes("/root/a"), (e) => e === plain);
+  await assert.rejects(session.writeFileBytes("/root/a", new Uint8Array()), (e) => e === plain);
+  modalPoll = 0;
+  await assert.rejects(session.runCommand("true"), ModalSandboxGoneError, "an exited sandbox is gone");
+  await assert.rejects(session.readFileBytes("/root/a"), ModalSandboxGoneError);
+  await assert.rejects(session.writeFileBytes("/root/a", new Uint8Array()), ModalSandboxGoneError);
+  modalPoll = new ModalNotFoundError("gone");
+  await assert.rejects(session.runCommand("true"), ModalSandboxGoneError, "a sandbox that cannot be polled is gone");
+  modalPoll = null;
+  for (const err of [
+    new ModalNotFoundError("x"),
+    new ModalClientClosedError("x"),
+    Object.assign(new Error("x"), { code: 5 }),
+  ]) {
+    modalFault = { exec: err };
+    await assert.rejects(session.runCommand("true"), ModalSandboxGoneError);
+  }
+  modalFault = { exec: new ModalTimeoutError("x") };
+  assert.equal((await session.runCommand("true")).exitCode, 124);
+  modalPoll = 137;
+  await assert.rejects(
+    session.runCommand("true"),
+    ModalSandboxGoneError,
+    "a sandbox that died at the deadline is gone",
+  );
+  modalPoll = null;
+  modalFault = { read: new ModalSandboxFilesystemNotFoundError("x") };
+  assert.equal(await session.readFileBytes("/root/missing"), null);
+  modalFault = { create: new ModalAlreadyExistsError("x") };
+  await assert.rejects(client.create({ name: "taken" }), ModalNameConflictError);
+  modalFault = { terminate: Object.assign(new Error("x"), { code: 5 }) };
+  await session.terminate();
+  await client.terminate("sb-native");
+  modalPoll = new ModalInvalidError("malformed sandbox id");
+  await assert.rejects(client.fromId("not-a-sandbox"), ModalSandboxGoneError, "an unknown id is a gone sandbox");
+});
+
 test("Modal rejects invalid checkpoint retention", () => {
   for (const snapshotRetentionMs of [0, -1, Infinity, NaN]) {
     assert.throws(
@@ -431,7 +508,12 @@ test("E2B does not dispatch twice when execution occurs before its start acknowl
     onDispatch = undefined;
     rmSync(root, { recursive: true, force: true });
   });
-  const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), { client: createSdkE2bClient({ apiKey: "test" }) });
+  const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
+    client: createSdkE2bClient({ apiKey: "test" }),
+  });
   const handle = await sandbox.provision([{ scopeId: "lost-start", mountPath: "", mode: "rw" }]);
   let effects = 0;
   onDispatch = (command) => {
@@ -480,6 +562,9 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
   const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
   const session = await client.create({});
   const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client: {
       create: async () => session,
       fromId: async () => session,

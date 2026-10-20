@@ -1,13 +1,18 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, session as electronSession } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { callComputer, registerComputerRuntime, stopComputer } from "./runtime.mjs";
+import { registerComputerPermissions, showComputerPermissions, focusComputerPermissions } from "./permissions.mjs";
 import { createLogin, loginCallback } from "./login.mjs";
+import { startUpdates } from "./updates.mjs";
+import { tabStep } from "./shortcuts.mjs";
 import { instanceUrl, externalUrl, browserLoginUrl, loginDestination, internalUrl } from "./url.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupUrl = pathToFileURL(path.join(directory, "setup.html")).href;
 let mainWindow;
+let quitting = false;
 const workspaceWindows = new Set();
 let setupWindow;
 let target;
@@ -24,6 +29,7 @@ else {
   app.on("second-instance", (_event, argv) => {
     const callback = argv.find((arg) => arg.startsWith("qm-desktop:"));
     if (callback) void finishBrowserSignIn(callback);
+    if (focusComputerPermissions()) return;
     const window = setupWindow ?? mainWindow;
     if (window?.isMinimized()) window.restore();
     window?.show();
@@ -69,6 +75,18 @@ function showSetup() {
     loginStatus = "";
   });
   setupWindow.loadURL(setupUrl);
+}
+
+function handleComputerReply(reply) {
+  if ([reply, reply.failure, reply.observation_failure].some((failure) => failure?.code === "permission_missing")) {
+    void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
+    return {
+      ...reply,
+      message:
+        "Enable computer access in the desktop setup window. Actions may already have completed; inspect the completion count and observe before retrying.",
+    };
+  }
+  return reply;
 }
 
 function instanceSession(url) {
@@ -153,8 +171,14 @@ async function showInstance(url) {
   mainWindow = window;
   const origin = new URL(url).origin;
   const session = window.webContents.session;
-  session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.setPermissionCheckHandler(() => false);
+  const canWriteClipboard = (permission, requestingUrl) =>
+    permission === "clipboard-sanitized-write" && requestingUrl !== "about:blank" && internalUrl(requestingUrl, origin);
+  session.setPermissionRequestHandler((_contents, permission, callback, details) =>
+    callback(canWriteClipboard(permission, details.requestingUrl)),
+  );
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    canWriteClipboard(permission, requestingOrigin),
+  );
   let handedOff = false;
   const children = new Set();
   const configureNavigation = (page) => {
@@ -177,9 +201,19 @@ async function showInstance(url) {
         openExternal(destination);
       }
     };
+    page.webContents.on("render-process-gone", () => stopComputer());
+    page.webContents.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+      if (mainFrame && !inPlace) stopComputer();
+    });
     page.webContents.on("will-navigate", navigate);
     page.webContents.on("will-redirect", navigate);
     page.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    page.webContents.on("before-input-event", (event, input) => {
+      const step = tabStep(input);
+      if (!step) return;
+      event.preventDefault();
+      page.webContents.send("qm:cycle-tab", step);
+    });
     page.webContents.setWindowOpenHandler(({ url: destination }) => {
       if (!active()) return { action: "deny" };
       if (browserLoginUrl(destination, origin)) signIn(destination);
@@ -214,6 +248,7 @@ async function showInstance(url) {
   };
   configureNavigation(window);
   window.on("closed", () => {
+    stopComputer();
     for (const child of children) if (!child.isDestroyed()) child.destroy();
     if (mainWindow === window) mainWindow = undefined;
   });
@@ -232,6 +267,7 @@ async function showInstance(url) {
 }
 
 async function start() {
+  registerComputerPermissions();
   app.setAsDefaultProtocolClient("qm-desktop");
   const configPath = path.join(app.getPath("userData"), "instance.json");
   try {
@@ -240,23 +276,57 @@ async function start() {
     if (error.code !== "ENOENT") dialog.showErrorBox("QM settings could not be read", error.message);
   }
   if (process.env.QM_DESKTOP_URL) target = instanceUrl(process.env.QM_DESKTOP_URL);
+  const saveInstance = async (url) => {
+    await writeFile(`${configPath}.tmp`, JSON.stringify({ url }), { mode: 0o600 });
+    await rename(`${configPath}.tmp`, configPath);
+  };
+  const checkForUpdates = startUpdates(
+    async () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(false);
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        const ready = await page.webContents.executeJavaScript(`(() => {
+        const event = new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } });
+        return window.dispatchEvent(event) && event.detail.ready;
+      })()`);
+        if (!ready) return false;
+      }
+      for (const page of workspaceWindows) {
+        if (page.isDestroyed()) continue;
+        await page.webContents.executeJavaScript('window.dispatchEvent(new Event("pagehide"))');
+        page.webContents.session.flushStorageData();
+        await page.webContents.session.cookies.flushStore();
+      }
+      if (target) {
+        const current = mainWindow?.webContents.getURL();
+        await saveInstance(loginDestination(target, target, current));
+      }
+      return true;
+    },
+    () => {
+      for (const page of workspaceWindows) if (!page.isDestroyed()) page.setEnabled(true);
+    },
+  );
   const assertSetup = (event) => {
     if (event.sender !== setupWindow?.webContents || event.senderFrame?.url !== setupUrl) {
       throw new Error("Untrusted settings request");
     }
   };
-  ipcMain.handle("qm:open-browser", async (event, value) => {
+  const assertWorkspace = (event) => {
     if (
       !mainWindow ||
       mainWindow.isDestroyed() ||
       ![...workspaceWindows].some((page) => !page.isDestroyed() && page.webContents === event.sender) ||
       event.senderFrame !== event.sender.mainFrame ||
       !target ||
-      new URL(event.senderFrame.url).origin !== new URL(target).origin ||
-      typeof value !== "string"
+      event.senderFrame.origin !== new URL(target).origin
     ) {
-      throw new Error("Untrusted browser request");
+      throw new Error("Untrusted workspace request");
     }
+  };
+  ipcMain.handle("qm:open-browser", async (event, value) => {
+    assertWorkspace(event);
+    if (typeof value !== "string") throw new Error("Untrusted browser request");
     const destination = new URL(value, target);
     if (
       destination.origin !== new URL(target).origin ||
@@ -266,6 +336,20 @@ async function start() {
       throw new Error("Untrusted browser destination");
     await shell.openExternal(destination.href);
   });
+  const deskOwner = (event, clientId) => {
+    if (typeof clientId !== "string" || clientId.length !== 36) throw new Error("Invalid desktop client");
+    return `${event.sender.id}:${clientId}`;
+  };
+  registerComputerRuntime(handleComputerReply);
+  ipcMain.handle("qm:computer-stop", (event, clientId) => {
+    assertWorkspace(event);
+    stopComputer(deskOwner(event, clientId));
+  });
+  ipcMain.handle("qm:computer-call", (event, args, clientId, deadline) => {
+    assertWorkspace(event);
+    if (!Number.isFinite(deadline)) throw new Error("Invalid computer deadline");
+    return callComputer(args, deskOwner(event, clientId), deadline);
+  });
   ipcMain.handle("qm:current-instance", (event) => {
     assertSetup(event);
     return { url: target ?? "", status: loginStatus };
@@ -274,7 +358,7 @@ async function start() {
     assertSetup(event);
     try {
       const url = instanceUrl(value);
-      await writeFile(configPath, JSON.stringify({ url }), { mode: 0o600 });
+      await saveInstance(url);
       target = url;
       void showInstance(url);
       setupWindow.close();
@@ -289,6 +373,14 @@ async function start() {
         label: "QM",
         submenu: [
           { role: "about" },
+          { label: "Check for Updates", enabled: Boolean(checkForUpdates), click: checkForUpdates },
+          {
+            label: "Computer Access…",
+            visible: process.platform === "darwin",
+            click: () => {
+              void showComputerPermissions().catch((error) => dialog.showErrorBox("Computer access", error.message));
+            },
+          },
           { label: "Change Instance…", accelerator: "CmdOrCtrl+,", click: showSetup },
           {
             label: "Open in Browser",
@@ -339,16 +431,24 @@ async function start() {
     ]),
   );
   app.on("activate", () => {
+    if (focusComputerPermissions()) return;
     if (setupWindow) setupWindow.show();
     else if (pendingLogin) showSetup();
     else if (mainWindow) mainWindow.show();
     else if (target) void showInstance(target);
     else showSetup();
   });
+  await showComputerPermissions(true);
+  if (quitting) return;
   if (target) await showInstance(target);
   else showSetup();
 }
 
+app.on("before-quit", () => {
+  quitting = true;
+  stopComputer();
+});
 app.on("window-all-closed", () => {
+  stopComputer();
   if (process.platform !== "darwin") app.quit();
 });

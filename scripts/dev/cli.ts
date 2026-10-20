@@ -40,7 +40,7 @@ import {
 } from "./lib/client.ts";
 import { sweepSlackTokenOrphans } from "./lib/orphans.ts";
 import { destroyLocalDevSandboxes } from "./lib/sandbox.ts";
-import { bestEffort, errMessage, formatAge, nowEpoch, sleep } from "./lib/util.ts";
+import { bestEffort, errMessage, formatAge, nowEpoch, sleep, swallowAs } from "./lib/util.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";
@@ -137,14 +137,16 @@ async function legacyTeardown(lease: LeaseInfo): Promise<void> {
     const pid = readPidFile(lease.lockDir, `${name}.pid`);
     if (pid) await killTree(pid, 5000);
   }
-  await destroyLocalDevSandboxes((m) => out(m)).catch(() => undefined);
+  await destroyLocalDevSandboxes((m) => out(m)).catch(swallowAs("dev: destroy local sandboxes", undefined));
   releaseSlotLock(lease.slot, store);
 }
 
 async function teardownLease(lease: LeaseInfo): Promise<void> {
   const sock = resolveSocketPath(lease.lockDir);
   if (await supervisorReachable(sock)) {
-    await supervisorRequest(sock, "POST", "/shutdown", {}).catch(() => {});
+    await supervisorRequest(sock, "POST", "/shutdown", {}).catch(
+      swallowAs("dev: supervisor shutdown request", undefined),
+    );
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline && existsSync(lease.lockDir)) await sleep(300);
     if (!existsSync(lease.lockDir)) return;
@@ -294,7 +296,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
   await streamBootEvents(sock, (e) => {
     renderPhase(e);
     if (e.event === "done" && e.result) result = e.result;
-  }).catch(() => {});
+  }).catch(swallowAs("dev: boot event stream", undefined));
   return result ?? { ok: false, reason: "boot event stream ended without a result", slot };
 }
 
@@ -671,7 +673,7 @@ async function main(): Promise<number> {
       });
     default:
       console.error(
-        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
+        "usage: dev [up|down|status|restart|canary|logs|doctor] [--json] [--force] [--rotate] [--strict] [--sandbox local|sprites|smolmachines|e2b|porter|agent37|superserve|do-managed-agents|auto] [--surface web|slack|both] [--no-slack] [--no-watch] [--org id] [--fix]",
       );
       return EXIT.usage;
   }

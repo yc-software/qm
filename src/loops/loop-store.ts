@@ -6,11 +6,10 @@ import type {
   LoopState,
   LoopTriageConfig,
   Destination,
-  RecipientConsent,
   ShipActionPolicy,
 } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -32,7 +31,6 @@ export interface CreateLoopInput extends CreateTriggerInput {
   caps?: LoopCaps;
   governor?: LoopGovernorConfig;
   cronId?: string;
-  runAs?: Loop["runAs"];
   schedule?: unknown;
 }
 
@@ -43,13 +41,11 @@ export interface LoopPatch {
   successCondition?: string;
   successChecks?: string[];
   destination?: Destination | null;
-  recipientConsent?: RecipientConsent | null;
   shipActions?: ShipActionPolicy[];
   caps?: LoopCaps;
   governor?: LoopGovernorConfig;
   triage?: LoopTriageConfig;
   cronId?: string;
-  runAs?: Loop["runAs"];
   state?: LoopState;
   playbookEdit?: PlaybookEdit;
   restore?: Loop;
@@ -160,9 +156,7 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         contentPart(input.governor),
         contentPart(input.destination),
         contentPart(input.ownerConsentedAt),
-        contentPart(input.recipientConsent),
         contentPart(input.cronId),
-        contentPart(input.runAs),
         contentPart(input.schedule),
       ]);
       const candidate: Loop = {
@@ -184,7 +178,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...(input.caps ? { caps: input.caps } : {}),
         ...(input.governor ? { governor: input.governor } : {}),
         ...(input.cronId ? { cronId: input.cronId } : {}),
-        ...(input.runAs ? { runAs: input.runAs } : {}),
       };
       if (backing.insertIfAbsent) {
         const created = await backing.insertIfAbsent(contentId, candidate);
@@ -209,7 +202,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         if (patch.successCondition !== undefined) fields.successCondition = patch.successCondition;
         if (patch.successChecks !== undefined) fields.successChecks = patch.successChecks;
         if (patch.destination !== undefined) fields.destination = patch.destination ?? undefined;
-        if (patch.recipientConsent !== undefined) fields.recipientConsent = patch.recipientConsent ?? undefined;
         if (patch.shipActions !== undefined) {
           const shipActions = normalizeShipActions(patch.shipActions);
           fields.shipActions = shipActions;
@@ -219,7 +211,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         if (patch.governor !== undefined) fields.governor = patch.governor;
         if (patch.triage !== undefined) fields.triage = mergeTriage(loop.triage, patch.triage);
         if (patch.cronId !== undefined) fields.cronId = patch.cronId;
-        if (patch.runAs !== undefined) fields.runAs = patch.runAs;
         if (patch.state !== undefined) Object.assign(fields, stateFields(patch.state));
         if (patch.quarantineClearedBy !== undefined) fields.quarantineClearedBy = patch.quarantineClearedBy;
         if (patch.quarantineClearedAt !== undefined) fields.quarantineClearedAt = patch.quarantineClearedAt;

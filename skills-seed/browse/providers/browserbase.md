@@ -44,7 +44,7 @@ again through the same live-view flow below.
 
 `keepAlive` matters everywhere here: without it the session dies as soon as a CDP client
 disconnects, so a runner retry or the sign-in handoff below would find a dead browser.
-(It needs the Hobby plan or above.) In a DM, with the person's context:
+(It needs the Hobby plan or above.) With the person's context:
 
 ```bash
 CREATE=$(curl -fsS -X POST https://api.browserbase.com/v1/sessions \
@@ -61,16 +61,6 @@ Live-view URLs are PER-TAB: the top-level `debuggerFullscreenUrl` is tab one's, 
 goes stale once the task opens more tabs. Whenever you hand a live-view link over later,
 re-fetch `/v1/sessions/$BB_SID/debug` at hand-off time and pick the right entry from
 `pages[]` (each has its own `debuggerFullscreenUrl`, `url`, and `title`).
-
-In a channel or group, OMIT `browserSettings.context` entirely (per the DM-only rule):
-
-```bash
-CREATE=$(curl -fsS -X POST https://api.browserbase.com/v1/sessions \
-  -H "X-BB-API-Key: $BROWSERBASE_API_KEY" -H 'content-type: application/json' \
-  -d '{"keepAlive":true,"timeout":1800}')
-```
-
-then extract `CDP_URL` / `BB_SID` / `LIVE_VIEW` exactly as above.
 
 Timeout is seconds (60–21600); captcha solving is on by default. For a site behind
 serious bot protection, add top-level `"proxies":true` and
@@ -113,25 +103,13 @@ SIGNIN_SID=$(printf '%s' "$SIGNIN" | python3 -c "import sys,json;print(json.load
 SIGNIN_CDP=$(printf '%s' "$SIGNIN" | python3 -c "import sys,json;print(json.load(sys.stdin).get('connectUrl',''))")
 ```
 
-It opens on a blank page, so steer it to the wall, then fetch the live-view link
+It opens on a blank page, so steer it to the wall with SKILL.md's shared
+`browse-nav.py`, then fetch the live-view link
 (`keepAlive` is what lets the session survive the nav script disconnecting — without it
 the person would open a dead live view):
 
 ```bash
-cat > /tmp/bb-nav.py <<'PY'
-import os
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    b = p.chromium.connect_over_cdp(os.environ["SIGNIN_CDP"])
-
-
-
-    ctx = b.contexts[0]
-    page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.goto(open("/tmp/wall-url.txt").read().strip(), timeout=60000)
-    b.close()
-PY
-SIGNIN_CDP="$SIGNIN_CDP" /opt/browser-engine/venv/bin/python /tmp/bb-nav.py
+CDP_URL="$SIGNIN_CDP" /opt/browser-engine/venv/bin/python /tmp/browse-nav.py
 curl -fsS "https://api.browserbase.com/v1/sessions/$SIGNIN_SID/debug" \
   -H "X-BB-API-Key: $BROWSERBASE_API_KEY" \
   | python3 -c "import sys,json;print(json.load(sys.stdin).get('debuggerFullscreenUrl',''))"

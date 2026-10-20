@@ -2,8 +2,9 @@ import { html, render, type TemplateResult } from "lit";
 import { KeyRound, Link } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { icon } from "./ui";
+import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
+import { CONNECTOR_LABELS } from "./connector-link";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
@@ -11,43 +12,13 @@ import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keycha
 import { listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
+  mcpLabel?: string;
   connected?: boolean;
   needsReconnect?: boolean;
   refreshError?: string;
   available?: boolean;
   hosts?: Array<{ host?: string } | string>;
 }
-
-const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> = {
-  google: {
-    name: "Google Workspace",
-    hosts: "Gmail, Calendar, Drive, Sheets",
-  },
-  slack: {
-    name: "Slack",
-    hosts: "Channels & messages",
-  },
-  notion: {
-    name: "Notion",
-    hosts: "Pages & databases",
-  },
-  linear: {
-    name: "Linear",
-    hosts: "Issues & projects",
-  },
-  github: {
-    name: "GitHub",
-    hosts: "Repos, issues & PRs",
-  },
-  dropbox: {
-    name: "Dropbox",
-    hosts: "Files & folders",
-  },
-  x: {
-    name: "X (Twitter)",
-    hosts: "Posts & profile",
-  },
-};
 
 interface KeychainCredential {
   id: string;
@@ -399,7 +370,7 @@ function drawConnectors(): void {
   const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
   const connectorCards = entries.map(([id, p]) => {
-    const meta = CONNECTOR_LABELS[id] ?? { name: id, hosts: "" };
+    const meta = CONNECTOR_LABELS[id] ?? { name: p.mcpLabel ?? id, hosts: "" };
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);

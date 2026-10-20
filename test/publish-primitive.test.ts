@@ -12,12 +12,14 @@ import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
 import type { AgentComputerExportEntry, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function svc() {
   const deployStore: DeployStore = createDeployStore();
   const acl: AclStore = createAclStore();
   let starts = 0;
   const deploy: DeployService = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
@@ -282,8 +284,8 @@ test("publish: renameFrom moves the link but keeps the id (and shares ride the i
   const created = await ctx(s.deploy, { files: appFile() }).publish({
     entrypoint: "x",
     name: "old-name",
-    share: [{ scope: scopeId("personal", "U2"), permission: "read" }],
   });
+  await s.deploy.shareDeployment(created.id, scopeId("personal", "U2"), "read", { createdBy: "U1" });
   const renamed = await ctx(s.deploy).publish({ renameFrom: "old-name", name: "new-name" });
 
   assert.equal(renamed.id, created.id);

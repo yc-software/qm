@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
 import {
   contrast,
   importTheme,
@@ -11,6 +12,8 @@ import {
   themeTokens,
   type Palette,
 } from "../src/theme-import.ts";
+
+globalThis.DOMParser = new JSDOM().window.DOMParser;
 
 const shellCss = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
 const baseCss = readFileSync(
@@ -68,6 +71,27 @@ test("a preset that keeps separate light and dark colours falls back to its dark
   const palette = importTheme("dual.itermcolors", xml);
   assert.deepEqual(palette.background, { r: 26, g: 26, b: 26 });
   assert.deepEqual(palette.foreground, { r: 230, g: 230, b: 230 });
+});
+
+test("an iTerm2 colour reads its own components, not those of a dict nested inside it", () => {
+  const xml = `<plist><dict>
+    <key>Background Color</key><dict>
+      <key>Tint</key><dict><key>Red Component</key><real>1</real></dict>
+      <key>Red Component</key><real>0</real>
+      <key>Green Component</key><real>0.5</real>
+      <key>Blue Component</key><integer>1</integer>
+    </dict>
+    ${plistColor("Foreground Color", 1, 1, 1)}
+  </dict></plist>`;
+  assert.deepEqual(importTheme("nested.itermcolors", xml).background, { r: 0, g: 128, b: 255 });
+});
+
+test("malformed iTerm2 XML is rejected with the parser's own explanation", () => {
+  const complete = `${plistColor("Background Color", 0, 0, 0)}${plistColor("Foreground Color", 1, 1, 1)}`;
+  assert.throws(
+    () => importTheme("x.itermcolors", `<plist><dict>${complete}</plist>`),
+    /^Error: Couldn't read that file as XML: .+/,
+  );
 });
 
 test("a plist without a background and foreground is rejected with a plain explanation", () => {

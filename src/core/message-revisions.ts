@@ -1,10 +1,5 @@
 import type { ScopeId, SessionEntry } from "../types.ts";
-import {
-  appendEntryOutsideTurn,
-  type Lease,
-  type SessionStore,
-  type TranscriptAppendSessions,
-} from "../sessions/session-store.ts";
+import type { Lease, SessionStore } from "../sessions/session-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../slack/message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
 import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -26,8 +21,10 @@ interface MessageRevisionSource {
   text?: string;
 }
 
-export type RevisionSessions = TranscriptAppendSessions &
-  Pick<SessionStore, "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getEntries">;
+export type RevisionSessions = Pick<
+  SessionStore,
+  "append" | "sessionsByThreadRefs" | "acquireLease" | "releaseLease" | "getEntries"
+>;
 
 interface RevisionSession {
   id: string;
@@ -79,10 +76,9 @@ function findOriginal(entries: readonly SessionEntry[], ts: string): OriginalMes
       name?: unknown;
       sourceRole?: unknown;
       hidden?: unknown;
-      securityTainted?: unknown;
     } | null;
     if (p?.ts !== ts) continue;
-    if (p.hidden === true || p.securityTainted === true) return null;
+    if (p.hidden === true) return null;
     found = {
       text: typeof p.text === "string" ? p.text : "",
       ...(p.sourceRole === "agent" ? { sourceRole: "agent" as const } : {}),
@@ -118,7 +114,7 @@ function revisionToRecord(
 }
 
 async function recordRevision(
-  sessions: TranscriptAppendSessions,
+  sessions: Pick<SessionStore, "append">,
   lease: Lease,
   session: RevisionSession,
   entries: readonly SessionEntry[],
@@ -126,9 +122,7 @@ async function recordRevision(
 ): Promise<boolean> {
   const payload = revisionToRecord(entries, source);
   if (!payload) return false;
-  await appendEntryOutsideTurn(sessions, lease, { type: "system", payload, scopeLabel: session.scopeId }, () =>
-    renderMessageRevision(payload),
-  );
+  await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
   return true;
 }
 
@@ -193,7 +187,7 @@ export function slackTsToMs(ts: string | undefined): number | undefined {
 }
 
 export async function reconcileMessageRevisions(opts: {
-  sessions: TranscriptAppendSessions & Pick<SessionStore, "getEntries">;
+  sessions: Pick<SessionStore, "append" | "getEntries">;
   surfaceCache: Pick<SurfaceCache, "revisedSince">;
   lease: Lease;
   session: RevisionSession & { threadRef: string };

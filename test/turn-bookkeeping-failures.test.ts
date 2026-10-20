@@ -4,7 +4,6 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
-import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -25,6 +24,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { HarnessTurnResult } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -55,7 +55,6 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
-  const posted: string[] = [];
   const harness = defineHarness(
     {
       id: "pi",
@@ -66,38 +65,9 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     },
     {
       async runTurn(turn) {
-        const userEntry = await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "user", content: [{ type: "text", text: turn.input }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: userEntry.seq,
-          meta: { bareText: turn.input },
-        });
-        if (turn.surfaceTools && turn.input.startsWith("post then fail bookkeeping")) {
-          const result = await turn.tools.post("mid-turn surface post");
-          posted.push(result.ok ? "ok" : "failed");
-        }
-        const reply = turn.input.startsWith("post then fail bookkeeping") ? "" : "done";
-        await turn.tape?.({
-          kind: "message",
-          harness: "pi",
-          payload: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: Date.now() },
-          scopeLabel: turn.scopeLabel,
-        });
-        const finalEntry = await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
-          scopeLabel: turn.scopeLabel,
-        });
-        await turn.tape?.({
-          kind: "annotation",
-          payload: { subturnEnd: true },
-          scopeLabel: turn.scopeLabel,
-          entrySeq: finalEntry.seq,
-        });
-        return { reply, modelCalls: 1, ...turnResult };
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+        return { reply: "done", modelCalls: 1, ...turnResult };
       },
       async screenSecurity() {
         return { decision: "auto" as const };
@@ -109,6 +79,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bookkeeping-")));
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "bookkeeping-deploy"),
@@ -117,9 +88,9 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   });
   const deliveries = createDeliveryStore();
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
-    sessionTapeMode: "serve",
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
@@ -141,53 +112,8 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     text,
     ...extra,
   });
-  return { orchestrator, sessions, deliveries, posted, input };
+  return { orchestrator, sessions, deliveries, input };
 }
-
-test("a turn-end coverage append failure after a surface post fails loudly but non-retryably", async () => {
-  const { orchestrator, sessions, posted, input } = buildScenario();
-  await orchestrator.handleTurn(input("prime"));
-  const appendTape = sessions.appendTape.bind(sessions);
-  sessions.appendTape = async (lease, rec) => {
-    if (rec.kind === "annotation" && (rec.payload as { turnEnd?: unknown }).turnEnd === true) {
-      throw new Error("bookkeeping write refused");
-    }
-    return appendTape(lease, rec);
-  };
-  const turn = orchestrator.handleTurn(
-    input("post then fail bookkeeping", {
-      addressed: true,
-      surfaceTools: true,
-      deliveryTarget: "slack:C1:bookkeeping",
-    }),
-  );
-  await assert.rejects(turn, (err: unknown) => {
-    assert.ok(err instanceof NonRetryableTurnError, "the worker must not re-execute a turn whose effects landed");
-    assert.match((err as Error).message, /coverage append failed/);
-    return true;
-  });
-  assert.deepEqual(posted, ["ok"], "the surface post landed exactly once");
-  const session = (await sessions.getByThread(conversation.threadRef))!;
-  const latest = await sessions.latestEntrySeq(session.id);
-  assert.ok((await sessions.tapeCoverage(session.id)) < latest, "coverage stays withheld for the heal to cover");
-});
-
-test("a pre-effect tape write failure stays retryable turn-fatal", async () => {
-  const { orchestrator, sessions, input } = buildScenario();
-  await orchestrator.handleTurn(input("prime"));
-  const appendTape = sessions.appendTape.bind(sessions);
-  sessions.appendTape = async (lease, rec) => {
-    if (rec.kind === "message" && (rec.payload as { role?: string }).role === "assistant") {
-      throw new Error("mid-step tape write refused");
-    }
-    return appendTape(lease, rec);
-  };
-  await assert.rejects(orchestrator.handleTurn(input("plain question")), (err: unknown) => {
-    assert.ok(!(err instanceof NonRetryableTurnError), "pre-effect failures keep the retry path");
-    assert.match((err as Error).message, /mid-step tape write refused/);
-    return true;
-  });
-});
 
 test("a cancel-stopped turn still persists and surfaces its pending approvals", async () => {
   const { orchestrator, input } = buildScenario({

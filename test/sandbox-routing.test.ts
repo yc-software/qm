@@ -130,7 +130,7 @@ test("provision uses the scope's default resource: backend, backing scope, lock,
   assert.equal(h.resourceId, "r1");
   assert.equal(h.scopeId, "personal:a");
   assert.equal(sprites.provisioned[0]!.layers[0]!.scopeId, "sandbox:r1", "rw layer remapped to the backing scope");
-  assert.deepEqual(resources.locks, [{ id: "r1", exclusive: true }]);
+  assert.deepEqual(resources.locks, [{ id: "r1", exclusive: false }]);
   assert.deepEqual(aws.calls, []);
 });
 
@@ -339,6 +339,18 @@ function computerBackends() {
   return { aws, sprites };
 }
 
+test("parking backends lock the computer exclusively only to park it, not to keep it warm", async () => {
+  const { router, sprites, resources } = build({ "personal:a": resource("r1", "sprites") });
+  sprites.profile.parksOnTeardown = true;
+  const h = await router.provision(layersFor("personal:a"));
+  await router.teardown(h, { keepWarm: true });
+  await router.teardown(h);
+  assert.deepEqual(resources.locks.slice(1), [
+    { id: "r1", exclusive: false },
+    { id: "r1", exclusive: true },
+  ]);
+});
+
 test("computer status/restart target the resource's backing scope under its lock", async () => {
   const { aws, sprites } = computerBackends();
   const resources = stubResources({ "personal:s": resource("s", "sprites") });
@@ -411,3 +423,17 @@ for (const combined of [true, false]) {
     assert.deepEqual(calls, combined ? ["combined:old:keep"] : ["remove:old", "list:keep"]);
   });
 }
+
+test("removeDirAndList keeps the removal strict but treats a failed listing as nothing to clean", async () => {
+  const r = resource("r1", "sprites");
+  const { router, sprites } = build({ "personal:a": r });
+  const h = await router.provision(layersFor("personal:a"));
+  sprites.listDir = async () => {
+    throw new Error("find: Permission denied");
+  };
+  assert.deepEqual(await router.removeDirAndList!(h, "turn/current", "turn"), []);
+  sprites.removeDir = async () => {
+    throw new Error("rm: read-only file system");
+  };
+  await assert.rejects(router.removeDirAndList!(h, "turn/current", "turn"), /read-only file system/);
+});

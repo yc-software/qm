@@ -2,6 +2,7 @@ import { browserModelRoutes } from "./browser-model.ts";
 import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
+import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
@@ -18,6 +19,7 @@ import { brokerGitHttp, GIT_HTTP_BROKER_PREFIX } from "../git-http-broker.ts";
 import { keychainRoutes } from "./keychain.ts";
 import { secretDropRoutes } from "./secret-drop.ts";
 import { adminRoutes } from "./admin.ts";
+import { spendExport } from "./admin/spend.ts";
 import { skillPackRoutes } from "./skill-packs.ts";
 import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
@@ -27,6 +29,7 @@ import { reachRoutes } from "./reach.ts";
 import { directoryRoutes } from "./directory.ts";
 import { contextRoutes } from "./context.ts";
 import { pinRoutes } from "./pins.ts";
+import { uiCanvasRoutes } from "./ui-canvas.ts";
 import { surfaceCacheRoutes } from "./surface-cache.ts";
 import { environmentRoutes } from "./environments.ts";
 import { emojiRoutes } from "./emoji.ts";
@@ -68,6 +71,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     },
   },
   ...slackEventRawRoutes,
+  { method: "GET", path: "/v1/spend/export", auth: "public", handle: spendExport },
   { match: (_m, p) => p.startsWith(GIT_HTTP_BROKER_PREFIX), auth: { aud: "credential-broker" }, handle: brokerGitHttp },
   ...connectorRawRoutes,
   ...deploymentRawRoutes,
@@ -92,6 +96,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...secretDropRoutes,
   ...connectorRoutes,
   ...composioRoutes,
+  ...composioTwitterMediaRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
   ...surfaceRoutes,
@@ -106,6 +111,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...directoryRoutes,
   ...contextRoutes,
   ...pinRoutes,
+  ...uiCanvasRoutes,
   ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,

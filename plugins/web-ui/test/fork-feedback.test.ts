@@ -16,6 +16,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
     id: "source",
     threadRef: "web:tester:source",
     scopeId: "personal:tester",
+    canContinue: true,
     type: "dm",
     createdAt: Date.now(),
     title: "Source conversation",
@@ -36,7 +37,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
       const response = new Promise<Response>((resolve) => (finish = resolve));
       let requests = 0;
       globalThis.fetch = (input, init) => {
-        if (String(input).endsWith("/fork")) {
+        if (String(input).endsWith("/api/sessions/source/fork")) {
           requests++;
           return response;
         }
@@ -68,7 +69,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
         forkedFrom: { sessionId: source.id, title: source.title },
         forkBoundarySeq: 0,
       };
-      const refreshes = h.requests.filter((path) => path === "/api/sessions").length;
+      const refreshes = h.requests.filter((path) => path.startsWith("/api/sessions?")).length;
       finish(
         outcome === "failure"
           ? Response.json({ error: "Could not copy history" }, { status: 500 })
@@ -86,7 +87,7 @@ test("fork feedback survives delayed success, failure, and navigation", async ()
         assert.match(h.mainText(), /Could not copy history/);
       } else {
         assert.equal(h.sessionsState.list.filter((session) => session.id === fork.id).length, 1);
-        assert.equal(h.requests.filter((path) => path === "/api/sessions").length, refreshes);
+        assert.equal(h.requests.filter((path) => path.startsWith("/api/sessions?")).length, refreshes);
         if (outcome === "navigate") assert.equal(conv.state.threadRef, newThread);
         else assert.equal(conv.state.sessionId, fork.id);
       }

@@ -13,6 +13,7 @@ export interface ToolPayload {
 
   tool?: string;
   command?: string;
+  background?: boolean;
   purpose?: string;
   path?: string;
   bytes?: number;
@@ -26,13 +27,10 @@ export interface ToolPayload {
   denied?: boolean;
   error?: string;
   reason?: string;
-  stdout?: string;
-  stderr?: string;
   code?: number;
   timedOut?: boolean;
   isError?: boolean;
   result?: string;
-  unscreened?: boolean;
   quarantined?: boolean;
   action?: string;
   process_id?: string;
@@ -72,6 +70,7 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
 export function toolCategory(payload: ToolPayload): string {
+  if (payload.tool === "execute" && payload.background === true) return "background";
   if (payload.tool === "files") {
     if (payload.action === "read" || payload.action === "write") return payload.action;
     return "share";
@@ -97,10 +96,7 @@ export function toolCategory(payload: ToolPayload): string {
 }
 
 export function toolExecutionOutput(result: ToolPayload): string | null {
-  if (result.unscreened && typeof result.result === "string") return result.result;
-  if (typeof result.stdout === "string" || typeof result.stderr === "string")
-    return [result.stdout ?? "", result.stderr ? `[stderr]\n${result.stderr}` : ""].filter(Boolean).join("\n");
-  return null;
+  return typeof result.code === "number" && typeof result.result === "string" ? result.result : null;
 }
 
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
@@ -160,6 +156,7 @@ const timelineMemo = new WeakMap<
   WorkBlock,
   {
     activity: WorkBlock["activity"];
+    reasoning: WorkBlock["reasoning"];
     status: WorkBlock["status"];
     approvals: WorkBlock["pendingApprovals"];
     items: TimelineItem[];
@@ -168,12 +165,19 @@ const timelineMemo = new WeakMap<
 
 export function buildTimeline(work: WorkBlock): TimelineItem[] {
   const hit = timelineMemo.get(work);
-  if (hit && hit.activity === work.activity && hit.status === work.status && hit.approvals === work.pendingApprovals) {
+  if (
+    hit &&
+    hit.activity === work.activity &&
+    hit.reasoning === work.reasoning &&
+    hit.status === work.status &&
+    hit.approvals === work.pendingApprovals
+  ) {
     return hit.items;
   }
   const items = buildTimelineUncached(work);
   timelineMemo.set(work, {
     activity: work.activity,
+    reasoning: work.reasoning,
     status: work.status,
     approvals: work.pendingApprovals,
     items,
@@ -225,6 +229,20 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
       open = null;
     }
   }
+  if (!isTerminalWorkStatus(work.status)) {
+    liveReasoning(work).forEach((block, i) =>
+      items.push({
+        kind: "thinking",
+        activity: {
+          seq: -1 - i,
+          parentSeq: null,
+          type: "thinking",
+          payload: { thinking: block.text, step: { id: block.step, index: block.index } },
+          createdAt: 0,
+        },
+      }),
+    );
+  }
   const collapsed = collapseToolItems(items, work.status);
   for (const item of collapsed) {
     if (item.kind !== "tool") continue;
@@ -236,6 +254,16 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   }
   for (const queue of pendingByCmd.values()) for (const a of queue) collapsed.push({ kind: "approval", approval: a });
   return collapsed;
+}
+
+export function thinkingStepKey(payload: unknown): string | null {
+  const step = (payload as { step?: { id?: unknown; index?: unknown } } | null)?.step;
+  return step ? `${String(step.id)}:${String(step.index)}` : null;
+}
+
+function liveReasoning(work: WorkBlock): NonNullable<WorkBlock["reasoning"]> {
+  const persisted = new Set(work.activity.map((a) => (a.type === "thinking" ? thinkingStepKey(a.payload) : null)));
+  return (work.reasoning ?? []).filter((b) => b.text.trim() && !persisted.has(`${b.step}:${b.index}`));
 }
 
 function collapseToolItems(items: TimelineItem[], status: WorkBlock["status"]): TimelineItem[] {
@@ -291,7 +319,7 @@ export function sessionToolView(
 }
 
 export function currentTextPhase(work: WorkBlock): {
-  phase: "commentary" | "final_answer";
+  phase: "commentary" | "final_answer" | undefined;
   streamOffset: number;
   startedAt: number;
 } | null {
@@ -299,8 +327,8 @@ export function currentTextPhase(work: WorkBlock): {
   if (!entry) return null;
   const payload = entry.payload as { phase?: unknown; streamOffset?: unknown } | null;
   if (
-    (payload?.phase !== "commentary" && payload?.phase !== "final_answer") ||
-    typeof payload.streamOffset !== "number" ||
+    (payload?.phase !== undefined && payload.phase !== "commentary" && payload.phase !== "final_answer") ||
+    typeof payload?.streamOffset !== "number" ||
     !Number.isSafeInteger(payload.streamOffset) ||
     payload.streamOffset < 0
   )
@@ -310,7 +338,21 @@ export function currentTextPhase(work: WorkBlock): {
 
 export function streamedAnswer(text: string, work: WorkBlock): string {
   const phase = currentTextPhase(work);
-  return phase?.phase === "final_answer" ? text.slice(phase.streamOffset) : streamingTextTail(text, work.activity);
+  if (phase) {
+    const lastText = work.activity.findLast((entry) => entry.type === "text_start" || entry.type === "text");
+    if (phase.phase !== "final_answer" && lastText?.type === "text") return "";
+    return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
+  }
+  return work.streamStartOffset
+    ? streamTextFrom(text, 0, work.streamStartOffset)
+    : streamingTextTail(text, work.activity);
+}
+
+function streamTextFrom(text: string, offset: number, startOffset: number): string {
+  if (offset >= startOffset) return text.slice(offset - startOffset);
+  let boundary = 0;
+  while (boundary < text.length && text[boundary]!.trim()) boundary++;
+  return "…earlier output omitted\n\n" + text.slice(boundary).trimStart();
 }
 
 export function streamingTextTail(text: string, activity: ToolActivity[]): string {

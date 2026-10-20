@@ -8,14 +8,18 @@ import { traceStatus } from "../plugins/chassis/src/timing.ts";
 async function runReporting(body: string, enabled = true, env: Record<string, string> = {}) {
   const events: Record<string, any>[] = [];
   const transactions: Record<string, any>[] = [];
+  const headers: Record<string, any>[] = [];
+  const outbound: Record<string, unknown>[] = [];
   const collector = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const lines = Buffer.concat(chunks).toString().split("\n");
     if (req.url?.includes("outbound")) {
+      outbound.push(req.headers);
       res.end("{}");
       return;
     }
+    if (lines[0]) headers.push(JSON.parse(lines[0]));
     for (let i = 1; i + 1 < lines.length; i += 2) {
       const type = JSON.parse(lines[i]!).type;
       if (type === "event") events.push(JSON.parse(lines[i + 1]!));
@@ -34,7 +38,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       "-e",
       `
     import * as Sentry from '@sentry/node';
-    import { initializeErrorReporting, reportBackendError, startTiming, flushErrorReporting } from './plugins/chassis/src/error-reporting.ts';
+    import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, markFirstToken } from './plugins/chassis/src/error-reporting.ts';
     initializeErrorReporting(Sentry, 'test');
     ${body}
   `,
@@ -49,6 +53,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
         SENTRY_DEPLOYMENT: "test-deployment",
         COLLECTOR_PORT: String(address.port),
         ...env,
+        ...(env.CORE_API_URL === "collector" ? { CORE_API_URL: `http://127.0.0.1:${address.port}` } : {}),
       },
     },
   );
@@ -60,7 +65,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
   const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
   try {
     const [code, signal] = await once(child, "exit");
-    return { events, transactions, code, signal, output };
+    return { events, transactions, headers, outbound, code, signal, output };
   } finally {
     clearTimeout(timeout);
     collector.closeAllConnections();
@@ -163,47 +168,137 @@ test("trace statuses map HTTP outcomes", () => {
   ]);
 });
 
-test("real SDK preserves sampled transaction data only when a sample rate is configured", async () => {
-  const body = `
-    startTiming('queue.task', 'run', Date.now() - 500)?.({ status: 'ok', endMs: Date.now(),
-      data: { surface: 'web', origin: 'human', private: 'private-tag', page: 'private-page' },
-      measurements: { queue_wait: 20, private: 5 } });
-    const finish = startTiming('http.server', 'GET /*');
-    finish?.({ name: 'GET /v1/sessions/:id', status: 'not_found', data: { http_status: '404' } });
-    reportBackendError(new Error('private-error'));
-    await fetch('http://127.0.0.1:' + process.env.COLLECTOR_PORT + '/private-outbound').catch(() => {});
-    await flushErrorReporting();
-  `;
-  const off = await runReporting(body);
-  assert.equal(off.code, 0);
-  assert.equal(off.transactions.length, 0);
-  assert.equal(off.events.length, 1);
-  const invalid = await runReporting(body, true, { SENTRY_TRACES_SAMPLE_RATE: "5" });
-  assert.equal(invalid.transactions.length, 0);
-  const on = await runReporting(body, true, { SENTRY_TRACES_SAMPLE_RATE: "1" });
+const TRACED_REQUESTS = `
+  const { createServer } = await import('node:http');
+  const collectorUrl = 'http://127.0.0.1:' + process.env.COLLECTOR_PORT;
+  let carrier;
+  let declinedCarrier;
+  let reported = false;
+  const server = createServer(async (req, res) => {
+    nameRequest(req.method, '/v1/things/:id');
+    if (req.url.startsWith('/v1/declined')) declinedCarrier = traceCarrier();
+    if (req.url.startsWith('/v1/forged')) {
+      reportBackendError(new Error('forged-error'));
+      console.log('forged-carrier ' + JSON.stringify(traceCarrier() ?? null));
+    }
+    if (!reported) {
+      reported = true;
+      carrier = traceCarrier();
+      reportBackendError(new Error('handler-error'));
+    }
+    await fetch('http://127.0.0.1:' + process.env.COLLECTOR_PORT + '/private-outbound/private-path?token=private-query', {
+      headers: { 'x-private': 'private-header' },
+    }).catch(() => {});
+    res.end('ok');
+    setTimeout(() => fetch(collectorUrl + '/private-detached/private-path?token=private-late').catch(() => {}), 100);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  await fetch(collectorUrl + '/private-unparented/private-path?token=private-root').catch(() => {});
+  const forged = { 'sentry-trace': '0123456789abcdef0123456789abcdef-0123456789abcdef-1', baggage: 'sentry-sample_rand=0.00000001,sentry-transaction=private-dsc,sentry-user_id=private-user,sentry-private=private-key,sentry-release=private-release,sentry-environment=private-env,sentry-public_key=private-pk,sentry-trace_id=private-trace,third=private-third' };
+  await fetch(base + '/v1/things/private-id?token=private-token', { headers: { 'x-qm-signature': 'private-signature', cookie: 'private-cookie' } });
+  await fetch(base + '/v1/forged/private-id', { headers: forged });
+  await fetch(base + '/v1/declined/1', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
+  console.log('declined-carrier ' + JSON.stringify(declinedCarrier ?? null));
+  await traceQueued(declinedCarrier, 'declined-run', {}, async () => {});
+  await fetch(base + '/healthz');
+  await fetch(base + '/v1/runs/private-id/events');
+  await traceQueued(carrier, 'run', { 'messaging.message.id': 'run-1', 'qm.surface': 'web', private: 'private-attribute' }, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    markFirstToken();
+  });
+  await traceQueued(undefined, 'stopped-run', {}, async () => ({ stopped: true }), (result) => result.stopped);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  reportBackendError(new Error('private-error'));
+  server.close();
+  await flushErrorReporting();
+`;
+
+test("tracing is off unless a valid sample rate is configured; errors still report", async () => {
+  for (const env of [{}, { SENTRY_TRACES_SAMPLE_RATE: "5" }, { SENTRY_TRACES_SAMPLE_RATE: "0" }] as Record<
+    string,
+    string
+  >[]) {
+    const run = await runReporting(TRACED_REQUESTS, true, env);
+    assert.equal(run.code, 0);
+    assert.equal(run.transactions.length, 0);
+    assert.equal(run.events.length, 3);
+  }
+});
+
+test("sampled requests and queued runs become scrubbed, connected transactions", async () => {
+  const on = await runReporting(TRACED_REQUESTS, true, { SENTRY_TRACES_SAMPLE_RATE: "1" });
   assert.equal(on.code, 0);
-  assert.equal(on.events.length, 1);
-  assert.equal(on.transactions.length, 2);
-  assert.match(JSON.stringify(on.transactions), /private-tag/);
-  const [run, request] = on.transactions;
-  assert.equal(run!.transaction, "run");
-  assert.ok(Math.abs(run!.timestamp - run!.start_timestamp - 0.5) < 0.05);
-  assert.deepEqual(run!.tags, {
-    service: "test",
-    deployment: "test-deployment",
+  assert.equal(on.events.length, 3);
+  assert.match(
+    /declined-carrier (.*)/.exec(on.output)?.[1] ?? "",
+    /^\{"sentryTrace":"fedcba9876543210fedcba9876543210-[0-9a-f]{16}-0"\}$/,
+    "a run queued by an unsampled request carries the negative decision",
+  );
+  assert.ok(
+    on.transactions.every(
+      (event) =>
+        event.transaction !== "declined-run" && event.contexts.trace.trace_id !== "fedcba9876543210fedcba9876543210",
+    ),
+    "a run queued by an unsampled request is not resampled",
+  );
+  const forgedCarrier = /forged-carrier (.*)/.exec(on.output)?.[1];
+  assert.ok(forgedCarrier && forgedCarrier !== "null", "a continued request still hands its trace to runs");
+  assert.doesNotMatch(forgedCarrier, /private/);
+  assert.deepEqual(Object.keys(JSON.parse(forgedCarrier)), ["sentryTrace"]);
+  assert.match(forgedCarrier, /"sentryTrace":"0123456789abcdef0123456789abcdef-/);
+  assert.doesNotMatch(JSON.stringify(on.transactions), /private/);
+  assert.doesNotMatch(JSON.stringify(on.headers), /private/);
+  const items = new Map([...on.events, ...on.transactions].map((item) => [item.event_id, item]));
+  const traced = on.headers.filter((h) => h.trace);
+  assert.ok(traced.length >= on.events.length + on.transactions.length, "every envelope carries a trace header");
+  for (const header of traced) {
+    const item = items.get(header.event_id);
+    assert.equal(header.trace.trace_id, item?.contexts.trace.trace_id, "the envelope trace header matches its event");
+    assert.equal(header.trace.release, "test-release");
+  }
+  const handlerError = on.events.find((event) => event.exception.values[0].value === "handler-error");
+  assert.equal(handlerError?.transaction, "GET /v1/things/:id", "errors inside a request carry the route template");
+  assert.deepEqual(
+    on.transactions.filter((event) => ["db", "http.client"].includes(event.contexts.trace.op)),
+    [],
+    "detached and unparented work is not sent as its own transaction",
+  );
+  const names = on.transactions.map((event) => event.transaction);
+  assert.deepEqual(names.sort(), ["GET /v1/things/:id", "GET /v1/things/:id", "run", "stopped-run"].sort());
+  assert.equal(
+    on.transactions.find((event) => event.transaction === "stopped-run")?.contexts.trace.status,
+    "cancelled",
+  );
+  const [request] = on.transactions.filter(
+    (event) => event.transaction === "GET /v1/things/:id" && event.contexts.trace.op === "http.server",
+  );
+  assert.ok(request, "the routed request is named by its template");
+  assert.equal(request.contexts.trace.data["http.route"], "/v1/things/:id");
+  assert.equal(request.request, undefined);
+  const outbound = request.spans.find((span: { op: string }) => span.op === "http.client");
+  assert.match(outbound.description, /^GET http:\/\/127\.0\.0\.1:\d+$/);
+  const run = on.transactions.find((event) => event.transaction === "run")!;
+  assert.equal(run.contexts.trace.op, "queue.process");
+  assert.equal(run.contexts.trace.trace_id, request.contexts.trace.trace_id, "the run continues the request's trace");
+  assert.equal(run.contexts.trace.data["messaging.message.id"], "run-1");
+  assert.equal(run.contexts.trace.data["qm.surface"], "web");
+  assert.equal(run.measurements.time_to_first_token.unit, "millisecond");
+  assert.ok(run.measurements.time_to_first_token.value >= 15);
+  assert.deepEqual(run.tags, { service: "test", deployment: "test-deployment" });
+  assert.equal(run.release, "test-release");
+  assert.equal(run.environment, "verification");
+});
+
+test("trace context goes only to QM's own services", async () => {
+  const external = await runReporting(TRACED_REQUESTS, true, { SENTRY_TRACES_SAMPLE_RATE: "1" });
+  assert.ok(external.outbound.length > 0);
+  assert.ok(external.outbound.every((h) => h["sentry-trace"] === undefined && h.baggage === undefined));
+  const internal = await runReporting(TRACED_REQUESTS, true, {
+    SENTRY_TRACES_SAMPLE_RATE: "1",
+    CORE_API_URL: "collector",
   });
-  assert.deepEqual(run!.measurements, {
-    queue_wait: { value: 20, unit: "millisecond" },
-    private: { value: 5, unit: "millisecond" },
-  });
-  assert.equal(run!.contexts.trace.data.private, "private-tag");
-  assert.equal(run!.contexts.trace.data.page, "private-page");
-  assert.equal(run!.contexts.trace.op, "queue.task");
-  assert.equal(run!.release, "test-release");
-  assert.equal(run!.environment, "verification");
-  assert.equal(request!.transaction, "GET /v1/sessions/:id");
-  assert.equal(request!.contexts.trace.status, "not_found");
-  assert.equal(request!.contexts.trace.data.http_status, "404");
+  assert.ok(internal.outbound.some((h) => typeof h["sentry-trace"] === "string"));
 });
 
 test("reportFailure sends one classified event per distinct failure and skips cancellations and recorded errors", async () => {

@@ -1,6 +1,4 @@
-import { sleep } from "./util.ts";
-import { slackSectionBlocks } from "./mrkdwn.ts";
-import type { DeliveryMetadata } from "./delivery.ts";
+import { swallow } from "../util/errors.ts";
 
 export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
 
@@ -87,7 +85,7 @@ export function createAckPresenter(deps: {
   const randomEmoji = (): string =>
     candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]!;
   let pickResult: string | undefined;
-  void deps.emojiPick?.then((v) => (pickResult = v)).catch(() => undefined);
+  void deps.emojiPick?.then((v) => (pickResult = v)).catch((e) => swallow("slack: pick ack emoji", e));
   let emoji = "";
   let reactionApplied = false;
   let reactionCancelled = false;
@@ -96,7 +94,7 @@ export function createAckPresenter(deps: {
   let sawFirstBlock = false;
   let chain: Promise<void> = Promise.resolve();
   const enqueue = (op: () => Promise<void>): void => {
-    chain = chain.then(op).catch(() => {});
+    chain = chain.then(op).catch((e) => swallow("slack: ack presenter step", e));
   };
   const timer = setTimeout(() => {
     if (deps.taskManaged || settled || ackPosted || reactionCancelled) return;
@@ -139,148 +137,9 @@ export function createAckPresenter(deps: {
   };
 }
 
-type RunTaskStatus = "pending" | "in_progress" | "completed" | "skipped" | "failed";
-
-export interface RunTaskView {
-  id: string;
-  title: string;
-  status: RunTaskStatus;
-}
-
-export function renderTaskList(tasks: RunTaskView[]): string {
-  const title = (value: string) => {
-    const oneLine = value
-      .replace(/[\r\n\t]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const bounded = oneLine.length > 120 ? `${oneLine.slice(0, 119)}…` : oneLine;
-    return bounded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  };
-  const noun = tasks.length === 1 ? "task" : "tasks";
-  const shown = tasks.slice(0, 20);
-  const rows = shown.map((task) => {
-    const label = title(task.title);
-    if (task.status === "completed") return `✓ ~${label}~`;
-    if (task.status === "skipped") return `– ~${label}~`;
-    if (task.status === "failed") return `✕ ~${label}~`;
-    return `${task.status === "in_progress" ? "◐" : "○"} ${label}`;
-  });
-  if (shown.length < tasks.length) rows.push(`… ${tasks.length - shown.length} more`);
-  return `*${tasks.length} ${noun}*\n${rows.join("\n")}`;
-}
-
-export interface TaskListPresenter {
-  attach(ts: string, leadText: string): Promise<void>;
-  addLead(leadText: string): Promise<boolean>;
-  onTasks(tasks: RunTaskView[]): Promise<void>;
-  finalize(text: string, metadata?: DeliveryMetadata): Promise<boolean>;
-  settle(): Promise<void>;
-}
-
-export function createTaskListPresenter(deps: {
-  post(text: string, blocks: Array<Record<string, unknown>>): Promise<string | undefined>;
-  update(ts: string, text: string, blocks: Array<Record<string, unknown>>, metadata?: DeliveryMetadata): Promise<void>;
-  checkpoint(ts: string): Promise<void>;
-  remove(ts: string): Promise<void>;
-  onSurfacePosted(): void;
-  sleep?(ms: number): Promise<void>;
-  onError?(error: unknown): void;
-}): TaskListPresenter {
-  let messageTs: string | undefined;
-  let leadText = "";
-  let tasks: RunTaskView[] = [];
-  let chain = Promise.resolve();
-  const sleepFor = deps.sleep ?? sleep;
-  const taskBlocks = (taskText: string): Array<Record<string, unknown>> => [
-    ...(leadText ? [{ type: "section", text: { type: "mrkdwn", text: leadText } }] : []),
-    { type: "section", text: { type: "mrkdwn", text: taskText } },
-  ];
-  const updateWithRetry = async (
-    ts: string,
-    text: string,
-    blocks: Array<Record<string, unknown>>,
-    metadata?: DeliveryMetadata,
-  ): Promise<boolean> => {
-    for (const delay of [0, 250, 750]) {
-      if (delay) await sleepFor(delay);
-      try {
-        await deps.update(ts, text, blocks, metadata);
-        return true;
-      } catch (error) {
-        if (delay === 750) deps.onError?.(error);
-      }
-    }
-    return false;
-  };
-  const render = async (): Promise<boolean> => {
-    if (!tasks.length) return false;
-    const taskText = renderTaskList(tasks);
-    const fallback = leadText ? `${leadText}\n\n${taskText}` : taskText;
-    if (messageTs) {
-      return updateWithRetry(messageTs, fallback, taskBlocks(taskText));
-    }
-    try {
-      const ts = await deps.post(fallback, taskBlocks(taskText));
-      if (!ts) return false;
-      try {
-        await deps.checkpoint(ts);
-      } catch (error) {
-        await deps.remove(ts).catch(() => {});
-        throw error;
-      }
-      messageTs = ts;
-      deps.onSurfacePosted();
-      return true;
-    } catch (error) {
-      deps.onError?.(error);
-      return false;
-    }
-  };
-  return {
-    async attach(ts, text) {
-      try {
-        await deps.checkpoint(ts);
-      } catch (error) {
-        await deps.remove(ts).catch(() => {});
-        throw error;
-      }
-      messageTs = ts;
-      leadText = text;
-    },
-    async addLead(text) {
-      await chain;
-      if (!messageTs) return false;
-      leadText = text;
-      const updated = await render();
-      if (updated) return true;
-      const staleTs = messageTs;
-      messageTs = undefined;
-      await deps.remove(staleTs).catch(() => {});
-      return false;
-    },
-    async onTasks(nextTasks) {
-      tasks = nextTasks.map((task) => ({ ...task }));
-      chain = chain.then(async () => {
-        await render();
-      });
-      await chain;
-    },
-    async finalize(text, metadata) {
-      await chain;
-      if (!messageTs || !tasks.length) return false;
-      const taskText = renderTaskList(tasks);
-      const finalBlocks = [...slackSectionBlocks(text), { type: "section", text: { type: "mrkdwn", text: taskText } }];
-      return updateWithRetry(messageTs, text || taskText, finalBlocks, metadata);
-    },
-    async settle() {
-      await chain;
-    },
-  };
-}
-
 export interface GoalNoticeView {
   objective: string;
-  status: "active" | "paused" | "complete" | "blocked";
+  status: "active" | "paused" | "complete" | "cancelled";
   floor?: string;
 }
 
@@ -292,7 +151,7 @@ export function renderGoalNotice(goal: GoalNoticeView): string {
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
   const objective = bounded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
-  if (goal.status === "blocked") return `✕ Goal blocked: ${objective}`;
+  if (goal.status === "cancelled") return `✕ Goal cancelled: ${objective}`;
   if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;
   return `◐ Pursuing goal: ${objective}${goal.floor ? ` · at least ${goal.floor}` : ""}`;
 }

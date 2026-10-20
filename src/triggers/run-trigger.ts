@@ -1,24 +1,17 @@
-import type {
-  DeliveryProvenance,
-  Destination,
-  Principal,
-  RecipientConsent,
-  ScopeId,
-  TurnRequest,
-  TurnResult,
-} from "../types.ts";
-import { parseScopeId } from "../types.ts";
+import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../core/turn-options.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { principalDestination, reachEnqueue } from "../reach/reach.ts";
-import { consentRequiredRecipient, recipientConsentSatisfied } from "./trigger-store.ts";
+import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
-import type { DirectoryStore } from "../directory/directory-store.ts";
+import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
-import { createIsCurrentSharedScopeMember, type CurrentScopeMembers } from "../resolution/scope-membership.ts";
+import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
+import { isProjectGroupRef } from "../projects/project-store.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -30,14 +23,14 @@ export interface TriggerDeps {
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
   currentScopeMembers?: CurrentScopeMembers;
-  isOpenScopeMember?: (actorId: string, scope: ScopeId) => Promise<boolean>;
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string; principalId?: string; slackId?: string } | null>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
     conversationMembers?: DirectoryStore["conversationMembers"];
   };
-  sessions?: { listByParticipant(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  sessions?: { participantScopes(principalId: string): Promise<readonly { scopeId: ScopeId }[]> };
+  resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
 export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
@@ -45,19 +38,14 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;
-  input: string;
+  input: string | ((homeRoster: DirectoryMember[] | undefined) => string);
   securityScreenData?: string;
   fireKey: string;
   surface: string;
   destination?: Destination;
   message?: string;
   threadRef?: string;
-  runAs?: "owner" | "scopeFloor" | "scopeShared";
-  ownerResourcesRequireOpen?: boolean;
   unattendedGrants?: string[];
-  members?: Principal[];
-  recipientConsent?: RecipientConsent;
-  recipientConsentRequired?: boolean;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -69,6 +57,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
 
 export interface TriggerOutcome {
   authzFailed: boolean;
+  ownerLeft?: boolean;
   ran: boolean;
   deferred?: boolean;
   status?: TurnResult["status"];
@@ -88,21 +77,8 @@ function isTriggerFailure(outcome: TriggerOutcome): boolean {
   return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
 }
 
-const NO_UPDATE_SENTINEL = "[no-update]";
-const SILENT_POLL_MARKERS = new Set([NO_UPDATE_SENTINEL, "no_reply", "[silent]"]);
-
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
 export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
-
-export function isSilentPollReply(reply: string): boolean {
-  const finalLine = reply
-    .trimEnd()
-    .split(/\r?\n/)
-    .findLast((line) => line.trim() !== "")
-    ?.trim()
-    .toLowerCase();
-  return finalLine === undefined || SILENT_POLL_MARKERS.has(finalLine);
-}
 
 function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResult): DeliveryProvenance {
   return {
@@ -125,8 +101,8 @@ async function relayAttribution(deps: TriggerDeps, spec: TriggerSpec): Promise<s
 }
 
 async function participatesInScope(deps: TriggerDeps, actorId: string, scope: ScopeId): Promise<boolean> {
-  const sessions = await deps.sessions?.listByParticipant(actorId).catch(() => []);
-  return sessions?.some((s) => s.scopeId === scope) === true;
+  const scopes = await deps.sessions?.participantScopes(actorId).catch(swallowAs("trigger: participant scopes", []));
+  return scopes?.some((s) => s.scopeId === scope) === true;
 }
 
 async function actorMayReadScope(
@@ -175,61 +151,57 @@ export async function destinationVisible(
     return isVisible(deps.directory, actorId, { kind: "channel", channelId: id });
   }
   if (destination.type === "group") return isVisible(deps.directory, actorId, { kind: "group", groupId: id });
-  return true;
+  if (destination.type !== "principal" || samePerson(destination.target, actorId) || !deps.resolveRecipient)
+    return true;
+  const recipient = await deps.resolveRecipient(destination.target);
+  return (
+    recipient.kind === "one" &&
+    (samePerson(recipient.member.principalId, destination.target) || recipient.member.slackId === destination.target)
+  );
+}
+
+const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);
+
+function homeRoster(
+  kind: string | null,
+  ref: string,
+  isPrivate: boolean | undefined,
+  roster: DirectoryMember[] | undefined,
+  currentMembers: Principal[] | undefined,
+): string[][] | undefined {
+  if (kind === "channel" && isPrivate !== true) return undefined;
+  const ids =
+    roster?.map((m) => [m.principalId, ...(m.slackId ? [m.slackId] : [])]) ??
+    (kind === "group" && isProjectGroupRef(ref) ? currentMembers?.map((m) => [m.id]) : undefined);
+  return ids?.length ? ids : undefined;
 }
 
 export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<TriggerOutcome> {
   await deps.identity.refresh();
-  const isScopeFloor = spec.runAs === "scopeFloor";
-  const isScopeShared = spec.runAs === "scopeShared";
+  const runsAsScope = actsAsScope(spec.owner, spec.ownerScopeId);
+  const scheduled = SCHEDULED_SURFACES.has(spec.surface);
   const currentMembers = await deps.currentScopeMembers?.(spec.ownerScopeId);
-  const members = currentMembers ?? spec.members ?? [];
-  let actorId = spec.owner;
-  if (isScopeFloor) {
-    const internalMembers = members.filter(
-      (m) => m.type === "internal" && deps.identity.classify(m.id).type === "internal",
-    );
-    if (internalMembers.length === 0) {
-      return { authzFailed: true, ran: false, note: "scopeFloor cron has no internal members left" };
-    }
-    if (!internalMembers.some((m) => samePerson(m.id, spec.owner))) actorId = internalMembers[0]!.id;
-  } else {
-    const owner = deps.identity.classify(spec.owner);
-    if (owner.type !== "internal") {
-      return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
-    }
-    if (isScopeShared) {
-      if (spec.ownerResourcesRequireOpen && !(await deps.isOpenScopeMember?.(spec.owner, spec.ownerScopeId))) {
-        return {
-          authzFailed: true,
-          ran: false,
-          note: "scopeShared owner resource access requires current Open membership",
-        };
-      }
-      let sharedOwnerIsMember = spec.members?.some((member) => samePerson(member.id, spec.owner)) === true;
-      if (currentMembers) sharedOwnerIsMember = currentMembers.some((member) => samePerson(member.id, spec.owner));
-      else if (deps.directory) {
-        sharedOwnerIsMember = await createIsCurrentSharedScopeMember({
-          directory: deps.directory,
-          identity: deps.identity,
-        })(spec.owner, spec.ownerScopeId);
-      }
-      if (!sharedOwnerIsMember) {
-        return { authzFailed: true, ran: false, note: "scopeShared owner is no longer a current scope member" };
-      }
-    }
+  const actorId = spec.owner;
+  if (!runsAsScope && deps.identity.classify(spec.owner).type !== "internal") {
+    return { authzFailed: true, ran: false, note: "owner is no longer an internal principal" };
   }
-
   const audience =
-    (isScopeFloor || isScopeShared) && members.length
-      ? members.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
+    runsAsScope && currentMembers?.length
+      ? currentMembers.map((m) => ({ externalId: m.id, ...(m.teamIds ? { teamIds: m.teamIds } : {}) }))
       : undefined;
   const { kind: ownerKind, ref: ownerRef } = parseScopeId(spec.ownerScopeId);
   const threadRef = spec.threadRef ?? spec.fireKey;
   let conversation: TurnRequest["conversation"] = { kind: "dm", threadRef };
+  let roster: DirectoryMember[] | undefined;
+  let isPrivate: boolean | undefined;
   if (ownerKind === "channel" || ownerKind === "group") {
-    const roster = await deps.directory?.conversationMembers?.(ownerKind, ownerRef).catch(() => undefined);
-    const isPrivate = ownerKind === "channel" ? await deps.directory?.channelPrivacy?.(ownerRef) : undefined;
+    roster = await deps.directory
+      ?.conversationMembers?.(ownerKind, ownerRef)
+      .catch(reportFailureAs("trigger home roster", undefined));
+    isPrivate =
+      ownerKind === "channel"
+        ? await deps.directory?.channelPrivacy?.(ownerRef).catch(reportFailureAs("trigger home privacy", undefined))
+        : undefined;
     conversation = {
       kind: ownerKind,
       channelRef: ownerRef,
@@ -240,8 +212,16 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     };
   }
 
+  const members = runsAsScope ? undefined : homeRoster(ownerKind, ownerRef, isPrivate, roster, currentMembers);
+  const ownerIsMember = members?.some((ids) => ids.some((id) => samePerson(id, actorId)));
+  if (scheduled && ownerIsMember === false)
+    return { authzFailed: true, ownerLeft: true, ran: false, note: "the owner left this conversation" };
   let homeAccess: { ok: boolean; note?: string };
-  if (currentMembers !== undefined) {
+  if (runsAsScope || ownerIsMember) {
+    homeAccess = { ok: true };
+  } else if (ownerIsMember === false) {
+    homeAccess = { ok: false, note: MEMBERSHIP_SKIP_NOTE };
+  } else if (currentMembers !== undefined) {
     homeAccess = currentMembers.some((member) => samePerson(member.id, actorId))
       ? { ok: true }
       : { ok: false, note: MEMBERSHIP_SKIP_NOTE };
@@ -262,32 +242,13 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const requiredRecipient = consentRequiredRecipient({
-    owner: spec.owner,
-    standing: spec.recipientConsentRequired === true,
-    destination: spec.destination,
-  });
-  const consented = recipientConsentSatisfied(spec, requiredRecipient);
-  const consentNote =
-    spec.recipientConsent?.status === "declined"
-      ? "recipient turned this delivery off — skipped"
-      : "awaiting the recipient's consent — delivery skipped";
-  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && consented && deliverable;
+  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
-  const ownerSkipNotice = async () => {
-    await deps.deliveries.enqueue({
-      destination: principalDestination(spec.owner, spec.owner),
-      text: `Scheduled delivery skipped: ${consentNote}`,
-      idempotencyKey: `${spec.fireKey}:err`,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
-  };
   let deferred = false;
   const ran = await deps.idempotency
     .once(spec.fireKey, async () => {
@@ -295,12 +256,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (spec.message !== undefined) {
         status = "ok";
         if (!spec.destination) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
@@ -326,12 +281,10 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         surface: spec.surface,
         actor: { externalId: actorId },
         conversation,
-        text: spec.input,
+        text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
-        ...(!isScopeFloor && !isScopeShared && spec.unattendedGrants
-          ? { unattendedGrants: spec.unattendedGrants }
-          : {}),
+        ...(ownerKind === "personal" && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
           triggered: true,
@@ -346,8 +299,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
-        ...(isScopeShared ? { ownerKeychainUnion: true } : {}),
-        ...(isScopeShared && spec.ownerResourcesRequireOpen ? { ownerResourcesRequireOpen: true } : {}),
+        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
@@ -363,12 +315,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (res.status === "ok" && (res.reply || res.attachments?.length)) {
         if (!spec.destination) return;
         if (liveDelivery) return;
-        if (!consented) {
-          status = "refused";
-          note = consentNote;
-          await ownerSkipNotice();
-          return;
-        }
         if (!deliverable) {
           status = "refused";
           note = notVisibleNote;
@@ -408,7 +354,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (spec.errorNotice && spec.destination && consented && deliverable && isTriggerFailure(outcome)) {
+  if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
       text: spec.errorNotice(userNote ?? note ?? status!),

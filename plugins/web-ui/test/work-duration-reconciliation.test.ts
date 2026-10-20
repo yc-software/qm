@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { entriesToMessages, type AssistantWork, type SessionEntry, type WorkBlock } from "../src/core-bridge.ts";
 import { workSeconds, workedLabel } from "../src/work-duration.ts";
 
@@ -65,7 +64,7 @@ test("work duration survives a transcript refresh — persisted turn timing wins
     { type: "tool_call", payload: { tool: "execute", command: "ls" }, createdAt: 112_000, seq: 2, parentSeq: 1 },
     {
       type: "tool_result",
-      payload: { tool: "execute", code: 0, stdout: "a" },
+      payload: { tool: "execute", code: 0, result: "a" },
       createdAt: 112_000,
       seq: 3,
       parentSeq: 2,
@@ -131,18 +130,6 @@ test("historical transcripts without persisted timing keep the activity-inferenc
   const work = (entriesToMessages(entries, MODEL)[1] as AssistantWork).work;
   assert.equal(work?.startedAt, 110);
   assert.equal(work?.finishedAt, 130);
-});
-
-test("live and historical rendering consume the same duration helper (source-level guard)", () => {
-  const chat = readFileSync(new URL("../src/chat.ts", import.meta.url), "utf8");
-  assert.match(
-    chat,
-    /import \{[^}]*\bworkSeconds, workedLabel \} from "\.\/work-duration"/,
-    "chat renders via the shared helper",
-  );
-
-  assert.match(chat, /workedLabel\(work.status === "working" \? "Working" : "Worked", secs\)/);
-  assert.match(chat, /function workLabel[\s\S]{0,400}?workSeconds\(work\)/);
 });
 
 test("live and completed work use compact minute and second labels", () => {

@@ -73,7 +73,11 @@ export async function startSlackPlugin(
   const APP_TOKEN = cfg.appToken;
   const SLACK_API_URL = cfg.apiUrl ? normalizeSlackApiUrl(cfg.apiUrl) : undefined;
   const TRUSTED_FILE_HOST = SLACK_API_URL ? new URL(SLACK_API_URL).hostname : undefined;
-  const CLIENT_OPTIONS = { ...NO_RETRY, ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}) } as const;
+  const CLIENT_OPTIONS = {
+    ...NO_RETRY,
+    attachOriginalToWebAPIRequestError: false,
+    ...(SLACK_API_URL ? { slackApiUrl: SLACK_API_URL } : {}),
+  } as const;
   const IDENTITY_TOKENS: Record<string, string | undefined> = {
     copilot: cfg.copilotBotToken,
   };
@@ -280,7 +284,7 @@ export async function startSlackPlugin(
     externalParticipantsEnabled,
     ...(cfg.recentMessages ? { recentMessages: cfg.recentMessages } : {}),
   });
-  const approvals = createApprovals({ core, flow, directory, threads, ids, externalAccess: !!cfg.externalAccess });
+  const approvals = createApprovals({ core, flow, directory, threads, externalAccess: !!cfg.externalAccess });
   registerKeychainApprovalActions(app, { core, directory, webUiPublicUrl: cfg.webUiPublicUrl });
   registerDeployAccessActions(app, { core, directory });
   const ensureHeader = createSurfaceHeaderEnsurer({
@@ -364,7 +368,6 @@ export async function startSlackPlugin(
     directory,
     mirror,
     serializer,
-    approvals,
     ackEmoji,
     ackEmojiCandidates: ackEmojiOverride,
     ids,
@@ -386,7 +389,7 @@ export async function startSlackPlugin(
       threadTs?: string;
       text?: string;
       senderSlackId?: string;
-      isDirectMessage?: boolean;
+      isDirectMessage: boolean;
     },
   ): void => {
     void (async () => {
@@ -395,19 +398,20 @@ export async function startSlackPlugin(
         try {
           const actor = await directory.classifyActor(client, msg.senderSlackId);
           if (actor.externalId.includes("@")) senderEmail = actor.externalId;
-        } catch {
+        } catch (e) {
+          swallow("slack: classify inbox message sender", e);
           senderEmail = undefined;
         }
       }
       await core.inboxSlackMessage({
         channel: msg.channel,
         ts: msg.ts,
-        ...(msg.isDirectMessage !== undefined ? { isDirectMessage: msg.isDirectMessage } : {}),
+        isDirectMessage: msg.isDirectMessage,
         ...(msg.threadTs ? { threadTs: msg.threadTs } : {}),
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),
       });
-    })().catch(() => {});
+    })().catch((e) => swallow("slack: forward message to inbox", e));
   };
   registerSlackEvents(app, {
     handler,

@@ -4,7 +4,7 @@ import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
-import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -170,6 +170,9 @@ export function visibleSkillRows<T extends SkillSummary>(
 export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
   const secret = opts.signingSecret ?? randomUUID();
+  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
+    advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn);
 
   function sign(manifest: SkillManifest): string {
     const files = canonicalFiles(manifest.files);
@@ -184,8 +187,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   }
 
   return {
-    withNameLock: (scopeId, name, fn) =>
-      opts.advisoryLock ? opts.advisoryLock.withLock(`skill-name:${scopeId}:${name}`, fn) : fn(),
+    withNameLock,
     async create(input) {
       assertSafeSkillName(input.manifest.name);
       const at = Date.now();
@@ -254,13 +256,17 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async archive(id) {
-      const s = await skills.get(id);
-      if (!s) throw new Error(`unknown skill: ${id}`);
-      if (s.status === "archived") return s;
-      s.status = "archived";
-      s.updatedAt = Date.now();
-      await skills.put(s.id, s);
-      return s;
+      const existing = await skills.get(id);
+      if (!existing) throw new Error(`unknown skill: ${id}`);
+      return withNameLock(existing.scopeId, existing.manifest.name, async () => {
+        const s = await skills.get(id);
+        if (!s) throw new Error(`unknown skill: ${id}`);
+        if (s.status === "archived") return s;
+        s.status = "archived";
+        s.updatedAt = Date.now();
+        await skills.put(s.id, s);
+        return s;
+      });
     },
 
     async restore(skill) {

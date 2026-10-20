@@ -112,6 +112,38 @@ test("git HTTP broker streams a smart-HTTP request through the pinned service cr
   });
 });
 
+test("git HTTP broker sends a credential's fixed headers over a caller's case variant", async () => {
+  let seen: Record<string, string> | undefined;
+  const deps: ServerDeps = {
+    control: {} as ServerDeps["control"],
+    serviceCreds: {
+      getServiceCredentialSecret: async () => ({
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "dXNlcjp0b2tlbg==",
+        host: "gitlab.example",
+        injection: { scheme: "Basic ", headers: { "Git-Protocol": "version=1", "x-tenant": "acme" } },
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+        enabled: true,
+      }),
+    } as unknown as ServerDeps["serviceCreds"],
+    gitHttpFetch: async (_url, init) => {
+      seen = init.headers;
+      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+    },
+  };
+  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/git-receive-pack", "POST", deps, "PACK");
+  await brokerGitHttp(c);
+  await text(c.res);
+  assert.deepEqual(seen, {
+    "content-type": "application/x-git-receive-pack-request",
+    "Git-Protocol": "version=1",
+    "x-tenant": "acme",
+    Authorization: "Basic dXNlcjp0b2tlbg==",
+  });
+});
+
 test("git HTTP broker refuses an env-delivery record like a missing credential", async () => {
   let fetched = false;
   const deps: ServerDeps = {

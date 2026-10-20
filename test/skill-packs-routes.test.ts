@@ -190,6 +190,45 @@ test("register → browse → import → list → remove a git skill pack (org s
   }
 });
 
+test("pack removal and re-import identify pack skills by their pack record, not their creator label", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    const lookalike = await s.built.skills.create({
+      scopeId: "org:default-org",
+      manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
+      createdBy: `pack:${id}`,
+    });
+    await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
+    await s.built.skills.publish(lookalike.id);
+
+    const imp = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ selected: ["reg-alpha", "reg-beta"] }),
+      }),
+    );
+    assert.deepEqual(imp.imported, ["reg-beta"]);
+    assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
+
+    const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
+    assert.equal(del.removed, 1);
+    assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
+  } finally {
+    rmSync(repo.dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
+
 test("register works with only a url (defaults to the repo's default branch)", async () => {
   const repo = makeFixtureRepo();
   const s = start();
@@ -682,6 +721,72 @@ test("a single imported skill can be un-indexed (archived) via DELETE /admin/ski
       "published",
       "sibling skill is untouched",
     );
+  } finally {
+    rmSync(repo.dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
+
+test("an admin can replace an archived seeded org skill with a same-named pack skill", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  try {
+    const seeded = await s.built.skills.create({
+      scopeId: "org:default-org",
+      manifest: { name: "reg-alpha", description: "bundled default", requiredCapabilities: [], body: "bundled" },
+      createdBy: "system:skills-seed",
+    });
+    await s.built.skills.review(seeded.id, "system:skills-seed", []);
+    await s.built.skills.publish(seeded.id);
+
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    const before = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
+    const blocked = before.candidates.find((c: any) => c.upstreamName === "reg-alpha");
+    assert.equal(blocked?.eligible, false);
+    assert.equal(blocked.excludeReason, "collision");
+    const blockedImport = await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: ["reg-alpha"] }),
+    });
+    assert.equal(blockedImport.status, 200);
+    assert.deepEqual((await json(blockedImport)).imported, []);
+    assert.equal((await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill?.id, seeded.id);
+
+    const archived = await fetch(`${s.base}/v1/admin/skills/${seeded.id}?scope=org:default-org`, {
+      method: "DELETE",
+      headers: ADMIN,
+    });
+    assert.equal(archived.status, 200);
+    assert.equal((await s.built.skills.get(seeded.id))?.status, "archived");
+
+    const after = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}/catalog`, { headers: ADMIN }));
+    assert.equal(
+      after.candidates.find((c: any) => c.upstreamName === "reg-alpha")?.eligible,
+      true,
+      "archiving the bundled default frees its name for a replacement",
+    );
+    const imported = await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+      method: "POST",
+      headers: ADMIN,
+      body: JSON.stringify({ selected: ["reg-alpha"] }),
+    });
+    assert.equal(imported.status, 200);
+    assert.deepEqual((await json(imported)).imported, ["reg-alpha"]);
+    assert.equal((await s.built.skills.get(seeded.id))?.status, "archived");
+    const replacement = (await s.built.skills.resolve("reg-alpha", ["org:default-org"])).skill;
+    assert.ok(replacement);
+    assert.notEqual(replacement.id, seeded.id);
+    assert.equal(replacement.createdBy, `pack:${id}`);
+    assert.equal(replacement.scopeId, "org:default-org");
+    assert.equal(replacement.manifest.description, "a");
   } finally {
     rmSync(repo.dir, { recursive: true, force: true });
     await s.close();

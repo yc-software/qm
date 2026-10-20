@@ -5,7 +5,7 @@ import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import type { ComposerSurface, ConvCtx } from "../src/conv-types.ts";
 
-test("a steered queued message stays visible as Steering until model intake or the run ends", async (t) => {
+test("a steered queued message shows in the transcript as waiting until model intake or the run ends", async (t) => {
   const dom = new JSDOM('<!doctype html><div id="app"></div><div id="composer"></div>', {
     url: "http://localhost/",
     pretendToBeVisual: true,
@@ -91,11 +91,7 @@ test("a steered queued message stays visible as Steering until model intake or t
     } as unknown as ConvCtx;
     composer = createComposerSurface(ctx);
     ctx.composer = composer!;
-    const chips = () =>
-      [...host.querySelectorAll(".queued-chip")].map((chip) => ({
-        tag: chip.querySelector(".queued-tag")?.textContent?.trim(),
-        text: chip.querySelector(".queued-text")?.textContent?.trim(),
-      }));
+    const waiting = () => composer!.waitingSteers(agent).map((q) => q.text);
     const steer = async (runId: string): Promise<void> => {
       composer!.setQueuedRuns(threadRef, [{ runId, text: "same text" }]);
       draw();
@@ -114,43 +110,41 @@ test("a steered queued message stays visible as Steering until model intake or t
       });
     };
 
-    await t.test("accepting a steer keeps the chip and fabricates no transcript message", async () => {
+    await t.test("accepting a steer leaves the queue strip and fabricates no transcript entry", async () => {
       await steer("q1");
       assert.deepEqual(composer!.queuedRunsFor(threadRef), []);
-      assert.deepEqual(chips(), [{ tag: "Steering", text: "same text" }]);
+      assert.deepEqual(waiting(), ["same text"]);
+      assert.equal(host.querySelector(".queued-chip"), null);
       assert.equal(agentState.messages.length, 0);
     });
 
     await t.test("repeated text settles only the steer whose intake ts arrived", async () => {
       await steer("q2");
-      assert.deepEqual(chips(), [
-        { tag: "Steering", text: "same text" },
-        { tag: "Steering", text: "same text" },
-      ]);
+      assert.deepEqual(waiting(), ["same text", "same text"]);
       intake("q2", 4);
       draw();
-      assert.deepEqual(chips(), [{ tag: "Steering", text: "same text" }]);
+      assert.deepEqual(waiting(), ["same text"]);
       intake("q1", 5);
       draw();
-      assert.deepEqual(chips(), []);
+      assert.deepEqual(waiting(), []);
     });
 
-    await t.test("an unrelated steered message with the same text does not settle the chip", async () => {
+    await t.test("an unrelated steered message with the same text does not settle the waiting steer", async () => {
       await steer("q3");
       agentState.messages.push({ role: "user", content: "same text", steered: true, entrySeq: 6, ts: "other" });
       draw();
-      assert.deepEqual(chips(), [{ tag: "Steering", text: "same text" }]);
+      assert.deepEqual(waiting(), ["same text"]);
     });
 
-    await t.test("the chip goes when the run ends without intake", async () => {
+    await t.test("the waiting steer goes when the run ends without intake", async () => {
       agentState.isStreaming = false;
       live = false;
       draw();
-      assert.deepEqual(chips(), []);
+      assert.deepEqual(waiting(), []);
       agentState.isStreaming = true;
       live = true;
       draw();
-      assert.deepEqual(chips(), []);
+      assert.deepEqual(waiting(), []);
     });
   } finally {
     composer?.dispose?.();

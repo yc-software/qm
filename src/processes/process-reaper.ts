@@ -1,16 +1,17 @@
 import type { ProcessRecord, ProcessRegistry } from "./process-registry.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
-import type { ProcessSandbox } from "../sandbox/sandbox.ts";
-import { errMessage } from "../util/errors.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
+import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
 export interface ReaperKillHookOptions {
   termGraceMs?: number;
   killGraceMs?: number;
+  onExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
 }
 
 export function createReaperKillHook(
@@ -20,20 +21,31 @@ export function createReaperKillHook(
   const termGraceMs = opts?.termGraceMs ?? 5_000;
   const killGraceMs = opts?.killGraceMs ?? 2_000;
   return async (rec) => {
-    const handle = await sandbox.provision(
-      [{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }],
-      rec.sandboxId ? { sandboxId: rec.sandboxId } : undefined,
-    );
+    if (!rec.sandboxId) return;
+    const handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+      sandboxId: rec.sandboxId,
+    });
     try {
-      await sandbox.signalProcess(handle, rec.processId, "TERM");
-      let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
-      if (status.state !== "exited") {
-        await sandbox.signalProcess(handle, rec.processId, "KILL");
-        status = await awaitProcessExit(sandbox, handle, rec.processId, killGraceMs);
+      try {
+        await sandbox.signalProcess(handle, rec.processId, "TERM");
+        let status = await awaitProcessExit(sandbox, handle, rec.processId, termGraceMs);
+        if (status.state !== "exited") {
+          await sandbox.signalProcess(handle, rec.processId, "KILL");
+          status = await awaitProcessExit(sandbox, handle, rec.processId, killGraceMs);
+        }
+        if (status.state !== "exited") throw new Error(`process survived TERM+KILL: ${rec.processId}`);
+      } catch (e) {
+        if (!(e instanceof ProcessSessionGoneError)) throw e;
       }
-      if (status.state !== "exited") throw new Error(`process survived TERM+KILL: ${rec.processId}`);
-    } catch (e) {
-      if (!processIsGone(e)) throw e;
+      await opts
+        ?.onExit?.(handle, rec.processId)
+        .catch((e) =>
+          console.error(
+            "[process-reaper] credential writeback failed:",
+            errMessage(e),
+            ...(e instanceof AggregateError ? e.errors.map(errMessage) : []),
+          ),
+        );
     } finally {
       await sandbox.teardown(handle, { keepWarm: true });
     }
@@ -50,11 +62,11 @@ export interface ProcessReaperOptions {
   intervalMs: number;
   kill?: (rec: ProcessRecord) => Promise<void>;
   onReaped?: (rec: ProcessRecord) => Promise<void>;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
 }
 
 export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReaperOptions): ProcessReaper {
-  const leaderLease = opts.leaderLease ?? createNoopLeaderLease();
+  const leaderLease = opts.leaderLease;
   async function sweep(): Promise<{ reaped: number }> {
     const expired = await registry.listExpired();
     let reaped = 0;
@@ -62,7 +74,8 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (opts.kill) {
         try {
           await opts.kill(rec);
-        } catch {
+        } catch (error) {
+          swallow(`process reaper: kill ${rec.processId}`, error);
           continue;
         }
       }

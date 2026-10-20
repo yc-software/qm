@@ -158,3 +158,13 @@ test("other links are not treated as session links", () => {
   assert.equal(sessionLinkTarget(`${origin}/s/abc`, origin, "/ui"), null);
   assert.equal(sessionLinkTarget("not a url", "null", ""), null);
 });
+
+test("legacy /sessions/<id> links resolve to the session", () => {
+  const uuid = "98e9f742-698f-4bd4-aaaa-4f474019fec6";
+  assert.deepEqual(parseDeepLink("", `/sessions/${uuid}`, ""), { view: "chats", session: uuid, item: null });
+  assert.deepEqual(parseDeepLink("/web-ui", `/web-ui/sessions/${uuid}`, ""), {
+    view: "chats",
+    session: uuid,
+    item: null,
+  });
+});

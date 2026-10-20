@@ -1,4 +1,4 @@
-import type { RecipientConsent, Webhook } from "../types.ts";
+import type { Webhook } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
@@ -6,7 +6,6 @@ import {
   contentPart,
   createDeduped,
   setTriggerEnabled,
-  setTriggerRecipientConsent,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
@@ -35,7 +34,7 @@ export interface WebhookStore {
   get(id: string): Promise<Webhook | null>;
   list(): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
-  setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
+  update(id: string, patch: { action: string }): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
@@ -102,8 +101,8 @@ export function createWebhookStore(
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
     },
-    setRecipientConsent(id, recipientConsent) {
-      return setTriggerRecipientConsent(backing, id, recipientConsent);
+    update(id, patch) {
+      return backing.merge(id, { action: patch.action });
     },
     async recordFire(id, info) {
       await backing.merge(id, {

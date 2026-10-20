@@ -194,7 +194,7 @@ test("the mounted conversation recovers a saved answer after a local polling tim
         let releaseList!: () => void;
         const listHeld = new Promise<void>((resolve) => (releaseList = resolve));
         globalThis.fetch = async (...args) => {
-          if (String(args[0]) === "/api/sessions") await listHeld;
+          if (String(args[0]).startsWith("/api/sessions?")) await listHeld;
           return originalFetch(...args);
         };
         const originalStream = agent.streamFn;

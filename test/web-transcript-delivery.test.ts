@@ -5,7 +5,8 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
 import { wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
-import { createTranscriptSource } from "../src/harness/tape-projection.ts";
+import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
+import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { sleep } from "../src/util/async.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -61,24 +62,26 @@ test("enqueue stays a plain insert; the drain writes the text durably before the
   assert.equal(drained.length, 1, "the delivery is visible once its text is durable");
 
   const entries = await sessions.getEntries(session.id);
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0]!.type, "assistant");
-  assert.deepEqual(entries[0]!.payload, {
-    text: "Reminder: standup in 10 minutes",
-    deliveryKey: "agent:main:cron:c1:100",
-    via: "cron",
-  });
-
-  const tape = await sessions.getTape(session.id);
-  const modelRow = tape.find((row) => row.kind === "message");
-  assert.ok(modelRow, "the model sees the delivered text on future turns");
-  const content = (modelRow!.payload as { role: string; content: Array<{ text: string }> }).content[0]!.text;
-  assert.match(content, /<message from="agent" via="cron"/);
-  assert.match(content, /Reminder: standup in 10 minutes/);
-  assert.equal((modelRow!.payload as { role?: string }).role, "user", "delivered text is never in assistant voice");
+  assert.deepEqual(
+    entries.map((e) => [e.type, e.payload]),
+    [
+      [
+        "assistant",
+        {
+          text: "Reminder: standup in 10 minutes",
+          via: "cron",
+          runId: drained[0]!.id,
+        },
+      ],
+    ],
+  );
+  const messages = reconstructMessagesFromHistory(entries);
+  assert.equal(messages.at(-1)!.role, "assistant");
+  assert.match(JSON.stringify(messages), /Reminder: standup in 10 minutes/);
+  assert.doesNotMatch(JSON.stringify(messages), /toolCall|toolResult/);
 });
 
-test("the recorded entry keeps the tape projection servable and renders through it", async () => {
+test("the recorded entry renders through the transcript source", async () => {
   const { sessions, deliveries } = wired();
   const session = await webSession(sessions);
 
@@ -90,37 +93,12 @@ test("the recorded entry keeps the tape projection servable and renders through 
   });
   await deliveries.pending("web");
 
-  assert.equal(await sessions.tapeCoverage(session.id), 0, "the write advances tape coverage over its own entry");
   const projected = (await createTranscriptSource(sessions).forRender(session.id)).entries;
-  assert.equal(projected.length, 1);
-  assert.equal(projected[0]!.type, "assistant");
-  assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
-});
-
-test("a session whose tape is already behind gets the entry but no orphan tape rows", async () => {
-  const { sessions, deliveries } = wired();
-  const session = await webSession(sessions);
-  const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: SCOPE });
-  await sessions.releaseLease(lease!);
-
-  await deliveries.enqueue({
-    destination: webDestination(),
-    text: "delivered into a stale tape",
-    idempotencyKey: "k-stale-tape",
-    provenance: cronProvenance(),
-  });
-  const drained = await deliveries.pending("web");
-  assert.equal(drained.length, 1);
-
-  const entries = await sessions.getEntries(session.id);
-  assert.equal(entries.length, 2, "the transcript entry still lands");
-  const tape = await sessions.getTape(session.id);
-  assert.ok(
-    tape.every((row) => row.kind === "annotation" && (row.payload as { event?: string }).event === "transcript_entry"),
+  assert.deepEqual(
+    projected.map((e) => e.type),
+    ["assistant"],
   );
-  assert.equal(await sessions.tapeCoverage(session.id), -1, "transcript annotations do not advance model coverage");
-  assert.deepEqual(await sessions.getTranscriptEntries(session.id), entries);
+  assert.equal((projected[0]!.payload as { text?: string }).text, "cron reply body");
 });
 
 test("repeated drains and a restarted decorator never duplicate the transcript entry", async () => {
@@ -138,20 +116,20 @@ test("repeated drains and a restarted decorator never duplicate the transcript e
   const restarted = withWebTranscriptDeliveries(inner, sessions);
   await restarted.pending("web");
 
-  assert.equal((await sessions.getEntries(session.id)).length, 1, "one entry across drains and restarts");
+  assert.equal((await sessions.getEntries(session.id)).length, 1, "one delivery across drains and restarts");
 });
 
-test("a failed tape write converges on retry: one entry, no duplicate model rows", async () => {
+test("a failed transcript write converges on retry: one entry", async () => {
   const sessions = createMemorySessionStore();
-  let failNextTape = true;
+  let failNextAppend = true;
   const flaky = {
     ...sessions,
-    appendTape: async (...args: Parameters<SessionStore["appendTape"]>) => {
-      if (failNextTape) {
-        failNextTape = false;
-        throw new Error("transient tape failure");
+    appendMany: async (...args: Parameters<SessionStore["appendMany"]>) => {
+      if (failNextAppend) {
+        failNextAppend = false;
+        throw new Error("transient append failure");
       }
-      return sessions.appendTape(...args);
+      return sessions.appendMany(...args);
     },
   };
   const inner = createDeliveryStore();
@@ -169,8 +147,6 @@ test("a failed tape write converges on retry: one entry, no duplicate model rows
   assert.equal(drained.length, 1, "the retry dedupes on the entry and delivers");
 
   assert.equal((await sessions.getEntries(session.id)).length, 1);
-  const modelRows = (await sessions.getTape(session.id)).filter((row) => row.kind === "message");
-  assert.ok(modelRows.length <= 1, "the model never sees the delivered text twice");
 });
 
 test("a busy session lease holds the delivery back, unacked, until the write lands", async () => {
@@ -249,7 +225,7 @@ test("a spine post to the session's own thread is nudged, not settled and not re
   const session = await webSession(sessions);
   await deliveries.enqueue({
     destination: webDestination(),
-    text: "mid-turn post already in the tape as a tool call",
+    text: "mid-turn post already recorded as a tool call",
     idempotencyKey: `post:${session.id}:x1`,
     provenance: cronProvenance({ trigger: "conversation", sourceThreadRef: THREAD, sourceSessionId: session.id }),
   });
@@ -328,7 +304,7 @@ test("an onTerminal-recorded failure entry suppresses the web drain's duplicate 
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   const runs = createMemoryRunStore().runs;
-  wireRunResultDeliveries(runs, inner, undefined, undefined, sessions);
+  wireRunResultDeliveries(runs, inner, undefined, sessions);
   const run = (await runs.enqueue({ sessionId: THREAD, request: webTurn(THREAD), maxAttempts: 1 })).run;
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(run.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
@@ -373,7 +349,7 @@ test("another run's failure record never suppresses this run's note", async () =
   const { lease } = await sessions.acquireLease(session.id, "turn");
   await sessions.append(lease!, {
     type: "system",
-    payload: { kind: "turn_failure", message: "earlier run, delivered note", deliveryKey: "run:other" },
+    payload: { kind: "turn_failure", message: "earlier run, delivered note", runId: "earlier-run" },
     scopeLabel: SCOPE,
   });
   await sessions.append(lease!, {
@@ -397,7 +373,7 @@ test("a recovered reply already recorded by its own turn is settled without a re
   await terminalRun(deliveries, inner, {
     status: "ok",
     sessionId: session.id,
-    reply: "already in the tape",
+    reply: "already in the transcript",
     sourceAssistantEntrySeq: 6,
   });
 
@@ -424,7 +400,7 @@ test("a recovered attachments-only reply is nudged, never silently settled away"
   assert.equal((await sessions.getEntries(session.id)).length, 0);
 });
 
-test("a recovered reply the turn never recorded is written into the transcript, in the agent's plain voice", async () => {
+test("a recovered reply the turn never recorded is written into the transcript as the agent's delivery", async () => {
   const { sessions, inner, deliveries } = wired();
   const session = await webSession(sessions);
   await terminalRun(deliveries, inner, { status: "ok", sessionId: session.id, reply: "recovered reply" });
@@ -434,8 +410,76 @@ test("a recovered reply the turn never recorded is written into the transcript, 
   const entries = await sessions.getEntries(session.id);
   assert.equal(entries.length, 1);
   assert.equal(entries[0]!.type, "assistant");
-  assert.deepEqual(entries[0]!.payload, { text: "recovered reply", deliveryKey: drained[0]!.idempotencyKey });
-  const modelRow = (await sessions.getTape(session.id)).find((row) => row.kind === "message");
-  const content = (modelRow!.payload as { content: Array<{ text: string }> }).content[0]!.text;
-  assert.doesNotMatch(content, /via=/, "the turn's own reply carries no delivery badge");
+  assert.equal((entries[0]!.payload as { text: string }).text, "recovered reply");
+  const model = JSON.stringify(reconstructMessagesFromHistory(entries));
+  assert.match(model, /recovered reply/);
+  assert.doesNotMatch(model, /"via"/, "the turn's own reply carries no delivery badge");
+});
+
+test("a delivery marks the web conversation unread for its participant", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions);
+  await sessions.addParticipant(session.id, "alice@example.com");
+  await sessions.updateParticipantView(session.id, "alice@example.com", { readAt: 1 });
+  assert.notEqual((await sessions.getForParticipant(session.id, "alice@example.com"))!.unread, true);
+
+  await deliveries.enqueue({
+    destination: webDestination(),
+    text: "Reminder: standup in 10 minutes",
+    idempotencyKey: "agent:main:cron:c1:900",
+    provenance: cronProvenance(),
+  });
+  await deliveries.pending("web");
+
+  assert.equal((await sessions.getForParticipant(session.id, "alice@example.com"))!.unread, true);
+});
+
+test("Slack send receipts survive a restart, retry a busy session, and collapse against the Slack event", async () => {
+  const { sessions, inner, deliveries } = wired();
+  const session = await webSession(sessions, "dm:D123");
+  const { lease } = await sessions.acquireLease(session.id, "turn");
+  assert.ok(lease);
+  const input = {
+    destination: {
+      ...webDestination("dm:D123"),
+      webTranscript: { kind: "slack_reply" as const, sessionId: session.id, ts: "123.789", name: "Alice" },
+    },
+    text: "Sent as Alice",
+    idempotencyKey: "slack-reply:session:D123:123.789",
+  };
+  await deliveries.enqueue(input);
+  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await inner.pending("web")).length, 1);
+  await sessions.releaseLease(lease);
+  const restarted = withWebTranscriptDeliveries(inner, sessions);
+  assert.equal((await restarted.pending("web")).length, 1);
+  await restarted.enqueue(input);
+  const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.type, "user");
+  assert.equal((entries[0]!.payload as { text: string }).text, input.text);
+  const eventLease = await sessions.acquireLease(session.id, "turn");
+  assert.ok(eventLease.lease);
+  await sessions.append(eventLease.lease, {
+    type: "user",
+    scopeLabel: SCOPE,
+    payload: { text: input.text, name: "Alice", ts: "123.789" },
+  });
+  await sessions.releaseLease(eventLease.lease);
+  const visible = (await createTranscriptSource(sessions).forRender(session.id)).entries;
+  assert.equal(visible.length, 1);
+  assert.equal((visible[0]!.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt, undefined);
+});
+
+test("Slack send receipts are recorded immediately without a listener and skip an already recorded event", async () => {
+  const { sessions, deliveries } = wired();
+  const session = await webSession(sessions, "dm:D123");
+  const destination: Destination = {
+    ...webDestination("dm:D123"),
+    webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "123.789", name: "Alice" },
+  };
+  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-1" });
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  await deliveries.enqueue({ destination, text: "Hello", idempotencyKey: "send-2" });
+  assert.equal((await sessions.getEntries(session.id)).length, 1);
 });

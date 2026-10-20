@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Template, defaultBuildLogger, type CopyItem } from "e2b";
 import { loadDeploymentLayer } from "../src/deployment/load-layer.ts";
 
@@ -18,7 +19,8 @@ const memoryMB = positiveInt("E2B_TEMPLATE_MEMORY_MB");
 const resources = { ...(cpuCount ? { cpuCount } : {}), ...(memoryMB ? { memoryMB } : {}) };
 const dockerfile = readFileSync(new URL("../deploy/e2b/e2b.Dockerfile", import.meta.url), "utf8");
 
-const base = await Template.build(Template().fromDockerfile(dockerfile), baseName, {
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const base = await Template.build(Template({ fileContextPath: repoRoot }).fromDockerfile(dockerfile), baseName, {
   ...resources,
   onBuildLogs: defaultBuildLogger(),
 });

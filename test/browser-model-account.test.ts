@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
@@ -203,11 +206,25 @@ test("personal API keys bypass organization provider endpoint overrides", async 
   }
 });
 
-test("company Codex subscription auth uses the native subscription transport without API-key fallback", async () => {
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const authFile = join(dir, "auth.json");
+  const claims = Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
+  ).toString("base64url");
+  writeFileSync(
+    authFile,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
+    }),
+    { mode: 0o600 },
+  );
   const built = buildApp(
     testConfig({
-      harness: "codex",
-      codexProcessEnv: { CODEX_ACCESS_TOKEN: "company-access" },
+      harness: "pi",
+      codexAuthFile: authFile,
       openaiApiKey: "must-not-fallback",
     }),
   );

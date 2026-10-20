@@ -20,7 +20,7 @@ function makeDeps() {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const crons = createCronStore();
   const webhooks = createWebhookStore();
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
     isInternal: (p: { type: string }) => p.type === "internal",
@@ -31,8 +31,12 @@ function makeDeps() {
     channelMember: async (channelId: string, principalId: string) => principalId === U1 && channelId === C1,
     channelPrivacy: async (channelId: string): Promise<boolean | undefined> => (channelId === C1 ? true : undefined),
   };
-  const sessions: { listByParticipant: (principalId: string) => Promise<unknown[]> } = {
+  const sessions: {
+    listByParticipant: (principalId: string) => Promise<unknown[]>;
+    participantScopes: (principalId: string) => Promise<unknown[]>;
+  } = {
     listByParticipant: async (_p: string) => [],
+    participantScopes: async (_p: string) => [],
   };
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
@@ -56,7 +60,7 @@ async function setup(): Promise<{ app: App; deps: ReturnType<typeof makeDeps> }>
   });
   await deps.acl.grant({
     ownerScopeId: scopeId("personal", "U2"),
-    ref: "report.pdf",
+    ref: "f-channel",
     granteeScopeId: orgScope,
     permission: "read",
     grantedBy: "U2",
@@ -218,6 +222,8 @@ test("historical participation grants neither context listing nor current scope 
           },
         ]
       : [];
+  deps.sessions.participantScopes = async (principalId: string) =>
+    principalId === "U2" ? [{ scopeId: channelScope, channelName: "general", sessionCount: 1, lastActivityAt: 2 }] : [];
   await deps.skills.create({
     scopeId: channelScope,
     manifest: { name: "private", description: "private", requiredCapabilities: [], body: "# Private" },
@@ -281,7 +287,7 @@ test("every file a context lists is one the viewer is authorized to open", async
     assert.ok(art, "the listed file exists");
     const myScopes = [scopeId("personal", U1), orgScope];
     const ownedByViewer = myScopes.includes(art!.ownerScopeId);
-    const grants = await deps.acl.grantsFor(art!.ownerScopeId, art!.path);
+    const grants = await deps.acl.grantsFor(art!.ownerScopeId, art!.id);
     const sharedToViewer = grants.some((g) => myScopes.includes(g.granteeScopeId));
     assert.ok(ownedByViewer || sharedToViewer, `${f.name} is openable by U1 (owned or ACL-granted)`);
   }
@@ -301,4 +307,14 @@ test("webhook secrets are redacted by the route, not the app layer", async () =>
   const app = createApp(deps as unknown as AppDeps);
   const out = await app.listScopeResources(U1, channelScope);
   assert.equal(out!.webhooks[0]!.verification.secret, "topsecret");
+});
+
+test("team members belong to their team scope", async () => {
+  const deps = makeDeps();
+  const teams = { isMember: async (principalId: string, teamId: string) => principalId === U1 && teamId === "labs" };
+  const app = createApp({ ...deps, teams } as unknown as AppDeps);
+
+  assert.equal(await app.belongsToScope(U1, scopeId("team", "labs")), true);
+  assert.equal(await app.belongsToScope("U2", scopeId("team", "labs")), false);
+  assert.equal(await app.belongsToScope(U1, scopeId("team", "other")), false);
 });

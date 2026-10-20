@@ -1,7 +1,11 @@
 import type { EntryType, SessionEntry } from "../types.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
-export const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
+const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
+
+export function searchEntryType(entry: Pick<SessionEntry, "type" | "payload">): EntryType | null {
+  return SEARCHABLE_ENTRY_TYPES.has(entry.type) ? entry.type : null;
+}
 const MAX_TERMS = 8;
 
 /** Lowercased alphanumeric terms, in query order — the shared tokenizer for both stores. */
@@ -26,7 +30,6 @@ export function tsPrefixQuery(query: string): string | null {
   return terms.map((t) => (t.length >= MIN_PREFIX_LEN ? `${t}:*` : t)).join(" & ");
 }
 
-/** The searchable text of an entry payload — mirrors the Postgres `entry_search_text` function. */
 export function entrySearchText(payload: unknown): string | null {
   if (typeof payload === "string") return payload;
   const text = (payload as { text?: unknown } | null)?.text;

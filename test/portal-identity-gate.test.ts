@@ -11,7 +11,6 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
-import { isUnclassifiedWrite } from "../src/api/user-scoped-routes.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 
@@ -131,7 +130,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   it("per-user reads bind their caller-named identity field to the portal actor", async () => {
     const alice = await token("U1");
     for (const path of [
-      "/v1/memory/history?principalId=",
+      "/v1/memory?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",
@@ -162,17 +161,16 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     }
   });
 
-  it("memory restore binds its body principalId to the portal actor", async () => {
-    assert.equal(
-      (await post("/v1/memory/restore", { principalId: "U2", revision: "r1", expectedRevision: "r0" })).status,
-      401,
-    );
-    const r = await post(
-      "/v1/memory/restore",
-      { principalId: "U2", revision: "r1", expectedRevision: "r0" },
-      { "x-portal-identity": await token("U1") },
-    );
-    assert.equal(r.status, 403, "restoring another person's memory must not pass on a bare valid actor");
+  it("memory edits bind their body principalId to the portal actor", async () => {
+    const patch = (headers: Record<string, string>) =>
+      fetch(`${base}/v1/memory`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ principalId: "U2", facts: [{ id: "1", text: "x" }] }),
+      });
+    assert.equal((await patch({})).status, 401);
+    const r = await patch({ "x-portal-identity": await token("U1") });
+    assert.equal(r.status, 403, "editing another person's memory must not pass on a bare valid actor");
   });
 
   it("directory resolve requires a portal actor even though it names no identity field", async () => {
@@ -334,7 +332,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.equal(response.status, 403, `deployment ${suffix}`);
     }
 
-    built.config.setCommandPolicy(scopeId("org", "default-org"), {
+    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval" }],
     });
@@ -395,16 +393,14 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 });
 
 describe("service-to-service writes are classified", () => {
-  it("every auth:source write route is classified, so production gating cannot demand a portal identity from a plugin", () => {
-    const unclassified = authBrokerRoutes
-      .filter((route) => "path" in route && route.auth === "source")
-      .map((route) => route as { method: string; path: string })
-      .filter((route) => isUnclassifiedWrite(route.method, route.path))
-      .map((route) => `${route.method} ${route.path}`);
+  it("every auth-broker source write declares its actor, so production gating cannot demand a portal identity from a plugin", () => {
+    const undeclared = authBrokerRoutes
+      .filter((route) => "path" in route && route.auth === "source" && route.method !== "GET" && !route.actor)
+      .map((route) => `${(route as { method: string }).method} ${(route as { path: string }).path}`);
     assert.deepEqual(
-      unclassified,
+      undeclared,
       [],
-      "an unclassified write requires a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; add it to SYSTEM in user-scoped-routes.ts",
+      'a write defaults to requiring a portal identity under REQUIRE_SIGNED_PORTAL_IDENTITY; declare actor: "system" or "person" on the route',
     );
   });
 });

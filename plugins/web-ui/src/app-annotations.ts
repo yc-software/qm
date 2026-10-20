@@ -1,3 +1,5 @@
+import { swallowAs } from "../../chassis/src/errors.ts";
+
 const MAX_ANNOTATION_TEXT = 20_000;
 const MAX_ANNOTATION_BYTES = 20 * 1024 * 1024;
 
@@ -52,7 +54,7 @@ export function watchAppAnnotations(
     (event.source as Window).postMessage({ type: "qm:annotations-ack", id: data.id }, event.origin);
   };
   const onMessage = (event: MessageEvent): void => {
-    queue = queue.then(() => receive(event)).catch(() => undefined);
+    queue = queue.then(() => receive(event)).catch(swallowAs("web-ui: app annotation message", undefined));
   };
   window.addEventListener("message", onMessage);
   return () => {

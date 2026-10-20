@@ -32,6 +32,7 @@ interface SlackMeta {
   ts: string;
   threadTs?: string;
   isDirectMessage?: boolean;
+  userId?: string;
 }
 
 function parseSlackMeta(v: unknown): SlackMeta | undefined {
@@ -41,11 +42,13 @@ function parseSlackMeta(v: unknown): SlackMeta | undefined {
   if (!channelId || !ts) return undefined;
   const channelLabel = clipOpt(v.channelLabel, 120);
   const threadTs = clipOpt(v.threadTs, 40);
+  const userId = clipOpt(v.userId, 40);
   return {
     channelId,
     ts,
     ...(channelLabel ? { channelLabel } : {}),
     ...(threadTs ? { threadTs } : {}),
+    ...(userId ? { userId } : {}),
     ...(typeof v.isDirectMessage === "boolean" ? { isDirectMessage: v.isDirectMessage } : {}),
   };
 }
@@ -57,8 +60,8 @@ function metaOf(item: LoopItem): SlackMeta | undefined {
 export function slackConversationRef(
   channelId: string,
   ts: string,
-  threadTs?: string,
-  isDirectMessage = channelId.startsWith("D"),
+  threadTs: string | undefined,
+  isDirectMessage: boolean,
 ): string {
   return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
@@ -66,9 +69,7 @@ export function slackConversationRef(
 export function slackReplyThreadTs(item: LoopItem): string | undefined {
   const slack = metaOf(item);
   if (!slack) return undefined;
-  if (slack.threadTs) return slack.threadTs;
-  const dm = slack.isDirectMessage ?? slack.channelId.startsWith("D");
-  return dm ? undefined : slack.ts;
+  return slack.threadTs ?? (slack.isDirectMessage ? undefined : slack.ts);
 }
 
 function itemReactions(item: LoopItem): string[] {
@@ -77,7 +78,10 @@ function itemReactions(item: LoopItem): string[] {
 }
 
 export function slackUserClientFactory(apiUrl?: string): (token: string) => SlackUserClient {
-  const options = apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {};
+  const options = {
+    attachOriginalToWebAPIRequestError: false,
+    ...(apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {}),
+  };
   return (token) => new WebClient(token, options);
 }
 
@@ -176,7 +180,8 @@ export const slackAdapter: LoopSourceAdapter = {
     const rawKey = clip(raw.sourceKey ?? raw.dedupeKey, 300);
     if (!rawKey) return { error: "sourceKey required" };
     const slack = parseSlackMeta(raw.slack);
-    if (!slack) return { error: "slack items need slack.channelId and slack.ts" };
+    if (!slack || slack.isDirectMessage === undefined)
+      return { error: "slack items need slack.channelId, slack.ts and slack.isDirectMessage" };
     const dedupeKey = slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage);
     const draft = raw.draft === undefined ? undefined : parseReplyDraft(raw.draft);
     if (draft === null) return { error: "draft needs a string body" };
@@ -192,11 +197,8 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return (
-      slackConversationRef(slack.channelId, slack.ts, slack.threadTs, slack.isDirectMessage) === conversationRef ||
-      (!slack.threadTs &&
-        (slack.isDirectMessage ?? slack.channelId.startsWith("D")) &&
-        conversationRef === `${slack.channelId}:${slack.ts}`)
+    return (slack.isDirectMessage ? [true, false] : [false]).some(
+      (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
     );
   },
   parseProposal(raw) {

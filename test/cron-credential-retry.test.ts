@@ -9,6 +9,7 @@ import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore();
@@ -25,7 +26,6 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
       audienceScopeId: "personal:U_BOB",
       onBehalfOf: "U_ALICE",
     },
-    recipientConsent: { recipientId: "U_BOB", status: "declined" },
   });
   const deliveries = createDeliveryStore();
   const idempotency = createIdempotencyStore();
@@ -62,7 +62,6 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
       ? { status: "refused", refusalKind: "session_busy", reason: "conversation is busy" }
       : { status: "ok", reply: "dummy scheduled result" };
   });
-  await f.crons.setRecipientConsent(f.cron.id, { recipientId: "U_BOB", status: "accepted" });
   const fireKey = `ask:${f.ask.id}:approved`;
 
   await assert.rejects(fireAskResolution(f.deps, f.ask));
@@ -85,7 +84,7 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
   assert.equal(pending[0]!.text, "dummy scheduled result");
 });
 
-test("failed cron credential resolution notifies only the owner even when its recipient declined delivery", async () => {
+test("failed cron credential resolution notifies only the owner", async () => {
   let runs = 0;
   const f = await fixture(async () => {
     runs++;
@@ -115,10 +114,10 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
     entered.resolve();
     return release.promise;
   });
-  await f.crons.setRecipientConsent(f.cron.id, { recipientId: "U_BOB", status: "accepted" });
   const asks = createMemoryMap<KeychainAsk>();
   await asks.put(f.ask.id, f.ask);
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks,

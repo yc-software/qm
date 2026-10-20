@@ -16,9 +16,8 @@ const claims: CapabilityClaims = {
 };
 async function setup(allowed = true) {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
-  await config.flushScope("org:default-org");
-  await config.setRuntimeSelectionLatest("org:default-org", active);
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection("org:default-org", active);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: active.modelId },
     {
@@ -68,7 +67,7 @@ test("runtime changes reject revoked access, bots, triggers and foreign personal
 
 test("runtime rejects unsupported effort and fast mode instead of silently dropping them", async () => {
   const { service } = await setup();
-  assert.deepEqual(await service(claims, active, { action: "set", harness: "opencode" }), {
+  assert.deepEqual(await service(claims, active, { action: "set", harness: "claude", effort: "ultracode" }), {
     ok: false,
     error: "effort_not_supported",
   });
@@ -105,7 +104,7 @@ test("runtime recovery uses only durable decisions belonging to the same run and
     entry("other", "alice", "claude-sonnet-5"),
     entry("run", "bob", "claude-opus-5"),
   ];
-  assert.equal(recoveredRuntime(entries, "run", "alice")?.modelId, "gpt-6-astra");
+  assert.equal(recoveredRuntime(entries, "run", "alice")?.choice.modelId, "gpt-6-astra");
   assert.equal(recoveredRuntime(entries, "new", "alice"), undefined);
 });
 
@@ -131,9 +130,8 @@ test("individual-account availability does not depend on organization provider k
 
 test("a saved override removed from the model picker cannot be newly selected", async () => {
   const { config, service } = await setup();
-  await config.setRuntimeSelectionLatest(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
-  await config.flushScope("org:default-org");
+  await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
+  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
   assert.deepEqual(await service(claims, active, { action: "set", model: "Astra" }), {
     ok: false,
     error: "model_not_enabled",
@@ -231,9 +229,8 @@ test("cron task handoffs still enforce actor, access, model and account policy",
     true,
   );
   assert.equal(result.ok, false);
-  await config.setRuntimeSelectionLatest(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
-  await config.flushScope("org:default-org");
+  await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
+  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
     { ok: false, error: "model_not_enabled" },
@@ -242,9 +239,8 @@ test("cron task handoffs still enforce actor, access, model and account policy",
 
 test("cron inherit cannot select a saved model removed from policy", async () => {
   const { service, config } = await setup();
-  await config.setRuntimeSelectionLatest(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
-  await config.flushScope("org:default-org");
+  await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
+  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(
       { ...claims, liveActor: false, triggered: true },

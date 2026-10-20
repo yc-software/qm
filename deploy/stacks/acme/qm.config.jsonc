@@ -10,7 +10,7 @@
   "sandbox": {
     "app": "acme-sandboxes",
   },
-  "services": ["core", "slack", "admin", "web-ui", "portal"],
+  "services": ["core", "slack", "admin", "web-ui", "portal", "egress-proxy"],
   "env": {
     "admin": {
       "ADMIN_BASE_PATH": "/admin",

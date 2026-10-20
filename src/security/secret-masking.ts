@@ -9,6 +9,7 @@ const NON_SECRET_ENV_KEYS = new Set([
   "PYTHONUNBUFFERED",
   "NO_PROXY",
   "no_proxy",
+  "GIT_HTTP_PROXY_AUTHMETHOD",
 ]);
 
 const MIN_MASKABLE_LENGTH = 8;

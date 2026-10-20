@@ -80,7 +80,7 @@ test("memory store: search ignores non-conversational entry types", async () => 
   const { lease } = await store.acquireLease(s.id);
   await store.append(lease!, {
     type: "tool_call",
-    payload: { text: "grep zanzibar" },
+    payload: { tool: "execute", callId: "c1", text: "grep zanzibar" },
     scopeLabel: scopeId("personal", "U1"),
   });
   await store.append(lease!, {
@@ -106,7 +106,7 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   const { lease } = await sessions.acquireLease(id);
   await sessions.append(lease!, {
     type: "tool_result",
-    payload: { text: "zanzibar weather outputonly" },
+    payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
     scopeLabel: scopeId("personal", "U1"),
   });
   await sessions.releaseLease(lease!);
@@ -129,4 +129,18 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   assert.equal(hits[1]!.author, "josh");
 
   assert.deepEqual(await app.searchSessions("U1", ""), [], "empty query is empty, not an error");
+});
+
+test("app.searchSessions finds sessions by title", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "search-"));
+  const { app, sessions } = buildApp(testConfig({ dataDir }));
+
+  const id = await seed(sessions, "web:U1:titled", "U1", ["hello there"]);
+  await sessions.updateTitle(id, "Quarterly roadmap review");
+  await seed(sessions, "web:U2:other2", "U2", ["hello there"]);
+
+  const byTitle = await app.searchSessions("U1", "roadmap");
+  assert.ok(byTitle.some((h) => h.sessionId === id && h.entryType === "title"));
+
+  assert.deepEqual(await app.searchSessions("U2", "roadmap"), [], "title matches respect participation");
 });

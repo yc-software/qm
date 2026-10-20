@@ -1,9 +1,9 @@
-import { isPrincipalType, PRINCIPAL_TYPES, type PrincipalType } from "../../types.ts";
+import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -84,7 +84,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
   if (Array.isArray(b.members)) {
     const members = b.members
       .filter(
-        (m): m is { principalId: string; displayName: string; type: PrincipalType; slackId?: string } =>
+        (m): m is DirectoryMember =>
           isObj(m) && typeof m.principalId === "string" && typeof m.displayName === "string" && isPrincipalType(m.type),
       )
       .map((m) => ({
@@ -92,6 +92,7 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
         displayName: m.displayName,
         type: m.type,
         ...(typeof m.slackId === "string" && m.slackId ? { slackId: m.slackId } : {}),
+        ...(typeof m.avatarUrl === "string" && m.avatarUrl.startsWith("https://") ? { avatarUrl: m.avatarUrl } : {}),
       }));
     await app.upsertDirectory(members, numOrUndef(b.membersSyncedAt));
     memberCount = members.length;
@@ -179,10 +180,7 @@ async function channelMembership(ctx: ApiCtx): Promise<void> {
 }
 
 export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
-  { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
   { method: "GET", path: "/v1/principals/:id/canonical", auth: "source", handle: canonicalPrincipal },
-  { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
   { method: "GET", path: "/v1/directory/meta", auth: "source", handle: directoryMeta },
   {
     method: "GET",
@@ -190,5 +188,10 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: channelMembership,
   },
-  { method: "GET", path: "/v1/directory/resolve", auth: "either", handle: resolveDirectory },
+  { method: "GET", path: "/v1/directory/resolve", actor: "person", auth: "either", handle: resolveDirectory },
+  ...withActor("system", [
+    { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
+    { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
+    { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
+  ]),
 ];

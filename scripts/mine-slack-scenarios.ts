@@ -65,7 +65,11 @@ async function main(): Promise<void> {
     const mined: Mined[] = [];
     for (const s of sessions) {
       const { rows: entries } = await client.query<Entry>(
-        `SELECT seq, type, payload, created_at FROM session_entries WHERE session_id = $1 ORDER BY seq`,
+        `SELECT seq, CASE WHEN kind IN ('UserMessage', 'SteeringMessage') THEN 'user'
+                      WHEN kind = 'AgentMessage' AND body ->> 'variant' IS NULL THEN 'assistant'
+                      ELSE kind END AS type,
+                body::text AS payload, (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_at
+           FROM items WHERE session_id = $1 ORDER BY seq`,
         [s.id],
       );
       const transcript: Array<{ author: string; text: string }> = [];

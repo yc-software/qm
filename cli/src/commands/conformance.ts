@@ -3,7 +3,7 @@ import { type Target, type QmConfig } from "../config.ts";
 import { deploymentLayerBundle, deploymentLayerRequest, type DeploymentLayerBundle } from "../deployment-layer.ts";
 import { CliError, errMessage, header, ok, step } from "../log.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "../tool-descriptor.ts";
-import { canonicalJson } from "../util.ts";
+import { canonicalJson } from "../canonical-json.ts";
 import { runChecks } from "./check.ts";
 import { hostingProvider } from "../backends/registry.ts";
 

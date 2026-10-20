@@ -5,6 +5,7 @@ import { subscribeDeliveries } from "./core-bridge";
 import { applySessionState } from "./session-list";
 import { refreshSessions, renderList, sessionsState } from "./sessions";
 import { appState } from "./shell-state";
+import { handleUiSignal, releaseUiCanvas, resyncUiCanvas } from "./ui-canvas";
 import type { Conversation, ConvCtx, ConvHost } from "./conv-types";
 
 const live = new Set<Conversation>();
@@ -22,6 +23,7 @@ export function createConversation(host: ConvHost, composerOptions?: ComposerOpt
 
 export function disposeConversation(conv: Conversation): void {
   live.delete(conv);
+  releaseUiCanvas(conv);
   if (main === conv) main = null;
   conv.composer.dispose();
   conv.dispose();
@@ -88,6 +90,10 @@ export function ensureDeliveryStream(): void {
       for (const conv of live) conv.onDelivery(threadRef);
     },
     (event) => {
+      if (event.state === "ui") {
+        handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);
+        return;
+      }
       if (event.state === "metadata") {
         void refreshSessions({ silent: true });
         return;
@@ -96,6 +102,7 @@ export function ensureDeliveryStream(): void {
       if (matched) {
         sessionsState.list = list;
         renderList();
+        if (event.state === "idle") void refreshSessions({ silent: true });
         const parentId = list.find((session) => session.threadRef === event.threadRef)?.parentSessionId;
         if (parentId) for (const conv of live) if (conv.state.sessionId === parentId) conv.redraw();
       } else {
@@ -104,7 +111,10 @@ export function ensureDeliveryStream(): void {
       if (event.state === "working") for (const conv of live) conv.resumeIfIdle();
       else for (const conv of live) conv.onDelivery(event.threadRef);
     },
-    () => void refreshSessions({ silent: true }),
+    () => {
+      void refreshSessions({ silent: true });
+      resyncUiCanvas([...live].map((conv) => conv.state.sessionId));
+    },
     (event) => inboxItemHandler?.(event),
     () => inboxResyncHandler?.(),
   );

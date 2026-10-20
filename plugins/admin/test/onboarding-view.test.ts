@@ -257,3 +257,130 @@ test("pending onboarding reads preserve the provider associated with a newly ent
   assert.equal(key.value, "test-only-key");
   dom.window.close();
 });
+
+test("embedding models register through the model registry without a chat lookup", async () => {
+  const { dom, controller } = fixture();
+  const calls: any[] = [];
+  controller.context.api = async (...args: any[]) => {
+    calls.push(args);
+    if (args[1] === "/api/model-registry")
+      return {
+        ok: true,
+        data: {
+          models: [
+            {
+              spec: { ...args[2], kind: "embedding", id: "text-embedding-3-small", name: "Small", provider: "openai" },
+              verifiedAt: 1,
+            },
+          ],
+        },
+      };
+    return { ok: true, data: {} };
+  };
+  const $ = (id: string) => dom.window.document.getElementById(id) as HTMLInputElement;
+  $("model-registry-kind").value = "embedding";
+  $("model-registry-kind").dispatchEvent(new dom.window.Event("change"));
+  assert.equal(($("model-registry-provider") as unknown as HTMLSelectElement).disabled, true);
+  assert.equal($("model-registry-lookup").closest(".foot")!.hasAttribute("hidden"), true);
+  $("model-registry-id").value = "text-embedding-3-small";
+  $("model-registry-id").dispatchEvent(new dom.window.Event("input"));
+  $("model-registry-name").value = "Small";
+  $("model-registry-name").dispatchEvent(new dom.window.Event("input"));
+  await controller.verify();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), [
+    "PUT",
+    "/api/model-registry/text-embedding-3-small",
+    { kind: "embedding", name: "Small", provider: "openai", verify: true },
+  ]);
+  assert.match($("st-model-registry").textContent!, /Recall runtime/);
+  await controller.loadRegistry();
+  assert.match($("model-registry-rows").textContent!, /Small \(text-embedding-3-small\)[\s\S]*Embedding/);
+  dom.window.close();
+});
+
+test("saving another provider's key can keep the current base model", async () => {
+  const { dom, controller } = fixture();
+  const calls: string[] = [];
+  controller.context.api = async (method: string, path: string) => {
+    calls.push(method + " " + path);
+    if (path.startsWith("/api/model-providers"))
+      return {
+        ok: true,
+        data: {
+          providers: UNCONFIGURED_PROVIDERS,
+          models: [...ANTHROPIC_MODELS, { id: "gpt-test", name: "GPT test", provider: "openai" }],
+        },
+      };
+    if (path.includes("?view=onboarding")) return { ok: true, data: { baseModel: "first-option" } };
+    return { ok: true, data: {} };
+  };
+  await controller.load();
+  const provider = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-provider")!;
+  provider.value = "openai";
+  provider.dispatchEvent(new dom.window.Event("change"));
+  const model = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-id")!;
+  assert.equal(model.options[model.options.length - 1]!.textContent, "Keep current base model (first-option)");
+  assert.equal(model.value, "gpt-test");
+  model.value = "";
+  model.dispatchEvent(new dom.window.Event("change"));
+  controller.apiKey = "sk-test";
+  calls.length = 0;
+  await controller.connect();
+  assert.ok(calls.includes("PUT /api/model-providers/openai"));
+  assert.ok(!calls.some((call) => call.endsWith("/base-model")));
+  assert.match(controller.providerMessage, /base model is unchanged/);
+  dom.window.close();
+});
+
+test("a rejected base model change shows the server's reason", async () => {
+  const { dom, controller } = fixture();
+  controller.context.api = async (method: string, path: string) => {
+    if (method === "PUT" && path.endsWith("/base-model"))
+      return { ok: false, data: { message: "model_not_supported" } };
+    if (path.startsWith("/api/model-providers"))
+      return { ok: true, data: { providers: UNCONFIGURED_PROVIDERS, models: ANTHROPIC_MODELS } };
+    return { ok: true, data: {} };
+  };
+  await controller.load();
+  controller.apiKey = "sk-test";
+  controller.model = ANTHROPIC_MODELS[0]!.id;
+  await controller.connect();
+  assert.equal(controller.providerMessage, "Key saved, but the base model could not be changed: model_not_supported");
+  assert.equal(controller.providerTone, "err");
+  dom.window.close();
+});
+
+test("a pending onboarding load keeps an explicit keep-current-base-model choice", async () => {
+  const { dom, controller } = fixture();
+  let complete: (response: unknown) => void = () => {};
+  controller.baseModel = "first-option";
+  controller.models = {
+    anthropic: ANTHROPIC_MODELS,
+    openai: [{ id: "gpt-test", name: "GPT test", provider: "openai" }],
+  };
+  controller.context.api = async (_method: string, path: string) => {
+    if (path === "/api/model-providers?catalog=cached")
+      return new Promise((resolve) => {
+        complete = resolve;
+      });
+    if (path.includes("?view=onboarding")) return { ok: true, data: { baseModel: "first-option" } };
+    return { ok: true, data: {} };
+  };
+  const pending = controller.load();
+  const provider = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-provider")!;
+  provider.value = "openai";
+  provider.dispatchEvent(new dom.window.Event("change"));
+  const model = dom.window.document.querySelector<HTMLSelectElement>("#onboarding-model-id")!;
+  model.value = "";
+  model.dispatchEvent(new dom.window.Event("change"));
+  complete({
+    ok: true,
+    data: {
+      providers: UNCONFIGURED_PROVIDERS,
+      models: [...ANTHROPIC_MODELS, { id: "gpt-test", name: "GPT test", provider: "openai" }],
+    },
+  });
+  await pending;
+  assert.equal(controller.model, "");
+  dom.window.close();
+});

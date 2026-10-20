@@ -9,7 +9,13 @@ import {
   type SurfaceHeaderClient,
   shouldProcessMessage,
 } from "./lib.ts";
-import { parseEventId, parseLifecycleEvent, parseMessageEvent, parseReactionEvent } from "./payloads.ts";
+import {
+  isDirectChannelType,
+  parseEventId,
+  parseLifecycleEvent,
+  parseMessageEvent,
+  parseReactionEvent,
+} from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -64,7 +70,7 @@ export function registerSlackEvents(
         threadTs?: string;
         text?: string;
         senderSlackId?: string;
-        isDirectMessage?: boolean;
+        isDirectMessage: boolean;
       },
     ) => void;
   },
@@ -201,6 +207,7 @@ export function registerSlackEvents(
         deps.inboxMessage?.(client, {
           channel: m.channel,
           ts: m.ts,
+          isDirectMessage: isDirectChannelType(m.channel_type),
           ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
           ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
           ...(m.user ? { senderSlackId: m.user } : {}),
@@ -357,7 +364,10 @@ export function registerSlackEvents(
     const e = parseLifecycleEvent(event);
     if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;
     if (e.user === ids.botUserId) {
-      if (e.channel && deps.backfillHistory) await deps.backfillHistory(client, e.channel).catch(() => {});
+      if (e.channel && deps.backfillHistory)
+        await deps
+          .backfillHistory(client, e.channel)
+          .catch(swallowAs("slack: backfill history on bot join", undefined));
       if (allowActor) {
         await forceDirectorySync(client);
         return;

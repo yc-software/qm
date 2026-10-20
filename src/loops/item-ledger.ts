@@ -1,5 +1,5 @@
 import type { LedgerEvent, LedgerEventOp } from "./ledger-events.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { wireMentionKeys } from "../slack/mrkdwn.ts";
 import type {
   LoopItem,
@@ -14,6 +14,7 @@ import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts"
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 interface EnqueueItemInput {
   loopId: string;
@@ -77,7 +78,7 @@ export interface LoopItemLedger {
   annotate(
     id: string,
     patch: LoopSourcePayload,
-    opts?: { summary?: string; expectedSourceAt?: number },
+    opts?: { summary?: string; expectedSourceAt?: number; expectedSourcePayload?: LoopSourcePayload },
   ): Promise<LoopItem | null>;
   appendThread(id: string, messages: Array<Omit<LoopThreadMessage, "id" | "at">>): Promise<LoopItem | null>;
   setTriage(id: string, patch: TriagePatch, by: "agent" | "human"): Promise<LoopItem | null>;
@@ -89,7 +90,7 @@ export interface LoopItemLedger {
   moveSource(from: string, to: string, source: string): Promise<void>;
   summaries(
     loopIds: string[],
-    options?: { includeEmailClassification?: boolean },
+    options?: { includeInboxMetadata?: boolean },
   ): Promise<Array<Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload">>>;
   queued(loopId: string, limit?: number): Promise<LoopItem[]>;
   claim(id: string, claimedAt?: number, expectedLoopId?: string): Promise<LoopItem | null>;
@@ -302,7 +303,7 @@ export function createLoopItemLedger(
       return { item: stored, created: stored.createdAt === candidate.createdAt };
     },
     async summaries(loopIds, options) {
-      if (!options?.includeEmailClassification)
+      if (!options?.includeInboxMetadata)
         return backing.select({
           where: { field: "loopId", anyOfFold: loopIds },
           omit: ["proposal", "agentDrafts", "thread", "sourcePayload"],
@@ -310,13 +311,22 @@ export function createLoopItemLedger(
       const items = await backing.select({
         where: { field: "loopId", anyOfFold: loopIds },
         omit: ["proposal", "agentDrafts", "thread"],
-        pickNested: { sourcePayload: ["source", "automated"] },
+        pickNested: { sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"] },
       });
       return items.map(({ sourcePayload, ...item }) => {
         const source = item.source ?? (typeof sourcePayload?.source === "string" ? sourcePayload.source : undefined);
         return {
           ...item,
           ...(source !== undefined ? { source } : {}),
+          ...(source === "slack"
+            ? {
+                inboxPreview: {
+                  ...item.inboxPreview,
+                  participants: sourcePayload?.participants,
+                  slackAvatarsRefreshAt: sourcePayload?.slackAvatarsRefreshAt,
+                },
+              }
+            : {}),
           ...(source === "gmail"
             ? { inboxPreview: { ...item.inboxPreview, automated: sourcePayload?.automated === true } }
             : {}),
@@ -410,7 +420,11 @@ export function createLoopItemLedger(
       const after = await update(id, (item) => {
         applied = true;
         const now = Date.now();
-        if (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts?.expectedSourceAt) {
+        if (
+          (opts?.expectedSourceAt !== undefined && item.sourceAt !== opts.expectedSourceAt) ||
+          (opts?.expectedSourcePayload !== undefined &&
+            !isDeepStrictEqual(item.sourcePayload, opts.expectedSourcePayload))
+        ) {
           applied = false;
           return item;
         }

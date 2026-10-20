@@ -1,16 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createPiHarness, endsAtRecordedToolResult } from "../src/harness/pi-harness.ts";
+import { continuableContext, createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
-import { resumeNote } from "../src/core/turn-resume.ts";
-import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
+import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;
-  tape: NewTapeRecord[];
 };
 
 type RequestBody = { messages: Array<{ role: string; content: unknown }> };
@@ -39,7 +37,7 @@ function turnInput(sink: Sink, overrides: Partial<HarnessTurnInput>): HarnessTur
   return {
     session: { id: "resume" } as HarnessTurnInput["session"],
     runId: "run-1",
-    input: resumeNote(),
+    input: "list the files",
     systemPrompt: "BASE",
     history: [],
     tools: {} as HarnessTurnInput["tools"],
@@ -49,9 +47,6 @@ function turnInput(sink: Sink, overrides: Partial<HarnessTurnInput>): HarnessTur
       const appended = { ...e, seq: seq++, createdAt: Date.now() };
       sink.entries.push({ seq: appended.seq, type: e.type, payload: e.payload });
       return appended as unknown as SessionEntry;
-    },
-    tape: async (rec: NewTapeRecord) => {
-      sink.tape.push(rec);
     },
     recordModelCall: () => {},
     ...overrides,
@@ -84,7 +79,7 @@ function sse(text: string): Response {
 
 async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurnInput> = {}) {
   const harness = createPiHarness({ apiKey: "sk-test" });
-  const sink: Sink = { entries: [], tape: [] };
+  const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
   const llmTurnSeqs: Array<number | null> = [];
   const realFetch = globalThis.fetch;
@@ -108,12 +103,21 @@ async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurn
   }
 }
 
-function promptedNote(requests: RequestBody[]): boolean {
-  return JSON.stringify(requests[0]!.messages).includes("(system note:");
+function userTexts(requests: RequestBody[]): string[] {
+  type Block = { type: string; text?: string };
+  return requests[0]!.messages
+    .filter((m) => m.role === "user")
+    .flatMap((m): Block[] =>
+      typeof m.content === "string" ? [{ type: "text", text: m.content }] : (m.content as Block[]),
+    )
+    .flatMap((b) => (b.type === "text" && b.text ? [b.text] : []));
 }
 
 test("a genuine resume whose context ends at a recorded tool result continues the assistant turn silently", async () => {
-  const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], { continueTurn: true });
+  const { result, sink, requests, llmTurnSeqs } = await runResume([ASK, CALL, RESULT], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
   assert.equal(result.reply, "done: two files");
   assert.deepEqual(llmTurnSeqs, [ASK.seq], "model requests are attributed to the run's original user entry");
   assert.equal(requests.length, 1);
@@ -123,16 +127,15 @@ test("a genuine resume whose context ends at a recorded tool result continues th
     (last.content as Array<{ type: string }>).some((block) => block.type === "tool_result"),
     "the model resumes right after the recorded tool result",
   );
-  assert.equal(promptedNote(requests), false, "no resume note reaches the model");
+  assert.deepEqual(
+    userTexts(requests),
+    ["── Wednesday, December 31, 1969 ──\nlist the files"],
+    "the request reaches the model once and nothing else is prompted",
+  );
   assert.deepEqual(
     sink.entries.map((e) => e.type),
     ["assistant"],
     "no user entry is appended for the resumed attempt",
-  );
-  assert.deepEqual(
-    sink.tape.filter((rec) => rec.kind === "message").map((rec) => (rec.payload as { role: string }).role),
-    ["assistant"],
-    "no trigger user row is taped",
   );
 });
 
@@ -140,6 +143,7 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
   const queries: string[] = [];
   const { result, sink, requests } = await runResume([ASK, SAFE_CALL], {
     continueTurn: true,
+    resumeUserSeq: ASK.seq,
     resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
     tools: {
       async history(q: string) {
@@ -155,40 +159,72 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
     ["tool_result", "assistant"],
     "no note entry follows the re-run",
   );
-  assert.deepEqual(
-    sink.tape.filter((rec) => rec.kind === "message").map((rec) => (rec.payload as { role: string }).role),
-    ["toolResult", "assistant"],
-  );
   const flattened = JSON.stringify(requests[0]!.messages);
   assert.ok(flattened.includes("shared/q2.md"), "the model sees the re-run result");
-  assert.equal(promptedNote(requests), false);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.ok(!flattened.includes("[interrupted"));
 });
 
-test("a resume whose last tool call never recorded a result keeps the note path", async () => {
-  const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true });
-  assert.equal(promptedNote(requests), true, "an unknown outcome needs the note, not a silent continue");
-  assert.ok(JSON.stringify(requests[0]!.messages).includes(INTERRUPTED_TOOL_RESULT));
-  assert.equal(sink.entries[0]?.type, "user", "the note is recorded as the attempt's user entry");
+test("a resume whose last tool call never recorded a result continues silently after the interrupted result", async () => {
+  const { sink, requests } = await runResume([ASK, CALL], { continueTurn: true, resumeUserSeq: ASK.seq });
+  assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
+});
+
+test("a resume that died before any work continues from the recorded request without re-sending it", async () => {
+  const { sink, requests } = await runResume([ASK], { continueTurn: true, resumeUserSeq: ASK.seq });
+  assert.equal(requests[0]!.messages.length, 1);
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
+});
+
+test("a resume that died before delivering its reply drops that reply and continues without a prompt", async () => {
+  const partialReply = entry(
+    "text",
+    {
+      text: "Here are",
+      step: {
+        id: "s1",
+        index: 0,
+        stopReason: "stop",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-test",
+      },
+    },
+    4,
+  );
+  const { sink, requests } = await runResume([ASK, CALL, RESULT, partialReply], {
+    continueTurn: true,
+    resumeUserSeq: ASK.seq,
+  });
+  assert.equal(requests[0]!.messages.at(-1)!.role, "user");
+  assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
+  assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
+  assert.deepEqual(
+    sink.entries.map((e) => e.type),
+    ["assistant"],
+  );
 });
 
 test("without the resume signal a context ending at a tool result is prompted normally", async () => {
   const { sink, requests } = await runResume([ASK, CALL, RESULT], { input: "follow-up question" });
   assert.equal(JSON.stringify(requests[0]!.messages).includes("follow-up question"), true);
   assert.equal(sink.entries[0]?.type, "user");
-  assert.equal(
-    sink.tape.filter((rec) => rec.kind === "message" && (rec.payload as { role: string }).role === "user").length,
-    1,
-    "the trigger user row is taped as usual",
-  );
 });
 
-test("endsAtRecordedToolResult accepts only a real trailing tool result", () => {
-  const result = { role: "toolResult", content: [{ type: "text", text: "ok" }] };
-  const healed = { role: "toolResult", content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }] };
-  assert.equal(endsAtRecordedToolResult([{ role: "user" }, result]), true);
-  assert.equal(endsAtRecordedToolResult([{ role: "user" }, healed]), false);
-  assert.equal(endsAtRecordedToolResult([{ role: "user" }, { role: "assistant" }]), false);
-  assert.equal(endsAtRecordedToolResult([{ role: "user" }]), false);
-  assert.equal(endsAtRecordedToolResult([]), false);
+test("continuableContext trims a trailing assistant and needs a user or tool result to continue from", () => {
+  const result = { role: "toolResult" };
+  const reply = { role: "assistant" };
+  assert.deepEqual(continuableContext([{ role: "user" }, result]), [{ role: "user" }, result]);
+  assert.deepEqual(continuableContext([{ role: "user" }, reply]), [{ role: "user" }]);
+  assert.equal(continuableContext([reply]), null);
+  assert.equal(continuableContext([]), null);
 });

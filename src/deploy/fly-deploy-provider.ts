@@ -8,6 +8,16 @@ import { sleep } from "../util/async.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
+import {
+  appBoot,
+  appGone,
+  appLogs,
+  appReporter,
+  recentAppChecks,
+  waitAppReady,
+  type AppErrorSink,
+  type Exec,
+} from "./shared-deploy-provider.ts";
 
 const MACHINES_API_BASE_URL = "https://api.machines.dev/v1";
 const DEFAULT_REGION = "lhr";
@@ -21,7 +31,6 @@ const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
 const API_TIMEOUT_MS = 30_000;
-const APP_ALREADY_TAKEN = /already\s+(exists|been\s+taken)|name\s+is\s+taken/i;
 
 interface FlyApp {
   name: string;
@@ -92,6 +101,7 @@ interface FlyMachinesApi {
   getMachine(appName: string, machineId: string): Promise<FlyMachine | null>;
   setCordon(appName: string, machineId: string, cordoned: boolean): Promise<void>;
   destroyMachine(appName: string, machineId: string): Promise<void>;
+  exec(appName: string, machineId: string, script: string, timeoutSec: number): ReturnType<Exec>;
 }
 
 interface FlyApiResponse {
@@ -102,7 +112,12 @@ interface FlyApiResponse {
 
 function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch }): FlyMachinesApi {
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const request = async (method: string, path: string, body?: unknown): Promise<FlyApiResponse> => {
+  const request = async (
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = API_TIMEOUT_MS,
+  ): Promise<FlyApiResponse> => {
     const res = await fetchImpl(`${MACHINES_API_BASE_URL}${path}`, {
       method,
       headers: {
@@ -110,7 +125,7 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return { ok: res.ok, status: res.status, text: await res.text() };
   };
@@ -192,10 +207,9 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       }
       const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug, network: appName });
       if (r.ok) return;
-      if (r.status !== 409 && r.status !== 422 && !APP_ALREADY_TAKEN.test(r.text)) {
-        throw failure(`create app ${appName}`, r);
-      }
-      const found = await getApp(appName);
+      const found = await getApp(appName).catch((e: unknown) => {
+        throw new Error(failure(`create app ${appName}`, r).message, { cause: e });
+      });
       if (!found) throw failure(`create app ${appName}`, r);
       assertOwned(appName, orgSlug, found);
     },
@@ -283,6 +297,18 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       if (r.ok || r.status === 404) return;
       throw failure(`destroy machine ${machineId}`, r);
     },
+    async exec(appName, machineId, script, timeoutSec) {
+      const what = `exec in machine ${machineId}`;
+      const r = await request(
+        "POST",
+        `${machine(appName, machineId)}/exec`,
+        { cmd: `sh -c ${shq(script)}`, timeout: timeoutSec },
+        (timeoutSec + 10) * 1000,
+      );
+      if (!r.ok) throw failure(what, r);
+      const out = parse<{ exit_code?: number; stdout?: string; stderr?: string }>(what, r);
+      return { code: out.exit_code ?? 0, stdout: out.stdout ?? "", stderr: out.stderr ?? "" };
+    },
   };
 }
 
@@ -309,6 +335,7 @@ export interface FlyDeployProviderOptions {
   appReadyTimeoutMs?: number;
   pollIntervalMs?: number;
   fetchImpl?: typeof fetch;
+  onError?: AppErrorSink;
 }
 
 export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployProvider {
@@ -321,6 +348,11 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   const appReadyTimeoutMs = opts.appReadyTimeoutMs ?? APP_READY_TIMEOUT_MS;
   const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
   const seconds = (ms: number): string => `${Math.round(ms / 1000)}s`;
+  const execIn =
+    (appName: string, machineId: string): Exec =>
+    (script, timeoutSec) =>
+      api.exec(appName, machineId, script, timeoutSec);
+  const checked = recentAppChecks();
 
   function ensureConfigured(): void {
     if (
@@ -376,12 +408,6 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
   async function bundleBase64(version: DeploymentVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
-    const sourceBytes = tree.reduce((total, file) => total + file.data.byteLength, 0);
-    if (sourceBytes > MAX_BUNDLE_SOURCE_BYTES) {
-      throw new Error(
-        `the app source is too large for the Fly deploy provider: ${sourceBytes} bytes, maximum ${MAX_BUNDLE_SOURCE_BYTES} bytes`,
-      );
-    }
     const encoded = gzipSync(await makeTar(tree)).toString("base64");
     if (encoded.length > MAX_BUNDLE_BASE64_BYTES) {
       throw new Error(
@@ -418,7 +444,11 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       exec: [
         "/bin/sh",
         "-lc",
-        `mkdir -p ${APP_DIR} && tar -xzf ${BUNDLE_GUEST_PATH} -C ${APP_DIR} && cd ${APP_DIR} && exec sh -lc ${shq(version.entrypoint)}`,
+        appBoot(
+          `cd ${APP_DIR}; ${version.entrypoint}`,
+          APP_PORT,
+          `mkdir -p ${APP_DIR} && tar -xzf ${BUNDLE_GUEST_PATH} -C ${APP_DIR}`,
+        ),
       ],
     },
   });
@@ -442,7 +472,17 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
     );
   }
 
-  async function waitAppReady(appName: string, machineId: string): Promise<void> {
+  async function waitServing(
+    d: Deployment,
+    env: Record<string, string> | undefined,
+    appName: string,
+    machineId: string,
+  ): Promise<void> {
+    await waitAppReady(execIn(appName, machineId), {
+      appPort: APP_PORT,
+      windowSec: Math.ceil(appReadyTimeoutMs / 1000),
+      report: appReporter(opts.onError, d, env),
+    });
     const deadline = Date.now() + appReadyTimeoutMs;
     let machine: FlyMachine | null = null;
     while (Date.now() < deadline) {
@@ -461,12 +501,37 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   }
 
   return {
-    profile: { managedScaleToZero: !!opts.sharedAppName, ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}) },
+    profile: {
+      managedScaleToZero: !!opts.sharedAppName,
+      maxAppBytes: MAX_BUNDLE_SOURCE_BYTES,
+      ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}),
+    },
 
-    async resolveEndpoint(d) {
+    async resolveEndpoint(d, version) {
+      if (!checked.has(d.id)) {
+        ensureConfigured();
+        const machines = await deploymentMachines(d).catch(
+          swallowAs<FlyMachine[]>("fly-deploy: list app machines", []),
+        );
+        const appName = appNameFor(d);
+        const report = appReporter(opts.onError, d, version.env);
+        if (
+          machines.length === 1 &&
+          machines[0]!.state === "started" &&
+          (await appGone(execIn(appName, machines[0]!.id), { appPort: APP_PORT, report }))
+        )
+          return null;
+        checked.set(d.id, true);
+      }
       if (!opts.privateTransport) return d.endpoint;
-      ensureConfigured();
       return endpointFor(d, await portFor(d));
+    },
+
+    async logs(d, logOpts): Promise<string | null> {
+      ensureConfigured();
+      const machines = await deploymentMachines(d);
+      if (machines.length !== 1 || machines[0]!.state !== "started") return null;
+      return appLogs(execIn(appNameFor(d), machines[0]!.id), logOpts.tailLines);
     },
 
     async setAlwaysOn(d, alwaysOn): Promise<void> {
@@ -487,13 +552,13 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       try {
         await api.updateMachine(appName, machine.id, config);
         await waitStarted(appName, machine.id);
-        await waitAppReady(appName, machine.id);
+        await waitServing(d, config.env, appName, machine.id);
         await api.setCordon(appName, machine.id, false);
         if (opts.configStore) await opts.configStore.put(d.id, config);
       } catch (error) {
         await api.updateMachine(appName, machine.id, accepted);
         await waitStarted(appName, machine.id);
-        await waitAppReady(appName, machine.id);
+        await waitServing(d, accepted.env, appName, machine.id);
         if (opts.configStore) await opts.configStore.put(d.id, accepted);
         throw error;
       }
@@ -535,14 +600,14 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
           try {
             await api.updateMachine(appName, previous.id, config);
             await waitStarted(appName, previous.id);
-            await waitAppReady(appName, previous.id);
+            await waitServing(d, config.env, appName, previous.id);
             await api.setCordon(appName, previous.id, false);
             await opts.configStore!.put(d.id, config);
           } catch (error) {
             if (accepted) {
               await api.updateMachine(appName, previous.id, accepted);
               await waitStarted(appName, previous.id);
-              await waitAppReady(appName, previous.id);
+              await waitServing(d, accepted.env, appName, previous.id);
               await api.setCordon(appName, previous.id, false);
               await opts.configStore!.put(d.id, accepted);
             }
@@ -552,7 +617,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
           const created = await api.createMachine(appName, { region, config, skip_service_registration: true });
           try {
             await waitStarted(appName, created.id);
-            await waitAppReady(appName, created.id);
+            await waitServing(d, config.env, appName, created.id);
             await api.setCordon(appName, created.id, false);
             await opts.configStore!.put(d.id, config);
           } catch (error) {
@@ -573,7 +638,7 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       });
       try {
         await waitStarted(appName, machine.id);
-        await waitAppReady(appName, machine.id);
+        await waitServing(d, version.env, appName, machine.id);
       } catch (error) {
         await api
           .destroyMachine(appName, machine.id)

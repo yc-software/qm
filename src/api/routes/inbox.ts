@@ -69,7 +69,7 @@ async function inbox(ctx: ApiCtx): Promise<void> {
       .filter((item) => !isResolved(item) && (item.source ?? item.sourcePayload?.source) === "gmail");
     await ctx.deps.inboxSourceRefresh(acting.actorId, mail);
   }
-  const summaries = (await deps.items.summaries(selectedIds, { includeEmailClassification: true })).filter(
+  const summaries = (await deps.items.summaries(selectedIds, { includeInboxMetadata: true })).filter(
     (item) => selectedIds.includes(item.loopId) && item.inboxPreview?.sentChat !== true,
   );
   const itemId = ctx.url.searchParams.get("itemId");
@@ -141,6 +141,29 @@ async function inbox(ctx: ApiCtx): Promise<void> {
   }
   const page = feed.slice(0, 40);
   const last = page.at(-1);
+  if (ctx.method === "GET" && ctx.deps.inboxSourceRefresh) {
+    const slack = (
+      await Promise.all(
+        page
+          .filter(
+            (item) =>
+              item.source === "slack" &&
+              loopsById.get(item.loopId)?.owner === acting.actorId &&
+              !(
+                typeof item.inboxPreview?.slackAvatarsRefreshAt === "number" &&
+                Date.now() < item.inboxPreview.slackAvatarsRefreshAt
+              ),
+          )
+          .map((item) => deps.items.get(item.id)),
+      )
+    ).filter((item) => item !== null);
+    await ctx.deps.inboxSourceRefresh(acting.actorId, slack, "avatars");
+    for (const refreshed of await Promise.all(slack.map((item) => deps.items.get(item.id)))) {
+      const summary = page.find((entry) => entry.id === refreshed?.id);
+      if (summary && refreshed && refreshed.sourceAt === summary.sourceAt)
+        summary.inboxPreview = { ...summary.inboxPreview, participants: refreshed.sourcePayload?.participants };
+    }
+  }
   sendJson(ctx.res, 200, {
     selected: await Promise.all(
       selected.map(async (loop) => ({
@@ -222,8 +245,8 @@ async function viewers(ctx: ApiCtx): Promise<void> {
 }
 
 export const inboxRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/inbox", auth: "source", handle: inbox },
-  { method: "POST", path: "/v1/inbox/viewers", auth: "source", handle: viewers },
-  { method: "GET", path: "/v1/inbox/access", auth: "source", handle: access },
-  { method: "PUT", path: "/v1/inbox", auth: "source", handle: inbox },
+  { method: "GET", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
+  { method: "POST", path: "/v1/inbox/viewers", actor: "system", auth: "source", handle: viewers },
+  { method: "GET", path: "/v1/inbox/access", actor: "query.principalId", auth: "source", handle: access },
+  { method: "PUT", path: "/v1/inbox", actor: "query.principalId", auth: "source", handle: inbox },
 ];

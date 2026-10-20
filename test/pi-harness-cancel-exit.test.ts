@@ -1,16 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
-import { createGoalRecord, latestGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord, type GoalRecord } from "../src/harness/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry, NewTapeRecord } from "../src/sessions/session-store.ts";
+import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function cancelTurn(
   sessionId: string,
   cancel: AbortSignal,
-  sink: { entries: Array<{ seq: number; type: string; payload: unknown }>; tape: NewTapeRecord[] },
+  sink: { entries: Array<{ seq: number; type: string; payload: unknown }> },
   overrides: Partial<HarnessTurnInput> = {},
 ): HarnessTurnInput {
   let seq = 0;
@@ -28,9 +28,6 @@ function cancelTurn(
       sink.entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
       return appended as unknown as SessionEntry;
     },
-    tape: async (rec: NewTapeRecord) => {
-      sink.tape.push(rec);
-    },
     recordModelCall: () => {},
     ...overrides,
   };
@@ -42,10 +39,10 @@ function abortShapedError(): Error {
   return error;
 }
 
-test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe, checkpointed, attested", async () => {
+test("a mid-prompt cancel takes the stopped exit and persists the stopped partial", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
   globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
     new Promise((_resolve, reject) => {
@@ -61,24 +58,40 @@ test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe,
     const result = await harness.turns.runTurn(cancelTurn("cancel-exit-stop", controller.signal, sink));
 
     assert.equal(result.stopped, true, "the cancelled turn reports itself stopped");
-    assert.equal(result.stoppedTapeComplete, true, "…and attests its tape is complete");
     assert.equal(result.reply, "(stopped)");
+    assert.equal(
+      sink.entries.filter((entry) => entry.type === "assistant").length,
+      0,
+      "no placeholder assistant reply is recorded when the model wrote nothing",
+    );
     const finalEntry = sink.entries.at(-1);
-    assert.equal(finalEntry?.type, "assistant");
-    assert.equal((finalEntry?.payload as { text?: unknown } | undefined)?.text, "(stopped)");
-    assert.equal((finalEntry?.payload as { stopped?: boolean } | undefined)?.stopped, true);
-    const cleanPartial = sink.tape.find(
-      (rec) =>
-        rec.kind === "message" &&
-        (rec.payload as { role?: string; stopReason?: string }).role === "assistant" &&
-        (rec.payload as { stopReason?: string }).stopReason === "stop",
-    );
-    assert.ok(cleanPartial, "the partial is re-taped as a replay-visible message");
-    const checkpoint = sink.tape.find(
-      (rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd === true,
-    );
-    assert.ok(checkpoint, "the stopped sub-turn is checkpointed");
-    assert.equal(checkpoint!.entrySeq, finalEntry!.seq, "…at the final assistant entry");
+    assert.equal(finalEntry?.type, "system");
+    assert.deepEqual(finalEntry?.payload, { kind: "turn_stopped", reason: "because the run was cancelled" });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a cancel that lands before the model request starts still stops the turn", { timeout: 10_000 }, async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  controller.abort();
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(abortShapedError());
+        return;
+      }
+      signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
+    })) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(cancelTurn("cancel-before-request", controller.signal, sink));
+
+    assert.equal(result.stopped, true);
+    assert.equal(result.reply, "(stopped)");
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -87,8 +100,7 @@ test("a mid-prompt cancel takes the stopped exit: partial persisted replay-safe,
 test("a genuine provider error racing a cancel still fails the turn instead of completing it as stopped", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  controller.abort();
-  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
     new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "boom" } }), {
@@ -97,23 +109,21 @@ test("a genuine provider error racing a cancel still fails the turn instead of c
     })) as typeof globalThis.fetch;
   try {
     await assert.rejects(
-      harness.turns.runTurn(cancelTurn("cancel-exit-error", controller.signal, sink)),
+      harness.turns.runTurn(
+        cancelTurn("cancel-exit-error", controller.signal, sink, {
+          recordLlmRequest: async () => controller.abort(),
+        }),
+      ),
       /boom|400|invalid_request_error/,
       "the unrelated failure surfaces as a turn error, not a stopped completion",
     );
+    assert.equal(controller.signal.aborted, true, "the cancel landed before the turn chose its exit");
     assert.equal(
       sink.entries.some(
         (entry) => entry.type === "assistant" && (entry.payload as { text?: unknown }).text === "(stopped)",
       ),
       false,
       "no stopped partial is fabricated for a turn that genuinely failed",
-    );
-    assert.equal(
-      sink.tape.some(
-        (rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd === true,
-      ),
-      false,
-      "no completeness checkpoint is stamped over the failure",
     );
   } finally {
     globalThis.fetch = realFetch;
@@ -150,7 +160,7 @@ function textReplyEvents(text: string): Array<Record<string, unknown>> {
 test("a cancel landing after the turn completed takes the normal exit, not the stopped hijack", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => sse(textReplyEvents("the finished answer"))) as typeof globalThis.fetch;
   try {
@@ -173,67 +183,10 @@ test("a cancel landing after the turn completed takes the normal exit, not the s
   }
 });
 
-test("a second '(stopped)' in one session is still re-taped for replay", async () => {
+test("Pi preserves the session's active goal when the worker cancels", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) =>
-    new Promise((_resolve, reject) => {
-      const signal = init?.signal;
-      if (signal?.aborted) {
-        reject(abortShapedError());
-        return;
-      }
-      signal?.addEventListener("abort", () => reject(abortShapedError()), { once: true });
-    })) as typeof globalThis.fetch;
-  try {
-    const turn = cancelTurn("cancel-second-stopped", controller.signal, sink);
-    turn.history = [
-      {
-        sessionId: "cancel-second-stopped",
-        seq: 0,
-        parentSeq: null,
-        type: "user",
-        payload: { text: "earlier ask" },
-        scopeLabel: turn.scopeLabel,
-        createdAt: 1,
-      },
-      {
-        sessionId: "cancel-second-stopped",
-        seq: 1,
-        parentSeq: 0,
-        type: "assistant",
-        payload: { text: "(stopped)" },
-        scopeLabel: turn.scopeLabel,
-        createdAt: 2,
-      },
-    ];
-    setTimeout(() => controller.abort(), 100);
-    const result = await harness.turns.runTurn(turn);
-    assert.equal(result.stopped, true);
-    assert.equal(result.stoppedTapeComplete, true);
-    const retaped = sink.tape.filter(
-      (rec) =>
-        rec.kind === "message" &&
-        (rec.payload as { role?: string; stopReason?: string }).role === "assistant" &&
-        (rec.payload as { stopReason?: string }).stopReason === "stop" &&
-        JSON.stringify((rec.payload as { content?: unknown }).content).includes("(stopped)"),
-    );
-    assert.equal(
-      retaped.length,
-      1,
-      "the prior turn's identical text must not suppress this turn's replay-visible re-tape",
-    );
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
-
-test("Pi rehydrates a durable receipt and preserves its active goal when the worker cancels", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
-  const controller = new AbortController();
-  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
     controller.abort();
@@ -246,21 +199,22 @@ test("Pi rehydrates a durable receipt and preserves its active goal when the wor
   });
   goal.tokensUsed = 1234;
   try {
-    const turn = cancelTurn("cancel-rehydrated-goal", controller.signal, sink);
-    turn.history = [
-      {
-        type: "tool_result",
-        payload: { tool: "goal", action: "create", goal },
-        seq: 0,
-        sessionId: turn.session.id,
-        parentSeq: null,
-        createdAt: 1,
-        scopeLabel: turn.scopeLabel,
+    const saved: GoalRecord[] = [];
+    const turn = cancelTurn("cancel-rehydrated-goal", controller.signal, sink, {
+      goal: structuredClone(goal),
+      saveGoal: async (record) => {
+        saved.push(structuredClone(record));
       },
-    ];
+    });
     const result = await harness.turns.runTurn(turn);
     assert.equal(result.stopped, true);
-    const { activeMs, ...persisted } = latestGoalRecord(sink.entries)!;
+    assert.ok(
+      !sink.entries.some(
+        (entry) => entry.type === "system" && (entry.payload as { kind?: unknown } | null)?.kind !== "turn_stopped",
+      ),
+      "no goal snapshot entries",
+    );
+    const { activeMs, ...persisted } = saved.at(-1)!;
     assert.deepEqual(persisted, goal);
     assert.ok(activeMs! >= 0 && activeMs! < 60_000, "the cancelled turn banks only its own running time");
   } finally {
@@ -289,7 +243,7 @@ for (const shutdown of [false, true]) {
     const harness = createPiHarness({ apiKey: "sk-test" });
     const cancel = new AbortController();
     const shutdownSignal = new AbortController();
-    const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }>, tape: [] as NewTapeRecord[] };
+    const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
     const realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
@@ -318,34 +272,25 @@ for (const shutdown of [false, true]) {
       });
       const result = await harness.turns.runTurn(turn);
       assert.equal(result.stopped, true);
-      assert.equal(result.stoppedTapeComplete, true);
       const entries = sink.entries as unknown as SessionEntry[];
       const types = entries.map((entry) => entry.type);
       assert.deepEqual(types.slice(0, 3), ["user", "tool_call", "tool_result"]);
-      const stoppedEntries = entries.filter((entry) => entry.type === "assistant");
-      const stoppedTape = sink.tape.filter(
-        (rec) =>
-          rec.kind === "message" &&
-          (rec.payload as { role?: string; stopReason?: string }).role === "assistant" &&
-          (rec.payload as { stopReason?: string }).stopReason === "stop",
+      const stoppedEntries = entries.filter(
+        (entry) => entry.type === "assistant" || (entry.payload as { kind?: unknown } | null)?.kind === "turn_stopped",
       );
-      const checkpoints = sink.tape.filter(
-        (rec) => rec.kind === "annotation" && (rec.payload as { subturnEnd?: unknown }).subturnEnd === true,
+      const partial = findTrailingPartialTurn(
+        entries.map((entry) => (entry.type === "user" ? { ...entry, payload: { runId: "run-1" } } : entry)),
+        "run-1",
       );
-      const partial = findTrailingPartialTurn(entries, "do the thing");
       if (shutdown) {
         assert.deepEqual(stoppedEntries, [], "shutdown must not close the turn with a stop marker");
-        assert.deepEqual(stoppedTape, [], "…nor re-tape one for replay");
-        assert.deepEqual(checkpoints, []);
         assert.equal((entries[2]!.payload as { interrupted?: unknown }).interrupted, true);
         assert.ok(partial, "the resumed attempt finds the open turn");
         assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
         assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
       } else {
         assert.equal(stoppedEntries.length, 1);
-        assert.equal((stoppedEntries[0]!.payload as { text?: unknown }).text, "(stopped)");
-        assert.equal(stoppedTape.length, 1);
-        assert.equal(checkpoints.length, 1);
+        assert.equal(stoppedEntries[0]!.type, "system");
         assert.equal(partial, null, "a user-facing stop closes the turn");
       }
     } finally {
@@ -353,3 +298,61 @@ for (const shutdown of [false, true]) {
     }
   });
 }
+
+function thinkingThenStall(signal: AbortSignal | null | undefined): Response {
+  const events = textReplyEvents("Cache is warm.").slice(0, 1);
+  events.push(
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "**Checking** the " } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "cache" } },
+  );
+  const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal?.addEventListener("abort", () => controller.error(abortShapedError()), { once: true });
+      controller.enqueue(new TextEncoder().encode(body));
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+test("reasoning streams before its thinking entry is persisted, and a cancel mid-reasoning persists it under the streamed id", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
+  const streamed: Array<{ step: string; index: number; chunk: string; persistedSoFar: number }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) =>
+    thinkingThenStall(init?.signal)) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      cancelTurn("reasoning-stream", controller.signal, sink, {
+        onReasoningDelta: (step, index, chunk) => {
+          streamed.push({
+            step,
+            index,
+            chunk,
+            persistedSoFar: sink.entries.filter((e) => e.type === "thinking").length,
+          });
+          if (chunk === "cache") controller.abort();
+        },
+      }),
+    );
+    assert.equal(result.stopped, true);
+    assert.equal(streamed.map((s) => s.chunk).join(""), "**Checking** the cache");
+    assert.ok(
+      streamed.every((s) => s.persistedSoFar === 0),
+      "reasoning is visible before the block is persisted",
+    );
+    const persisted = sink.entries.filter((e) => e.type === "thinking");
+    assert.equal(persisted.length, 1);
+    const payload = persisted[0]!.payload as { thinking: string; step: { id: string; index: number } };
+    assert.equal(payload.thinking, "**Checking** the cache");
+    assert.deepEqual(
+      new Set(streamed.map((s) => `${s.step}:${s.index}`)),
+      new Set([`${payload.step.id}:${payload.step.index}`]),
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

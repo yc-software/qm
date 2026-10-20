@@ -1,6 +1,6 @@
 import { html, LitElement, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { api, type CoreSession } from "./core-bridge";
+import { fetchSessionRow } from "./core-bridge";
 import type { Conversation } from "./conv-types";
 import { createConversation, disposeConversation, ensureDeliveryStream } from "./conversations";
 import { openSessionInto } from "./sessions";
@@ -53,8 +53,7 @@ class InboxChat extends LitElement {
     const current = conversation.mountLoadingPane();
     const threadRef = `web:${user}:inbox`;
     try {
-      const { sessions } = await api<{ sessions: CoreSession[] }>("/api/sessions");
-      const session = sessions.find((entry) => entry.threadRef === threadRef);
+      const session = await fetchSessionRow({ threadRef });
       if (this.conversation !== conversation || !current()) return;
       if (session) await openSessionInto(conversation, session, undefined, undefined, false);
       else conversation.mountContinuable(threadRef, null, null, [], "Inbox");

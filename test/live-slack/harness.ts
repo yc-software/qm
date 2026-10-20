@@ -374,13 +374,14 @@ export class Ctx {
       body: JSON.stringify({
         model: this.env.judgeModel,
         max_tokens: 300,
+        thinking: { type: "disabled" },
         system: `You are a strict test judge for an AI assistant's Slack replies. Today's date is ${new Date().toISOString().slice(0, 10)}. Answer with exactly PASS or FAIL on the first line, then a one-sentence reason. Judge only what is asked; tone and verbosity are irrelevant unless the question asks about them.`,
         messages: [{ role: "user", content: `Question: ${question}\n\nContent to judge:\n${content}` }],
       }),
     });
-    const data = (await res.json()) as { content?: Array<{ text?: string }> };
+    const data = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
     if (!res.ok) throw new Error(`judge call failed: ${res.status} ${JSON.stringify(data).slice(0, 300)}`);
-    const verdict = (data.content?.[0]?.text ?? "").trim();
+    const verdict = (data.content?.find((block) => block.type === "text")?.text ?? "").trim();
     assert.ok(/^PASS\b/i.test(verdict), `judge failed: ${question}\n${verdict}`);
   }
 

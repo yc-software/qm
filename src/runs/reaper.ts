@@ -3,7 +3,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { ScopeId } from "../types.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 
 export const REAPER_LEASE_KEY = "runs:reaper";
 
@@ -32,13 +32,13 @@ async function releaseStrandedSessionLeases(sessions: SessionStore, sessionIds: 
 
 export interface ReaperOptions {
   intervalMs: number;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
   maxAgeMs?: number;
   errors?: ErrorLog;
 }
 
 export function createReaper(runs: RunStore, sessions: SessionStore, opts: ReaperOptions): Reaper {
-  const leaderLease = opts.leaderLease ?? createNoopLeaderLease();
+  const leaderLease = opts.leaderLease;
   const { errors } = opts;
   const reap = (): Promise<{ requeued: number; parked: number }> =>
     runs.reapExpired((retiredSessionIds) => releaseStrandedSessionLeases(sessions, retiredSessionIds), {

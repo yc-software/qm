@@ -1,8 +1,10 @@
-import { memoryBoundedEntries } from "../memory/context-boundary.ts";
+import type { RunStop } from "../runs/run-store.ts";
 import type { SessionEntry } from "../types.ts";
-import { contextSummaryPayload, entrySecurityTainted } from "../sessions/session-store.ts";
+import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
+import { isObj } from "../util/objects.ts";
+import { documentAttachmentTokens, replayableDocumentMetas } from "../core/document-kinds.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;
@@ -17,41 +19,59 @@ function headTailSlice(s: string, maxChars: number, tailChars: number): string {
 }
 
 export const INTERRUPTED_TOOL_RESULT =
-  "[interrupted — a routine platform deploy restarted the agent while this tool call was running and its outcome was not recorded. Check what actually happened before redoing anything with side effects.]";
+  "[system] This call was interrupted; its outcome wasn't recorded. Check what happened before retrying.";
+
+const STOP_CAUSES = {
+  parked: "A pause to let a person's turn run first",
+  shutdown: "A routine platform deploy",
+  lease_expired: "A worker crash",
+  error: "An internal error",
+  provider: "A model-provider failure",
+};
+
+export function unrecordedToolResult(stop: RunStop | undefined): string {
+  const by =
+    stop?.kind === "error" && stop.code
+      ? `${STOP_CAUSES.provider} (${stop.code}${stop.status !== undefined ? `, HTTP ${stop.status}` : ""})`
+      : stop && STOP_CAUSES[stop.kind];
+  return by
+    ? `[system] ${by} interrupted this call; its outcome wasn't recorded. Check what happened before retrying.`
+    : INTERRUPTED_TOOL_RESULT;
+}
 
 export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
 
+export function withoutWire(payload: unknown): Record<string, unknown> {
+  return { ...(payload as Record<string, unknown> | null), step: undefined, wire: undefined };
+}
+
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {
-  return memoryBoundedEntries(entries).filter(
+  return entries.filter(
     (e) =>
-      e.type !== "thinking" &&
-      e.type !== "text" &&
-      e.type !== "soul" &&
+      ((e.type !== "thinking" && e.type !== "text") || isObj((e.payload as { step?: unknown } | null)?.step)) &&
+      (e.payload as { slackReplyReceipt?: unknown } | null)?.slackReplyReceipt !== true &&
       (e.payload as { kind?: unknown } | null)?.kind !== "turn_failure",
   );
 }
 
-export function forModelContext(
-  entries: SessionEntry[],
-  opts: { includeSecurityTainted?: boolean } = {},
-): SessionEntry[] {
+export function forModelContext(entries: SessionEntry[]): SessionEntry[] {
   const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
-  const visible = replayable.filter((e) => opts.includeSecurityTainted || !entrySecurityTainted(e));
-  if (!latest) return visible;
+  if (!latest) return replayable;
   const throughSeq = contextSummaryPayload(latest)!.throughSeq;
-  return [
-    ...(visible.includes(latest) ? [latest] : []),
-    ...visible.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq),
-  ];
+  return [latest, ...replayable.filter((e) => !contextSummaryPayload(e) && e.seq > throughSeq)];
 }
 
 export function forSearchView(entries: SessionEntry[]): SessionEntry[] {
   const replayable = modelReplayable(entries);
   const latest = replayable.findLast((e) => contextSummaryPayload(e));
   return replayable.filter(
-    (e) => e.type !== "tool_result" && !entrySecurityTainted(e) && (!contextSummaryPayload(e) || e === latest),
+    (e) =>
+      e.type !== "tool_result" &&
+      e.type !== "thinking" &&
+      e.type !== "text" &&
+      (!contextSummaryPayload(e) || e === latest),
   );
 }
 
@@ -59,11 +79,16 @@ const entryTokenCache = new Map<string, number>();
 const ENTRY_TOKEN_CACHE_MAX = 50_000;
 
 export function estimateEntryTokens(entry: SessionEntry): number {
-  const payload = entry.payload as { text?: string; environment?: string } | null;
+  return estimateEntryTextTokens(entry) + (entry.type === "user" ? documentAttachmentTokens(entry.payload) : 0);
+}
+
+function estimateEntryTextTokens(entry: SessionEntry): number {
+  const payload = entry.payload as { text?: string; environment?: string; thinking?: string } | null;
+  const prose = entry.type === "thinking" ? [payload?.thinking] : [payload?.text, payload?.environment];
   const text =
-    typeof payload?.text === "string"
-      ? [payload.text, payload.environment].filter((s) => typeof s === "string" && s).join("\n\n")
-      : JSON.stringify(entry.payload ?? {});
+    typeof prose[0] === "string"
+      ? prose.filter((s) => typeof s === "string" && s).join("\n\n")
+      : JSON.stringify(withoutWire(entry.payload));
   const key = `${entry.sessionId}:${entry.seq}:${text.length}`;
   const hit = entryTokenCache.get(key);
   if (hit !== undefined) return hit;
@@ -108,6 +133,7 @@ export function compactTranscript(history: SessionEntry[]): string {
   const lines: string[] = [];
   const push = (line: string) => lines.push(headTailSlice(line, MAX_COMPACT_ENTRY_CHARS, COMPACT_ENTRY_TAIL_CHARS));
   for (const entry of history) {
+    if (entry.type === "thinking") continue;
     const stamp = entryStamp(entry.createdAt);
     const summary = contextSummaryPayload(entry);
     if (summary) {
@@ -125,16 +151,20 @@ export function compactTranscript(history: SessionEntry[]): string {
     const ov = entry.type === "user" && op?.overheard === true;
     const text = String(op?.text ?? "").trim();
     const ovFiles = ov && Array.isArray(op?.files) ? (op!.files as unknown[]).map(String).filter(Boolean) : [];
+    const files =
+      entry.type === "user" && !ov
+        ? replayableDocumentMetas(entry.payload).map((meta) => `${meta.name} [file ${meta.artifactId}]`)
+        : ovFiles;
     const author = entry.type === "user" && typeof op?.name === "string" && op.name ? op.name : null;
     const label = ov
       ? `overheard#${entry.seq}${stamp} (${op?.sourceRole === "agent" ? "agent" : (author ?? "someone")})`
       : `${entry.type}#${entry.seq}${stamp}${author ? ` (${author})` : ""}`;
-    if (text) push(`${label}: ${text}${ovFiles.length ? ` (files: ${ovFiles.join(", ")})` : ""}`);
+    if (text) push(`${label}: ${text}${files.length ? ` (files: ${files.join(", ")})` : ""}`);
     else if (ov && ovFiles.length) push(`${label}: (shared file) (files: ${ovFiles.join(", ")})`);
     else if (!ov) {
       const payload =
-        entry.type === "user" && entry.payload && typeof entry.payload === "object"
-          ? { ...entry.payload, memoryRecall: undefined }
+        entry.payload && typeof entry.payload === "object"
+          ? { ...withoutWire(entry.payload), memoryRecall: undefined }
           : entry.payload;
       push(`${label}:${op?.isError === true ? " [isError]" : ""} ${JSON.stringify(payload ?? {})}`);
     }

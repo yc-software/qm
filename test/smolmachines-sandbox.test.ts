@@ -40,6 +40,8 @@ const preCreate = (name: string): Promise<Response> =>
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSmolmachinesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "smol-ws-"))), {
+    store: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SMOLMACHINES_TOKEN,
     namePrefix: "qmt",
     fetchImpl: fake.fetchImpl,

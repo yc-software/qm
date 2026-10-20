@@ -30,7 +30,7 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
     channelMember: async (channelId: string, principalId: string) =>
       channelId === "C1" && (principalId === "U1" || principalId === "U2"),
   };
-  const sessions = { listByParticipant: async (_p: string) => [] };
+  const sessions = { listByParticipant: async (_p: string) => [], participantScopes: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
   const crons = { list: async () => [] };
   const webhooks = { list: async () => [] };
@@ -62,7 +62,7 @@ async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
 
 test("owner sees their own file in owned[] and can open its bytes", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeApp(files, createAclStore());
+  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
   const id = fileArtifactId("run-1", "out", 0);
   await files.put({
     id,
@@ -88,7 +88,7 @@ test("owner sees their own file in owned[] and can open its bytes", async () => 
 
 test("a grantee sees a shared file in shared[] and can open it; the owner doesn't double-list it", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const app = makeApp(files, acl);
   const owner = scopeId("personal", "U1");
   const id = fileArtifactId("share", "out", 0);
@@ -104,7 +104,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
   });
   await acl.grant({
     ownerScopeId: owner,
-    ref: "redline.md",
+    ref: id,
     granteeScopeId: scopeId("personal", "U2"),
     permission: "read",
     grantedBy: "U1",
@@ -123,7 +123,7 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
 
 test("a stranger sees nothing and cannot open the file (404 = null)", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeApp(files, createAclStore());
+  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
   const id = fileArtifactId("run-1", "out", 0);
   await files.put({
     id,
@@ -144,7 +144,7 @@ test("a stranger sees nothing and cannot open the file (404 = null)", async () =
 
 test("an org grant surfaces the file to any org member", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const app = makeApp(files, acl);
   const owner = scopeId("personal", "U1");
   const id = fileArtifactId("orgshare", "out", 0);
@@ -160,7 +160,7 @@ test("an org grant surfaces the file to any org member", async () => {
   });
   await acl.grant({
     ownerScopeId: owner,
-    ref: "poster.png",
+    ref: id,
     granteeScopeId: scopeId("org", ORG),
     permission: "read",
     grantedBy: "U1",
@@ -194,14 +194,14 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
     get: async () => row,
     open: async () => null,
   } as unknown as FileArtifactStore;
-  const app = makeApp(files, createAclStore());
+  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
 
   assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
 });
 
 test("uploadFileForViewer stores a personal inbound file", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeUploadApp(files, createAclStore());
+  const app = makeUploadApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
 
   const file = await app.uploadFileForViewer("U1", {
     name: "../notes.txt",
@@ -223,7 +223,7 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
 
 test("uploadFileForViewer to a shared context is visible to another context member", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const app = makeUploadApp(files, acl);
 
   const file = await app.uploadFileForViewer("U1", {
@@ -234,7 +234,7 @@ test("uploadFileForViewer to a shared context is visible to another context memb
   });
   assert.ok(file);
   assert.equal(file!.createdInScope, channel);
-  const grants = await acl.grantsFor(scopeId("personal", "U1"), `artifacts/${file!.id}/brief.pdf`);
+  const grants = await acl.grantsFor(scopeId("personal", "U1"), file!.id);
   assert.equal(
     grants.some((g) => g.granteeScopeId === channel),
     true,
@@ -250,7 +250,7 @@ test("uploadFileForViewer to a shared context is visible to another context memb
 
 test("scoped file listing pages within the requested context", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeUploadApp(files, createAclStore());
+  const app = makeUploadApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
   await app.uploadFileForViewer("U1", {
     name: "personal.txt",
     mimetype: "text/plain",
@@ -273,7 +273,7 @@ test("scoped file listing pages within the requested context", async () => {
 
 test("project files collapse across contributors and turns before paging owned and shared documents", async () => {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore();
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
   const app = makeUploadApp(files, acl);
   const ledger: string[] = [];
   for (const [turn, author, documents] of [
@@ -297,7 +297,7 @@ test("project files collapse across contributors and turns before paging owned a
         createdInScope: channel,
         createdAt: turn * 100,
       });
-      await acl.grant({ ownerScopeId, ref: path, granteeScopeId: channel, permission: "read", grantedBy: author });
+      await acl.grant({ ownerScopeId, ref: id, granteeScopeId: channel, permission: "read", grantedBy: author });
       ledger.push(id);
     }
   }
@@ -326,7 +326,7 @@ test("project files collapse across contributors and turns before paging owned a
 for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
   test("scope resources drain file pages for " + authors.join(" and "), async () => {
     const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-    const acl = createAclStore();
+    const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
     const app = makeUploadApp(files, acl);
     for (let n = 0; n < 55; n++) {
       for (const [index, author] of authors.entries()) {
@@ -345,7 +345,7 @@ for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
           createdInScope: channel,
           createdAt: n * 2 + index,
         });
-        await acl.grant({ ownerScopeId, ref: path, granteeScopeId: channel, permission: "read", grantedBy: author });
+        await acl.grant({ ownerScopeId, ref: id, granteeScopeId: channel, permission: "read", grantedBy: author });
       }
     }
     const resources = await app.listScopeResources("U1", channel);
@@ -355,3 +355,43 @@ for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
       assert.equal(resources?.files.filter((file) => file.ownerScopeId === scopeId("personal", author)).length, 55);
   });
 }
+
+test("file grants name one Files record, not its path or another generation", async () => {
+  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const app = makeUploadApp(files, acl);
+  const ownerScopeId = scopeId("personal", "U1");
+  const input = {
+    ownerScopeId,
+    createdBy: "U1",
+    name: "report.txt",
+    path: "report.txt",
+    mimetype: "text/plain",
+    direction: "out" as const,
+  };
+  const original = (await files.put({ ...input, id: "original", data: Buffer.from("old") })).artifact;
+  const replacement = (await files.put({ ...input, id: "replacement", data: Buffer.from("new") })).artifact;
+  const grant = {
+    ownerScopeId,
+    granteeScopeId: scopeId("personal", "U2"),
+    permission: "read" as const,
+    grantedBy: "U1",
+  };
+  for (const ref of [input.path, "artifacts/original/report.txt", "nonexistent"])
+    await assert.rejects(app.grant({ ...grant, ref }), /put the file in Files first using POST \/v1\/files\/uploads/);
+  assert.deepEqual(await acl.list(), []);
+  await app.grant({ ...grant, ref: original.id });
+  const metadata = await app.getArtifactHome("file", original.id);
+  assert.equal(metadata?.grantRef, original.id);
+  assert.deepEqual(
+    (await app.listFilesForViewer("U2")).shared.map((file) => file.id),
+    [original.id],
+  );
+  const opened = await app.openFileForViewer(original.id, "U2");
+  assert.ok(opened);
+  assert.equal((await drain(opened.stream)).toString(), "old");
+  assert.equal(await app.openFileForViewer(replacement.id, "U2"), null);
+  await files.delete(original.id);
+  assert.deepEqual((await app.listFilesForViewer("U2")).shared, []);
+  assert.equal(await app.openFileForViewer(replacement.id, "U2"), null);
+});

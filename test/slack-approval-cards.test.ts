@@ -151,8 +151,6 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
       surface: "slack",
       async: true,
       idempotencyKey: "ik-1",
-      intakePreambleMs: 12,
-      clientSentAt: 1000,
       actor: { externalId: "U1", displayName: "Alice" },
       conversation: { kind: "channel", threadRef: "ch:C1:t1", channelRef: "C1", audience: [{ externalId: "U1" }] },
       deliveryTarget: "C1:t1",
@@ -169,7 +167,7 @@ test("recoveredApprovalContext rebuilds a button context from core's durable rec
   assert.equal(ctx!.threadOnly, true, "channel kind replies thread-only, like the original turn");
   assert.equal(ctx!.command, "git push --force origin main");
   assert.equal(ctx!.reason, "force push");
-  for (const gone of ["surface", "async", "idempotencyKey", "approval", "intakePreambleMs", "clientSentAt"]) {
+  for (const gone of ["surface", "async", "idempotencyKey", "approval"]) {
     assert.ok(!(gone in ctx!.turn), `${gone} should be stripped from the replayed turn`);
   }
   assert.equal((ctx!.turn as { text?: string }).text, "!run git push --force origin main");

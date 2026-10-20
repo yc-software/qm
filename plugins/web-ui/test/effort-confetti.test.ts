@@ -29,7 +29,7 @@ test("confetti celebrates only the highest supported effort and respects reduced
   try {
     const { burstEffortConfetti } = await vite.ssrLoadModule("/src/effort-confetti.ts");
     let selectedLevel = "xhigh";
-    let selectedHarness = "codex";
+    let selectedHarness = "claude";
     button.addEventListener("click", (event) => burstEffortConfetti(event, selectedLevel, selectedHarness));
     const finishBurst = async (): Promise<void> => {
       completions.splice(0).forEach((complete) => complete());
@@ -39,7 +39,6 @@ test("confetti celebrates only the highest supported effort and respects reduced
     for (const [harness, top] of [
       ["pi", "ultracode"],
       ["claude", "max"],
-      ["codex", "xhigh"],
     ]) {
       selectedHarness = harness;
       for (const level of ["high", "auto", top]) {
@@ -50,8 +49,8 @@ test("confetti celebrates only the highest supported effort and respects reduced
       }
     }
     for (const [harness, level] of [
-      ["opencode", "auto"],
-      ["codex", "ultracode"],
+      ["mock", "auto"],
+      ["claude", "ultracode"],
       ["pi", "max"],
     ]) {
       selectedHarness = harness;
@@ -59,8 +58,8 @@ test("confetti celebrates only the highest supported effort and respects reduced
       button.click();
       assert.equal(dom.window.document.querySelector(".effort-confetti"), null);
     }
-    selectedHarness = "codex";
-    selectedLevel = "xhigh";
+    selectedHarness = "claude";
+    selectedLevel = "max";
     reducedMotion = true;
     button.click();
     assert.equal(dom.window.document.querySelector(".effort-confetti"), null);

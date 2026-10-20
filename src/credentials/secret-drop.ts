@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Destination, ScopeId } from "../types.ts";
 import type { GrantMode } from "./keychain.ts";
+import { swallowAs } from "../util/errors.ts";
 
 export interface SecretDropField {
   key: string;
@@ -66,7 +67,7 @@ export function createSecretDropStore(
       const out: SecretDropRecord[] = [];
       for (const [id, r] of await backing.entries()) {
         if (at - r.createdAt > ttl) {
-          void backing.delete(id).catch(() => {});
+          void backing.delete(id).catch(swallowAs("secret drop: delete expired drop", undefined));
           continue;
         }
         if (

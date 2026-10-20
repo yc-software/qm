@@ -118,12 +118,16 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
   it("accepts task/text aliases so user-facing cron creation doesn't expose internal modes", async () => {
     const taskRes = await post(
       "/v1/crons",
-      { schedule: { cron: "* * * * *" }, task: "check mail; reply [no-update] if nothing changed", recipient: "Alice" },
+      {
+        schedule: { cron: "* * * * *" },
+        task: "check mail; call finish_silently if nothing changed",
+        recipient: "Alice",
+      },
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(taskRes.status, 200);
     const taskBody = (await taskRes.json()) as any;
-    assert.equal(taskBody.cron.action, "check mail; reply [no-update] if nothing changed");
+    assert.equal(taskBody.cron.action, "check mail; call finish_silently if nothing changed");
     assert.equal(taskBody.cron.message, undefined);
 
     const textRes = await post(
@@ -426,6 +430,7 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
 
     const session = await sessions.getByThread("dm:D-alice");
     assert.ok(session, "recipient DM session created");
+    assert.equal(session!.surface, "slack");
     const entries = await sessions.getEntries(session!.id);
     assert.equal(
       entries.some((e) => e.type === "assistant"),

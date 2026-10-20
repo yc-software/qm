@@ -9,8 +9,8 @@ import { setGatewayModels } from "../src/model/gateway-models.ts";
 const adaptiveId = "claude-sonnet-4-6";
 
 test("native Auto is model and harness specific, while legacy auto remains valid", () => {
-  for (const harnessId of ["pi", "codex", "claude", "opencode"] as const) {
-    const modelId = harnessId === "codex" ? "gpt-5.4" : adaptiveId;
+  for (const harnessId of ["pi", "claude"] as const) {
+    const modelId = adaptiveId;
     assert.equal(validateRuntimeChoice({ harnessId, modelId, effortLevel: "auto" }), null);
     assert.equal(
       validateRuntimeChoice({ harnessId, modelId, effortLevel: "adaptive" }),
@@ -111,7 +111,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
       headers: { "content-type": "text/event-stream" },
     });
   }) as typeof fetch;
-  for (const modelId of [adaptiveId, "claude-opus-5-5", "claude-sonnet-5-5"])
+  for (const modelId of [adaptiveId, "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
     for (const route of ["api-key", "personal-key", "oauth", "gateway"] as const) {
       await t.test(`${modelId}/${route}`, async () => {
         const harness = createPiHarness({
@@ -191,9 +191,9 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   const { resolveRuntimeChoice } = await import("../src/harness/harness-router.ts");
   const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
+  await config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
   const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "auto" };
-  await config.setRuntimeSelectionLatest("personal:test", active);
+  await config.setRuntimeSelection("personal:test", active);
   const service = createRuntimeService({ config, harnessId: "pi" }, { authorizesCapabilityScope: async () => true });
   const claims = { actorId: "test", scopeId: "personal:test" as const, liveActor: true, exp: Date.now() + 60_000 };
   for (const effort of ["adaptive", "default"]) {
@@ -214,6 +214,6 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
       }),
     /not supported/,
   );
-  await config.setRuntimeSelectionLatest("personal:test", active);
+  await config.setRuntimeSelection("personal:test", active);
   assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, "auto");
 });

@@ -10,10 +10,17 @@ import type { Ctx } from "./live-slack/harness.ts";
 
 function evidence(sandboxId = "box", stdout = "nonce\n"): unknown[] {
   return [
-    { type: "tool_call", payload: { tool: "sandbox", action: "exec", sandbox_id: sandboxId, callId: "call" } },
+    { type: "tool_call", payload: { tool: "execute", sandbox_id: sandboxId, callId: "call" } },
     {
       type: "tool_result",
-      payload: { tool: "sandbox", action: "exec", callId: "call", isError: false, code: 0, timedOut: false, stdout },
+      payload: {
+        tool: "execute",
+        callId: "call",
+        isError: false,
+        code: 0,
+        timedOut: false,
+        result: `${stdout}\n[exit 0]`,
+      },
     },
   ];
 }
@@ -22,13 +29,14 @@ test("provider execution requires correlated success on the exact sandbox", () =
   assert.doesNotThrow(() => assertSandboxExecution(evidence(), "box", "nonce\n"));
   for (const patch of [
     { tool: "read" },
-    { action: "start_process" },
+    { background: true },
     { callId: "unrelated" },
     { isError: true },
     { code: 1 },
     { timedOut: true },
-    { stdout: "wrong\n" },
-    { stdout: undefined, result: "nonce\n" },
+    { result: "wrong\n\n[exit 0]" },
+    { result: "nonce\n" },
+    { result: undefined, stdout: "nonce\n" },
   ]) {
     const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
     Object.assign(entries[1]!.payload, patch);
@@ -40,7 +48,7 @@ test("provider execution requires correlated success on the exact sandbox", () =
 
 test("projected sandbox results require exact successful execution evidence", () => {
   const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
-  entries[1]!.payload = { tool: "sandbox", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
+  entries[1]!.payload = { tool: "execute", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
   assert.doesNotThrow(() => assertSandboxExecution(entries, "box", "nonce\n"));
   for (const patch of [
     { result: "nonce\n" },
@@ -52,7 +60,7 @@ test("projected sandbox results require exact successful execution evidence", ()
     { callId: "unrelated" },
     { code: 1 },
     { timedOut: true },
-    { action: "start_process" },
+    { background: true },
   ]) {
     const changed = [entries[0], { ...entries[1], payload: { ...entries[1]!.payload, ...patch } }];
     assert.throws(() => assertSandboxExecution(changed, "box", "nonce\n"));
@@ -60,10 +68,32 @@ test("projected sandbox results require exact successful execution evidence", ()
   assert.throws(() => assertSandboxExecution(entries.toReversed(), "box", "nonce\n"));
 });
 
+test("a failed provider execution reports what the execute call returned", () => {
+  const token = "eyJhbGciOiJIUzI1NiIsImtpZCI6ImsxIn0.eyJvcmdJZCI6InFhIn0.c2lnbmF0dXJlMTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1u";
+  const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
+  Object.assign(entries[1]!.payload, {
+    code: 1,
+    result: `${"x".repeat(500)}\n[stderr]\nproxy https://x:${token}@proxy.example.com refused\nProxy-Authorization: Basic eDpzZWNyZXQ=\n[exit 1]`,
+  });
+  assert.throws(
+    () => assertSandboxExecution(entries, "box", "nonce\n"),
+    (error: Error) =>
+      error.message.includes('"code":1') &&
+      error.message.includes("@proxy.example.com refused") &&
+      error.message.includes("[exit 1]") &&
+      !error.message.includes("x".repeat(151)) &&
+      !error.message.includes("eyJvcmdJZCI6InFhIn0") &&
+      !error.message.includes("c2lnbmF0dXJl") &&
+      !error.message.includes("eDpzZWNyZXQ"),
+  );
+  assert.throws(() => assertSandboxExecution(evidence().slice(0, 1), "box", "nonce\n"), /no result recorded/);
+});
+
 test("every provider has its own parallel execution scenario", () => {
   assert.deepEqual(sandboxProviders.toSorted(), [
     "agent37",
     "aws",
+    "do-managed-agents",
     "e2b",
     "local",
     "modal",
@@ -159,7 +189,7 @@ test("explicit provider selection retains strict coverage without treating defer
       "sandbox-execute-modal",
     ],
   );
-  assert.equal(selectSandboxProviderScenarios("all").length, 9);
+  assert.equal(selectSandboxProviderScenarios("all").length, 10);
   assert.deepEqual(selectSandboxProviderScenarios(undefined), []);
   for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
     assert.throws(() => selectSandboxProviderScenarios(value));

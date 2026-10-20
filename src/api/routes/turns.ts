@@ -58,7 +58,20 @@ const clientToolsSchema = z
 
 const clientResultSchema = z.object({
   callId: z.string().min(1).max(256),
-  result: z.object({ content: z.string(), structured: z.unknown().optional(), isError: z.boolean().optional() }),
+  result: z.object({
+    content: z.string(),
+    structured: z.unknown().optional(),
+    isError: z.boolean().optional(),
+    images: z
+      .array(
+        z.object({
+          data: z.string().max(4_000_000).base64(),
+          mimeType: z.enum(["image/png", "image/jpeg"]),
+        }),
+      )
+      .max(4)
+      .optional(),
+  }),
 });
 
 function zodMessage(field: string, error: z.ZodError): string {
@@ -68,7 +81,7 @@ function zodMessage(field: string, error: z.ZodError): string {
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;
-  const { useOwnerKeychain: _internalOnly, ownerResourcesRequireOpen: _requireOpen, ...safe } = origin;
+  const { useOwnerKeychain: _internalOnly, ...safe } = origin;
   return safe;
 }
 
@@ -91,7 +104,6 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     slackSource: _slackSource,
     externalSlack: _externalSlack,
     ownerKeychainUnion: _ownerKeychainUnion,
-    ownerResourcesRequireOpen: _ownerResourcesRequireOpen,
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
@@ -103,6 +115,8 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
   const { clientTools: rawClientTools, ...rest } = safeBody;
+  if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
+    return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;
   if (rawClientTools !== undefined) {
     const parsed = clientToolsSchema.safeParse(rawClientTools);
@@ -159,6 +173,9 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "kind must be abort, steer or client_result" });
   }
   if (kind === "client_result") {
+    const run = await ctx.deps.runs?.get(id);
+    if (run?.request.desktopClientId && (!isObj(body) || body.desktopClientId !== run.request.desktopClientId))
+      return sendJson(res, 403, { error: "wrong_desktop_client" });
     const parsed = clientResultSchema.safeParse(body);
     if (!parsed.success)
       return sendJson(res, 400, { error: "bad_request", message: zodMessage("client_result", parsed.error) });
@@ -270,37 +287,23 @@ async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
-async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const runId = ctx.params.runId!;
-  const num = (v: unknown): number | undefined =>
-    typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
-  const deliverMs = isObj(body) ? num(body.deliverMs) : undefined;
-  const slackInflightMs = isObj(body) ? num(body.slackInflightMs) : undefined;
-  if (deliverMs === undefined && slackInflightMs === undefined) {
-    return sendJson(res, 400, { error: "bad_request", message: "deliverMs or slackInflightMs required" });
-  }
-  await deps.metrics
-    ?.updateByRunId(runId, {
-      ...(deliverMs !== undefined ? { deliverMs } : {}),
-      ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
-    })
-    .catch(() => undefined);
-  return sendJson(res, 200, { ok: true });
-}
-
 export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/turns", auth: "source", handle: postTurn },
-  { method: "POST", path: "/v1/turns/:runId/metrics", auth: "source", handle: postTurnMetrics },
-  { method: "GET", path: "/v1/approvals/pending", auth: "source", handle: getPendingApproval },
-  { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
-  { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
-  { method: "POST", path: "/v1/runs/:id/signal", auth: "source", handle: postRunSignal },
+  { method: "POST", path: "/v1/turns", actor: "system", auth: "source", handle: postTurn },
+  { method: "GET", path: "/v1/approvals/pending", actor: "person", auth: "source", handle: getPendingApproval },
+  { method: "GET", path: "/v1/approvals/:id", actor: "person", auth: "source", handle: getApproval },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/delivery-state",
+    actor: "system",
+    auth: "source",
+    handle: postRunDeliveryState,
+  },
+  { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
   { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
-  { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
-  { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },
+  { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
-  { method: "POST", path: "/v1/deliveries/:id/ack", auth: "source", handle: ackDelivery },
-  { method: "POST", path: "/v1/deliveries/ack-by-key", auth: "source", handle: ackDeliveryByKey },
+  { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
+  { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

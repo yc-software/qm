@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { getRuntimeConfig } from "../src/runtime-config-cache.ts";
 import {
-  getRuntimeConfig,
   invalidateRuntimeConfigs,
   loadRuntimeConfig,
   saveRuntimeConfig,

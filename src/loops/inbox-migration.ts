@@ -64,12 +64,10 @@ async function migrateInboxLocked(
           schedule: cron.schedule,
           title: `${loop.name} sync`,
           action: renderSourceInboxTask(loop.id, source),
-          runAs: cron.runAs,
-          members: cron.members,
           unattendedGrants: cron.unattendedGrants,
           enabled: false,
         }));
-      await deps.store.update(loop.id, { cronId: replacement.id, runAs: cron.runAs ?? "owner" });
+      await deps.store.update(loop.id, { cronId: replacement.id });
     }
     if (!migration.enabled) await deps.store.setState(loop.id, "paused");
   }

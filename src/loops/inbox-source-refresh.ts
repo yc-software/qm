@@ -1,19 +1,34 @@
 import { LRUCache } from "lru-cache";
-import type { LoopItem } from "../types.ts";
+import { personalScope, type LoopItem } from "../types.ts";
+import type { FeatureFlagStore } from "../feature-flags.ts";
+import type { ErrorLog } from "../admin/error-log.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
+import { errMessage } from "../util/errors.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
+import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
+import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
   items: LoopItemLedger;
   tokens: ConnectorTokenSource;
+  directory: Pick<DirectoryStore, "getBySlackId">;
+  featureFlags: Pick<FeatureFlagStore, "enabled">;
+  errors?: ErrorLog;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
   now?: () => number;
 }
 
-export type InboxSourceRefresh = (owner: string, items: LoopItem[]) => Promise<void>;
+export type InboxSourceRefresh = (owner: string, items: LoopItem[], mode?: "avatars") => Promise<void>;
+
+interface SlackParticipant {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+}
 
 // Reuse the inbox's existing refresh cycle, not a second provider poller. Cache only
 // results/identities, never credentials, and share in-flight reads between tabs.
@@ -22,28 +37,58 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   const info = new LRUCache<string, Record<string, unknown>>({ max: 2000, ttl: 300_000 });
   const limited = new LRUCache<string, boolean>({ max: 2000 });
   const running = new Map<string, Promise<void>>();
+  const infoRunning = new Map<string, Promise<Record<string, unknown>>>();
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
   const positions = new LRUCache<string, number>({ max: 2000 });
   const slackBase = normalizeSlackApiUrl(deps.slackApiUrl ?? "https://slack.com/api");
 
-  async function get(owner: string, source: string, path: string, token: string): Promise<Record<string, unknown>> {
+  function recordFailure(owner: string, subject: string, error: unknown): void {
+    deps.errors?.record({
+      category: "inbox",
+      code: "source_refresh_failed",
+      message: redactSecrets(`${subject}: ${errMessage(error)}`),
+      scopeLabel: personalScope(owner),
+    });
+  }
+
+  async function get(
+    owner: string,
+    source: string,
+    path: string,
+    token: string,
+    deadline = now() + 3000,
+  ): Promise<Record<string, unknown>> {
     const method = path.split("?")[0]!;
     const key = `${owner}:${source}:${source === "slack" ? method : "read"}`;
     if (limited.has(key)) throw new Error("Source rate limited. The next refresh will retry.");
-    const base = source === "slack" ? slackBase : "https://gmail.googleapis.com/gmail/v1/users/me/";
-    const res = await fetchImpl(`${base}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.status === 429) {
-      const retry = Number(res.headers.get("retry-after"));
+    const timeoutMs = Math.max(1, Math.min(3000, deadline - now()));
+    const rateLimit = (retry: number) =>
       limited.set(key, true, { ttl: Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000 });
+    const failure = (cause: Error) =>
+      new Error("Couldn't refresh the source. Your item has not been dismissed.", { cause });
+    if (source === "gmail") {
+      try {
+        return await gmailApi(token, fetchImpl)<Record<string, unknown>>(path, { timeoutMs });
+      } catch (error) {
+        if (!(error instanceof GmailApiError)) throw error;
+        if (error.status === 429) rateLimit(error.retryAfterSeconds);
+        throw failure(error);
+      }
     }
-    if (!res.ok) throw new Error("Couldn't refresh the source. Your item has not been dismissed.");
+    const res = await fetchImpl(`${slackBase}${path}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 429) rateLimit(Number(res.headers.get("retry-after")));
+    if (!res.ok) throw failure(new Error(`${source} ${method}: HTTP ${res.status}`));
     const body: unknown = await res.json();
     if (!isObj(body) || body.ok === false)
-      throw new Error("Couldn't refresh the source. Your item has not been dismissed.");
+      throw failure(
+        new Error(
+          `${source} ${method}: ${isObj(body) && typeof body.error === "string" ? body.error : "Invalid response"}`,
+        ),
+      );
     return body;
   }
 
@@ -51,9 +96,92 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const key = `${owner}:${path}`;
     const cached = info.get(key);
     if (cached) return cached;
-    const value = await get(owner, "slack", path, token);
-    info.set(key, value);
-    return value;
+    const pending = infoRunning.get(key);
+    if (pending) return pending;
+    const task = get(owner, "slack", path, token)
+      .then((value) => {
+        info.set(key, value);
+        return value;
+      })
+      .finally(() => infoRunning.delete(key));
+    infoRunning.set(key, task);
+    return task;
+  }
+
+  function imageUrl(profile: Record<string, unknown>): string | undefined {
+    return [48, 72, 192, 512, 1024, 32, 24, "original", 36, 96, 128, 256]
+      .map((size) => profile[`image_${size}`])
+      .find((value): value is string => typeof value === "string" && value.startsWith("https://"));
+  }
+
+  function savedParticipants(payload: Record<string, unknown>): SlackParticipant[] {
+    return Array.isArray(payload.participants)
+      ? payload.participants.filter(
+          (person): person is SlackParticipant =>
+            isObj(person) && typeof person.id === "string" && typeof person.name === "string",
+        )
+      : [];
+  }
+
+  function messageParticipant(message: Record<string, unknown>): SlackParticipant | undefined {
+    const bot = isObj(message.bot_profile) ? message.bot_profile : {};
+    const profile = isObj(message.user_profile) ? message.user_profile : {};
+    let id = typeof message.user === "string" ? message.user : undefined;
+    if (!id && typeof message.bot_id === "string") id = `bot:${message.bot_id}`;
+    if (!id) return;
+    const avatarUrl = imageUrl(isObj(bot.icons) ? bot.icons : profile);
+    return {
+      id,
+      name: String(bot.name || profile.display_name || profile.real_name || message.username || id),
+      ...(avatarUrl ? { avatarUrl } : {}),
+    };
+  }
+
+  async function participants(
+    owner: string,
+    ids: string[],
+    previous: SlackParticipant[],
+  ): Promise<{ people: SlackParticipant[]; refreshAt: number }> {
+    let complete = true;
+    const people = await Promise.all(
+      [...new Set(ids)].slice(0, 8).map(async (id): Promise<SlackParticipant> => {
+        const saved = previous.find((person) => person.id === id) ?? { id, name: id };
+        if (id.startsWith("bot:")) return saved;
+        try {
+          const member = await deps.directory.getBySlackId(id);
+          if (!member) return saved;
+          const avatarUrl = member.avatarUrl?.startsWith("https://") ? member.avatarUrl : saved.avatarUrl;
+          return { id, name: member.displayName || saved.name, ...(avatarUrl ? { avatarUrl } : {}) };
+        } catch (error) {
+          recordFailure(owner, `Slack profile ${id}`, error);
+          complete = false;
+          return saved;
+        }
+      }),
+    );
+    return { people, refreshAt: now() + (complete ? 86_400_000 : 60_000) };
+  }
+
+  async function refreshAvatars(owner: string, item: LoopItem): Promise<void> {
+    if ((item.source ?? item.sourcePayload?.source) !== "slack") return;
+    const payload = item.sourcePayload ?? {};
+    if (typeof payload.slackAvatarsRefreshAt === "number" && now() < payload.slackAvatarsRefreshAt) return;
+    const meta = isObj(payload.slack) ? payload.slack : {};
+    if (typeof meta.channelId !== "string" || typeof meta.ts !== "string") return;
+    const previous = savedParticipants(payload);
+    const senderId = typeof meta.userId === "string" ? meta.userId : undefined;
+    if (!senderId || senderId.startsWith("bot:")) return;
+    if (!previous.some((person) => person.id === senderId))
+      previous.unshift({ id: senderId, name: typeof payload.from === "string" ? payload.from : senderId });
+    const profiles = await participants(owner, [senderId, ...previous.map((person) => person.id)], previous);
+    await deps.items.annotate(
+      item.id,
+      {
+        participants: profiles.people,
+        slackAvatarsRefreshAt: profiles.refreshAt,
+      },
+      { expectedSourceAt: item.sourceAt, expectedSourcePayload: payload },
+    );
   }
 
   async function refresh(owner: string, item: LoopItem): Promise<void> {
@@ -102,31 +230,53 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
       .filter((m) => !root || m.ts === root || m.thread_ts === root)
       .sort((a, b) => Number(a.ts) - Number(b.ts));
     if (root && !messages.some((m) => m.ts === root)) throw new Error("The original Slack message is unavailable.");
-    const names = new Map<string, string>();
-    for (const user of [
-      ...new Set(messages.map((m) => m.user).filter((u): u is string => typeof u === "string")),
-    ].slice(0, 8)) {
-      try {
-        const result = await slackInfo(owner, `users.info?user=${encodeURIComponent(user)}`, token);
-        const u = isObj(result.user) ? result.user : {};
-        const profile = isObj(u.profile) ? u.profile : {};
-        names.set(user, String(profile.display_name || profile.real_name || u.real_name || u.name || user));
-      } catch {
-        /* User names are cosmetic; message history remains usable. */
-      }
+    const waiting = messages.find((message) => message.ts === meta.ts);
+    const saved = savedParticipants(payload);
+    const sender =
+      (waiting && messageParticipant(waiting)) ??
+      (typeof meta.userId === "string" ? { id: meta.userId, name: meta.userId } : undefined);
+    const previous = new Map(saved.map((person) => [person.id, person]));
+    for (const message of messages) {
+      const person = messageParticipant(message);
+      if (person)
+        previous.set(person.id, {
+          ...person,
+          ...previous.get(person.id),
+          ...(person.avatarUrl ? { avatarUrl: person.avatarUrl } : {}),
+        });
     }
-    const context = messages.map((m) => ({
-      author: names.get(String(m.user)) ?? String(m.user ?? m.username ?? "Slack"),
-      text: typeof m.text === "string" ? m.text : "",
-      at: Math.round(Number(m.ts) * 1000),
-      ts: m.ts,
-      ...(root && m.ts !== root ? { reply: true } : {}),
-      images: (Array.isArray(m.files) ? m.files.filter(isObj) : [])
-        .filter((f) => typeof f.mimetype === "string" && f.mimetype.startsWith("image/"))
-        .map((f) => f.url_private)
-        .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
-        .slice(0, 4),
-    }));
+    if (sender && (!previous.has(sender.id) || previous.get(sender.id)?.name === sender.id))
+      previous.set(sender.id, { ...sender, ...(typeof payload.from === "string" ? { name: payload.from } : {}) });
+    const profiles = await participants(
+      owner,
+      [
+        ...(sender ? [sender.id] : []),
+        ...messages.toReversed().flatMap((message) => {
+          const person = messageParticipant(message);
+          return person ? [person.id] : [];
+        }),
+      ],
+      [...previous.values()],
+    );
+    const people = new Map([...previous.values(), ...profiles.people].map((person) => [person.id, person]));
+    const context = messages.map((m) => {
+      const author = messageParticipant(m);
+      const person = author && people.get(author.id);
+      return {
+        author: person?.name ?? String(m.user ?? m.username ?? "Slack"),
+        ...(person ? { authorId: person.id } : {}),
+        ...(person?.avatarUrl ? { avatarUrl: person.avatarUrl } : {}),
+        text: typeof m.text === "string" ? m.text : "",
+        at: Math.round(Number(m.ts) * 1000),
+        ts: m.ts,
+        ...(root && m.ts !== root ? { reply: true } : {}),
+        images: (Array.isArray(m.files) ? m.files.filter(isObj) : [])
+          .filter((f) => typeof f.mimetype === "string" && f.mimetype.startsWith("image/"))
+          .map((f) => f.url_private)
+          .filter((url): url is string => typeof url === "string" && url.startsWith("https://"))
+          .slice(0, 4),
+      };
+    });
     // Nearby channel context is selected by the drafting agent, not an arbitrary
     // channel tail. Keep it separate from the authoritative thread snapshot.
     const nearby =
@@ -141,7 +291,14 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     await deps.items.annotate(
       item.id,
       {
-        slack: { ...meta, isDirectMessage: direct, ...(root ? { threadTs: root } : {}) },
+        slack: {
+          ...meta,
+          isDirectMessage: direct,
+          ...(root ? { threadTs: root } : {}),
+          ...(typeof waiting?.user === "string" ? { userId: waiting.user } : {}),
+        },
+        participants: sender ? profiles.people : saved,
+        slackAvatarsRefreshAt: sender ? profiles.refreshAt : 0,
         context: [...nearby, ...context],
         sourceContextFetched: true,
         sourceContextPartial: partial,
@@ -165,15 +322,25 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     }
   }
 
-  async function one(owner: string, item: LoopItem): Promise<void> {
-    const key = `${owner}:${item.id}:${item.sourceAt ?? 0}`;
-    const pending = running.get(key);
-    if (pending) return pending;
+  async function one(owner: string, item: LoopItem, mode?: "avatars"): Promise<void> {
+    const itemKey = `${owner}:${item.id}:${item.sourceAt ?? 0}`;
+    const key = `${itemKey}:${mode ?? "source"}`;
     if (checked.has(key)) return;
+    const pending = running.get(itemKey);
+    if (pending) {
+      if (mode === "avatars") return;
+      await pending;
+      const latest = await deps.items.get(item.id);
+      if (latest && latest.sourceAt === item.sourceAt) return one(owner, latest, mode);
+      return;
+    }
     const task = (async () => {
       try {
-        await refresh(owner, item);
+        if (mode === "avatars") await refreshAvatars(owner, item);
+        else await refresh(owner, item);
       } catch (e) {
+        recordFailure(owner, `Inbox item ${item.id}`, e);
+        if (mode === "avatars") return;
         await deps.items.annotate(
           item.id,
           {
@@ -183,22 +350,22 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         );
       } finally {
         checked.set(key, true);
-        running.delete(key);
+        running.delete(itemKey);
       }
     })();
-    running.set(key, task);
+    running.set(itemKey, task);
     return task;
   }
-  return async (owner, items) => {
-    // Bound simultaneous Gmail reads. Slack is refreshed only for an opened item;
-    // normal Slack reconciliation still comes from events and the existing sync.
-    const start = positions.get(owner) ?? 0;
+  return async (owner, items, mode) => {
+    if (!(await deps.featureFlags.enabled("inbox_loops", personalScope(owner)))) return;
+    const positionKey = `${owner}:${mode ?? "source"}`;
+    const start = positions.get(positionKey) ?? 0;
     const ordered = items.slice(start).concat(items.slice(0, start));
     const deadline = now() + 3000;
     let visited = 0;
     for (; visited < ordered.length && now() < deadline; visited += 4)
-      await Promise.all(ordered.slice(visited, visited + 4).map((item) => one(owner, item)));
+      await Promise.all(ordered.slice(visited, visited + 4).map((item) => one(owner, item, mode)));
     // Slow sources must neither block the whole inbox nor starve later cards.
-    if (items.length > 1) positions.set(owner, (start + visited) % items.length);
+    if (items.length > 1) positions.set(positionKey, (start + visited) % items.length);
   };
 }

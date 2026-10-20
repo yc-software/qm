@@ -65,7 +65,7 @@ test("a submission freezes the edited draft before upload and never retries a co
             at: 101,
           };
           return conflict
-            ? Response.json({ message: "the draft changed" }, { status: 409 })
+            ? Response.json({ error: "draft_changed", message: "the draft changed" }, { status: 409 })
             : Response.json({ item: ledger });
         }
         if (path.endsWith("/followup")) {
@@ -85,10 +85,20 @@ test("a submission freezes the edited draft before upload and never retries a co
       state.inboxTestComposer!.state.attachments = [
         { id: "file", type: "document", fileName: "notes.txt", mimeType: "text/plain", size: 1, content: "eA==" },
       ];
+      assert.equal(
+        window.dispatchEvent(new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } })),
+        false,
+        "staged attachments block restart",
+      );
       const saving = inbox.persistDraft(item);
       await until(() => Boolean(releaseEdit));
       host.querySelector<HTMLButtonElement>(".inbox-suggest-chip.primary")!.click();
       await until(() => Boolean(releaseUpload));
+      assert.equal(
+        window.dispatchEvent(new CustomEvent("qm:prepare-update", { cancelable: true, detail: { ready: false } })),
+        false,
+        "in-flight upload blocks restart after clearing composer",
+      );
       releaseEdit!();
       await saving;
       releaseUpload!();

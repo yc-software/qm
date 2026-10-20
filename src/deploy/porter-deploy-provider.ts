@@ -3,8 +3,18 @@ import { LRUCache } from "lru-cache";
 import { NotFoundError } from "porter-sandbox";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { waitAppReady } from "./shared-deploy-provider.ts";
-import { normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
+import {
+  appEnv as declaredAppEnv,
+  appGone,
+  appLaunch,
+  appLogs,
+  appReporter,
+  bundleEntries,
+  extractBundle,
+  waitAppReady,
+  type AppErrorSink,
+} from "./shared-deploy-provider.ts";
+import { posixJoin } from "./deploy-fs.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import {
   createPorterClient,
@@ -19,16 +29,14 @@ import {
   type PorterSandboxLike,
 } from "../sandbox/porter-client.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
-import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 
 const APP_DIR = "/app";
 const HOME_DIR = "/root";
 const DATA_DIR = "/data";
-const PID_PATH = "/tmp/qm-app.pid";
-const LOG_PATH = "/tmp/qm-app.log";
 const APP_PORT_DEFAULT = 8080;
 const ENDPOINT_PORT = 443;
 const APP_READY_WINDOW_SEC_DEFAULT = 60;
@@ -41,7 +49,6 @@ const RESOLVE_CACHE_MAX = 500;
 const KIND_TAG = "qm-kind";
 const DEPLOY_TAG = "qm-deploy";
 const DEFAULT_RUNNER_IMAGE = "ghcr.io/porter-dev/qm-app-runner:latest";
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface StoredPorterDeployBody {
   deploymentId: string;
@@ -65,7 +72,8 @@ export interface PorterDeployProviderOptions {
   resolveCacheMs?: number;
   client?: PorterClientLike;
   store?: DurableMap<StoredPorterDeployBody>;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
+  onError?: AppErrorSink;
 }
 
 export function createPorterDeployProvider(opts: PorterDeployProviderOptions): DeployProvider {
@@ -77,7 +85,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const readyWindowSec = opts.readyWindowSec ?? APP_READY_WINDOW_SEC_DEFAULT;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
   const store = opts.store ?? createMemoryMap<StoredPorterDeployBody>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const client: PorterClientLike =
     opts.client ??
@@ -113,14 +121,12 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   }
 
   function appEnv(version: DeploymentVersion): Record<string, string> {
-    const declared = Object.fromEntries(Object.entries(version.env ?? {}).filter(([k]) => ENV_NAME.test(k)));
-    return { ...declared, HOME: HOME_DIR, PORT: String(appPort), DATA_DIR };
+    return declaredAppEnv(version.env, { HOME: HOME_DIR, PORT: String(appPort), DATA_DIR });
   }
 
   async function unpackTree(sandboxId: string, volumeId: string, guestDir: string, dir: string): Promise<void> {
-    const files = await readTree(dir, { tolerateMissing: true });
-    if (!files.length) return;
-    const entries = files.map((f) => ({ path: normalizeRelPath(f.path), data: f.data }));
+    const entries = await bundleEntries(dir);
+    if (!entries.length) return;
     const bundle = `${BUNDLE_DIR}/${randomUUID()}.tar`;
     const uploaded = await client.volumes.raw
       .writeFile(volumeId, await makeTar(entries), { path: `/${bundle}` }, { timeoutMs: BUNDLE_UPLOAD_TIMEOUT_MS })
@@ -132,12 +138,10 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     const guestBundle = posixJoin(DATA_DIR, bundle);
     const r = await execRaw(
       sandboxId,
-      `mkdir -p ${shq(guestDir)} && tar -xmf ${shq(guestBundle)} -C ${shq(guestDir)}; rc=$?; ` +
-        `rm -f ${shq(guestBundle)}; rmdir ${shq(posixJoin(DATA_DIR, BUNDLE_DIR))} 2>/dev/null; exit $rc`,
+      extractBundle(guestBundle, guestDir, `rmdir ${shq(posixJoin(DATA_DIR, BUNDLE_DIR))} 2>/dev/null`),
       BUNDLE_EXTRACT_TIMEOUT_SEC,
     );
-    if (r.code !== 0)
-      throw new Error(`porter deploy: unpacking into ${guestDir} failed: ${(r.stderr || r.stdout).slice(0, 300)}`);
+    if (r.code !== 0) throw execFailure(`porter deploy: unpacking into ${guestDir}`, r);
   }
 
   async function materialize(sandboxId: string, volumeId: string, version: DeploymentVersion): Promise<void> {
@@ -145,21 +149,19 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     if (version.homeDir) await unpackTree(sandboxId, volumeId, HOME_DIR, version.homeDir);
   }
 
-  async function startApp(sandboxId: string, version: DeploymentVersion): Promise<void> {
+  async function startApp(d: Deployment, sandboxId: string, version: DeploymentVersion): Promise<void> {
     const inner = `cd ${shq(APP_DIR)}; ${version.entrypoint}`;
-    const launch = `sh -c ${shq(inner)} < /dev/null > ${shq(LOG_PATH)} 2>&1 & echo $! > ${shq(PID_PATH)}`;
     const script = [
       `mkdir -p ${shq(APP_DIR)} ${shq(DATA_DIR)}`,
       `export HOME=${shq(HOME_DIR)} PORT=${appPort} DATA_DIR=${shq(DATA_DIR)}`,
-      `if command -v setsid >/dev/null 2>&1; then setsid ${launch}; else ${launch}; fi`,
+      appLaunch(inner, appPort),
     ].join("; ");
     const r = await execRaw(sandboxId, script, APP_START_EXEC_TIMEOUT_SEC);
-    if (r.code !== 0) throw new Error(`porter deploy app start failed: ${r.stderr.slice(0, 300)}`);
+    if (r.code !== 0) throw execFailure("porter deploy app start", r);
     await waitAppReady((script, timeoutSec) => execRaw(sandboxId, script, timeoutSec), {
       appPort,
       windowSec: readyWindowSec,
-      pidPath: PID_PATH,
-      logPath: LOG_PATH,
+      report: appReporter(opts.onError, d, version.env),
     });
   }
 
@@ -207,34 +209,24 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         await retireBodies(d, true);
         await store.delete(d.id).catch((e) => swallow("porter-deploy: clear stale pointer", e));
         const name = `${baseName(d)}-${randomUUID().slice(0, 5)}`;
-        const sb = await client.sandboxes
-          .create({
-            image,
-            name,
-            command: ["sleep", "infinity"],
-            tags: { [KIND_TAG]: "app", [DEPLOY_TAG]: d.id },
-            env: appEnv(version),
-            volume_mounts: { [DATA_DIR]: volumeId },
-            networking:
-              visibility === "internal"
-                ? [{ port: appPort, internal: true }]
-                : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
-            ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
-          })
-          .catch((e) => {
-            if (visibility !== "internal" && errMessage(e).includes("sandbox ingress")) {
-              throw new Error(
-                `porter deploy ${d.id}: the cluster refused the app's ${visibility} domain because sandbox ingress is not enabled — turn it on for this cluster (docs/porter.md), then point PORTER_DEPLOY_APPS_DOMAIN's wildcard DNS record at it (${errMessage(e)})`,
-                { cause: e },
-              );
-            }
-            throw e;
-          });
+        const sb = await client.sandboxes.create({
+          image,
+          name,
+          command: ["sleep", "infinity"],
+          tags: { [KIND_TAG]: "app", [DEPLOY_TAG]: d.id },
+          env: appEnv(version),
+          volume_mounts: { [DATA_DIR]: volumeId },
+          networking:
+            visibility === "internal"
+              ? [{ port: appPort, internal: true }]
+              : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
+          ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
+        });
         try {
           await waitPorterRunning(name, sb);
           const address = await addressOf(d, sb);
           await materialize(sb.id, volumeId, version);
-          await startApp(sb.id, version);
+          await startApp(d, sb.id, version);
           await store.put(d.id, { deploymentId: d.id, sandboxId: sb.id, name, ...address, createdAtMs: Date.now() });
           return endpointOf(address);
         } catch (e) {
@@ -243,7 +235,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         }
       }),
 
-    async resolveEndpoint(d): Promise<DeployEndpoint | null> {
+    async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);
       if (cached) return cached;
       const stored = await liveStored(d);
@@ -251,6 +243,9 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         resolveCache.delete(d.id);
         return null;
       }
+      const exec = (script: string, timeoutSec: number) => execRaw(stored.sandboxId, script, timeoutSec);
+      const report = appReporter(opts.onError, d, version.env);
+      if (await appGone(exec, { appPort, report })) return null;
       const endpoint = endpointOf(stored);
       if (resolveCacheMs > 0) resolveCache.set(d.id, endpoint);
       return endpoint;
@@ -259,9 +254,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
     async logs(d, logOpts): Promise<string | null> {
       const stored = await liveStored(d);
       if (!stored) return null;
-      const lines = Math.max(1, Math.min(2000, Math.floor(logOpts.tailLines)));
-      const r = await execRaw(stored.sandboxId, `tail -n ${lines} ${shq(LOG_PATH)} 2>/dev/null || true`, 30);
-      return r.stdout;
+      return appLogs((script, timeoutSec) => execRaw(stored.sandboxId, script, timeoutSec), logOpts.tailLines);
     },
 
     destroy: (d) =>

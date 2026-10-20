@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
-import type { SlackAgentRequestContext } from "../src/api/slack-core-client.ts";
 import type { TurnResult } from "../src/types.ts";
 
 type Handler = (args: any) => Promise<void>;
@@ -333,29 +332,11 @@ class FakeCore implements SlackCoreClient {
     this.abortedRuns.push(runId);
   }
   async ackRunDelivery(): Promise<void> {}
-  async reportTurnMetrics(): Promise<void> {}
   async reportRunEditRef(): Promise<void> {}
   async getApproval(): Promise<null> {
     return null;
   }
-  readonly agentRequests = new Map<string, SlackAgentRequestContext>();
-  async putAgentRequest(requestId: string, record: SlackAgentRequestContext): Promise<void> {
-    this.agentRequests.set(requestId, record);
-  }
-  async getAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
-    return this.agentRequests.get(requestId) ?? null;
-  }
-  async takeAgentRequest(requestId: string): Promise<SlackAgentRequestContext | null> {
-    const record = this.agentRequests.get(requestId) ?? null;
-    this.agentRequests.delete(requestId);
-    return record;
-  }
-  async agentRequestForApproval(approvalRequestId: string): Promise<SlackAgentRequestContext | null> {
-    for (const record of this.agentRequests.values()) {
-      if (record.approvalRequestIds?.includes(approvalRequestId)) return record;
-    }
-    return null;
-  }
+
   async pushDirectory(body: any): Promise<boolean> {
     this.directories.push(body);
     return true;
@@ -630,6 +611,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
+    assert.equal(f.core.turns[0].slackSource.replyThreadTs, undefined);
     assert.equal(f.core.turns[0].liveActor, true);
     assert.equal(f.core.turns[0].triggerTs, "100.1");
     assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
@@ -1250,6 +1232,25 @@ test("a blocked-thread result without approval details tells only the sender ins
   }
 });
 
+test("a DM thread reply carries its reply thread as a typed Slack source field", async () => {
+  const f = await fixture();
+  try {
+    await f.app.emitMessage({
+      channel: "D1",
+      channel_type: "im",
+      user: "U1",
+      text: "and this?",
+      ts: "100.2",
+      thread_ts: "100.1",
+    });
+    assert.equal(f.core.turns.length, 1);
+    assert.equal(f.core.turns[0].conversation.kind, "dm");
+    assert.equal(f.core.turns[0].slackSource.replyThreadTs, "100.1");
+  } finally {
+    await f.stop();
+  }
+});
+
 test("an internal channel mention carries the complete audience and thread context", async () => {
   const f = await fixture();
   try {
@@ -1257,7 +1258,7 @@ test("an internal channel mention carries the complete audience and thread conte
     f.client.messagesByChannel.set("C1", [event]);
     await f.app.emitEvent("app_mention", event);
     assert.equal(f.core.turns.length, 1);
-    assert.equal(f.core.turns[0].text, "status?");
+    assert.equal(f.core.turns[0].text, "@qmbot status?");
     assert.equal(f.core.turns[0].conversation.threadRef, "ch:C1:104.1");
     assert.equal(f.core.turns[0].conversation.channelRef, "C1");
     assert.deepEqual(f.core.turns[0].conversation.audience.map((a: any) => a.externalId).sort(), ["U1", "U2"]);
