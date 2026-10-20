@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { ConnectorTokenSource } from "./sources/adapter.ts";
 import type { IngestEntryInput } from "./item-ledger.ts";
+import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 
 export interface GmailPushConfig {
   topic: string;
@@ -40,29 +41,18 @@ interface GmailMessage {
 }
 
 export function createGmailPushClient(tokens: ConnectorTokenSource, config: GmailPushConfig, fetchImpl = fetch) {
-  async function request<T>(owner: string, path: string, body?: unknown): Promise<T> {
+  async function client(owner: string) {
     const token = await tokens.connectorAccessToken("gmail.googleapis.com", owner, "personal");
     if (!token) throw new Error("Connect a personal Gmail account before enabling Gmail Pub/Sub.");
-    const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, {
-      method: body === undefined ? "GET" : "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!response.ok)
-      throw Object.assign(new Error(`Gmail ${path.split("?")[0]} returned ${response.status}`), {
-        status: response.status,
-      });
-    return (await response.json()) as T;
+    return gmailApi(token, fetchImpl);
   }
 
   return {
     async watch(owner: string): Promise<GmailCursor> {
-      const profile = await request<{ emailAddress: string }>(owner, "profile");
-      const watch = await request<{ historyId: string; expiration: string }>(owner, "watch", {
-        topicName: config.topic,
-        labelIds: ["INBOX"],
-        labelFilterBehavior: "include",
+      const request = await client(owner);
+      const profile = await request<{ emailAddress: string }>("profile");
+      const watch = await request<{ historyId: string; expiration: string }>("watch", {
+        body: { topicName: config.topic, labelIds: ["INBOX"], labelFilterBehavior: "include" },
       });
       if (!profile.emailAddress || !/^\d+$/.test(watch.historyId) || !Number.isFinite(Number(watch.expiration)))
         throw new Error("Gmail returned an invalid watch response");
@@ -78,16 +68,17 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
       cursor: GmailCursor,
       ingest: (entries: IngestEntryInput[]) => Promise<unknown>,
     ): Promise<string> {
-      const profile = await request<{ emailAddress: string; historyId: string }>(owner, "profile");
+      const request = await client(owner);
+      const profile = await request<{ emailAddress: string; historyId: string }>("profile");
       if (profile.emailAddress.toLowerCase() !== cursor.email)
         throw new Error("Connected Gmail account changed; reconnect this ingestion source.");
       const importMessages = async (ids: string[]) => {
         for (const id of new Set(ids)) {
           let message: GmailMessage;
           try {
-            message = await request<GmailMessage>(owner, `messages/${encodeURIComponent(id)}?format=metadata`);
+            message = await request<GmailMessage>(`messages/${encodeURIComponent(id)}?format=metadata`);
           } catch (error) {
-            if ((error as { status?: number }).status === 404) continue;
+            if (error instanceof GmailApiError && error.status === 404) continue;
             throw error;
           }
           if (!message.labelIds?.includes("INBOX")) continue;
@@ -136,7 +127,7 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
               messagesAdded?: Array<{ message: GmailMessage }>;
               labelsAdded?: Array<{ message: GmailMessage; labelIds: string[] }>;
             }>;
-          }>(owner, `history?${query}`);
+          }>(`history?${query}`);
           await importMessages(
             (page.history ?? []).flatMap((entry) => [
               ...(entry.messagesAdded ?? []).map((row) => row.message.id),
@@ -147,15 +138,12 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
           latest = page.historyId;
         } while (pageToken);
       } catch (error) {
-        if ((error as { status?: number }).status !== 404) throw error;
+        if (!(error instanceof GmailApiError && error.status === 404)) throw error;
         pageToken = undefined;
         do {
           const query = new URLSearchParams({ labelIds: "INBOX", maxResults: "100" });
           if (pageToken) query.set("pageToken", pageToken);
-          const page = await request<{ nextPageToken?: string; messages?: Array<{ id: string }> }>(
-            owner,
-            `messages?${query}`,
-          );
+          const page = await request<{ nextPageToken?: string; messages?: Array<{ id: string }> }>(`messages?${query}`);
           await importMessages((page.messages ?? []).map((message) => message.id));
           pageToken = page.nextPageToken;
         } while (pageToken);

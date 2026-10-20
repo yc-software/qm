@@ -1,4 +1,5 @@
-import { GmailReadError, getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
+import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
+import { GmailApiError } from "../../connectors/gmail-api.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -534,14 +535,13 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
       accountType,
     });
   } catch (error) {
-    let status = 502;
-    if (error instanceof GmailReadError) {
-      if ([401, 403].includes(error.status)) status = 409;
-      else if (error.status === 404) status = 404;
-    }
+    const upstream = error instanceof GmailApiError ? error.status : 0;
+    const reconnect = upstream === 401 || upstream === 403;
+    let status = upstream === 404 ? 404 : 502;
+    if (reconnect) status = 409;
     return sendJson(ctx.res, status, {
       error: "gmail_unavailable",
-      message: error instanceof GmailReadError ? error.message : "Couldn't load sent mail from Gmail. Try again.",
+      message: reconnect ? "Reconnect Google to read sent mail." : "Couldn't load sent mail from Gmail. Try again.",
     });
   }
 }

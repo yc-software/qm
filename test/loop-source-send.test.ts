@@ -115,6 +115,24 @@ test("gmail send posts base64url raw with the thread id", async () => {
   assert.doesNotMatch(body.raw, /[+/=]/);
 });
 
+test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
+  const result = await gmailAdapter.act(
+    {
+      owner: "josh",
+      tokens: tokens({ "gmail.googleapis.com": "tok" }),
+      fetchImpl: async () => new Response("Recipient address rejected", { status: 400 }),
+    },
+    gmailItem,
+    "send",
+    { body: "Confirmed." },
+  );
+  assert.deepEqual(result, {
+    ok: false,
+    reason: "upstream",
+    message: "Gmail refused the send (400): Recipient address rejected",
+  });
+});
+
 test("the held proposal is what goes out when the action carries no draft", async () => {
   let sent = "";
   const fetchImpl = (async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {

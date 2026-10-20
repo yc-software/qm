@@ -1,6 +1,7 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
+import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
   addressList,
@@ -101,18 +102,17 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   const mime = await buildGmailReplyMime(item, draft);
   if (!mime) return { ok: false, reason: "bad_item", message: "no recipient — add a To: address to the draft" };
   const threadId = metaOf(item)?.threadId;
-  const res = await fetchImpl(`https://${GMAIL_HOST}/gmail/v1/users/me/messages/send`, {
-    method: "POST",
-    signal: AbortSignal.timeout(30000),
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      raw: mime.toString("base64url"),
-      ...(threadId ? { threadId } : {}),
-    }),
-  });
-  if (!res.ok) {
-    const text = (await res.text().catch(() => "")).slice(0, 300);
-    return { ok: false, reason: "upstream", message: `Gmail refused the send (${res.status}): ${text}` };
+  try {
+    await gmailApi(token, fetchImpl)("messages/send", {
+      timeoutMs: 30_000,
+      body: {
+        raw: mime.toString("base64url"),
+        ...(threadId ? { threadId } : {}),
+      },
+    });
+  } catch (error) {
+    if (!(error instanceof GmailApiError)) throw error;
+    return { ok: false, reason: "upstream", message: `Gmail refused the send (${error.status}): ${error.detail}` };
   }
   return { ok: true, result: draft.body };
 }
