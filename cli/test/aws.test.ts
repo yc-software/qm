@@ -429,7 +429,7 @@ else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) conso
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
 else if (a.includes("ecs wait tasks-stopped")) console.log("");
-else if (a.includes("ecs describe-tasks") && s.taskMissing) console.log(JSON.stringify({ tasks: [], failures: [{ arn: "arn:aws:ecs:us-west-2:123456789012:task/canary", reason: "MISSING" }] }));
+else if (a.includes("ecs describe-tasks") && s.missingPolls > 0) { s.missingPolls--; save(); console.log(JSON.stringify({ tasks: [], failures: [{ arn: "arn:aws:ecs:us-west-2:123456789012:task/canary", reason: s.failureReason || "MISSING" }] })); }
 else if (a.includes("ecs describe-tasks") && s.runningPolls > 0) { s.runningPolls--; save(); console.log(JSON.stringify({ tasks: [{ lastStatus: "RUNNING", containers: [{ name: "core" }] }], failures: [] })); }
 else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ lastStatus: "STOPPED", stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
 else if (a.includes("ecs describe-task-definition")) {
@@ -2879,9 +2879,9 @@ test("AWS migration polls a long-running task to its deadline without stopping i
   };
   const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
   try {
-    setState({ runningPolls: 3 });
+    setState({ missingPolls: 2, runningPolls: 3 });
     await awsMigrateCandidate(single, dir, candidatePath);
-    assert.equal(readFileSync(fake.log, "utf8").match(/ecs describe-tasks/g)?.length, 4);
+    assert.equal(readFileSync(fake.log, "utf8").match(/ecs describe-tasks/g)?.length, 6);
 
     setState({ runningPolls: 1e9 });
     process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "50";
@@ -2894,8 +2894,17 @@ test("AWS migration polls a long-running task to its deadline without stopping i
     assert.match(calls, /ecs deregister-task-definition/);
     assert.match(calls, /dynamodb delete-item/);
 
-    setState({ runningPolls: 0, taskMissing: true });
-    await assert.rejects(() => awsMigrateCandidate(single, dir, candidatePath), /migration task failed \(MISSING\)/);
+    setState({ runningPolls: 0, missingPolls: 1e9 });
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /task\/canary is still MISSING and was left running/,
+    );
+
+    setState({ missingPolls: 1, failureReason: "ACCESS_DENIED" });
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /migration task failed \(ACCESS_DENIED\)/,
+    );
     calls = readFileSync(fake.log, "utf8");
     assert.equal(calls.match(/ecs describe-tasks/g)?.length, 1);
     assert.match(calls, /dynamodb delete-item/);

@@ -928,12 +928,12 @@ async function runAwsCandidateMigration(
         failures?: Array<{ arn?: string; reason?: string }>;
       }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
       const task = described.tasks?.[0];
-      const core = task?.containers?.find((container) => container.name === "core");
-      if (described.failures?.length || !task) {
-        const failures = described.failures?.map((failure) => failure.reason ?? "unknown").join(", ");
-        throw new CliError(`AWS migration task failed (${failures || "task not found"})`);
+      const failures = (described.failures ?? []).map((failure) => failure.reason ?? "unknown");
+      if (failures.some((reason) => reason !== "MISSING")) {
+        throw new CliError(`AWS migration task failed (${failures.join(", ")})`);
       }
-      if (task.lastStatus === "STOPPED") {
+      if (task?.lastStatus === "STOPPED") {
+        const core = task.containers?.find((container) => container.name === "core");
         if (core?.exitCode !== 0) {
           throw new CliError(
             `AWS migration task failed (${core?.reason ?? task.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
@@ -943,7 +943,7 @@ async function runAwsCandidateMigration(
       }
       if (Date.now() > deadline) {
         throw new CliError(
-          `timed out waiting for the AWS migration task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`,
+          `timed out waiting for the AWS migration task; ${taskArn} is still ${task ? (task.lastStatus ?? "unknown") : "MISSING"} and was left running`,
         );
       }
       await sleep(pollMs);
