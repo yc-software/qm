@@ -209,6 +209,17 @@ fn number(e: &El, name: &str) -> Option<f64> {
     attr(e, name)?.downcast::<CFNumber>()?.to_f64()
 }
 
+pub(super) fn scroll_pixels(amount: Amount, direction: Direction, viewport: Option<Rect>, fallback: Rect) -> i32 {
+    let view = viewport.unwrap_or(fallback);
+    match amount {
+        Amount::Pixels(n) => n as i32,
+        Amount::Pages(n) => {
+            let extent = if matches!(direction, Direction::Up | Direction::Down) { view.h } else { view.w };
+            (n.clamp(0.0, 20.0) * 0.85 * extent) as i32
+        }
+    }
+}
+
 pub(super) fn scroll_pages(host: &El, area: &El, direction: Direction, pages: f64) -> Result<bool, Failure> {
     if pages.is_nan() || pages <= 0.0 {
         return Ok(false);
@@ -310,4 +321,20 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_wheel_fallback_uses_the_scroll_pane_viewport() {
+        let pane = Rect { x: 0.0, y: 0.0, w: 200.0, h: 400.0 };
+        let row = Rect { x: 0.0, y: 0.0, w: 150.0, h: 20.0 };
+        let window = Rect { x: 0.0, y: 0.0, w: 800.0, h: 1000.0 };
+        assert_eq!(scroll_pixels(Amount::Pages(1.0), Direction::Down, Some(pane), row), 340);
+        assert_eq!(scroll_pixels(Amount::Pages(0.5), Direction::Right, Some(pane), window), 85);
+        assert_eq!(scroll_pixels(Amount::Pages(0.5), Direction::Up, None, window), 425);
+        assert_eq!(scroll_pixels(Amount::Pixels(17), Direction::Down, Some(pane), row), 17);
+    }
 }

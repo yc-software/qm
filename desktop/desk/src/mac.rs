@@ -1742,6 +1742,7 @@ impl Desk {
                 if input::menu_open(ax) {
                     return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
                 }
+                let mut viewport = None;
                 if let Amount::Pages(n) = amount {
                     let area = match target {
                         Some(Target::Index(i)) => input::scroll_area(&self.element(pid, *i)?),
@@ -1749,6 +1750,7 @@ impl Desk {
                         None => input::area_at(ax, center(w)),
                     };
                     if let Some(area) = area {
+                        viewport = frame(&area);
                         if input::scroll_pages(ax, &area, *direction, *n)? {
                             return Ok(());
                         }
@@ -1764,11 +1766,7 @@ impl Desk {
                 }
                 .unwrap_or(Rect { x: 0.0, y: 0.0, w: 600.0, h: 600.0 });
                 let (to, press) = self.pointer(ax, p)?;
-                let vertical = matches!(direction, Direction::Up | Direction::Down);
-                let mut left = match amount {
-                    Amount::Pixels(n) => *n as i32,
-                    Amount::Pages(n) => (n.clamp(0.0, 20.0) * 0.85 * if vertical { view.h } else { view.w }) as i32,
-                };
+                let mut left = input::scroll_pixels(*amount, *direction, viewport, view);
                 while left > 0 {
                     active()?;
                     let n = left.min(120);
