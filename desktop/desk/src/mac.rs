@@ -200,10 +200,8 @@ struct Observer {
 impl Observer {
     fn new(pid: i32, ax: &El) -> Option<Observer> {
         let mut o: CFTypeRef = std::ptr::null();
-        if unsafe { AXObserverCreate(pid, noticed, &mut o) } != 0 || o.is_null() {
-            return None;
-        }
-        let observer = unsafe { CFType::wrap_under_create_rule(o) };
+        let status = unsafe { AXObserverCreate(pid, noticed, &mut o) };
+        let observer = ax_result(status, o)?;
         let notices = Box::<Notices>::default();
         let refcon = &*notices as *const Notices as *mut c_void;
         let added = NOTICES
@@ -305,10 +303,18 @@ fn cfs(s: &str) -> CFString {
     CFString::new(s)
 }
 
+fn ax_result(status: i32, value: CFTypeRef) -> Option<CFType> {
+    if value.is_null() {
+        return None;
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(value) };
+    (status == 0).then_some(value)
+}
+
 fn attr(e: &El, name: &str) -> Option<CFType> {
     let mut v: CFTypeRef = std::ptr::null();
     let err = unsafe { AXUIElementCopyAttributeValue(e.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), &mut v) };
-    (err == 0 && !v.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(v) })
+    ax_result(err, v)
 }
 
 fn dead(e: &El) -> bool {
@@ -380,10 +386,8 @@ fn list(v: CFType) -> Vec<CFType> {
 
 fn actions(e: &El) -> Vec<String> {
     let mut v: CFTypeRef = std::ptr::null();
-    if unsafe { AXUIElementCopyActionNames(e.as_CFTypeRef(), &mut v) } != 0 || v.is_null() {
-        return vec![];
-    }
-    list(unsafe { CFType::wrap_under_create_rule(v) }).iter().filter_map(text_of).collect()
+    let status = unsafe { AXUIElementCopyActionNames(e.as_CFTypeRef(), &mut v) };
+    ax_result(status, v).map(list).unwrap_or_default().iter().filter_map(text_of).collect()
 }
 
 fn set_attr(e: &El, name: &str, v: &CFType) -> i32 {
@@ -773,13 +777,10 @@ thread_local! {
 fn fetch_attributes(e: &El, names: &CFArray<CFString>) -> Vec<Option<CFType>> {
     let mut v: CFTypeRef = std::ptr::null();
     let err = unsafe { AXUIElementCopyMultipleAttributeValues(e.as_CFTypeRef(), names.as_CFTypeRef(), 0, &mut v) };
-    if err != 0 || v.is_null() {
-        if !v.is_null() {
-            drop(unsafe { CFType::wrap_under_create_rule(v) });
-        }
+    let Some(values) = ax_result(err, v) else {
         return names.iter().map(|name| attr(e, &name.to_string())).collect();
-    }
-    let values = list(unsafe { CFType::wrap_under_create_rule(v) });
+    };
+    let values = list(values);
     let error = |x: &CFType| unsafe { CFGetTypeID(x.as_CFTypeRef()) == AXValueGetTypeID() && AXValueGetType(x.as_CFTypeRef()) == 5 };
     let mut out: Vec<Option<CFType>> = values.into_iter().map(|x| (!error(&x)).then_some(x)).collect();
     out.resize(names.len() as usize, None);
@@ -866,10 +867,8 @@ fn rebind_text(text: HashMap<u32, text::ObservedText>, moved: &HashMap<u32, u32>
 
 fn attributed_supported(e: &El) -> bool {
     let mut names = std::ptr::null();
-    if unsafe { AXUIElementCopyParameterizedAttributeNames(e.as_CFTypeRef(), &mut names) } != 0 || names.is_null() {
-        return false;
-    }
-    list(unsafe { CFType::wrap_under_create_rule(names) }).iter().any(|name| text_of(name).as_deref() == Some("AXAttributedStringForRange"))
+    let status = unsafe { AXUIElementCopyParameterizedAttributeNames(e.as_CFTypeRef(), &mut names) };
+    ax_result(status, names).map(list).unwrap_or_default().iter().any(|name| text_of(name).as_deref() == Some("AXAttributedStringForRange"))
 }
 
 fn native_font_traits(name: &str, size: f64) -> Option<NSFontDescriptorSymbolicTraits> {
@@ -985,10 +984,7 @@ fn attributed_text(e: &El, n: &Node) -> Option<text::RenderedText> {
             &mut value,
         )
     };
-    if result != 0 || value.is_null() {
-        return None;
-    }
-    let value = unsafe { CFType::wrap_under_create_rule(value) }.downcast::<CFAttributedString>()?;
+    let value = ax_result(result, value)?.downcast::<CFAttributedString>()?;
     let runs = attributed_runs(&value, &visible.text)?;
     let starts_line = visible.start == 0 || raw.encode_utf16().nth(visible.start - 1) == Some(10);
     let mut markdown = text::attributed_text(&runs, starts_line)?;
@@ -2024,6 +2020,22 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copied_ax_results_release_owned_values_on_error_and_success() {
+        let value = CFArray::from_CFTypes(&[cfs("owned AX result")]);
+        let baseline = value.retain_count();
+        for status in [0, -25200] {
+            let owned = value.clone();
+            let pointer = owned.as_CFTypeRef();
+            std::mem::forget(owned);
+            let result = ax_result(status, pointer);
+            assert_eq!(result.is_some(), status == 0);
+            drop(result);
+            assert_eq!(value.retain_count(), baseline);
+        }
+        assert!(ax_result(0, std::ptr::null()).is_none());
+    }
+
     #[test]
     fn observed_window_rejects_rebound_identity_with_same_element_and_frame() {
         let element = app_element(10001);

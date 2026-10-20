@@ -20,11 +20,7 @@ fn parameter(e: &El, name: &str, argument: &El) -> Option<CFType> {
     let status = unsafe {
         AXUIElementCopyParameterizedAttributeValue(e.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), argument.as_CFTypeRef(), &mut value)
     };
-    if value.is_null() {
-        return None;
-    }
-    let value = unsafe { CFType::wrap_under_create_rule(value) };
-    (status == 0).then_some(value)
+    ax_result(status, value)
 }
 
 fn bounded(range: El, mut query: impl FnMut(&str, &El) -> Option<CFType>) -> Option<Read> {

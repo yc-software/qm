@@ -9,11 +9,7 @@ const TEXT_ROLES: &[&str] = &["AXTextField", "AXTextArea", "AXComboBox"];
 fn element_at(root: &El, p: CGPoint) -> Option<El> {
     let mut v: CFTypeRef = std::ptr::null();
     let status = unsafe { AXUIElementCopyElementAtPosition(root.as_CFTypeRef(), p.x as f32, p.y as f32, &mut v) };
-    if v.is_null() {
-        return None;
-    }
-    let element = unsafe { CFType::wrap_under_create_rule(v) };
-    (status == 0).then_some(element)
+    ax_result(status, v)
 }
 
 pub(super) fn within(e: &El, ancestor: &El) -> bool {
