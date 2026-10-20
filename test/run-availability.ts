@@ -134,10 +134,15 @@ test(
     const reader = createPostgresRunStore(url);
     let notifications = 0;
     let resyncs = 0;
-    const off = reader.runs.subscribeAvailable!(() => notifications++, {
-      pollMs: 60_000,
-      onResync: () => resyncs++,
-    });
+    const off = reader.runs.subscribeAvailable!(
+      () => {
+        notifications++;
+      },
+      {
+        pollMs: 60_000,
+        onResync: () => resyncs++,
+      },
+    );
     const ids: string[] = [];
     try {
       await writer.runs.list();
@@ -349,6 +354,96 @@ test(
       holder.release();
       await runtime.close();
       await pool.end();
+      await cleanup();
+    }
+  },
+);
+
+test(
+  "Postgres wakes one idle worker per notification and a backlog still fans out",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const { url, cleanup } = await isolatedPostgres();
+    const writer = createPostgresRunStore(url);
+    const reader = createPostgresRunStore(url);
+    const direct = new pg.Pool({ connectionString: url });
+    const claim = reader.runs.claim.bind(reader.runs);
+    let claims = 0;
+    reader.runs.claim = async (...args) => {
+      claims++;
+      return claim(...args);
+    };
+    const handled: string[] = [];
+    let releaseHeld!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    const workers = Array.from({ length: 12 }, () =>
+      createWorker({
+        runs: reader.runs,
+        orchestrator: {
+          handleTurn: async (input: OrchestratorInput) => {
+            handled.push(input.conversation.threadRef);
+            if (input.text === "hold") await held;
+            return { status: "ok", sessionId: input.conversation.threadRef };
+          },
+        } as unknown as Orchestrator,
+        leaseTtlMs: 5_000,
+        pollMs: 60_000,
+      }),
+    );
+    const enqueue = (sessionId: string, text = "go") =>
+      writer.runs.enqueue({
+        sessionId,
+        request: { ...request, text, conversation: { ...request.conversation, threadRef: sessionId } },
+      });
+    try {
+      await writer.runs.list();
+      for (const worker of workers) worker.start();
+      await until(() => claims >= workers.length);
+      await sleep(100);
+      let before = claims;
+      await enqueue("single");
+      await until(() => handled.includes("single"));
+      await sleep(200);
+      assert.ok(
+        claims - before <= 4,
+        `one run costs a handful of claims, not one per idle worker (${claims - before})`,
+      );
+
+      before = claims;
+      const sessions = Array.from({ length: 6 }, (_, i) => `backlog-${i}`);
+      const startedAt = Date.now();
+      for (const sessionId of sessions)
+        await direct.query(
+          "INSERT INTO runs(id, session_id, status, request, created_at) VALUES($1,$2,'pending',$3,$4)",
+          [
+            randomUUID(),
+            sessionId,
+            JSON.stringify({
+              ...request,
+              text: "hold",
+              conversation: { ...request.conversation, threadRef: sessionId },
+            }),
+            Date.now(),
+          ],
+        );
+      await direct.query("SELECT pg_notify('qm_run_available', 'null')");
+      await until(() => sessions.every((sessionId) => handled.includes(sessionId)));
+      assert.ok(
+        Date.now() - startedAt < 2_000,
+        "one signal drains a backlog across idle workers without recovery polls",
+      );
+      const { rows } = await direct.query(
+        "SELECT count(DISTINCT worker_id)::int AS n FROM runs WHERE status='running'",
+      );
+      assert.equal(rows[0].n, sessions.length, "each backlog run is held by its own worker");
+    } finally {
+      releaseHeld();
+      await Promise.all(workers.map((worker) => worker.stop()));
+      await reader.close();
+      await writer.close();
+      await direct.end();
       await cleanup();
     }
   },

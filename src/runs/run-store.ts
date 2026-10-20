@@ -91,7 +91,8 @@ export interface EnqueueResult {
 export interface RunStore {
   readonly maxClaims?: number;
 
-  subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  // A listener returns true when it will claim because of this signal; the store may then skip the remaining listeners.
+  subscribeAvailable?(listener: () => boolean | void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
