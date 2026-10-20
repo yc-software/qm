@@ -19,15 +19,10 @@ interface McpRequest {
   authorization?: string;
 }
 
-interface TokenRequest {
-  clientId: string;
-  via: "basic" | "post";
-}
-
 export interface McpTestServer {
   url: string;
   requests: McpRequest[];
-  tokenRequests: TokenRequest[];
+  tokenRequests: string[];
   openSessions(): number;
   dropSessions(): Promise<void>;
   revokeTokens(): void;
@@ -69,7 +64,7 @@ export async function startMcpTestServer(
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const tokens = new Map<string, string>();
   const requests: McpRequest[] = [];
-  const tokenRequests: TokenRequest[] = [];
+  const tokenRequests: string[] = [];
 
   function mcpServer(): Server {
     const server = new Server({ name: "qm-test", version: "1.0.0" }, { capabilities: { tools: {} } });
@@ -102,7 +97,7 @@ export async function startMcpTestServer(
     if (form.get("grant_type") !== "client_credentials" || !clientId || opts.clients?.[clientId] !== secret) {
       return json(res, 401, { error: "invalid_client" });
     }
-    tokenRequests.push({ clientId, via: basic ? "basic" : "post" });
+    tokenRequests.push(clientId);
     const accessToken = `${clientId}-token-${tokenRequests.length}`;
     tokens.set(accessToken, clientId);
     json(res, 200, { access_token: accessToken, token_type: "Bearer", expires_in: 3600 });

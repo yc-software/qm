@@ -52,10 +52,7 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
   assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
-  assert.deepEqual(
-    mcp.tokenRequests.map((r) => r.clientId),
-    ["ro", "rw"],
-  );
+  assert.deepEqual(mcp.tokenRequests, ["ro", "rw"]);
   assert.deepEqual(
     mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => r.authorization),
     ["Bearer ro-token-1", "Bearer rw-token-2"],

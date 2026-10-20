@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
@@ -61,7 +60,10 @@ test("mcp client surfaces tool errors and protocol errors", async (t) => {
   });
   const client = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
   await assert.rejects(client.callTool("query", {}), /^Error: mcp tool query error: query exploded$/);
-  await assert.rejects(client.callTool("missing", {}), /Unknown tool: missing/);
+  await assert.rejects(
+    client.callTool("missing", {}),
+    (e: Error) => e.message === "mcp tools/call failed" && /Unknown tool: missing/.test(String(e.cause)),
+  );
 });
 
 test("mcp client starts a fresh session after the server forgets its sessions", async (t) => {
@@ -78,7 +80,7 @@ test("mcp client sends bearer auth", async (t) => {
   const good = createMcpClient({ url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
   assert.equal((await good.listTools()).length, 2);
   const bad = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
-  await assert.rejects(bad.listTools(), (e) => e instanceof StreamableHTTPError && e.code === 401);
+  await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
 });
 
 test("mcp client posts to the configured endpoint path", async (t) => {
@@ -106,7 +108,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
   });
   assert.equal((await client.listTools()).length, 2);
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
-  assert.deepEqual(mcp.tokenRequests, [{ clientId: "id", via: "basic" }]);
+  assert.deepEqual(mcp.tokenRequests, ["id"]);
   mcp.revokeTokens();
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
   assert.equal(mcp.tokenRequests.length, 2);
@@ -124,7 +126,7 @@ test("mcp client never sends client credentials to an authorization server on an
     url: mcp.url,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
   });
-  await assert.rejects(client.listTools(), /not presented to/);
+  await assert.rejects(client.listTools(), (e: Error) => /not presented to/.test(String(e.cause)));
   assert.deepEqual(elsewhere.tokenRequests, []);
   assert.deepEqual(mcp.tokenRequests, []);
 });

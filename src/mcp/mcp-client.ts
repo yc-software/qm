@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { ClientCredentialsProvider } from "@modelcontextprotocol/sdk/client/auth-extensions.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { swallowAs } from "../util/errors.ts";
 
@@ -43,7 +43,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
         })
       : undefined;
 
-  async function session<T>(work: (client: Client) => Promise<T>): Promise<T> {
+  async function session<T>(op: string, work: (client: Client) => Promise<T>): Promise<T> {
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
       ...(auth.mode === "bearer" ? { requestInit: { headers: { authorization: `Bearer ${auth.token}` } } } : {}),
@@ -53,6 +53,9 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
     try {
       await client.connect(transport);
       return await work(client);
+    } catch (e) {
+      const status = e instanceof StreamableHTTPError && e.code ? ` (HTTP ${e.code})` : "";
+      throw new Error(`mcp ${op} failed${status}`, { cause: e });
     } finally {
       await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
       await client.close();
@@ -61,7 +64,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
 
   return {
     listTools: () =>
-      session(async (client) => {
+      session("tools/list", async (client) => {
         const tools: McpRemoteTool[] = [];
         let cursor: string | undefined;
         do {
@@ -72,13 +75,12 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
         } while (cursor && tools.length < MAX_TOOLS);
         return tools.slice(0, MAX_TOOLS);
       }),
-    callTool: (name, args) =>
-      session(async (client) => {
-        const result = (await client.callTool({ name, arguments: args }, undefined, {
-          timeout: CALL_TIMEOUT_MS,
-        })) as CallToolResult;
-        if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
-        return result;
-      }),
+    async callTool(name, args) {
+      const result = (await session("tools/call", (client) =>
+        client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
+      )) as CallToolResult;
+      if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
+      return result;
+    },
   };
 }
