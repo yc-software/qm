@@ -4,7 +4,6 @@ import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
 
 export { sendJson };
-export { gzipAccepted, sendBuffered, withVary } from "../../plugins/chassis/src/http.ts";
 
 const BODY_DEADLINE = Symbol.for("qm.bodyDeadline");
 type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void } };

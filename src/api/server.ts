@@ -265,21 +265,6 @@ async function gate(
   raw: string,
   route: Pick<Route, "auth" | "actor"> | undefined,
 ): Promise<GateResult | null> {
-  const timing = requestTiming();
-  if (timing && !timing.phases.has("pre")) addPhase("pre", performance.now() - timing.startedAt, timing);
-  return timed("auth", () => gateRequest(req, res, wiring, method, pathname, url, raw, route));
-}
-
-async function gateRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  wiring: Wiring,
-  method: string,
-  pathname: string,
-  url: URL,
-  raw: string,
-  route: Pick<Route, "auth" | "actor"> | undefined,
-): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
@@ -390,6 +375,12 @@ async function gateRequest(
   return { body, capability, actor };
 }
 
+function timedGate(run: () => Promise<GateResult | null>): Promise<GateResult | null> {
+  const timing = requestTiming();
+  if (timing) addPhase("pre", performance.now() - timing.startedAt, timing);
+  return timed("auth", run);
+}
+
 function assertedActorField(field: string, url: URL, body: unknown): unknown {
   const [where, name] = field.split(".", 2) as [string, string];
   if (where === "query") return url.searchParams.get(name);
@@ -446,7 +437,7 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
       const base = baseCtx(req, res, wiring);
       const raw = rawBodies.get(req) ?? "";
       const found = findRoute(matchRoutes, base.method, base.pathname);
-      const g = await gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route);
+      const g = await timedGate(() => gate(req, res, wiring, base.method, base.pathname, base.url, raw, found?.route));
       if (!g) return;
       if (found) {
         const ctx: ApiCtx = {
@@ -493,15 +484,17 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
   const gateHook = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     const url = new URL(request.raw.url ?? "/", "http://localhost");
     const raw = rawBodies.get(request.raw) ?? "";
-    const result = await gate(
-      request.raw,
-      reply.raw,
-      wiring,
-      request.raw.method ?? "GET",
-      url.pathname,
-      url,
-      raw,
-      request.routeOptions.config.route,
+    const result = await timedGate(() =>
+      gate(
+        request.raw,
+        reply.raw,
+        wiring,
+        request.raw.method ?? "GET",
+        url.pathname,
+        url,
+        raw,
+        request.routeOptions.config.route,
+      ),
     );
     if (!result) {
       reply.hijack();

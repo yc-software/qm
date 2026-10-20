@@ -80,3 +80,30 @@ test(
     }
   },
 );
+
+test(
+  "a background query that waits behind a request's connection is not charged to that request",
+  { skip: direct ? false : "set DATABASE_URL to run" },
+  async () => {
+    configurePgPooling({ databaseUrl: direct!, queryMax: 1 });
+    const pg = createPgPool(direct!);
+    try {
+      let started!: () => void;
+      const holding = new Promise<void>((resolve) => (started = resolve));
+      const pending = withRequestTiming("t", async () => {
+        const own = pg.q("SELECT pg_sleep(0.05)");
+        started();
+        await own;
+        return requestTiming()!;
+      });
+      await holding;
+      const background = pg.q("SELECT 1");
+      const request = await pending;
+      await background;
+      assert.equal(request.db.queries, 1);
+    } finally {
+      await pg.close();
+      configurePgPooling({});
+    }
+  },
+);

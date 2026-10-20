@@ -1,3 +1,4 @@
+import { addPhase } from "../../../../plugins/chassis/src/server-timing.ts";
 import { parseScopeId } from "../../../types.ts";
 import { encodeRef, serviceCredRef } from "../../../acl/resource-ref.ts";
 import { computeRetention } from "../../../admin/retention.ts";
@@ -445,6 +446,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       return await load();
     } finally {
       timings[name] = performance.now() - start;
+      addPhase(name, timings[name]);
     }
   };
   const actor = await read("authorize", () => authorizeAdmin(ctx, targetScope));
@@ -491,12 +493,6 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
         scopeModelOptions(deps, values, view !== null && url.searchParams.get("catalog") !== "refresh"),
       )
     : undefined;
-  res.setHeader(
-    "server-timing",
-    Object.entries(timings)
-      .map(([name, duration]) => `${name};dur=${duration.toFixed(1)}`)
-      .join(", "),
-  );
   const elapsed = performance.now() - started;
   if (view && url.searchParams.get("catalog") !== "refresh" && elapsed > 500)
     console.warn(
