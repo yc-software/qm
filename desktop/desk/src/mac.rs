@@ -439,16 +439,16 @@ fn post(e: CGEvent, pid: i32) {
 
 const EVENT_WINDOW_ID: u32 = 51;
 
-fn in_window(e: &CGEvent, at: &Press, p: CGPoint) -> Result<(), Failure> {
+pub(crate) fn in_window(e: &CGEvent, window: u32, frame: &Rect, p: CGPoint) -> Result<(), Failure> {
     let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
     if pointer.is_null() {
         return Err(fail(ErrorCode::ActionFailed, "Window-relative event delivery is unavailable"));
     }
     let set_location: unsafe extern "C" fn(*mut c_void, CGPoint) = unsafe { std::mem::transmute(pointer) };
-    e.set_integer_value_field(EVENT_WINDOW_ID, at.win as i64);
-    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER, at.win as i64);
-    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT, at.win as i64);
-    unsafe { set_location(e.as_ptr().cast(), pt(p.x - at.frame.x, p.y - at.frame.y)) };
+    e.set_integer_value_field(EVENT_WINDOW_ID, window as i64);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER, window as i64);
+    e.set_integer_value_field(EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT, window as i64);
+    unsafe { set_location(e.as_ptr().cast(), pt(p.x - frame.x, p.y - frame.y)) };
     Ok(())
 }
 
@@ -480,7 +480,7 @@ fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, cl
     e.set_flags(flags);
     e.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, clicks);
     e.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, at.number);
-    in_window(&e, at, p)?;
+    in_window(&e, at.win, &at.frame, p)?;
     if !release {
         active()?;
     }
@@ -1945,7 +1945,7 @@ impl Desk {
                         .map_err(|_| fail(ErrorCode::ActionFailed, "scroll event"))?;
                     unsafe { CGEventSetLocation(e.as_ptr() as *mut c_void, p) };
                     validate_input_window(&press)?;
-                    in_window(&e, &press, p)?;
+                    in_window(&e, press.win, &press.frame, p)?;
                     active()?;
                     post(e, to);
                 }

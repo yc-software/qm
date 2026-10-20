@@ -1,4 +1,4 @@
-use crate::protocol::{ErrorCode, Failure};
+use crate::protocol::{ErrorCode, Failure, Rect};
 use core_foundation::base::{CFRetain, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
@@ -111,11 +111,6 @@ fn activate_window(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>
         return synthetic_focus(target, 0, 1);
     };
     synthetic_focus(target, window, 1)?;
-    let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
-    if pointer.is_null() {
-        return Err(Failure::new(ErrorCode::ActionFailed, "Window-relative activation is unavailable"));
-    }
-    let set_location: unsafe extern "C" fn(*mut c_void, core_graphics::geometry::CGPoint) = unsafe { std::mem::transmute(pointer) };
     autoreleasepool(|_| {
         let events = [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp]
             .into_iter()
@@ -145,16 +140,13 @@ fn activate_window(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>
                 );
                 event.set_integer_value_field(3, 0);
                 event.set_integer_value_field(7, 3);
-                event.set_integer_value_field(51, i64::from(window));
-                event.set_integer_value_field(91, i64::from(window));
-                event.set_integer_value_field(92, i64::from(window));
                 event.set_integer_value_field(41, std::process::id() as i64);
-                unsafe {
-                    set_location(
-                        event.as_ptr().cast(),
-                        core_graphics::geometry::CGPoint::new(point.x - frame.origin.x, point.y - frame.origin.y),
-                    )
-                };
+                crate::mac::in_window(
+                    &event,
+                    window,
+                    &Rect { x: frame.origin.x, y: frame.origin.y, w: frame.size.width, h: frame.size.height },
+                    point,
+                )?;
                 Ok(event)
             })
             .collect::<Result<Vec<_>, Failure>>()?;
@@ -232,14 +224,19 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     let mut failures = Vec::new();
     for (phase, result) in [("activation", activation), ("restoration", restoration), ("display resume", resumed)] {
         if let Err(error) = result {
-            failures.push(format!("{phase}: {}", error.message));
+            failures.push(format!("{phase} PID {target}: {}", error.message));
         }
     }
-    let result = if failures.is_empty() { Ok(()) } else { Err(Failure::new(ErrorCode::ActionFailed, failures.join("; "))) };
-    if result.is_err() && frontmost() != Some(target) {
-        let _ = synthetic_focus(target, 0, 2);
+    if !failures.is_empty() && frontmost() != Some(target) {
+        if let Err(error) = synthetic_focus(target, 0, 2) {
+            failures.push(format!("deactivation PID {target}: {}", error.message));
+        }
     }
-    result
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(Failure::new(ErrorCode::ActionFailed, failures.join("; ")))
+    }
 }
 
 thread_local! {
@@ -326,15 +323,19 @@ impl Focus {
         while Instant::now() < until && !crate::cancellation::cancelled() {
             std::thread::sleep(Duration::from_millis(8));
         }
-        let mut failure = None;
+        let mut failures = Vec::new();
         for (target, _) in activated.into_iter().rev() {
             if frontmost() != Some(target) {
                 if let Err(error) = synthetic_focus(target, 0, 2) {
-                    failure.get_or_insert(error);
+                    failures.push(format!("deactivation PID {target}: {}", error.message));
                 }
             }
         }
-        failure.map_or(Ok(()), Err)
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Failure::new(ErrorCode::ActionFailed, failures.join("; ")))
+        }
     }
 
     pub fn check(&self) -> Result<(), Failure> {
