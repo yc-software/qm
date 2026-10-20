@@ -907,6 +907,7 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   const layers = [{ scopeId: storageScopeId, mountPath: "/", mode: "rw" as const }];
   const turn = createTurnSandboxes({
     deps: { sandbox, sandboxResources: sandboxes, swarms: service },
+    swarmSandboxId: binding.sandboxId,
     input: { ...run.request, runId: run.id },
     actor: run.request.actor,
     session: { id: binding.member.sessionId },

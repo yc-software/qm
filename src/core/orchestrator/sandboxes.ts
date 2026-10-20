@@ -22,7 +22,7 @@ import { isSafeSkillName } from "../../skills/skill-name.ts";
 import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
-import { sleep } from "../../util/async.ts";
+import { createKeyedQueue, sleep } from "../../util/async.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -45,6 +45,7 @@ export interface TurnSandboxContext {
   openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
   ownerAuthAvailable: boolean;
+  swarmSandboxId?: string;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
   emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
@@ -67,6 +68,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     openSpeakerKeychain,
     openResourceAccess,
     ownerAuthAvailable,
+    swarmSandboxId,
     visibleSkillsForTurn,
     emitGapWork,
   } = ctx;
@@ -172,6 +174,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const resourcePendingHandles = new Map<string, SandboxHandle>();
   const resourcePending = new Map<string, Promise<SandboxHandle>>();
   let provisionInFlight: Promise<SandboxHandle> | null = null;
+  let provisionTarget: string | undefined;
+  const provisionQueue = createKeyedQueue<"scoped">();
   const holdResource = async (handle: SandboxHandle): Promise<void> => {
     if (handle.resourceId && deps.runs && input.runId)
       await deps.sandboxResources?.hold(handle.resourceId, input.runId);
@@ -184,23 +188,35 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return run?.status === "running" && !leaseLapsed(run, Date.now());
     });
   };
-  const provision = (eager = false): Promise<SandboxHandle> => {
-    if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
-      provisionInFlight = null;
-      throw err;
-    });
-    return provisionInFlight;
+  const invalidateProvision = () => {
+    const previous = box.handle ?? box.pending;
+    if (previous)
+      (box.handle ? resourceHandles : resourcePendingHandles).set(previous.resourceId ?? previous.id, previous);
+    box.handle = null;
+    box.pending = null;
+    provisionInFlight = null;
+    laidTrees.clear();
   };
-  const doProvision = async (emit: typeof emitGapWork, eager: boolean): Promise<SandboxHandle> => {
+  const provision = (eager = false): Promise<SandboxHandle> =>
+    provisionQueue("scoped", async () => {
+      if (!eager) box.used = true;
+      const sandboxId = swarmSandboxId ?? (await deps.sandboxResources?.resolve(writableScopeId ?? memoryScopeId))?.id;
+      if (provisionInFlight && provisionTarget !== sandboxId) invalidateProvision();
+      provisionTarget = sandboxId;
+      provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager, sandboxId).catch((err) => {
+        provisionInFlight = null;
+        throw err;
+      });
+      return provisionInFlight;
+    });
+  const doProvision = async (emit: typeof emitGapWork, eager: boolean, sandboxId?: string): Promise<SandboxHandle> => {
     const provisionStart = Date.now();
     if (input.externalSlack) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
     }
-    const swarmBinding = await deps.swarms?.binding(input);
     const handle = await deps.sandbox.provision(resolution.layers, {
-      ...(swarmBinding?.sandboxId ? { sandboxId: swarmBinding.sandboxId } : {}),
+      ...(sandboxId ? { sandboxId } : {}),
       env: connectorEnv,
       egress: resolution.egress,
       ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
@@ -581,6 +597,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return (await deps.processes.listLive()).some((process) => process.sandboxId === handle.resourceId);
   };
   const reclaimBox = async (): Promise<void> => {
+    await provisionQueue("scoped", async () => {});
     let ownerCleanupError: unknown;
     let scratchCleanupError: unknown;
     if (ownerAuthProvisionInFlight)
@@ -731,14 +748,5 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     provisionForReach,
     reclaimBox,
     provisionPending: () => provisionInFlight !== null,
-    invalidateProvision: () => {
-      const previous = box.handle ?? box.pending;
-      if (previous)
-        (box.handle ? resourceHandles : resourcePendingHandles).set(previous.resourceId ?? previous.id, previous);
-      box.handle = null;
-      box.pending = null;
-      provisionInFlight = null;
-      laidTrees.clear();
-    },
   };
 }

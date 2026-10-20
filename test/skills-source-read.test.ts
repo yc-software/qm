@@ -143,6 +143,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     deps: {
       skills: { recordUse: async () => {} },
       sandboxResources: {
+        resolve: async () => null,
         access: async (_actor: string, id: string) => {
           if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
           return { id, ownerScopeId: "personal:U1" };

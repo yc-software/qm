@@ -502,7 +502,6 @@ export interface ToolContextDeps {
   grantedHandles: GrantedHandle[];
   context?: TurnContext;
   sandboxResources?: SandboxResources;
-  invalidateProvision?: () => void;
   workspace: WorkspaceStore;
   deploy: DeployService;
   acl: AclStore;
@@ -797,7 +796,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
             if (action === "default") {
               if (input?.sandboxId === undefined) throw new Error("default requires sandbox_id or null");
               await resources.setDefault(deps.createdBy, writableScopeId, input.sandboxId);
-              deps.invalidateProvision?.();
               return { defaultSandboxId: input.sandboxId };
             }
             if (!input?.backend || !deps.provisionResource) throw new Error("create requires an available backend");

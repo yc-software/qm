@@ -209,7 +209,7 @@ test("listing an untouched scope never invents a legacy machine", async () => {
   await assert.rejects(resources.create("alice", "personal:alice", "toString"), /unavailable/);
 });
 
-test("turn default changes invalidate cached provisioning while explicit calls dedupe and cleanup each computer once", async () => {
+test("turn provisioning follows durable default changes while explicit handles keep their target", async () => {
   const { resources, router, layers, backend } = fixture();
   const released: string[] = [];
   backend.teardown = async (handle) => {
@@ -236,16 +236,117 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
-  const old = await turn.provision();
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const provision = backend.provision.bind(backend);
+  backend.provision = async (layers, opts) => {
+    if (layers.some((layer) => layer.scopeId === a.backingScopeId)) {
+      entered.resolve();
+      await resume.promise;
+    }
+    return provision(layers, opts);
+  };
+  const pendingOld = turn.provision();
+  await entered.promise;
   await resources.setDefault("alice", "personal:alice", b.id);
-  turn.invalidateProvision();
-  const next = await turn.provision();
+  const pendingNext = turn.provision();
+  const pendingConcurrent = turn.provision();
+  resume.resolve();
+  const [old, next, alsoNext] = await Promise.all([pendingOld, pendingNext, pendingConcurrent]);
   assert.notEqual(old.id, next.id);
+  assert.equal(next, alsoNext);
+  await resources.setDefault("alice", "personal:alice", null);
+  await assert.rejects(turn.provision(), /no default sandbox/);
+  await resources.setDefault("alice", "personal:alice", b.id);
+  const [current, concurrent] = await Promise.all([turn.provision(), turn.provision()]);
+  assert.equal(current, concurrent);
+  assert.equal(current.id, next.id);
   assert.equal((await router.run(old, "still old")).stdout, old.id);
   const [x, y] = await Promise.all([turn.provisionResource(a.id), turn.provisionResource(a.id)]);
   assert.equal(x, y);
   await turn.reclaimBox();
   assert.deepEqual(released.sort(), [a.backingScopeId, b.backingScopeId].sort());
+});
+
+test("turn cleanup waits for durable target selection before reclaiming eager provisioning", async () => {
+  const { resources, router, layers, backend } = fixture();
+  const selected = await resources.create("alice", "personal:alice", "local");
+  await resources.setDefault("alice", "personal:alice", selected.id);
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const resolve = resources.resolve.bind(resources);
+  resources.resolve = async (scope) => {
+    entered.resolve();
+    await resume.promise;
+    return resolve(scope);
+  };
+  const released: string[] = [];
+  backend.teardown = async (handle) => {
+    released.push(handle.id);
+  };
+  const turn = createTurnSandboxes({
+    deps: { sandbox: router, sandboxResources: resources },
+    input: { origin: { kind: "user" } },
+    actor: { id: "alice", type: "internal" },
+    session: { id: "s" },
+    resolution: { layers },
+    scopeId: "personal:alice",
+    memoryScopeId: "personal:alice",
+    transferId: "t",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    ownerAuthAvailable: false,
+    visibleSkillsForTurn: async () => [],
+    emitGapWork: () => {},
+  } as unknown as TurnSandboxContext);
+  const pending = turn.provision(true);
+  await entered.promise;
+  let cleaned = false;
+  const cleanup = turn.reclaimBox().then(() => {
+    cleaned = true;
+  });
+  await new Promise<void>((done) => setImmediate(done));
+  try {
+    assert.equal(cleaned, false);
+  } finally {
+    resume.resolve();
+    await Promise.all([pending, cleanup]);
+  }
+  assert.deepEqual(released, [selected.backingScopeId]);
+});
+
+test("a swarm computer stays pinned across durable default changes", async () => {
+  const { resources, router, layers, provisioned } = fixture();
+  const pinned = await resources.create("alice", "personal:alice", "local");
+  const other = await resources.create("alice", "personal:alice", "local");
+  await resources.setDefault("alice", "personal:alice", pinned.id);
+  provisioned.length = 0;
+  const turn = createTurnSandboxes({
+    deps: { sandbox: router, sandboxResources: resources },
+    swarmSandboxId: pinned.id,
+    input: { origin: { kind: "user" } },
+    actor: { id: "alice", type: "internal" },
+    session: { id: "s" },
+    resolution: { layers },
+    scopeId: "personal:alice",
+    memoryScopeId: "personal:alice",
+    transferId: "t",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    ownerAuthAvailable: false,
+    visibleSkillsForTurn: async () => [],
+    emitGapWork: () => {},
+  } as unknown as TurnSandboxContext);
+  const first = await turn.provision();
+  await resources.setDefault("alice", "personal:alice", other.id);
+  assert.equal(await turn.provision(), first);
+  await resources.setDefault("alice", "personal:alice", null);
+  assert.equal(await turn.provision(), first);
+  assert.equal(first.resourceId, pinned.id);
+  assert.deepEqual(provisioned, [pinned.backingScopeId]);
+  await turn.reclaimBox();
 });
 
 test("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
