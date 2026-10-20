@@ -20,19 +20,19 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "custom-provider-boot-")),
     harness: "pi",
-    modelId: "acme-large",
+    modelId: "custom/acme-gateway/acme-large",
   });
   const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
   const deps = serverDeps(config, built);
   assert.equal(deps.customProviders, built.customProviders);
   assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
-  assert.equal(deps.baseModelDefault, "acme-large");
+  assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
 
   const server = createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    assert.notEqual(defaultModelForHarness("pi", deps.baseModelDefault), "acme-large");
+    assert.notEqual(defaultModelForHarness("pi", deps.baseModelDefault), "custom/acme-gateway/acme-large");
 
     const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
@@ -51,7 +51,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     });
     assert.equal(put.status, 200);
 
-    assert.equal(defaultModelForHarness("pi", deps.baseModelDefault), "acme-large");
+    assert.equal(defaultModelForHarness("pi", deps.baseModelDefault), "custom/acme-gateway/acme-large");
 
     const runtime = await fetch(
       `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,
@@ -63,9 +63,9 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
       modelsByHarness: Record<string, string[]>;
       modelCatalog: Record<string, { name: string; provider: string }>;
     };
-    assert.equal(body.effective.modelId, "acme-large");
-    assert.ok(body.modelsByHarness.pi?.includes("acme-large"));
-    assert.equal(body.modelCatalog["acme-large"]?.provider, "acme-gateway");
+    assert.equal(body.effective.modelId, "custom/acme-gateway/acme-large");
+    assert.ok(body.modelsByHarness.pi?.includes("custom/acme-gateway/acme-large"));
+    assert.equal(body.modelCatalog["custom/acme-gateway/acme-large"]?.provider, "acme-gateway");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
