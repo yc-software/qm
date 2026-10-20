@@ -169,15 +169,15 @@ export interface OrchestratorDeps {
   skillBundles?: SkillBundleStore;
   skillsReady?: Promise<void>;
   advisoryLock?: AdvisoryLock;
-  approvals?: DurableMap<PendingApprovalRecord>;
-  approvalGrants?: DurableMap<CommandApprovalGrant>;
+  approvals: DurableMap<PendingApprovalRecord>;
+  approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
   ledger?: ToolLedger;
   signals?: RunSignalStore;
   turnStream?: TurnStream;
   runActivity?: RunActivityStore;
   runs?: RunStore;
-  blobTransfer?: BlobTransferStore;
+  blobTransfer: BlobTransferStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
   crons?: CronStore;

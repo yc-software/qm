@@ -10,6 +10,7 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -113,6 +114,7 @@ async function harness(opts?: {
   };
   const identity = createIdentityService();
   const poller = createMonitorPoller({
+    ...singleProcessDeps(),
     monitors,
     processes,
     sandbox: fake.sandbox,

@@ -20,7 +20,7 @@ import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type {
   Delivery,
   PendingApproval,
@@ -165,7 +165,7 @@ export interface SlackCoreClientDeps {
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
   brandingDefault?: OrgBranding;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   surfaceCache?: SurfaceCache;
   memory?: MemoryService;
@@ -176,7 +176,7 @@ const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
-  const lease = deps.leaderLease ?? createNoopLeaderLease();
+  const lease = deps.leaderLease;
   const orgScope: ScopeId = scopeId("org", configOrgId());
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {

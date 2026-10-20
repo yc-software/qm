@@ -4,12 +4,14 @@ import { scopeId } from "../src/types.ts";
 import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "../src/credentials/keychain.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
 function store(opts: { creds?: DurableMap<KeychainCredential> } = {}) {
   return createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: opts.creds ?? createMemoryMap<KeychainCredential>(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

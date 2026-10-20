@@ -10,10 +10,14 @@ import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aws-ws-"));
   return createAwsSandbox(createLocalWorkspaceStore(dir), {
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     region: "us-west-2",
     imageIdentifier: "img",
     s3Bucket: "bucket",

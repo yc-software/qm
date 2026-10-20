@@ -9,6 +9,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { DeployEndpoint } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function svc(
   opts: {
@@ -44,6 +45,7 @@ function svc(
       : {}),
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -140,6 +142,7 @@ test("alwaysOn is visible to the provider at first launch (not applied after the
     destroy: async () => {},
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -173,6 +176,7 @@ test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy
     },
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

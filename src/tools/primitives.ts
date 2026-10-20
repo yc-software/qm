@@ -62,7 +62,7 @@ import { errMessage, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -245,7 +245,6 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  mcpToolDefs(): McpToolDescriptor[];
   callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
   awaitClientResult(
     callId: string,
@@ -1229,10 +1228,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async historyOpen(seq: number): Promise<string | null> {
       if (!deps.sessionHistory) return null;
       return deps.sessionHistory.open(seq);
-    },
-
-    mcpToolDefs(): McpToolDescriptor[] {
-      return deps.mcp?.toolDefs() ?? [];
     },
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {

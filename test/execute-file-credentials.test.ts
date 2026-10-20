@@ -15,6 +15,7 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";
@@ -28,6 +29,7 @@ async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "qm-file-execution-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

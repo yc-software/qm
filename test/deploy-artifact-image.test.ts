@@ -13,6 +13,7 @@ import { createDeployService, type DeployService } from "../src/deploy/deploy-se
 import type { DeployReconcileInput } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 interface ProviderProbe {
   appliedImages: Array<string | undefined>;
@@ -22,6 +23,7 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
   const deployStore = createDeployStore();
   const probe: ProviderProbe = { appliedImages: [] };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     acl: createAclStore(),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -93,6 +95,7 @@ test("rollback reuses the stored image — the provider gets the recorded ref, n
 test("a runtime-mount provider (no image) leaves versions image-less — Docker behavior unchanged", async () => {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     acl: createAclStore(),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -120,6 +123,7 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
   const deployStore = createDeployStore();
   const reconciles: DeployReconcileInput[] = [];
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     acl: createAclStore(),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -170,6 +174,7 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
     },
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     acl: createAclStore(),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -199,6 +204,7 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
   const deployStore = createDeployStore();
   let applies = 0;
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     acl: createAclStore(),
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

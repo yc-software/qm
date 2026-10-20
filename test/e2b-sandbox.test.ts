@@ -18,6 +18,8 @@ import { installFakeE2b, type FakeE2b } from "./support/fake-e2b.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;
@@ -27,6 +29,9 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createE2bSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "e2b-ws-"))), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
     ...extra,

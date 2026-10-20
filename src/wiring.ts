@@ -1093,9 +1093,7 @@ export function buildApp(
       .digest("hex")
       .slice(0, 32);
     return createSuperserveSandbox(workspace, {
-      configEpoch:
-        ss.configGeneration ??
-        (pgArtifactMap ? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock) : 0),
+      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
       client: createSdkSuperserveClient({
         apiKey: ss.apiKey,
         ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
@@ -1340,7 +1338,6 @@ export function buildApp(
         }
       : {}),
   });
-  const mcpTools = () => mcpToolService.toolDefs();
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
     ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
     : undefined;
@@ -1489,7 +1486,6 @@ export function buildApp(
         resolveProviderKeys: resolvePiProviderKeys,
         ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
         signals: runSignals,
-        mcpTools,
       }),
     ],
     [
@@ -1505,7 +1501,6 @@ export function buildApp(
             }
           : {}),
         signals: runSignals,
-        mcpTools,
       }),
     ],
     ["mock", createMockHarness()],
@@ -2640,7 +2635,7 @@ export function buildApp(
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
     deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
-    lock: advisoryLock,
+    advisoryLock,
     crons,
     deliveries,
     idempotency,

@@ -29,6 +29,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -256,6 +257,7 @@ function buildScenario() {
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "tool-call-resume-")));
   const orchestrator = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
     sessions,
@@ -269,6 +271,7 @@ function buildScenario() {
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "tool-call-resume-deploy"),

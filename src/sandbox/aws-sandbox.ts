@@ -3,8 +3,8 @@ import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -83,8 +83,8 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
-  store?: DurableMap<StoredMicrovm>;
-  advisoryLock?: AdvisoryLock;
+  store: DurableMap<StoredMicrovm>;
+  advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
@@ -109,8 +109,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     });
   const s3: Pick<S3Client, "send"> =
     opts.s3 ?? new S3Client({ region, ...(opts.profile ? { profile: opts.profile } : {}) });
-  const store = opts.store ?? createMemoryMap<StoredMicrovm>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const store = opts.store;
+  const advisoryLock = opts.advisoryLock;
   const provisionQueue = createKeyedQueue<string>();
   const withScopeLock = <T>(scope: string, run: () => Promise<T>): Promise<T> =>
     provisionQueue(scope, () => advisoryLock.withLock(`aws-provision:${scope}`, run));

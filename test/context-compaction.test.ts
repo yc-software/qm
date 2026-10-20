@@ -41,6 +41,7 @@ import type { SessionStore } from "../src/sessions/session-store.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
@@ -115,6 +116,7 @@ function buildOrchestrator(
   const sessions = swarm?.sessions ?? createMemorySessionStore();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "cc-")));
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "cc-deploy"),
@@ -122,6 +124,7 @@ function buildOrchestrator(
     acl,
   });
   const orch = createOrchestrator({
+    ...singleProcessDeps(),
     config,
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { NotFoundError } from "porter-sandbox";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import {
@@ -71,7 +71,7 @@ export interface PorterSandboxOptions {
   apiBaseUrl?: string;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   client?: PorterClientLike;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -80,7 +80,7 @@ export const porterScopeSlug = porterSlug;
 
 const bodyName = (slug: string): string => `${slug}-${randomUUID().slice(0, 5)}`;
 
-export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandboxOptions = {}): Sandbox {
+export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandboxOptions): Sandbox {
   const image = opts.image ?? DEFAULT_PORTER_SANDBOX_IMAGE;
   const prefix = opts.namePrefix ?? "qm";
   const homeDir = opts.homeDir ?? "/root";
@@ -88,7 +88,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const workspaceDir = `${homeDir}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const egressProxyHost = opts.egressProxyUrl ? new URL(opts.egressProxyUrl).hostname : undefined;
 
   const client: PorterClientLike =

@@ -9,6 +9,7 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import { swallow } from "../src/util/errors.ts";
 import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
+import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const { awsDeploy } = loadConfig();
 const region = awsDeploy.region;
@@ -17,7 +18,7 @@ const appPort = awsDeploy.appPort ?? 8081;
 
 const api = createMicrovmApi({ region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
 const store = createMemoryMap<StoredDeployBody>();
-const provider = createAwsDeployProvider({ ...awsDeploy, store });
+const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store });
 
 function makeVersion(v: number): DeploymentVersion {
   const snapshotDir = mkdtempSync(join(tmpdir(), `aws-deploy-app-v${v}-`));

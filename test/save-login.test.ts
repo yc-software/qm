@@ -11,12 +11,14 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { scopeId } from "../src/types.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("../skills-seed/interactive-login/scripts/save-login.mjs", import.meta.url));
 
 test("save-login uploads a private login home and re-saving keeps the entry and its grants", async (t) => {
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

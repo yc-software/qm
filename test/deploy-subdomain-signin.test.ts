@@ -18,6 +18,7 @@ import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -173,6 +174,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
 
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
     deployStore,
     provider: {
@@ -374,6 +376,7 @@ test("org-wide app access admits only signed-in org members", async () => {
   const acl = createAclStore();
   const identity = createIdentityService();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     externalSharingAllowed: async () => false,
     deployStore: createDeployStore(),
     provider: {
@@ -434,6 +437,7 @@ test("org-wide app access admits only signed-in org members", async () => {
 test("subdomain ingress: without the session config the domain has no door — a 503, not a bounce", async () => {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
     deployStore,
     provider: {

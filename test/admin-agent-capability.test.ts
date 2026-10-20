@@ -24,6 +24,7 @@ import {
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
@@ -45,6 +46,7 @@ function start(withConfig = true) {
     ],
   );
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

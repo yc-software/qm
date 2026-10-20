@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
@@ -95,18 +95,18 @@ function visible(project: Project): Project {
 }
 
 export function createProjectStore(
-  backing: DurableMap<Project> = createMemoryMap<Project>(),
+  backing: DurableMap<Project>,
   opts: {
     now?: () => number;
     id?: () => string;
     isActiveMember?: (principalId: string) => boolean;
-    advisoryLock?: AdvisoryLock;
-  } = {},
+    advisoryLock: AdvisoryLock;
+  },
 ): ProjectStore {
   const now = opts.now ?? Date.now;
   const nextId = opts.id ?? randomUUID;
   const isActiveMember = opts.isActiveMember ?? (() => true);
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const withLock = <T>(id: string, fn: () => Promise<T>): Promise<T> =>
     queue(id, () => advisoryLock.withLock(`project:${id}`, fn));
