@@ -878,7 +878,8 @@ a.chat-row-open {
   align-items: center;
   gap: 5px;
 }
-.slack-logo {
+.surface-slack .slack-mark,
+.surface-glyph .slack-mark {
   display: block;
   flex-shrink: 0;
   opacity: 0.65;

@@ -73,6 +73,7 @@ import {
 import { tip } from "./tooltip";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
 import {
@@ -298,31 +299,6 @@ export function groupDmTitle(s: CoreSession): TemplateResult | string {
 
 export function sessionTitle(s: CoreSession): string {
   return s.title && s.title.trim() ? s.title : defaultSessionTitle(s);
-}
-
-export function slackLogo(size = 13): TemplateResult {
-  return html`<svg
-    class="slack-logo"
-    width=${size}
-    height=${size}
-    viewBox="0 0 122.8 122.8"
-    fill="currentColor"
-    aria-hidden="true"
-    focusable="false"
-  >
-    <path
-      d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"
-    />
-    <path
-      d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z"
-    />
-    <path
-      d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"
-    />
-    <path
-      d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"
-    />
-  </svg>`;
 }
 
 function visibleSessions(): CoreSession[] {
@@ -817,7 +793,7 @@ function chatPageRow(s: CoreSession): TemplateResult {
         <span class="list-row-title">${statusMarks(s)}<span dir="auto">${groupDmTitle(s)}</span></span>
         <span class="list-row-meta">
           ${unreadDot(s)} ${scopeChip(s.scopeId, s.channelName ?? null)}
-          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : nothing}
+          ${surfaceOf(s) === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : nothing}
           ${readOnly ? html`<span class="ro-lock" ${tip("Read-only")}>${icon(Lock, 12)}</span>` : nothing}
           <span class="list-row-date">${listWhen(activityOf(s))}</span>
           <span class="chat-row-arrow" aria-hidden="true">${icon(ChevronRight, 16)}</span>
@@ -958,7 +934,7 @@ function armMidnightRefresh(): void {
 
 function surfaceGlyph(s: CoreSession): TemplateResult | typeof nothing {
   const surface = surfaceOf(s);
-  if (surface === "slack") return html`<span class="surface-glyph">${slackLogo(12)}</span>`;
+  if (surface === "slack") return html`<span class="surface-glyph">${slackMark(12, true)}</span>`;
   if (surface === "core") return html`<span class="surface-glyph">${icon(SquareTerminal, 12)}</span>`;
   return nothing;
 }
