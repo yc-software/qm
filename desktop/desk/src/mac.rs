@@ -15,6 +15,7 @@ use core_foundation::number::CFNumber;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource};
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
+use core_graphics::access::ScreenCaptureAccess;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton, EventField, ScrollEventUnit};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::{CGPoint, CGSize};
@@ -59,8 +60,6 @@ extern "C" {
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-    fn CGRequestScreenCaptureAccess() -> bool;
     fn CGEventSetLocation(e: *mut c_void, p: CGPoint);
 }
 
@@ -1396,13 +1395,7 @@ fn permissions(prompt: bool) -> Reply {
     } else {
         unsafe { AXIsProcessTrusted() }
     };
-    let screen_recording = unsafe {
-        if prompt {
-            CGRequestScreenCaptureAccess()
-        } else {
-            CGPreflightScreenCaptureAccess()
-        }
-    };
+    let screen_recording = if prompt { ScreenCaptureAccess.request() } else { ScreenCaptureAccess.preflight() };
     let binary = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
     let help = "System Settings > Privacy & Security > Accessibility and > Screen Recording: add the app that launches desk \
 (QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
@@ -2027,7 +2020,7 @@ fn window(app: &App) -> Result<(El, El), Failure> {
 }
 
 fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
-    if !unsafe { CGPreflightScreenCaptureAccess() } {
+    if !ScreenCaptureAccess.preflight() {
         return Err(fail(ErrorCode::PermissionMissing, "Screen Recording not granted; run `desk permissions --prompt`"));
     }
     crate::capture::window(window_id(w), panels, f).map_err(|m| fail(ErrorCode::ActionFailed, m))
