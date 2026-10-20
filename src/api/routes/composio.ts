@@ -30,7 +30,7 @@ export function composioUserIds(principal: string): string[] {
   return [...new Set(personIds(principal).map((id) => composioUserId(orgId(), id)))];
 }
 
-async function activeRun(ctx: ApiCtx): Promise<boolean> {
+export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const cap = ctx.capability;
   if (!cap) return true;
   const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
