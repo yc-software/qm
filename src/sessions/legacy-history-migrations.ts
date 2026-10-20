@@ -748,6 +748,7 @@ SELECT (SELECT id FROM qm_tenant), e.session_id, e.seq,
   {
     id: "sessions/store/0035-items-keep-call-ids",
     statements: [
+      `SET LOCAL statement_timeout = 0`,
       `DO $keep_call_ids$
    BEGIN
      IF to_regclass('session_entries') IS NULL
