@@ -98,7 +98,7 @@ pub fn parse(input: &str) -> Option<Chord> {
     if let Some(code) = modifier_code(&name) {
         return Some(Chord { code, flags, character: None, modifiers });
     }
-    let single = (last.chars().count() == 1).then(|| last.chars().next().unwrap()).or_else(|| symbol(&name));
+    let single = (name.chars().count() == 1).then(|| name.chars().next().unwrap()).or_else(|| symbol(&name));
     let symbol = single.and_then(|c| "~!@#$%^&*()_+{}|:\"<>?".chars().position(|x| x == c));
     let normalized = if let Some(i) = symbol {
         flags |= SHIFT;
@@ -369,6 +369,26 @@ mod tests {
         let mut option = parse("cmd+numbersign").unwrap();
         option.remap(crate::text::Stroke { code: 20, shift: false, option: true });
         assert_eq!(option.flags, COMMAND | OPTION);
+    }
+
+    #[test]
+    fn letter_key_names_are_case_insensitive_before_layout_mapping() {
+        let layout = std::collections::HashMap::from([
+            ('z', crate::text::Stroke { code: 6, shift: false, option: false }),
+            ('Z', crate::text::Stroke { code: 6, shift: true, option: false }),
+        ]);
+        let emitted = |name| {
+            let mut chord = parse(name).unwrap();
+            chord.remap(layout[&chord.character.unwrap()]);
+            events_with_modifiers(chord.code, chord.flags, &chord.modifiers)
+        };
+        let plain = emitted("cmd+z");
+        assert_eq!(emitted("cmd+Z"), plain);
+        assert_eq!(plain.iter().map(|event| event.code).collect::<Vec<_>>(), [55, 6, 6, 55]);
+        let shifted = emitted("cmd+Shift_R+z");
+        assert_eq!(emitted("cmd+Shift_R+Z"), shifted);
+        assert_eq!(shifted.iter().map(|event| event.code).collect::<Vec<_>>(), [60, 55, 6, 6, 55, 60]);
+        assert_eq!(shifted[2].flags, COMMAND | SHIFT);
     }
 
     #[test]
