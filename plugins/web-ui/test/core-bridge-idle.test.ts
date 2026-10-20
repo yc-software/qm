@@ -340,7 +340,7 @@ test("approval denial is rendered as a normal status, not a stream error", async
 
   const streamFn = makeRunResumeStreamFn("run-denied", {
     status: "done",
-    result: { status: "refused", refusalKind: "approval_denied", reason: "Regan declined the push" },
+    result: { status: "refused", refusalKind: "approval_denied", reason: "the approver declined this push" },
     partial: "",
     activity: [
       {
