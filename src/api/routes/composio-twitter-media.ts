@@ -18,8 +18,12 @@ class XMediaError extends Error {
   constructor(endpoint: string, status: number, response: unknown) {
     super(`X ${endpoint} returned status ${status}: ${JSON.stringify(response)?.slice(0, 1000)}`);
     this.status = status;
-    const detail = (response as { detail?: unknown } | undefined)?.detail;
-    this.detail = typeof detail === "string" ? detail : undefined;
+    const { detail, errors } = (response ?? {}) as { detail?: unknown; errors?: unknown };
+    const messages = [
+      detail,
+      ...(Array.isArray(errors) ? errors.map((e) => (e as { message?: unknown })?.message) : []),
+    ];
+    this.detail = messages.filter((m): m is string => typeof m === "string").join(" ") || undefined;
   }
 }
 

@@ -155,3 +155,11 @@ test("downscaleVisionImage falls back to original bytes when no converter is ava
   assert.equal(warnings.length, 1);
   assert.match(warnings[0]!, /no image converter was found on PATH/);
 });
+
+test("sniffing a large image with many segments takes linear time", () => {
+  const segments = Buffer.alloc(1024 * 1024, Buffer.from([0xff, 0xfe, 0x00, 0x02]));
+  const crafted = Buffer.concat([Buffer.from([0xff, 0xd8]), segments]);
+  const started = performance.now();
+  assert.equal(sniffImageDimensions(crafted), undefined);
+  assert.ok(performance.now() - started < 2_000);
+});

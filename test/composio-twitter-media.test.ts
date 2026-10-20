@@ -256,10 +256,16 @@ test("ending the run partway through stops sending segments", async () => {
 
 test("provider details are masked before they reach the agent", async () => {
   const f = await fixture();
-  f.replies.push(xAccount, proxied({ detail: "rejected key private-key for this request" }, 400));
+  f.replies.push(
+    xAccount,
+    proxied(
+      { detail: "rejected key private-key for this request", errors: [{ message: "media type unrecognized" }] },
+      400,
+    ),
+  );
   const result = await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") });
   assert.equal(result.status, 502);
   assert.equal(result.data.providerStatus, 400);
   assert.doesNotMatch(result.text, /private-key/);
-  assert.match(result.data.providerDetail, /rejected key/);
+  assert.match(result.data.providerDetail, /rejected key .* media type unrecognized/);
 });
