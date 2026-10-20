@@ -1257,6 +1257,14 @@ test(
         [{ session_id: unrelated }],
         "another transaction's pending spend survives the backfill",
       );
+      await q("UPDATE sessions SET origin = 'cron' WHERE id = ANY($1) AND thread_ref = 'ch:C1:oc-thread'", [ids]);
+      assert.deepEqual(
+        (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "cron" }))
+          .filter((r) => r.threadRef === "ch:C1:oc-thread")
+          .map((r) => r.origin),
+        ["cron"],
+        "a listed session reports the stored origin its filter matched",
+      );
     } finally {
       await raw.end();
     }
