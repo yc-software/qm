@@ -1405,8 +1405,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         ),
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
-      built.config.setApprovedHarnesses(["pi"]);
-      await built.config.flushScope("org:default-org");
+      await built.config.setApprovedHarnesses(["pi"]);
       if (configured) await built.config.setPurposeRuntime("subagent", category);
       assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
     }
