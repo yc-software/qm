@@ -81,7 +81,13 @@ function plistDict(dict: Element | null | undefined): Map<string, Element> {
 }
 
 function parseItermColors(name: string, xml: string): Palette {
-  const root = new DOMParser().parseFromString(xml, "application/xml").querySelector("plist > dict");
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const error = doc.querySelector("parsererror");
+  if (error) {
+    const detail = (error.querySelector("div") ?? error).textContent!.trim().split("\n")[0];
+    throw new Error(`Couldn't read that file as XML: ${detail}`);
+  }
+  const root = doc.querySelector("plist > dict");
   const colors = new Map<string, Rgb>();
   for (const [key, value] of plistDict(root)) {
     if (value.tagName !== "dict") continue;

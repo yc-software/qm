@@ -86,10 +86,11 @@ test("an iTerm2 colour reads its own components, not those of a dict nested insi
   assert.deepEqual(importTheme("nested.itermcolors", xml).background, { r: 0, g: 128, b: 255 });
 });
 
-test("malformed iTerm2 XML is rejected with the same plain explanation", () => {
+test("malformed iTerm2 XML is rejected with the parser's own explanation", () => {
+  const complete = `${plistColor("Background Color", 0, 0, 0)}${plistColor("Foreground Color", 1, 1, 1)}`;
   assert.throws(
-    () => importTheme("x.itermcolors", `<plist><dict>${plistColor("Background Color", 0, 0, 0)}`),
-    /Background Color and a Foreground Color/,
+    () => importTheme("x.itermcolors", `<plist><dict>${complete}</plist>`),
+    /^Error: Couldn't read that file as XML: .+/,
   );
 });
 
