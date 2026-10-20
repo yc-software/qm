@@ -1705,10 +1705,7 @@ impl Desk {
             });
             return if current == Some(target) { Ok(e) } else { Err(gone()) };
         }
-        if !target.rebindable {
-            return Err(gone());
-        }
-        relocate(&roots, target).ok_or_else(gone)
+        s.ids.relocate(index, |locator| relocate(&roots, locator)).ok_or_else(gone)
     }
 
     fn point(&self, pid: i32, t: Target) -> Result<CGPoint, Failure> {

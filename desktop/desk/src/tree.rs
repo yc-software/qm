@@ -508,6 +508,10 @@ impl<T: PartialEq + Clone> Ids<T> {
                 .map(|e| e.id)
                 .collect();
             let [id] = old.into_iter().collect::<Vec<_>>()[..] else { continue };
+            let Some(replacement) = self.known.iter().find(|entry| entry.now && entry.id == new) else { continue };
+            if self.replacement_owned_by_other(id, &replacement.el) {
+                continue;
+            }
             let gone = self.by_locator[&locator].iter().filter(|&&i| self.known[i].id == id).all(|&i| dead(&self.known[i].el));
             if !gone {
                 continue;
@@ -550,6 +554,19 @@ impl<T: PartialEq + Clone> Ids<T> {
             next.add(e);
         }
         next
+    }
+
+    fn replacement_owned_by_other(&self, id: u32, element: &T) -> bool {
+        self.known.iter().any(|entry| !entry.now && entry.id != id && entry.el == *element)
+    }
+
+    pub fn relocate(&self, id: u32, find: impl FnOnce(Locator) -> Option<T>) -> Option<T> {
+        let locator = self.locator(id)?;
+        if !locator.rebindable || self.by_locator.get(&locator)?.iter().any(|&at| self.known[at].id != id) {
+            return None;
+        }
+        let replacement = find(locator)?;
+        (!self.replacement_owned_by_other(id, &replacement)).then_some(replacement)
     }
 
     pub fn locator(&self, id: u32) -> Option<Locator> {
@@ -1057,6 +1074,33 @@ mod tests {
         let new = ids.assign(&"new", 3, loc("Send"));
         assert_ne!(new, old);
         assert!(ids.rebind(|e| *e == "old").is_empty());
+    }
+
+    #[test]
+    fn action_relocation_rejects_a_surviving_duplicate_or_existing_owner() {
+        let mut ids = Ids::new();
+        let removed = ids.assign(&"removed", 1, loc("Delete"));
+        ids.assign(&"survivor", 2, loc("Delete"));
+        let ids = ids.carry();
+        assert_eq!(ids.relocate(removed, |_| Some("survivor")), None);
+        let mut ids = Ids::new();
+        let removed = ids.assign(&"removed", 1, loc("Delete"));
+        ids.assign(&"renamed", 2, loc("Cancel"));
+        let ids = ids.carry();
+        assert_eq!(ids.relocate(removed, |_| Some("renamed")), None);
+        assert_eq!(ids.relocate(removed, |_| Some("replacement")), Some("replacement"));
+    }
+
+    #[test]
+    fn observation_rebinding_does_not_take_another_ids_native_object() {
+        let mut ids = Ids::new();
+        let removed = ids.assign(&"removed", 1, loc("Delete"));
+        let other = ids.assign(&"renamed", 2, loc("Cancel"));
+        let mut ids = ids.carry();
+        let changed = ids.assign(&"renamed", 2, loc("Delete"));
+        assert!(ids.rebind(|element| *element == "removed").is_empty());
+        assert_ne!(changed, removed);
+        assert_ne!(changed, other);
     }
 
     #[test]
