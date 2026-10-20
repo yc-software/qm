@@ -327,26 +327,15 @@ async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string):
   }
 }
 
-const RANK = ["read", "write", "admin"];
-
-function grants(held: string, scope: string): boolean {
-  if (held === scope || scope.startsWith(`${held}:`)) return true;
-  if (held.slice(held.lastIndexOf("/") + 1) === scope) return true;
-  const [heldLevel, heldResource] = held.split(":");
-  const [level, resource] = scope.split(":");
-  return (
-    Boolean(resource) &&
-    heldResource === resource &&
-    RANK.indexOf(heldLevel!) >= RANK.indexOf(level!) &&
-    RANK.includes(level!)
-  );
+function scopeName(scope: string): string {
+  return scope.slice(scope.lastIndexOf("/") + 1) || scope;
 }
 
 function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
   const granted = account.state?.val?.scope;
   if (typeof granted !== "string" || !granted.trim()) return [];
-  const held = granted.split(/[\s,]+/).filter(Boolean);
-  return configured.filter((scope) => !held.some((candidate) => grants(candidate, scope)));
+  const held = new Set(granted.split(/[\s,]+/).map(scopeName));
+  return configured.filter((scope) => !held.has(scopeName(scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {

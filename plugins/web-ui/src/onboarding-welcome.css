@@ -226,7 +226,7 @@ qm-onboarding-welcome {
 }
 .connection-connected .kc-text-action {
   padding: 0 2px;
-  font-size: 10px;
+  font-size: inherit;
 }
 .connection-result strong {
   font-weight: 550;

@@ -314,38 +314,26 @@ test("connections report scopes the app's configuration grants that an older con
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
 });
 
-test("scopes covered by a broader or differently written grant are not reported missing", async () => {
+test("scopes granted in URL form match their short configured names", async () => {
   const f = fixture();
   await f.own();
-  const account = (id: string, config: string, scope: string) => ({
-    id,
-    user_id: composioUserId(orgId(), "alice"),
-    status: "ACTIVE",
-    toolkit: { slug: id.slice(3) },
-    auth_config: { id: config },
-    state: { val: { scope } },
-  });
   f.replies.push(
     {
       items: [
-        account("ca_github", "ac_github", "user,gist,admin:org"),
-        account("ca_outlook", "ac_outlook", "https://graph.microsoft.com/Mail.Read offline_access"),
-        account("ca_slack", "ac_slack", "files:write,chat:write"),
+        {
+          id: "ca_outlook",
+          user_id: composioUserId(orgId(), "alice"),
+          status: "ACTIVE",
+          toolkit: { slug: "outlook" },
+          auth_config: { id: "ac_outlook" },
+          state: { val: { scope: "https://graph.microsoft.com/Mail.Read offline_access https://mail.google.com/" } },
+        },
       ],
     },
-    { credentials: { scopes: ["user", "user:email", "gist", "read:org", "repo"] } },
-    { credentials: { scopes: ["Mail.Read", "offline_access", "Mail.Send"] } },
-    { credentials: { scopes: ["files:read", "chat:write"] } },
+    { credentials: { scopes: ["Mail.Read", "offline_access", "https://mail.google.com/", "Mail.Send"] } },
   );
   const r = await f.invoke("/v1/composio/connections");
-  assert.deepEqual(
-    r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
-    [
-      ["ca_github", ["repo"]],
-      ["ca_outlook", ["Mail.Send"]],
-      ["ca_slack", ["files:read"]],
-    ],
-  );
+  assert.deepEqual(r.data.items[0].missingScopes, ["Mail.Send"]);
 });
 
 test("people can disconnect only their own connections, on a turn they started", async () => {
