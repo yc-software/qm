@@ -10,21 +10,24 @@ import { emailSecretNames, serviceSecretValue } from "./secrets.ts";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
-function versionParts(version: string): number[] {
-  return version
-    .replace(/^v/, "")
-    .split(".")
-    .map((part) => Number.parseInt(part, 10) || 0);
+interface Semver {
+  core: number[];
+  prerelease: boolean;
 }
 
-function versionAtLeast(actual: string, minimum: string): boolean {
-  const a = versionParts(actual);
-  const b = versionParts(minimum);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const delta = (a[i] ?? 0) - (b[i] ?? 0);
-    if (delta !== 0) return delta > 0;
-  }
-  return true;
+function parseSemver(text: string): Semver | undefined {
+  const bare = text.trim().startsWith("v") ? text.trim().slice(1) : text.trim();
+  const [version = ""] = bare.split("+");
+  const [release = "", ...prerelease] = version.split("-");
+  const core = release.split(".");
+  if (core.length > 3 || !core.every((part) => Number.isSafeInteger(Number(part)) && String(Number(part)) === part))
+    return undefined;
+  return { core: [0, 1, 2].map((i) => Number(core[i] ?? 0)), prerelease: prerelease.length > 0 };
+}
+
+function atLeast(actual: Semver, minimum: Semver): boolean {
+  for (let i = 0; i < 3; i++) if (actual.core[i] !== minimum.core[i]) return actual.core[i]! > minimum.core[i]!;
+  return !actual.prerelease || minimum.prerelease;
 }
 
 function enginesNodeSpec(packagePath: string): string | undefined {
@@ -43,16 +46,20 @@ function cliPackagePath(): string {
 }
 
 export function nodeEngineProblem(spec: string, source: string, nodeVersion = process.version): string | undefined {
-  const minimums = [...spec.matchAll(/>=\s*v?(\d+(?:\.\d+){0,2})/g)].map((match) => match[1]!);
-  for (const minimum of minimums) {
-    if (!versionAtLeast(nodeVersion, minimum)) {
-      return (
-        `Node ${nodeVersion} does not satisfy "node": ${JSON.stringify(spec)} required by ${source} — ` +
-        `install Node >=${minimum} (e.g. \`nvm install ${minimum.split(".")[0]}\`) and rerun`
-      );
-    }
+  const minimumText = spec.trim().startsWith(">=") ? spec.trim().slice(2).trim() : "";
+  const minimum = parseSemver(minimumText);
+  const actual = parseSemver(nodeVersion);
+  if (!minimum || !actual) {
+    warn(
+      `cannot check "node": ${JSON.stringify(spec)} in ${source} — qm only checks a single ">=<version>" constraint`,
+    );
+    return undefined;
   }
-  return undefined;
+  if (atLeast(actual, minimum)) return undefined;
+  return (
+    `Node ${nodeVersion} does not satisfy "node": ${JSON.stringify(spec)} required by ${source} — ` +
+    `install Node >=${minimumText} (e.g. \`nvm install ${minimum.core[0]}\`) and rerun`
+  );
 }
 
 export function assertNodeEngine(deploymentDir?: string): void {

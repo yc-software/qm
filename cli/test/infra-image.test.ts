@@ -61,7 +61,7 @@ if (command === "dynamodb put-item") {
   const item = JSON.parse(args[args.indexOf("--item") + 1]);
   const current = readLock();
   if (current && Number(current.expiresAt) >= Math.floor(Date.now() / 1000)) {
-    console.error("ConditionalCheckFailedException: lock held");
+    console.error(JSON.stringify({ Code: "ConditionalCheckFailedException", Message: "lock held" }));
     process.exit(6);
   }
   writeLock({key:item.lockKey.S,holder:item.holder.S,expiresAt:item.expiresAt.N});
@@ -70,7 +70,7 @@ if (command === "dynamodb put-item") {
   const current = readLock();
   const values = JSON.parse(args[args.indexOf("--expression-attribute-values") + 1]);
   if (!current || current.holder !== values[":holder"].S) {
-    console.error("ConditionalCheckFailedException: lease lost");
+    console.error(JSON.stringify({ Code: "ConditionalCheckFailedException", Message: "lease lost" }));
     process.exit(6);
   }
   fs.unlinkSync(lockPath);
@@ -112,7 +112,7 @@ else if (command === "s3api put-object") {
     state.state = "UPDATING";
     state.externalInFlight = true;
     writeState(state);
-    console.error("ConflictException: another operation is in progress");
+    console.error(JSON.stringify({ Code: "ConflictException", Message: "another operation is in progress" }));
     process.exit(2);
   }
   state.version++;

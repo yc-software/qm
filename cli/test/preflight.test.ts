@@ -49,6 +49,25 @@ test("nodeEngineProblem accepts a satisfying version and rejects an older one", 
   assert.ok(problem?.includes("the repo package.json"));
 });
 
+test("nodeEngineProblem ranks a prerelease below its release and ignores build metadata", () => {
+  assert.ok(nodeEngineProblem(">=24.0.0", "package.json", "v24.0.0-rc.1"));
+  assert.equal(nodeEngineProblem(">=24", "package.json", "v24.0.0+build.7"), undefined);
+  assert.equal(nodeEngineProblem(">=24.15.0", "package.json", "v25.0.0-nightly20261019"), undefined);
+});
+
+test("nodeEngineProblem warns instead of silently passing a constraint it cannot check", () => {
+  const lines: string[] = [];
+  const prior = console.warn;
+  console.warn = (...args: unknown[]): void => void lines.push(args.join(" "));
+  try {
+    assert.equal(nodeEngineProblem("^24.0.0 || ^26.0.0", "package.json", "v22.0.0"), undefined);
+  } finally {
+    console.warn = prior;
+  }
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0]!.includes('"^24.0.0 || ^26.0.0"'));
+});
+
 test("fly sandbox preflight fails with the exact fix when the token cannot reach the app", async () => {
   const secrets = new Map([["FLY_SANDBOX_API_TOKEN", "fm2_dead"]]);
   const fetchImpl = (async () => new Response("not found", { status: 404 })) as typeof fetch;

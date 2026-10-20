@@ -3,14 +3,10 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  doctorCommon,
-  localDoctorSecrets,
-  requiredSlackScopes,
-  slackManifestBotScopes,
-} from "../src/backends/doctor.ts";
+import { doctorCommon, localDoctorSecrets } from "../src/backends/doctor.ts";
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
+import { slackBotScopes } from "../src/slack-manifests.ts";
 
 const config: QmConfig = {
   contract: 1,
@@ -159,7 +155,8 @@ test("Fly doctor requires the signing secret for source plugins absent from conf
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\n");
+if (app === "acme-core") process.stdout.write(JSON.stringify(["CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY", "CORE_SIGNING_SECRET", "PORTAL_IDENTITY_SECRET", "SKILL_SIGNING_SECRET", "FLY_API_TOKEN", "FLY_DEPLOY_API_TOKEN"].map((name) => ({ name }))));
+else process.stdout.write("[]");
 `,
   );
   chmodSync(bin, 0o755);
@@ -185,8 +182,9 @@ test("Fly doctor rejects persisted core access on coreless plugins", async () =>
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
-if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SECRET\\n");
+if (app === "acme-core") process.stdout.write(JSON.stringify(["CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY", "CORE_SIGNING_SECRET", "PORTAL_IDENTITY_SECRET", "SKILL_SIGNING_SECRET", "FLY_API_TOKEN"].map((name) => ({ name }))));
+else if (app === "acme-signer") process.stdout.write(JSON.stringify(["CORE_API_URL", "CORE_SIGNING_SECRET"].map((name) => ({ name }))));
+else process.stdout.write("[]");
 `,
   );
   chmodSync(bin, 0o755);
@@ -222,7 +220,8 @@ test("Fly doctor demands the plain name too for a dual-role (core + sandbox) sec
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
 const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
+if (app === "acme-core") process.stdout.write(JSON.stringify(["CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY", "CORE_SIGNING_SECRET", "PORTAL_IDENTITY_SECRET", "SKILL_SIGNING_SECRET", "FLY_API_TOKEN", "FLY_DEPLOY_API_TOKEN", "FLY_RESIDENT_ENV_ANTHROPIC_API_KEY"].map((name) => ({ name }))));
+else process.stdout.write("[]");
 `,
   );
   chmodSync(bin, 0o755);
@@ -286,102 +285,6 @@ process.exit(0);
   }
 });
 
-test("doctor reads the deployment's slack-app-manifest.yml scopes, falling back to the template", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-manifest-"));
-  try {
-    const templateScopes = requiredSlackScopes();
-    assert.ok(templateScopes.includes("chat:write"), "template scopes parse");
-    assert.deepEqual(requiredSlackScopes(dir), templateScopes, "no deployment manifest → template");
-    writeFileSync(
-      join(dir, "slack-app-manifest.yml"),
-      [
-        "display_information:",
-        "  name: acme Agent",
-        "oauth_config:",
-        "  scopes:",
-        "    bot:",
-        "      - chat:write",
-        "      - custom:scope",
-        "settings:",
-        "  socket_mode_enabled: true",
-      ].join("\n"),
-    );
-    assert.deepEqual(requiredSlackScopes(dir), ["chat:write", "custom:scope"], "deployment manifest wins");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("requiredSlackScopes warns when the deployment manifest lags the template's scopes, and stays quiet on a superset", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-stale-"));
-  const lines: string[] = [];
-  const priorWarn = console.warn;
-  console.warn = (...args: unknown[]): void => void lines.push(args.join(" "));
-  try {
-    const templateScopes = requiredSlackScopes();
-    writeFileSync(join(dir, "slack-app-manifest.yml"), "oauth_config:\n  scopes:\n    bot:\n      - chat:write\n");
-    requiredSlackScopes(dir);
-    assert.equal(lines.length, 1, "a lagging manifest draws exactly one warning");
-    for (const scope of templateScopes.filter((s) => s !== "chat:write")) {
-      assert.ok(lines[0]!.includes(scope), `warning names missing scope ${scope}`);
-    }
-    lines.length = 0;
-    writeFileSync(
-      join(dir, "slack-app-manifest.yml"),
-      JSON.stringify({ oauth_config: { scopes: { bot: [...templateScopes, "custom:extra"] } } }),
-    );
-    assert.deepEqual(requiredSlackScopes(dir), [...templateScopes, "custom:extra"]);
-    assert.deepEqual(lines, [], "a superset manifest draws no warning");
-  } finally {
-    console.warn = priorWarn;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("slackManifestBotScopes reads both YAML and JSON manifests", () => {
-  assert.deepEqual(slackManifestBotScopes('{"oauth_config":{"scopes":{"bot":["a:b","c:d"]}}}'), ["a:b", "c:d"]);
-  assert.deepEqual(slackManifestBotScopes('oauth_config:\n  scopes:\n    bot:\n      - a:b\n      - "c:d"\n'), [
-    "a:b",
-    "c:d",
-  ]);
-});
-
-test("slackManifestBotScopes parses inline-flow lists, quoted or not", () => {
-  assert.deepEqual(slackManifestBotScopes("oauth_config:\n  scopes:\n    bot: [a:b, \"c:d\", 'e:f']\n"), [
-    "a:b",
-    "c:d",
-    "e:f",
-  ]);
-  assert.deepEqual(slackManifestBotScopes("oauth_config:\n  scopes:\n    bot: [chat:write]  # keep in sync\n"), [
-    "chat:write",
-  ]);
-});
-
-test("slackManifestBotScopes does not truncate on comments inside a block list", () => {
-  const yaml = [
-    "oauth_config:",
-    "  scopes:",
-    "    bot:",
-    "      - chat:write",
-    "      # socket mode needs this",
-    "      - users:read  # directory sync",
-    '      - "channels:history"',
-    "settings:",
-    "  socket_mode_enabled: true",
-  ].join("\n");
-  assert.deepEqual(slackManifestBotScopes(yaml), ["chat:write", "users:read", "channels:history"]);
-});
-
-test("requiredSlackScopes throws when a manifest exists but zero scopes parse", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-zeroscope-"));
-  try {
-    writeFileSync(join(dir, "slack-app-manifest.yml"), "display_information:\n  name: acme Agent\n");
-    assert.throws(() => requiredSlackScopes(dir), /no bot scopes parse/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 const SLACK_TOKENS = new Map([
   ["SLACK_BOT_TOKEN", "xoxb-test"],
   ["SLACK_APP_TOKEN", "xapp-test"],
@@ -434,7 +337,7 @@ const authOk = (scopes?: string): Response =>
 test("slackCheck passes when granted scopes are a superset of the manifest's", async () => {
   const dir = manifestDir();
   try {
-    await withStubbedSlack({ auth: authOk("chat:write, users:read, extra:scope") }, () =>
+    await withStubbedSlack({ auth: authOk([...slackBotScopes(), "extra:scope"].join(", ")) }, () =>
       doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
     );
   } finally {
@@ -454,7 +357,7 @@ test("Slack doctor validates deployment-file tokens before conflicting ambient t
     seen.push(new Headers(init?.headers).get("authorization") ?? "");
     const url = String(input);
     return url.endsWith("/auth.test")
-      ? authOk("chat:write, users:read")
+      ? authOk(slackBotScopes().join(", "))
       : new Response(JSON.stringify({ ok: true }), { status: 200 });
   }) as typeof fetch;
   try {
@@ -478,7 +381,7 @@ test("Slack doctor validates the bot through its configured API while Socket Mod
     const url = String(input);
     seen.push(url);
     return url.endsWith("/auth.test")
-      ? authOk("chat:write, users:read")
+      ? authOk(slackBotScopes().join(", "))
       : new Response(JSON.stringify({ ok: true }), { status: 200 });
   }) as typeof fetch;
   try {
@@ -498,7 +401,7 @@ test("Slack doctor does not require a Socket Mode token for HTTP events", async 
   const dir = manifestDir();
   const httpConfig = { ...slackConfig(), env: { slack: { SLACK_EVENTS_MODE: "http" } } };
   try {
-    await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
+    await withStubbedSlack({ auth: authOk(slackBotScopes().join(", ")) }, () =>
       doctorCommon(httpConfig, new Map([["SLACK_BOT_TOKEN", "xoxb-test"]]), { configDir: dir }),
     );
   } finally {
@@ -509,8 +412,17 @@ test("Slack doctor does not require a Socket Mode token for HTTP events", async 
 test("slackCheck fails naming each manifest scope the token lacks", async () => {
   const dir = manifestDir();
   try {
-    await withStubbedSlack({ auth: authOk("chat:write") }, () =>
-      assert.rejects(doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }), /missing scopes: users:read/),
+    await withStubbedSlack({ auth: authOk("chat:write, users:read") }, () =>
+      assert.rejects(
+        doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
+        (error: unknown) =>
+          (error as Error).message.includes(
+            `missing scopes: ${slackBotScopes()
+              .filter((scope) => scope !== "chat:write" && scope !== "users:read")
+              .join(", ")};`,
+          ),
+        "a deployment manifest listing fewer scopes does not lower what doctor requires",
+      ),
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -537,9 +449,8 @@ test("slackCheck treats a missing x-oauth-scopes header as zero granted scopes, 
   const dir = manifestDir();
   try {
     await withStubbedSlack({ auth: authOk() }, () =>
-      assert.rejects(
-        doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }),
-        /missing scopes: chat:write, users:read/,
+      assert.rejects(doctorCommon(slackConfig(), SLACK_TOKENS, { configDir: dir }), (error: unknown) =>
+        (error as Error).message.includes(`missing scopes: ${slackBotScopes().join(", ")};`),
       ),
     );
   } finally {
@@ -552,7 +463,7 @@ test("slackCheck rejects a bad Socket Mode app token even when the bot token pas
   try {
     await withStubbedSlack(
       {
-        auth: authOk("chat:write, users:read"),
+        auth: authOk(slackBotScopes().join(", ")),
         socket: new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200 }),
       },
       () =>

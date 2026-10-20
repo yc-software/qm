@@ -90,9 +90,9 @@ export function writeConfig(
   return path;
 }
 
-const STANDIN_DOCKERFILE = `FROM alpine:latest
+const STANDIN_DOCKERFILE = `FROM node:24-alpine
 ARG WEB_UI_BASE
-CMD ["sh","-c","echo 'listening on :8080'; echo 'connected as @e2ebot'; echo 'surface on http://localhost'; echo '[admin-plugin] http'; echo 'public front door on'; echo 'tail sentinel'; while true; do sleep 3600; done"]
+CMD ["node","-e","console.log('listening on :8080'); console.log('tail sentinel'); require('node:http').createServer((req, res) => res.end('ok')).listen(8080)"]
 `;
 
 export function standInCheckout(services: readonly string[]): string {
@@ -232,8 +232,8 @@ if (${fail} && args[0] === ${fail}) { console.error(args[0] + ": fake fly failur
 const has = (a, b) => args[0] === a && args[1] === b;
 if (has("apps", "create")) { console.log("created"); }
 else if (has("apps", "list")) { console.log(JSON.stringify(${apps})); }
-else if (has("secrets", "list")) { for (const s of ${secrets}) console.log(s); }
-else if (has("mpg", "list")) { console.log("pg-1 test-pg"); }
+else if (has("secrets", "list")) { console.log(JSON.stringify(${secrets}.map((name) => ({ name })))); }
+else if (has("mpg", "list")) { console.log(JSON.stringify([{ id: "pg-1", name: "test-pg" }])); }
 else if (args[0] === "status") {
   const app = args[args.indexOf("-a") + 1];
   const owner = ${appOwners}[app];
@@ -243,6 +243,7 @@ else if (args[0] === "status") {
 else if (args[0] === "logs") { console.log("log line from fake fly"); }
 else if (args[0] === "scale") { console.log("scaled"); }
 else if (args[0] === "deploy") { console.log("deployed"); }
+else if (has("ips", "list")) { console.log("[]"); }
 else if (args[0] === "ips") { console.log("allocated"); }
 else { console.log("ok"); }
 `,

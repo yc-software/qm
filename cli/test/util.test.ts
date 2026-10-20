@@ -2,9 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { canonicalJson } from "../src/canonical-json.ts";
-import { capture, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import {
+  capture,
+  runInheritAsync,
+  flyBin,
+  isInvalidSecret,
+  readEnvFile,
+  waitForJson,
+  writeEnvValue,
+} from "../src/util.ts";
 
 test("capture accepts CLI output larger than Node's one-megabyte default", () => {
   const output = capture(process.execPath, ["-e", 'process.stdout.write("x".repeat(2 * 1024 * 1024))']);
@@ -205,4 +214,26 @@ test("promptHidden treats Ctrl-D as enter on a non-empty buffer and as cancel on
 test("async inherited processes reject spawn errors and signal termination", async () => {
   await assert.rejects(runInheritAsync("/definitely-missing-qm-command", []), /ENOENT/);
   await assert.rejects(runInheritAsync(process.execPath, ["-e", 'process.kill(process.pid, "SIGTERM")']), /SIGTERM/);
+});
+
+test("waitForJson polls until the endpoint answers with a body the caller accepts", async () => {
+  let hits = 0;
+  const server = createServer((_req, res) => {
+    hits++;
+    if (hits === 1) {
+      res.writeHead(503).end();
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: hits > 2, connectedAs: "qm" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    const body = await waitForJson(`http://127.0.0.1:${port}/healthz`, 10, (candidate) => candidate.ok === true);
+    assert.deepEqual(body, { ok: true, connectedAs: "qm" });
+    assert.equal(hits, 3);
+    assert.equal(await waitForJson(`http://127.0.0.1:${port}/healthz`, 1, () => false), undefined);
+  } finally {
+    server.close();
+  }
 });

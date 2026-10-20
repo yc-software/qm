@@ -1,5 +1,6 @@
 import { httpDeploymentLayerTransport, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +29,7 @@ import {
   hostedServiceEnv,
   serviceHost,
   serviceDef,
+  serviceHealthCheck,
   teardownOrdered,
   virtualServiceEnv,
   type LogOpts,
@@ -521,21 +523,25 @@ function noteLogTail(name: string, logs: string): void {
 }
 
 async function waitReady(ctx: DockerCtx, service: ServiceName): Promise<void> {
-  const def = serviceDef(service);
   const name = cname(ctx, service);
+  const def = serviceDef(service);
+  const [, ...probe] = serviceHealthCheck(def, def.docker.internalPort);
+  let lastProbe = "";
   for (let i = 0; i < 90; i++) {
-    const logs = captureBoth("docker", ["logs", name]);
-    if (def.readiness.test(logs)) {
+    const result = spawnSync("docker", ["exec", name, ...probe], { encoding: "utf8", timeout: 5000 });
+    if (result.status === 0) {
       persistRestart(name);
       return;
     }
+    lastProbe = (result.stderr || result.error?.message || `exit ${result.status}`).trim();
     if (!containerRunning(name)) {
-      noteLogTail(name, logs);
+      noteLogTail(name, captureBoth("docker", ["logs", name]));
       throw new CliError(`${service} exited before becoming ready (see logs above)`);
     }
     await sleep(1000);
   }
-  throw new CliError(`${service} did not become ready in 90s`);
+  noteLogTail(name, captureBoth("docker", ["logs", name]));
+  throw new CliError(`${service} did not become ready in 90s; last health check: ${lastProbe} (see logs above)`);
 }
 
 async function waitPluginUp(name: string): Promise<void> {

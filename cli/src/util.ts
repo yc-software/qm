@@ -22,9 +22,9 @@ const procOpts = (o: { cwd?: string; env?: NodeJS.ProcessEnv }) => ({
   ...(o.env ? { env: o.env } : {}),
 });
 
-async function pollUntil(cond: () => boolean, tries: number): Promise<boolean> {
+async function pollUntil(cond: () => boolean | Promise<boolean>, tries: number): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
-    if (cond()) return true;
+    if (await cond()) return true;
     await sleep(1000);
   }
   return false;
@@ -222,15 +222,22 @@ export async function stopPid(pid: number | undefined, graceSec = 5): Promise<vo
   killTree(pid!, "SIGKILL");
 }
 
-export function waitForLog(file: string, pattern: RegExp, timeoutSec: number): Promise<boolean> {
-  return pollUntil(() => {
-    if (!existsSync(file)) return false;
+export async function waitForJson(
+  url: string,
+  timeoutSec: number,
+  ready: (body: Record<string, unknown>) => boolean = () => true,
+): Promise<Record<string, unknown> | undefined> {
+  let body: Record<string, unknown> | undefined;
+  const answered = await pollUntil(async () => {
     try {
-      return pattern.test(readFileSync(file, "utf8"));
+      const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
+      body = response.ok ? ((await response.json()) as Record<string, unknown>) : undefined;
     } catch {
-      return false;
+      body = undefined;
     }
+    return !!body && ready(body);
   }, timeoutSec);
+  return answered ? body : undefined;
 }
 
 export const tailString = (s: string, lines: number): string => s.split("\n").slice(-lines).join("\n");

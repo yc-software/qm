@@ -45,7 +45,7 @@ if (args[0] === "run") {
   console.log("cid");
   process.exit(0);
 }
-if (args[0] === "logs") { console.log("listening on :8080"); process.exit(0); }
+if (args[0] === "logs") { console.log("container log line"); process.exit(0); }
 if (args[0] === "volume") { console.error("No such volume"); process.exit(1); }
 if (args[0] === "inspect") {
   if (String(args[args.length - 1]).endsWith("-pg")) { console.error("No such object"); process.exit(1); }

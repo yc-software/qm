@@ -24,11 +24,12 @@ if (args[0] === "apps" && args[1] === "create") {
 } else if (args[0] === "secrets" && args[1] === "set") {
   console.log("staged");
 } else if (args[0] === "secrets" && args[1] === "list") {
-  console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : "DATABASE_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");
+  console.log(JSON.stringify(["ADMIN_GRANTS", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_ENDPOINT_URL_S3", "AWS_SECRET_ACCESS_KEY", "CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY", "CORE_SIGNING_SECRET", "PORTAL_IDENTITY_SECRET", "SKILL_SIGNING_SECRET", "FLY_API_TOKEN", "PUBLIC_API_URL", ...(process.env.FAKE_FLY_FRESH_PG ? [] : ["DATABASE_URL"]), "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"].map((name) => ({ name }))));
 } else if (args[0] === "mpg" && args[1] === "list") {
-  console.log(process.env.FAKE_FLY_FRESH_PG ? "" : "pg-1 test-pg");
+  const created = require("node:path").join(__dirname, "mpg-created");
+  console.log(JSON.stringify(fs.existsSync(created) ? [{ id: "pg-1", name: fs.readFileSync(created, "utf8") }] : process.env.FAKE_FLY_FRESH_PG ? [] : [{ id: "pg-1", name: "test-pg" }]));
 } else if (args[0] === "mpg" && args[1] === "create") {
-  console.log("ID: pg-1");
+  fs.writeFileSync(require("node:path").join(__dirname, "mpg-created"), args[args.indexOf("--name") + 1]);
 } else if (args[0] === "mpg" && args[1] === "status") {
   if (process.env.FAKE_FLY_STATUS_FAIL) {
     console.log("postgresql://fly-user:secret@direct.pg-1.flympg.net/fly-db");

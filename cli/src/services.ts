@@ -91,7 +91,6 @@ interface FlyServiceSpec {
 
 export interface ServiceDef {
   name: ServiceName;
-  readiness: RegExp;
   order: number;
   dev?: {
     cwd: string;
@@ -106,7 +105,7 @@ export interface ServiceDef {
     hostPortOffset?: number;
   };
   fly?: FlyServiceSpec;
-  tcpIngress?: { healthCheck: string[] };
+  tcpIngress?: { healthCheck: ["CMD", ...string[]] };
 }
 
 export interface BrandEnv {
@@ -217,7 +216,6 @@ const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> =>
 const CATALOG: Record<ServiceName, ServiceDef> = {
   core: {
     name: "core",
-    readiness: /listening on :\d+/,
     order: 0,
     dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/index.ts"], portEnv: "PORT", portSlotOffset: 0 },
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
@@ -241,7 +239,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   "web-ui": {
     name: "web-ui",
-    readiness: /surface on http/,
     order: 20,
     dev: {
       cwd: "plugins/web-ui",
@@ -259,7 +256,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   admin: {
     name: "admin",
-    readiness: /\[admin-plugin\] http/,
     order: 30,
     dev: { cwd: "plugins/admin", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 32 },
     docker: { image: "admin", internalPort: 8080, portEnv: "PORT", hostPortOffset: 3 },
@@ -271,7 +267,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   portal: {
     name: "portal",
-    readiness: /public front door on/,
     order: 40,
     dev: { cwd: "plugins/portal", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 48 },
     docker: { image: "portal", internalPort: 8080, portEnv: "PORT", hostPortOffset: 1 },
@@ -303,7 +298,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   auth: {
     name: "auth",
-    readiness: /sign-in broker on/,
     order: 35,
     dev: { cwd: "plugins/auth", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 64 },
     docker: { image: "auth", internalPort: 8080, portEnv: "PORT" },
@@ -325,7 +319,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   "egress-proxy": {
     name: "egress-proxy",
-    readiness: /starting main dispatch loop/,
     order: 50,
     docker: { image: "egress-proxy", internalPort: 48080, portEnv: "PORT", hostPortOffset: 4 },
     fly: {
@@ -346,6 +339,17 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
 };
 
 export const serviceDef = (name: ServiceName): ServiceDef => CATALOG[name];
+
+export function serviceHealthCheck(def: ServiceDef, port: number): ["CMD", ...string[]] {
+  return (
+    def.tcpIngress?.healthCheck ?? [
+      "CMD",
+      "node",
+      "-e",
+      `fetch('http://127.0.0.1:${port}/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`,
+    ]
+  );
+}
 
 export function ordered(names: ServiceName[]): ServiceDef[] {
   return names.map(serviceDef).sort((a, b) => a.order - b.order);

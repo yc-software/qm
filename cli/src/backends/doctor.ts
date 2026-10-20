@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   MODEL_PROVIDER_KEYS,
@@ -13,61 +13,7 @@ import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
 import { emailTransportConfigured } from "../preflight.ts";
-
-export function slackManifestBotScopes(manifest: string): string[] {
-  try {
-    const parsed = JSON.parse(manifest) as { oauth_config?: { scopes?: { bot?: string[] } } };
-    return parsed.oauth_config?.scopes?.bot ?? [];
-  } catch {
-    const clean = (item: string): string =>
-      item
-        .split(/\s+#/)[0]!
-        .trim()
-        .replace(/^["']|["']$/g, "")
-        .trim();
-    const lines = manifest.split("\n");
-    const inline = lines.map((line) => line.match(/^\s*bot:\s*\[(.*)\]\s*(?:#.*)?$/)).find(Boolean);
-    if (inline) return inline[1]!.split(",").map(clean).filter(Boolean);
-    const start = lines.findIndex((line) => /^\s*bot:\s*(?:#.*)?$/.test(line));
-    if (start === -1) return [];
-    const indent = lines[start]!.match(/^\s*/)![0].length;
-    const scopes: string[] = [];
-    for (const line of lines.slice(start + 1)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      if (line.match(/^\s*/)![0].length <= indent) break;
-      const item = trimmed.match(/^-\s*(.+)$/);
-      if (!item) break;
-      const scope = clean(item[1]!);
-      if (scope) scopes.push(scope);
-    }
-    return scopes;
-  }
-}
-
-export function requiredSlackScopes(configDir?: string): string[] {
-  const local = configDir ? join(configDir, "slack-app-manifest.yml") : undefined;
-  const sourceTemplate = new URL("../../templates/slack-manifest.json", import.meta.url);
-  const packagedTemplate = new URL("../../../templates/slack-manifest.json", import.meta.url);
-  const templatePath = existsSync(sourceTemplate) ? sourceTemplate : packagedTemplate;
-  const path = local && existsSync(local) ? local : templatePath;
-  const scopes = slackManifestBotScopes(readFileSync(path, "utf8"));
-  if (scopes.length === 0) {
-    throw new CliError(
-      `no bot scopes parse from ${path} — fix oauth_config.scopes.bot in the manifest (doctor cannot verify Slack scopes against an empty list)`,
-    );
-  }
-  if (path === local) {
-    const behind = slackManifestBotScopes(readFileSync(templatePath, "utf8")).filter(
-      (scope) => !scopes.includes(scope),
-    );
-    if (behind.length)
-      warn(
-        `slack-app-manifest.yml lacks bot scopes the current slack plugin uses (${behind.join(", ")}) — merge them from the CLI's template and reinstall the app`,
-      );
-  }
-  return scopes;
-}
+import { slackBotScopes } from "../slack-manifests.ts";
 
 async function slackApi(
   url: string,
@@ -91,12 +37,7 @@ function slackMethodUrl(method: string, apiUrl?: string): string {
   return `${base.endsWith("/api") ? base : `${base}/api`}/${method}`;
 }
 
-async function slackCheck(
-  botToken: string,
-  appToken: string | undefined,
-  configDir?: string,
-  botApiUrl?: string,
-): Promise<void> {
+async function slackCheck(botToken: string, appToken: string | undefined, botApiUrl?: string): Promise<void> {
   const auth = await slackApi(slackMethodUrl("auth.test", botApiUrl), {
     headers: { authorization: `Bearer ${botToken}` },
   });
@@ -108,7 +49,7 @@ async function slackCheck(
       .map((scope) => scope.trim())
       .filter(Boolean),
   );
-  const missing = requiredSlackScopes(configDir).filter((scope) => !granted.has(scope));
+  const missing = slackBotScopes().filter((scope) => !granted.has(scope));
   if (missing.length)
     throw new CliError(
       `Slack app is missing scopes: ${missing.join(", ")}; update from slack-app-manifest.yml and reinstall`,
@@ -183,7 +124,7 @@ export async function doctorCommon(
     }
     if (bot && (httpEvents || app)) {
       const botApiUrl = deploymentSecretValue("SLACK_API_URL", secrets.get("SLACK_API_URL"));
-      await slackCheck(bot, httpEvents ? undefined : app, opts.configDir, botApiUrl);
+      await slackCheck(bot, httpEvents ? undefined : app, botApiUrl);
       if (opts.requiredSecretValues) {
         step("Slack tokens and manifest scopes: ok");
       } else if (config.target === "aws") {

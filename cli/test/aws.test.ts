@@ -32,7 +32,6 @@ import {
   githubTrustSubject,
   imageTransferArgs,
   isPinnedWorkloadImage,
-  probeAwsSecretStore,
   renderTaskDefinition,
   secretArns,
   serviceEnvironment,
@@ -333,7 +332,7 @@ else if (a.includes("secretsmanager get-secret-value") && a.includes("--query AR
 else if (a.includes("ecr get-login-password")) console.log("pw");
 else if (a.includes("ecr batch-get-image")) console.log(JSON.stringify({ images: [{ imageManifest: "{}", imageManifestMediaType: "application/vnd.oci.image.index.v1+json" }] }));
 else if (a.includes("ecr put-image") && ${JSON.stringify(opts.failPromotion ?? false)}) { console.error("PutImageFailure"); process.exit(1); }
-else if (a.includes("ecr put-image") && ${JSON.stringify(opts.promotionAlreadyCurrent ?? false)}) { console.error("ImageAlreadyExistsException"); process.exit(1); }
+else if (a.includes("ecr put-image") && ${JSON.stringify(opts.promotionAlreadyCurrent ?? false)}) { console.error(JSON.stringify({ Code: "ImageAlreadyExistsException", Message: "tag exists" })); process.exit(1); }
 else if (a.includes("ecr put-image")) console.log(JSON.stringify({ image: { imageId: { imageDigest: "sha256:${"a".repeat(64)}" } } }));
 else if (a.includes("ecr describe-images")) console.log(JSON.stringify({ imageDetails: [{ imageDigest: "sha256:${"a".repeat(64)}" }] }));
 else if (a.includes("ecs describe-services") && ${JSON.stringify(opts.failDescribe ?? false)}) { console.error("DescribeServicesFailure"); process.exit(1); }
@@ -486,7 +485,7 @@ else if (a.includes("dynamodb transact-write-items")) {
   }
   for (const write of JSON.parse(after("--transact-items"))) {
     if (write.Put) {
-      if (write.Put.ConditionExpression === "attribute_not_exists(lockKey)" && s.dynamo[write.Put.Item.lockKey.S]) { console.error("ConditionalCheckFailedException"); process.exit(1); }
+      if (write.Put.ConditionExpression === "attribute_not_exists(lockKey)" && s.dynamo[write.Put.Item.lockKey.S]) { console.error(JSON.stringify({ Code: "ConditionalCheckFailedException", Message: "The conditional request failed" })); process.exit(1); }
       s.dynamo[write.Put.Item.lockKey.S] = write.Put.Item;
     }
     if (write.Delete) delete s.dynamo[write.Delete.Key.lockKey.S];
@@ -1773,7 +1772,7 @@ test("a lease renewal that loses the holder condition warns loudly and stops ren
   const fake = fakeAws(
     dir,
     `
-if (a.includes("dynamodb update-item")) { console.error("An error occurred (ConditionalCheckFailedException) when calling the UpdateItem operation"); process.exit(1); }
+if (a.includes("dynamodb update-item")) { console.error(JSON.stringify({ Code: "ConditionalCheckFailedException", Message: "The conditional request failed" })); process.exit(1); }
 console.log("");`,
   );
   const priorRenew = process.env.QM_AWS_LEASE_RENEW_MS;
@@ -1853,7 +1852,7 @@ test("AWS deploy rejects required secret containers without an AWSCURRENT value 
     `
 if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(Object.entries(config.aws!.services).map(([name, spec]) => ({ serviceName: spec.ecsService, loadBalancers: name === "portal" ? [{ targetGroupArn: targetArn }] : [] })))} }));
 else if (a.includes("secretsmanager get-secret-value")) {
-  console.error("ResourceNotFoundException: Secrets Manager can't find the specified secret value");
+  console.error(JSON.stringify({ Code: "ResourceNotFoundException", Message: "Secrets Manager can't find the specified secret value" }));
   process.exit(1);
 }
 console.log("");`,
@@ -3724,7 +3723,7 @@ test("secrets push never creates secret containers outside Terraform", async () 
     `
 if (a.includes("dynamodb get-item")) console.log("{}");
 else if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "acme-core", desiredCount: 0, runningCount: 0, tags: [{ key: "Deployment", value: "acme" }, { key: "ManagedBy", value: "terraform" }] }], failures: [] }));
-else if (a.includes("put-secret-value")) { console.error("An error occurred (AccessDeniedException) when calling the PutSecretValue operation"); process.exit(1); }
+else if (a.includes("put-secret-value")) { console.error(JSON.stringify({ Code: "AccessDeniedException", Message: "not authorized" })); process.exit(1); }
 console.log("");`,
   );
   try {
@@ -3741,7 +3740,7 @@ console.log("");`,
     `
 if (a.includes("dynamodb get-item")) console.log("{}");
 else if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "acme-core", desiredCount: 0, runningCount: 0, tags: [{ key: "Deployment", value: "acme" }, { key: "ManagedBy", value: "terraform" }] }], failures: [] }));
-else if (a.includes("put-secret-value")) { console.error("An error occurred (ResourceNotFoundException) when calling the PutSecretValue operation"); process.exit(1); }
+else if (a.includes("put-secret-value")) { console.error(JSON.stringify({ Code: "ResourceNotFoundException", Message: "Secrets Manager can't find the specified secret" })); process.exit(1); }
 console.log("");`,
   );
   try {
@@ -3864,7 +3863,7 @@ test("AWS lease acquisition surfaces a held lease and skips release", async () =
   const fake = fakeAws(
     dir,
     `
-if (a.includes("dynamodb put-item")) { console.error("An error occurred (ConditionalCheckFailedException) when calling the PutItem operation"); process.exit(1); }
+if (a.includes("dynamodb put-item")) { console.error(JSON.stringify({ Code: "ConditionalCheckFailedException", Message: "The conditional request failed" })); process.exit(1); }
 console.log("");`,
   );
   try {
@@ -4928,54 +4927,6 @@ test("AWS renders adopted logGroup and stopTimeout pins; the defaults stay deriv
     "/ecs/legacy-core",
   );
   assert.equal(container.stopTimeout, 120);
-});
-
-test("AWS doctor classifies an un-pushed secret store as pending, not drift", () => {
-  const rnf = new Error(
-    "An error occurred (ResourceNotFoundException) when calling the GetSecretValue operation: Secrets Manager can't find the specified secret.",
-  );
-  const secrets = computedSecrets({
-    contract: 1,
-    orgId: "acme",
-    publicUrl: "https://acme.example.com",
-    target: "aws",
-    services: ["core"],
-    plugins: [],
-    skills: [],
-    env: {},
-    imageOverrides: {},
-  });
-  const requiredNames = secrets.filter((secret) => secret.required).map((secret) => secret.name);
-  assert.ok(requiredNames.length > 0);
-  const probe = probeAwsSecretStore(
-    secrets,
-    () => {
-      throw rnf;
-    },
-    () => assert.fail("PUBLIC_API_URL must not be validated when the store is empty"),
-  );
-  assert.deepEqual(probe.pending, requiredNames);
-  assert.deepEqual(probe.failures, []);
-  assert.equal(probe.values.size, 0);
-});
-
-test("AWS doctor still fails a pushed secret store holding a placeholder value", () => {
-  const probe = probeAwsSecretStore(
-    [
-      {
-        name: "CORE_SIGNING_SECRET",
-        services: ["core"],
-        description: "",
-        required: true,
-        managedBy: "operator",
-      },
-    ],
-    () => "replace-me",
-    () => {},
-  );
-  assert.deepEqual(probe.pending, []);
-  assert.equal(probe.failures.length, 1);
-  assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
 
 for (const mode of ["draining", "stale", "failed"] as const) {

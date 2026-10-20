@@ -174,7 +174,7 @@ test(
       assert.match(dockerPlan, /Plan only/);
       assert.doesNotMatch(dockerPlan, /\bPI_(?:MODEL|DETECT_MODEL)\b/);
       const fakeFly = join(dir, "fly");
-      writeFileSync(fakeFly, '#!/bin/sh\ncase "$1 $2" in\n"secrets list") exit 0;;\n*) printf "{}";;\nesac\n');
+      writeFileSync(fakeFly, '#!/bin/sh\ncase "$1 $2" in\n"secrets list") printf "[]";;\n*) printf "{}";;\nesac\n');
       chmodSync(fakeFly, 0o755);
       const flyPlan = execFileSync(bin, ["plan"], {
         cwd: deployment,

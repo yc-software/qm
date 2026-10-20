@@ -73,6 +73,11 @@ export function renderSlackManifests(config: QmConfig): SlackManifests {
   };
 }
 
+export function slackBotScopes(): string[] {
+  return (JSON.parse(template("slack-manifest.json")) as { oauth_config: { scopes: { bot: string[] } } }).oauth_config
+    .scopes.bot;
+}
+
 export function slackManifestCreationUrl(manifest: string): string {
   const url = new URL("https://api.slack.com/apps");
   url.searchParams.set("new_app", "1");

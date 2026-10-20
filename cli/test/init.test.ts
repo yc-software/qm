@@ -13,7 +13,6 @@ import { SERVICE_NAMES, VIRTUAL_SERVICE_NAMES } from "../src/services.ts";
 import { renderEnvExample } from "../src/secrets.ts";
 import { runChecks } from "../src/commands/check.ts";
 import { renderTerraformVars } from "../src/terraform.ts";
-import { requiredSlackScopes, slackManifestBotScopes } from "../src/backends/doctor.ts";
 
 function quiet<T>(fn: () => T): T {
   const log = console.log,
@@ -546,11 +545,6 @@ test("the scaffold is an npm-backed deployment repository with no CI coupling an
     assert.match(manifest, /^ {2}name: qm$/m);
     assert.match(manifest, /^ {6}- chat:write$/m);
     assert.match(manifest, /background_color: "#1f2937"/, "values YAML would misread are quoted");
-    assert.deepEqual(
-      slackManifestBotScopes(manifest),
-      requiredSlackScopes(dir),
-      "doctor parses the scaffolded YAML scopes",
-    );
     assert.equal(existsSync(join(dir, "slack-sso-manifest.yml")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });

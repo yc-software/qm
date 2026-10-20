@@ -289,7 +289,7 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
   );
   const fake = fakeFly(
     dir,
-    `if (a === "secrets list -a acme-signer") console.log("CORE_API_URL digest\\nCORE_SIGNING_SECRET digest"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
+    `if (a === "secrets list -a acme-signer --json") console.log(JSON.stringify([{ name: "CORE_API_URL" }, { name: "CORE_SIGNING_SECRET" }])); else if (a.startsWith("secrets list")) console.log("[]"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   const priorAnthropic = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "proc-wins";
@@ -375,6 +375,7 @@ test("fly secrets push warns that staged secrets are not live when machines are 
     `
 if (a.startsWith("status -a acme-core")) console.log(JSON.stringify({ Machines: [{ id: "m1", state: "started" }] }));
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
+else if (a.startsWith("secrets list")) console.log("[]");
 `,
   );
   const log = console.log;
@@ -431,6 +432,7 @@ test("fly secrets push stays quiet about staging when no machines are running", 
     `
 if (a.startsWith("status -a")) console.log(JSON.stringify({ Machines: [] }));
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
+else if (a.startsWith("secrets list")) console.log("[]");
 `,
   );
   const log = console.log;
@@ -480,7 +482,7 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
   const fake = fakeFly(
     dir,
     `
-if (a === "secrets list -a acme-core") console.log("FLY_DEPLOY_API_TOKEN digest");
+if (a === "secrets list -a acme-core --json") console.log(JSON.stringify([{ name: "FLY_DEPLOY_API_TOKEN" }]));
 else if (a.startsWith("secrets set ")) fs.readFileSync(0, "utf8");
 `,
   );
@@ -523,7 +525,7 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
   );
   const fake = fakeFly(
     dir,
-    `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
+    `if (a.startsWith("secrets list")) console.log("[]"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   const prior = process.env.CORE_SIGNING_SECRET;
   process.env.CORE_SIGNING_SECRET = "ambient-signing-secret-that-is-long-enough";
@@ -571,6 +573,7 @@ else if (a.startsWith("status")) {
   const service = app.slice("acme-".length);
   console.log(JSON.stringify({ Machines: [{ id: "machine-" + service, state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(liveEnvs)}[service] } }] }));
 }
+else if (a.startsWith("config show")) console.log(JSON.stringify({ env: ${JSON.stringify(liveEnvs)}[require("node:path").basename(process.argv[process.argv.indexOf("--config") + 1], ".fly.toml").replace("plugin-", "")] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
@@ -700,7 +703,7 @@ test("fly live readiness rejects rendered environment drift after identity and r
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const env = { ...generatedEnv(derivedTomlFor(config, "core", repoRoot)), S3_BUCKET: "wrong-bucket" };
+  const env = { QM_DEPLOYMENT_ID: "qm-v2:personal:acme:acme", S3_BUCKET: "wrong-bucket" };
   const fake = fakeFly(
     dir,
     `
@@ -709,6 +712,7 @@ else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
   id: "machine-core", state: "started", region: "sjc",
   config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} }
 }] }));
+else if (a.startsWith("config show --local --config ") && a.endsWith("core.fly.toml")) console.log(JSON.stringify({ env: { S3_BUCKET: "acme-data" } }));
 else console.log("ok");`,
   );
   try {
@@ -751,6 +755,7 @@ else if (a.startsWith("status")) {
   const service = app.slice("acme-".length);
   console.log(JSON.stringify({ Machines: [{ id: "machine-" + service, state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(liveEnvs)}[service] } }] }));
 }
+else if (a.startsWith("config show")) console.log(JSON.stringify({ env: ${JSON.stringify(liveEnvs)}[require("node:path").basename(process.argv[process.argv.indexOf("--config") + 1], ".fly.toml").replace("plugin-", "")] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
   );
@@ -798,6 +803,7 @@ else if (a.startsWith("status")) {
   const service = app.slice("acme-".length);
   console.log(JSON.stringify({ Machines: [{ id: "machine-" + service, state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(liveEnvs)}[service] } }] }));
 }
+else if (a.startsWith("config show")) console.log(JSON.stringify({ env: ${JSON.stringify(liveEnvs)}[require("node:path").basename(process.argv[process.argv.indexOf("--config") + 1], ".fly.toml").replace("plugin-", "")] }));
 else if (a.startsWith("checks list") && a.includes("acme-linear")) console.log(JSON.stringify({ machine: [{ status: "failing" }] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
@@ -836,6 +842,7 @@ if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else if (a.startsWith("machine exec")) { console.error("AccessDenied"); process.exit(1); }
+else if (a.startsWith("config show")) console.log(JSON.stringify({ env: ${JSON.stringify(env)} }));
 else console.log("ok");`,
   );
   try {
@@ -910,6 +917,7 @@ if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: "registry.fly.io/acme-core:deployment-123", env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("image show")) console.log(JSON.stringify([{ MachineID: "machine-core", Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: ${JSON.stringify(digest)} }]));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
+else if (a.startsWith("config show")) console.log(JSON.stringify({ env: ${JSON.stringify(env)} }));
 else console.log("ok");`,
   );
   try {
@@ -1042,7 +1050,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
     `
 if (a.startsWith("apps create")) console.log("already been taken");
 else if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
-else if (a.startsWith("secrets list")) console.log("CORE_SIGNING_SECRET");
+else if (a.startsWith("secrets list")) console.log(JSON.stringify([{ name: "CORE_SIGNING_SECRET" }]));
 else console.log("ok");`,
   );
   try {
@@ -1140,7 +1148,7 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
   );
   const fake = fakeFly(
     dir,
-    `const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
+    `if (a.startsWith("secrets list")) console.log("[]"); const v = fs.readFileSync(0, "utf8"); fs.appendFileSync(${JSON.stringify(join(dir, "fly.log"))}, "value:" + v + "\\n");`,
   );
   const log = console.log;
   console.log = (): void => {};

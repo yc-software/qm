@@ -18,7 +18,11 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   acquireAwsLease as acquireLease,
+  awsCapture,
+  awsErrorCode,
   awsText,
+  awsUsageError,
+  explainAwsUsageError,
   deployLocksTable,
   deploymentStateKey,
   releaseAwsLease as releaseLease,
@@ -50,6 +54,7 @@ import {
   hostedServiceEnv,
   serviceHost,
   serviceDef,
+  serviceHealthCheck,
   isServiceName,
   virtualServiceEnv,
   type LogOpts,
@@ -185,7 +190,7 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
   request: awsCoreRequest,
   secretFallback: (config) =>
     config.aws
-      ? capture(process.env.AWS_BIN ?? "aws", [
+      ? awsCapture([
           "secretsmanager",
           "get-secret-value",
           "--secret-id",
@@ -289,7 +294,7 @@ function awsArgs(aws: AwsConfig, args: string[]): string[] {
 }
 
 function awsJson<T>(aws: AwsConfig, args: string[]): T {
-  const raw = capture(process.env.AWS_BIN ?? "aws", awsArgs(aws, [...args, "--output", "json"]));
+  const raw = awsCapture(awsArgs(aws, [...args, "--output", "json"]));
   if (!raw.trim()) return {} as T;
   return JSON.parse(raw) as T;
 }
@@ -327,12 +332,7 @@ function deployImageCoordinates(config: QmConfig): { name: string; version: stri
 }
 
 export function guardLambdaMicrovms(e: unknown): never {
-  if (/invalid choice:?\s*'?lambda-microvms/i.test(errMessage(e))) {
-    throw new CliError(
-      "this AWS CLI lacks the `lambda-microvms` commands needed to build/verify the AWS deploy MicroVM image; install an AWS CLI with Lambda MicroVMs support",
-    );
-  }
-  throw e instanceof Error ? e : new Error(errMessage(e));
+  throw explainAwsUsageError(e);
 }
 
 function assertAwsDeployImage(config: QmConfig): void {
@@ -349,8 +349,9 @@ function assertAwsDeployImage(config: QmConfig): void {
       expectedArn,
     ]);
   } catch (e) {
-    if (/invalid choice:?\s*'?lambda-microvms/i.test(errMessage(e))) return;
-    guardLambdaMicrovms(e);
+    if (!awsUsageError(e)) guardLambdaMicrovms(e);
+    warn(`skipping the AWS deploy image check — ${errMessage(e)}`);
+    return;
   }
   const detail = (image.image && typeof image.image === "object" ? image.image : image) as Record<string, unknown>;
   const arn = detail.imageArn ?? detail.imageARN ?? detail.arn;
@@ -529,12 +530,7 @@ export function renderTaskDefinition(
     .sort((a, b) => a.name.localeCompare(b.name));
   const healthCheck = def
     ? {
-        command: def.tcpIngress?.healthCheck ?? [
-          "CMD",
-          "node",
-          "-e",
-          `fetch('http://127.0.0.1:${internalPort}/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`,
-        ],
+        command: serviceHealthCheck(def, internalPort),
         interval: 10,
         timeout: 5,
         retries: 3,
@@ -974,7 +970,7 @@ export function secretArns(config: QmConfig): Record<string, string> {
         controlValues.set(secret.name, value.SecretString!);
       return [[secret.name, value.ARN] as const];
     } catch (error) {
-      if (!secret.required && /ResourceNotFoundException/.test(errMessage(error))) return [];
+      if (!secret.required && awsErrorCode(error) === "ResourceNotFoundException") return [];
       throw error;
     }
   });
@@ -2131,7 +2127,7 @@ function promoteStagedImage(config: QmConfig, service: string, image: string, la
       ...(staged.imageManifestMediaType ? ["--image-manifest-media-type", staged.imageManifestMediaType] : []),
     ]);
   } catch (error) {
-    if (!/ImageAlreadyExistsException/.test(errMessage(error))) throw error;
+    if (awsErrorCode(error) !== "ImageAlreadyExistsException") throw error;
   }
 }
 
@@ -2681,7 +2677,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
           `imageTag=${stagingLabel}`,
         ]);
       } catch (error) {
-        if (!/ImageNotFoundException/.test(errMessage(error)))
+        if (awsErrorCode(error) !== "ImageNotFoundException")
           warn(`could not clean staging image ${service}:${stagingLabel}: ${errMessage(error)}`);
       }
     }
@@ -3522,7 +3518,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
             `file://${secret.file}`,
           ]);
         } catch (error) {
-          if (/ResourceNotFoundException/.test(errMessage(error))) {
+          if (awsErrorCode(error) === "ResourceNotFoundException") {
             throw new CliError(
               `AWS secret container ${secret.id} is missing; apply the rendered Terraform before pushing secrets`,
             );
@@ -4409,39 +4405,6 @@ export function assertAwsDeploymentStorage(config: QmConfig): void {
   ]);
 }
 
-export function probeAwsSecretStore(
-  secrets: ComputedSecret[],
-  read: (name: string) => string,
-  checkPublicApiUrl: () => void,
-): { values: Map<string, string>; pending: string[]; failures: string[] } {
-  const values = new Map<string, string>();
-  const pending: string[] = [];
-  const failures: string[] = [];
-  for (const secret of secrets) {
-    const label = secret.required ? `secret ${secret.name}` : `optional secret ${secret.name}`;
-    try {
-      const value = read(secret.name);
-      if (isInvalidSecret(secret.name, value)) throw new Error("missing, placeholder, or insecure value");
-      values.set(secret.name, value);
-      if (secret.required && secret.name === "PUBLIC_API_URL") checkPublicApiUrl();
-      step(secret.required ? `${label}: ok` : `${label}: configured`);
-    } catch (error) {
-      if (/ResourceNotFoundException/.test(errMessage(error))) {
-        if (secret.required) {
-          pending.push(secret.name);
-          step(`${label}: not pushed yet — run \`qm secrets push\` before the first deploy`);
-        } else {
-          warn(`${label}: not configured`);
-        }
-      } else {
-        failures.push(`${label}: ${errMessage(error)}`);
-        warn(`${label}: failed`);
-      }
-    }
-  }
-  return { values, pending, failures };
-}
-
 export async function awsDoctor(config: QmConfig, configDir: string): Promise<void> {
   const { aws } = awsTopology(config, configDir);
   header(`qm doctor — ${config.orgId} (aws)`);
@@ -4650,7 +4613,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         inspect();
         step(`optional secret ${secret.name}: configured`);
       } catch (error) {
-        if (/ResourceNotFoundException|AccessDeniedException/.test(errMessage(error)))
+        if (["ResourceNotFoundException", "AccessDeniedException"].includes(awsErrorCode(error) ?? ""))
           warn(`optional secret ${secret.name}: not configured or not readable`);
         else {
           failures.push(`optional secret ${secret.name}: ${errMessage(error)}`);

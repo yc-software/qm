@@ -13,8 +13,45 @@ export interface AwsLease {
   renewTimer?: ReturnType<typeof setInterval>;
 }
 
+const AWS_CLI_REJECTED =
+  "the AWS CLI rejected the command line; qm needs AWS CLI v2.35.10 or newer for `--cli-error-format` and the `lambda-microvms` commands";
+
+export function awsCapture(args: string[]): string {
+  try {
+    return capture(process.env.AWS_BIN ?? "aws", [...args, "--cli-error-format", "json"]);
+  } catch (error) {
+    throw explainAwsUsageError(error);
+  }
+}
+
+export function explainAwsUsageError(error: unknown): Error {
+  if (awsUsageError(error) && !(error instanceof CliError))
+    return new CliError(`${AWS_CLI_REJECTED}: ${errMessage(error)}`, { cause: (error as Error).cause });
+  return error instanceof Error ? error : new Error(errMessage(error));
+}
+
 export function awsText(aws: AwsConfig, args: string[]): string {
-  return capture(process.env.AWS_BIN ?? "aws", [...args, "--region", aws.region, "--output", "text"]).trim();
+  return awsCapture([...args, "--region", aws.region, "--output", "text"]).trim();
+}
+
+function awsFailure(error: unknown): { status?: unknown; stderr?: unknown } | undefined {
+  return error instanceof Error ? (error.cause as { status?: unknown; stderr?: unknown } | undefined) : undefined;
+}
+
+export const awsUsageError = (error: unknown): boolean => awsFailure(error)?.status === 252;
+
+export function awsErrorCode(error: unknown): string | undefined {
+  const failure = awsFailure(error);
+  if (typeof failure?.stderr !== "string") return undefined;
+  const stderr = failure.stderr;
+  try {
+    const parsed = JSON.parse(stderr.slice(stderr.startsWith("{") ? 0 : stderr.indexOf("\n{") + 1)) as {
+      Code?: unknown;
+    };
+    return typeof parsed.Code === "string" ? parsed.Code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function deployLocksTable(aws: AwsConfig): string {
@@ -44,7 +81,7 @@ export function acquireAwsLease(aws: AwsConfig, key = "deploy"): AwsLease {
       JSON.stringify({ ":now": { N: String(now) } }),
     ]);
   } catch (error) {
-    if (/ConditionalCheckFailedException/.test(errMessage(error))) {
+    if (awsErrorCode(error) === "ConditionalCheckFailedException") {
       throw new CliError(
         `another QM operation holds the ${JSON.stringify(key)} lease in ${table}; it expires within ${LEASE_SECONDS / 60} minutes, or delete that item to release it manually`,
       );
@@ -88,7 +125,7 @@ function renewAwsLease(aws: AwsConfig, lease: AwsLease): void {
       JSON.stringify({ ":expiresAt": { N: String(now + LEASE_SECONDS) }, ":holder": { S: lease.holder } }),
     ]);
   } catch (error) {
-    if (/ConditionalCheckFailedException/.test(errMessage(error))) {
+    if (awsErrorCode(error) === "ConditionalCheckFailedException") {
       clearInterval(lease.renewTimer);
       lease.renewTimer = undefined;
       warn(

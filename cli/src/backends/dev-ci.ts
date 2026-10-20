@@ -1,11 +1,13 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { die, note, ok } from "../log.ts";
-import { envNum, gitTopLevel, runInherit, spawnBackground, stopPid, tail, waitForLog, which } from "../util.ts";
+import { envNum, gitTopLevel, runInherit, spawnBackground, stopPid, tail, waitForJson, which } from "../util.ts";
 import { serviceDef } from "../services.ts";
 
 const ciDir = (root: string): string => join(root, process.env.CI_INSTANCE_DIR ?? ".ci-instance");
 const ciPort = (): number => envNum("CI_INSTANCE_PORT", 8181);
+const SLACK_HEALTH_PORT_OFFSET = 2;
+const TUNNEL_METRICS_PORT_OFFSET = 3;
 const readyTimeout = (): number => envNum("CI_INSTANCE_READY_TIMEOUT", 60);
 const pidFromFile = (dir: string, name: string): number | undefined => {
   const path = join(dir, `${name}.pid`);
@@ -17,15 +19,18 @@ const writePid = (dir: string, name: string, pid: number): void => writeFileSync
 
 async function startTunnel(port: number, dir: string): Promise<string | undefined> {
   if (!which("cloudflared")) return undefined;
-  const logFile = join(dir, "tunnel.log");
-  const url = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+  const metrics = `127.0.0.1:${port + TUNNEL_METRICS_PORT_OFFSET}`;
   writePid(
     dir,
     "tunnel",
-    spawnBackground("cloudflared", ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate"], { logFile }),
+    spawnBackground(
+      "cloudflared",
+      ["tunnel", "--url", `http://localhost:${port}`, "--no-autoupdate", "--metrics", metrics],
+      { logFile: join(dir, "tunnel.log") },
+    ),
   );
-  if (!(await waitForLog(logFile, url, 30))) return undefined;
-  return readFileSync(logFile, "utf8").match(url)?.[0];
+  const tunnel = await waitForJson(`http://${metrics}/quicktunnel`, 30, (body) => !!body.hostname);
+  return tunnel ? `https://${String(tunnel.hostname)}` : undefined;
 }
 
 function requireEnv(): void {
@@ -65,7 +70,12 @@ export async function devCiUp(): Promise<void> {
   for (const f of ["core.log", "tunnel.log"]) writeFileSync(join(dir, f), "");
   const port = ciPort();
 
-  const overlay: Record<string, string> = { HARNESS: process.env.HARNESS ?? "pi" };
+  const healthPort = port + SLACK_HEALTH_PORT_OFFSET;
+  const overlay: Record<string, string> = {
+    HARNESS: process.env.HARNESS ?? "pi",
+    DEV_INTROSPECTION: "1",
+    DEV_HEALTH_PORT: String(healthPort),
+  };
   if (process.env.SLACK_EVENTS_MODE === "http" && !process.env.SLACK_EVENTS_PORT) {
     overlay.SLACK_EVENTS_PORT = String(port + 1);
   }
@@ -76,10 +86,11 @@ export async function devCiUp(): Promise<void> {
 
   if (!process.env.PUBLIC_API_URL && process.env.SPRITES_TOKEN) {
     const url = await startTunnel(port, dir);
-    if (!url) {
-      await devCiDown();
-      die("cloudflared tunnel didn't come up (sandbox self-API scenarios would silently fail)");
-    }
+    if (!url)
+      return dieWithTail(
+        join(dir, "tunnel.log"),
+        "cloudflared tunnel didn't come up (sandbox self-API scenarios would silently fail)",
+      );
     overlay.PUBLIC_API_URL = url;
     note(`agent self-API tunnel: ${url} → :${port}`);
   }
@@ -93,14 +104,13 @@ export async function devCiUp(): Promise<void> {
     logFile: coreLog,
   });
   writePid(dir, "core", corePid);
-  if (!(await waitForLog(coreLog, serviceDef("core").readiness, readyTimeout()))) {
+  if (!(await waitForJson(`http://127.0.0.1:${port}/healthz`, readyTimeout()))) {
     await dieWithTail(coreLog, `core failed to start on :${port}`);
   }
-  if (!(await waitForLog(coreLog, /connected as @/, readyTimeout()))) {
-    await dieWithTail(coreLog, "slack surface failed to connect (bad/uninstalled CI app token?)");
-  }
+  const slack = await waitForJson(`http://127.0.0.1:${healthPort}/healthz`, readyTimeout(), (body) => body.ok === true);
+  if (!slack) return dieWithTail(coreLog, "slack surface failed to connect (bad/uninstalled CI app token?)");
 
-  const handle = readFileSync(coreLog, "utf8").match(/connected as @([^\s]+)/)?.[1] ?? "agent";
+  const handle = String(slack.connectedAs || "agent");
   ok(`ci instance up — core :${port}, slack @${handle}`);
 
   if (process.env.GITHUB_ENV) {

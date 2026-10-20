@@ -450,11 +450,27 @@ function writeDerived(ctx: FlyCtx, service: ServiceName): string {
   return path;
 }
 
+function flyJson(raw: string, command: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new CliError(`${command} returned invalid JSON (${errMessage(error)}):\n${raw.slice(0, 500)}`, {
+      cause: error,
+    });
+  }
+}
+
+function flyJsonList(raw: string, command: string): Record<string, unknown>[] {
+  const parsed = flyJson(raw, command);
+  if (!Array.isArray(parsed)) throw new CliError(`${command} returned a non-array:\n${raw.slice(0, 500)}`);
+  return parsed.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object");
+}
+
 function secretNames(app: string): Set<string> | undefined {
-  const out = fly(["secrets", "list", "-a", app], { allow: FLY_APP_NOT_FOUND });
+  const out = fly(["secrets", "list", "-a", app, "--json"], { allow: FLY_APP_NOT_FOUND });
   if (FLY_APP_NOT_FOUND.test(out)) return undefined;
   return new Set(
-    [...out.matchAll(/^\s*\*?\s*([A-Z0-9_]+)\s/gm)].map((m) => m[1]).filter((s): s is string => s !== undefined),
+    flyJsonList(out, "fly secrets list").flatMap((entry) => (typeof entry.name === "string" ? [entry.name] : [])),
   );
 }
 
@@ -482,20 +498,10 @@ function ensureObjectStorage(ctx: FlyCtx): void {
   note(`object storage: credentials staged on ${app}`);
 }
 
-function generatedTomlEnv(toml: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  let inEnv = false;
-  for (const line of toml.split("\n")) {
-    const section = line.match(/^\s*\[(.+)\]\s*$/);
-    if (section) {
-      inEnv = section[1] === "env";
-      continue;
-    }
-    if (!inEnv) continue;
-    const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*("(?:[^"\\]|\\.)*")\s*$/);
-    if (match?.[1] && match[2]) env[match[1]] = JSON.parse(match[2]) as string;
-  }
-  return env;
+function flyConfigEnv(path: string): Record<string, unknown> {
+  const parsed = flyJson(fly(["config", "show", "--local", "--config", path]), `fly config show for ${path}`);
+  const env = parsed && typeof parsed === "object" ? (parsed as { env?: unknown }).env : undefined;
+  return env && typeof env === "object" ? (env as Record<string, unknown>) : {};
 }
 
 const S3_PROBE_SOURCE = `
@@ -541,22 +547,13 @@ function flyLiveSession(app: string, machineId: string): void {
 }
 
 function flyOrgApps(flyOrg: string): Set<string> {
-  const raw = fly(["apps", "list", "--org", flyOrg, "--json"]);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new CliError(`fly apps list returned invalid JSON for organization ${flyOrg}`);
-  }
-  if (!Array.isArray(parsed)) throw new CliError(`fly apps list returned a non-array for organization ${flyOrg}`);
   return new Set(
-    parsed.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [];
-      const name = String(
-        (entry as Record<string, unknown>).Name ?? (entry as Record<string, unknown>).name ?? "",
-      ).trim();
-      return name ? [name] : [];
-    }),
+    flyJsonList(fly(["apps", "list", "--org", flyOrg, "--json"]), `fly apps list for organization ${flyOrg}`).flatMap(
+      (entry) => {
+        const name = String(entry.Name ?? "").trim();
+        return name ? [name] : [];
+      },
+    ),
   );
 }
 
@@ -597,8 +594,7 @@ function ensurePostgres(ctx: FlyCtx): void {
     return;
   }
   const pgName = `${ctx.appPrefix}-pg`;
-  const list = fly(["mpg", "list", "--org", ctx.flyOrg]);
-  let id = mpgClusterId(list, pgName);
+  let id = mpgClusterId(ctx.flyOrg, pgName);
   if (!id) {
     note(`postgres: creating cluster ${pgName} (basic plan)…`);
     const created = fly([
@@ -613,19 +609,19 @@ function ensurePostgres(ctx: FlyCtx): void {
       "--plan",
       "basic",
     ]);
-    id = created.match(/ID:\s*(\S+)/)?.[1];
-    if (!id) throw new CliError(`could not parse cluster id from mpg create output:\n${created}`);
+    id = mpgClusterId(ctx.flyOrg, pgName);
+    if (!id) throw new CliError(`fly mpg list has no cluster named ${pgName} after mpg create:\n${created}`);
   }
   const status = flySensitive(["mpg", "status", id, "--json"], "failed to read Managed Postgres connection details");
   stageSecret(app, "DATABASE_URL", mpgDirectUrl(status, id));
   note(`postgres: direct connection staged on ${app}`);
 }
 
-export function mpgClusterId(listOutput: string, name: string): string | undefined {
-  return listOutput
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .find((fields) => fields.includes(name))?.[0];
+function mpgClusterId(flyOrg: string, name: string): string | undefined {
+  const cluster = flyJsonList(fly(["mpg", "list", "--org", flyOrg, "--json"]), "fly mpg list").find(
+    (entry) => entry.name === name,
+  );
+  return typeof cluster?.id === "string" ? cluster.id : undefined;
 }
 
 export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
@@ -663,8 +659,8 @@ export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
 }
 
 function ensureFlycast(app: string): void {
-  const ips = fly(["ips", "list", "-a", app]);
-  if (/private/i.test(ips)) return;
+  if (flyJsonList(fly(["ips", "list", "-a", app, "--json"]), "fly ips list").some((ip) => ip.Type === "private_v6"))
+    return;
   fly(["ips", "allocate-v6", "--private", "-a", app]);
   note(`flycast: allocated private v6 for ${app}`);
 }
@@ -695,11 +691,8 @@ interface FlyImageDetail {
 }
 
 function flyImageDetails(app: string): FlyImageDetail[] {
-  const parsed = JSON.parse(fly(["image", "show", "-a", app, "--json"])) as unknown;
-  if (!Array.isArray(parsed)) throw new CliError(`fly image show returned invalid JSON for ${app}`);
-  return parsed.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const { Digest, MachineID, Registry, Repository, Tag } = entry as Record<string, unknown>;
+  return flyJsonList(fly(["image", "show", "-a", app, "--json"]), `fly image show for ${app}`).flatMap((entry) => {
+    const { Digest, MachineID, Registry, Repository, Tag } = entry;
     if (
       typeof Digest !== "string" ||
       !/^sha256:[a-f0-9]{64}$/.test(Digest) ||
@@ -1654,19 +1647,8 @@ export async function flyCheckLive(
       continue;
     }
     const plugin = plugins.get(workload);
-    const expectedEnv = generatedTomlEnv(
-      firstParty.has(workload)
-        ? deriveToml(ctx, workload as ServiceName)
-        : pluginTomlContent(
-            ctx.appPrefix,
-            ctx.flyOrg,
-            ctx.orgId,
-            config.publicUrl,
-            config.services.includes("portal"),
-            ctx.region,
-            plugin!,
-            brandEnvOf(config),
-          ),
+    const expectedEnv = flyConfigEnv(
+      firstParty.has(workload) ? writeDerived(ctx, workload as ServiceName) : writePluginDerived(ctx, plugin!),
     );
     const envDrift = machines.flatMap((machine, index) =>
       Object.entries(expectedEnv).flatMap(([name, value]) =>

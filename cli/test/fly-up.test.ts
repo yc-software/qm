@@ -4,23 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QmConfig } from "../src/config.ts";
-import { flyUp, mpgClusterId, mpgDirectUrl } from "../src/backends/fly.ts";
-
-test("mpgClusterId matches a whole field regardless of column position or spacing", () => {
-  const header = "ID              NAME          REGION  STATUS";
-  assert.equal(
-    mpgClusterId(`${header}\npg-abc123       acme-pg       sjc     ready`, "acme-pg"),
-    "pg-abc123",
-    "name padded with spaces on both sides",
-  );
-  assert.equal(
-    mpgClusterId(`ID       REGION  NAME\npg-abc123  sjc   acme-pg`, "acme-pg"),
-    "pg-abc123",
-    "name in the last column (no trailing space)",
-  );
-  assert.equal(mpgClusterId(`${header}\npg-abc123 acme-pg-2 sjc ready`, "acme-pg"), undefined, "no substring matches");
-  assert.equal(mpgClusterId("", "acme-pg"), undefined);
-});
+import { flyUp, mpgDirectUrl } from "../src/backends/fly.ts";
 
 test("mpgDirectUrl selects the direct Managed Postgres endpoint without exposing credentials", () => {
   assert.equal(
@@ -76,7 +60,7 @@ fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 if (a[0] === "apps" && a[1] === "create") console.log("already been taken");
 else if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify([{ Name: "acme-core" }]));
 else if (a[0] === "secrets" && a[1] === "list") {
-  console.log(${JSON.stringify(
+  console.log(JSON.stringify(${JSON.stringify(
     [
       marker,
       "CAPABILITY_SECRET",
@@ -87,15 +71,12 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "PORTAL_IDENTITY_SECRET",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
-    ]
-      .map((name) => `${name} digest`)
-      .join("\n"),
-  )});
-  if (fs.existsSync(${JSON.stringify(state)})) console.log("AWS_ACCESS_KEY_ID digest\\nAWS_ENDPOINT_URL_S3 digest\\nAWS_SECRET_ACCESS_KEY digest");
+    ].map((name) => ({ name })),
+  )}.concat(fs.existsSync(${JSON.stringify(state)}) ? [{ name: "AWS_ACCESS_KEY_ID" }, { name: "AWS_ENDPOINT_URL_S3" }, { name: "AWS_SECRET_ACCESS_KEY" }] : [])));
 } else if (a[0] === "storage" && a[1] === "create") fs.writeFileSync(${JSON.stringify(state)}, "1");
 else if (a[0] === "status") console.log(JSON.stringify({ Machines: [{ config: { image: "registry.fly.io/acme-core:deployment-123" } }] }));
 else if (a[0] === "image" && a[1] === "show") console.log(JSON.stringify([{ Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: "sha256:${"b".repeat(64)}" }]));
-else if (a[0] === "mpg" && a[1] === "list") console.log("pg-1 acme-pg");
+else if (a[0] === "mpg" && a[1] === "list") console.log(JSON.stringify([{ id: "pg-1", name: "acme-pg" }]));
 else if (a[0] === "mpg" && a[1] === "status") console.log(JSON.stringify({ credentials: { direct_uri: "postgresql://u:p@direct.pg-1.flympg.net/db" } }));
 else console.log("ok");
 `,
@@ -180,7 +161,7 @@ const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 if (a[0] === "apps" && a[1] === "create") console.log("already been taken");
 else if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-egress-proxy" }]));
-else if (a[0] === "secrets" && a[1] === "list") console.log("QM_OWNER_CD83933C6C53374D digest\\nCAPABILITY_SECRET digest\\nCORE_SIGNING_SECRET digest");
+else if (a[0] === "secrets" && a[1] === "list") console.log(JSON.stringify([{ name: "QM_OWNER_CD83933C6C53374D" }, { name: "CAPABILITY_SECRET" }, { name: "CORE_SIGNING_SECRET" }]));
 else if (a[0] === "ips" && a[1] === "list") console.log(fs.existsSync(${JSON.stringify(ipsFile)}) ? fs.readFileSync(${JSON.stringify(ipsFile)}, "utf8") : "[]");
 else console.log("ok");
 `,
