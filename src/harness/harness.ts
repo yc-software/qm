@@ -169,7 +169,6 @@ export interface HarnessTurnResult {
   pausedOnApproval?: boolean;
   modelCalls?: number;
   cacheUsage?: { cacheRead: number; cacheWrite: number; uncachedInput: number };
-  compileMs?: number;
 }
 
 export interface HarnessDetectInput {

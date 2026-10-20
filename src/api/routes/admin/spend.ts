@@ -1,4 +1,3 @@
-import { cacheHitRatio } from "../../../admin/metrics-sink.ts";
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
@@ -7,6 +6,17 @@ import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } fr
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
 import { type ApiCtx, type BaseCtx } from "../route.ts";
+
+export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number }): number | null {
+  const read = s.cacheRead;
+  const write = s.cacheWrite;
+  const uncached = s.uncachedInput;
+  if (read === undefined && write === undefined && uncached === undefined) return null;
+  const r = read ?? 0;
+  const denom = r + (write ?? 0) + (uncached ?? 0);
+  if (denom <= 0) return null;
+  return r / denom;
+}
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;

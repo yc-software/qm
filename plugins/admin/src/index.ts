@@ -315,7 +315,6 @@ const WRITES = new Map<string, string[]>([
 ]);
 
 const READS = [
-  "metrics",
   "spend",
   "egress",
   "errors",

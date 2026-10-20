@@ -1584,8 +1584,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
-  ): Promise<{ entry: TurnSession; compileMs: number }> {
-    const compileStart = Date.now();
+  ): Promise<{ entry: TurnSession }> {
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -1606,7 +1605,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       tempDirPrefix,
       composedPrompt,
     );
-    const compileMs = Date.now() - compileStart;
 
     let session: AgentSession;
     try {
@@ -1725,7 +1723,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
-    return { entry, compileMs };
+    return { entry };
   }
 
   return defineHarness(
@@ -1775,7 +1773,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
         const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
         const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-        const { entry, compileMs } = await createTurnSession(
+        const { entry } = await createTurnSession(
           withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
@@ -2328,7 +2326,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply: "",
               runtimeHandoff: entry.ref.runtimeHandoff,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
               cacheUsage: sumCacheUsage(callStats) ?? undefined,
             };
           }
@@ -2366,7 +2363,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply,
               stopped: true as const,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
             };
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
@@ -2396,9 +2392,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
                 modelCalls,
                 ...silent,
-                compileMs,
               }
-            : { reply, modelCalls, ...silent, compileMs };
+            : { reply, modelCalls, ...silent };
           return cacheUsage ? { ...base, cacheUsage } : base;
         } finally {
           removeIsolatedDirs(entry);

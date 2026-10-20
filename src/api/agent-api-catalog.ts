@@ -846,9 +846,9 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "GET",
-        path: "/v1/admin/audit|errors|metrics|egress?scope=",
+        path: "/v1/admin/audit|errors|egress?scope=",
         summary:
-          "observability: audit log, error telemetry, turn metrics, outbound-destination log (logs: DM or effective Open sharing)",
+          "observability: audit log, error telemetry, outbound-destination log (logs: DM or effective Open sharing)",
       },
       { method: "GET", path: "/v1/admin/retention", summary: "org-wide usage and retention report" },
       {
@@ -900,13 +900,6 @@ const FAMILIES: AgentApiFamily[] = [
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
     routes: [{ method: "GET", path: "/v1/admin/audit", summary: "read security audit events" }],
-  },
-  {
-    match: () => false,
-    when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes("admin.metrics.read") === true,
-    guidance:
-      "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: [{ method: "GET", path: "/v1/admin/metrics", summary: "read usage and performance metrics" }],
   },
   {
     match: () => false,

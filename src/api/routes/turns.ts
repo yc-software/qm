@@ -287,28 +287,8 @@ async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { ok: true });
 }
 
-async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body } = ctx;
-  const runId = ctx.params.runId!;
-  const num = (v: unknown): number | undefined =>
-    typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
-  const deliverMs = isObj(body) ? num(body.deliverMs) : undefined;
-  const slackInflightMs = isObj(body) ? num(body.slackInflightMs) : undefined;
-  if (deliverMs === undefined && slackInflightMs === undefined) {
-    return sendJson(res, 400, { error: "bad_request", message: "deliverMs or slackInflightMs required" });
-  }
-  await deps.metrics
-    ?.updateByRunId(runId, {
-      ...(deliverMs !== undefined ? { deliverMs } : {}),
-      ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
-    })
-    .catch(() => undefined);
-  return sendJson(res, 200, { ok: true });
-}
-
 export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/turns", actor: "system", auth: "source", handle: postTurn },
-  { method: "POST", path: "/v1/turns/:runId/metrics", actor: "system", auth: "source", handle: postTurnMetrics },
   { method: "GET", path: "/v1/approvals/pending", actor: "person", auth: "source", handle: getPendingApproval },
   { method: "GET", path: "/v1/approvals/:id", actor: "person", auth: "source", handle: getApproval },
   {

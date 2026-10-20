@@ -316,14 +316,12 @@ test("each new unattended read grant opens exactly its own routes", async () => 
     const scopeQ = `scope=${encodeURIComponent(ORG)}`;
     const cases: Array<[string, string[]]> = [
       ["admin.audit.read", [`/v1/admin/audit?${scopeQ}`]],
-      ["admin.metrics.read", [`/v1/admin/metrics?${scopeQ}`]],
       ["admin.egress.read", [`/v1/admin/egress?${scopeQ}`]],
       ["admin.files.read", [`/v1/admin/files?${scopeQ}`]],
     ];
     const crossDenied = [
       `/v1/admin/sessions?${scopeQ}`,
       `/v1/admin/audit?${scopeQ}`,
-      `/v1/admin/metrics?${scopeQ}`,
       `/v1/admin/egress?${scopeQ}`,
       `/v1/admin/files?${scopeQ}`,
     ];
@@ -341,10 +339,10 @@ test("each new unattended read grant opens exactly its own routes", async () => 
     }
     const combined = await capFor("admin-alice", {
       live: false,
-      grants: ["admin.sessions.read", "admin.metrics.read"],
+      grants: ["admin.sessions.read", "admin.egress.read"],
     });
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/metrics?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
+      (await fetch(`${s.base}/v1/admin/egress?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
       200,
     );
     assert.equal(

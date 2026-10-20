@@ -141,8 +141,8 @@ export function show(context: Context) {
     );
     const sections = [
       html`<p class="lead">
-        Components and page patterns from the redesigned admin portal, including Skills, Files, Sessions, Metrics,
-        Audit, and Egress. Examples use fictional data and do not save changes.
+        Components and page patterns from the redesigned admin portal, including Skills, Files, Sessions, Audit, and
+        Egress. Examples use fictional data and do not save changes.
       </p>`,
       designSection("Foundations", "One palette, a small type scale, and consistent spacing.", [
         designSpec(
@@ -384,11 +384,11 @@ export function show(context: Context) {
           ),
           designSpec(
             "Open report section",
-            "Authored Metrics / Audit / Egress composition · statline() + shared table controls",
+            "Authored Audit / Egress composition · statline() + shared table controls",
             html`<section class="design-open-section">
               <h3>Activity summary</h3>
               <p class="hint">Keep descriptions beside the section they explain.</p>
-              <div id="design-metrics-summary">
+              <div id="design-report-summary">
                 <div class="statline">152 requests · 2 scopes · Last 24 hours</div>
               </div>
               <div class="tablewrap">

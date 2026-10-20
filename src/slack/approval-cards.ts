@@ -133,8 +133,6 @@ export function recoveredApprovalContext(
     redeliveryKey: _redeliveryKey,
     approval: _approval,
     relayInput: _relayInput,
-    intakePreambleMs: _intakePreambleMs,
-    clientSentAt: _clientSentAt,
     ...turn
   } = req;
   const origin =

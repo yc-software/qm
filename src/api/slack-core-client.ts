@@ -38,7 +38,6 @@ import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
@@ -106,7 +105,6 @@ export interface SlackCoreClient {
   signalRunAbort(runId: string): Promise<void>;
   stopConversation(threadRef: string): Promise<boolean>;
   ackRunDelivery(runId: string): Promise<void>;
-  reportTurnMetrics(runId: string, patch: { deliverMs?: number; slackInflightMs?: number }): Promise<void>;
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
@@ -161,7 +159,6 @@ export interface SlackCoreClientDeps {
   blobTransfer: BlobTransferStore;
   deliveries: DeliveryStore;
   errors?: ErrorLog;
-  metrics: MetricsSink;
   runs: RunStore;
   turnStream: TurnStream;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
@@ -402,10 +399,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
 
     async ackRunDelivery(runId) {
       await deps.app.ackDeliveryByKey(`run:${runId}`);
-    },
-
-    async reportTurnMetrics(runId, patch) {
-      await deps.metrics.updateByRunId(runId, patch);
     },
 
     async reportRunEditRef(runId, editRef) {

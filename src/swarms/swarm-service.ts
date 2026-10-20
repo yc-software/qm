@@ -195,7 +195,6 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     background: true,
     cancel: true,
     shutdown: true,
-    queueMs: true,
     runStartedAt: true,
   };
   return (

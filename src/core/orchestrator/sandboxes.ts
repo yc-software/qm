@@ -101,7 +101,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     pending: SandboxHandle | null;
     used: boolean;
     provisionMs?: number;
-    materializeMs?: number;
   } = { handle: null, pending: null, used: false };
   const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
     handle: null,
@@ -134,7 +133,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }),
     });
   };
-  const ownerAuthBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
+  const ownerAuthBox: { handle: SandboxHandle | null; pending: SandboxHandle | null } = {
     handle: null,
     pending: null,
   };
@@ -460,7 +459,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           return Promise.reject(new Error("owner-auth box initialization failed and cleanup is still pending"));
         }
         ownerAuthProvisionInFlight ??= (async () => {
-          const provisionStart = Date.now();
           const handle = await deps.sandbox.provision(
             resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
             {
@@ -472,7 +470,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
             },
           );
           ownerAuthBox.pending = handle;
-          ownerAuthBox.provisionMs = Date.now() - provisionStart;
           ownerAuthBox.handle = handle;
           return handle;
         })().catch(async (err) => {
@@ -713,7 +710,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
 
   return {
-    box,
     scratchBox,
     ownerAuthBox,
     ownerAuthCommand,
@@ -725,7 +721,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     useSkill,
     provisionForReach,
     reclaimBox,
-    provisionPending: () => provisionInFlight !== null,
     invalidateProvision: () => {
       const previous = box.handle ?? box.pending;
       if (previous)

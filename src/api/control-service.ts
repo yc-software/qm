@@ -317,13 +317,7 @@ function patchFromCronPatchRequest(
   };
 }
 
-const UNATTENDED_GRANTS = new Set([
-  "admin.sessions.read",
-  "admin.audit.read",
-  "admin.metrics.read",
-  "admin.egress.read",
-  "admin.files.read",
-]);
+const UNATTENDED_GRANTS = new Set(["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"]);
 
 function validateUnattendedGrants(grants: string[]): string | null {
   if (!grants.every((grant) => UNATTENDED_GRANTS.has(grant))) return "unknown unattended grant";

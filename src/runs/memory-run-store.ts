@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
-import { countedClaims, isTerminal, leaseLapsed, releasesDedupKey, runPriority } from "./run-store.ts";
+import {
+  countedClaims,
+  isTerminal,
+  leaseLapsed,
+  releasesDedupKey,
+  runPriority,
+  withTraceCarrier,
+} from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
@@ -63,7 +70,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
         id: randomUUID(),
         sessionId,
         status: "pending",
-        request,
+        request: withTraceCarrier(request),
         result: null,
         deliveryState: null,
         turnUserSeq: null,

@@ -430,8 +430,6 @@ export function createTurnMethods(
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
-        ...(typeof req.intakePreambleMs === "number" ? { intakePreambleMs: req.intakePreambleMs } : {}),
-        ...(typeof req.clientSentAt === "number" ? { clientSentAt: req.clientSentAt } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(projectVersion ? { scopeVersion: projectVersion } : {}),
@@ -541,7 +539,7 @@ export function createTurnMethods(
           );
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(req.clientSentAt ?? Date.now()),
+            ts: String(Date.now()),
             text: injectedText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),

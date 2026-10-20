@@ -10,10 +10,8 @@ import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { flushErrorReporting, startTiming } from "../plugins/chassis/src/error-reporting.ts";
-import type { TimingStatus } from "../plugins/chassis/src/timing.ts";
+import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
-import { resolveTurnOrigin } from "./core/turn-origin.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
 import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
@@ -440,8 +438,6 @@ import {
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { createMetricsSink, type MetricsSink } from "./admin/metrics-sink.ts";
-import { createPostgresMetricsSink } from "./admin/postgres-metrics-sink.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
@@ -538,7 +534,6 @@ export interface BuiltApp {
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
-  metrics: MetricsSink;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
@@ -1679,20 +1674,7 @@ export function buildApp(
         })
       : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
-  runs.onTerminal((run) => {
-    void productAnalytics.responseFinished(run);
-    const startedAt = run.startedAt ?? run.finishedAt ?? Date.now();
-    const finishTiming = startTiming("queue.task", "run", startedAt);
-    let status: TimingStatus = "internal_error";
-    if (run.result?.stopped) status = "cancelled";
-    else if (run.status === "done") status = "ok";
-    finishTiming?.({
-      status,
-      endMs: run.finishedAt ?? Date.now(),
-      data: { surface: run.request.surface, origin: resolveTurnOrigin(run.request).kind },
-      measurements: { queue_wait: startedAt - run.createdAt },
-    });
-  });
+  runs.onTerminal((run) => void productAnalytics.responseFinished(run));
   const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
@@ -1704,7 +1686,6 @@ export function buildApp(
     config.databaseUrl && config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(config.databaseUrl) : undefined;
   const brokerSessions = config.databaseUrl ? createPostgresBrokerSessions(config.databaseUrl) : undefined;
   const replayDedupe = config.databaseUrl ? createPostgresReplayDedupe(config.databaseUrl) : createMemoryReplayDedupe();
-  const metrics = config.databaseUrl ? createPostgresMetricsSink(config.databaseUrl) : createMetricsSink();
   const credentialUsage = config.databaseUrl
     ? createPostgresCredentialUsageSink(config.databaseUrl)
     : createCredentialUsageSink();
@@ -2159,7 +2140,6 @@ export function buildApp(
     skillsReady,
     advisoryLock,
     errors,
-    metrics,
     ledger,
     signals: runSignals,
     turnStream,
@@ -2416,7 +2396,6 @@ export function buildApp(
     blobTransfer,
     deliveries,
     errors,
-    metrics,
     runs,
     turnStream,
     ackPicks: ackEmojiPicks,
@@ -3052,7 +3031,6 @@ export function buildApp(
     admin,
     rateLimiter,
     errors,
-    metrics,
     crons,
     credentialUsage,
     egressAudit,
@@ -3186,7 +3164,6 @@ export function serverDeps(
     sessions: built.sessions,
     auditLog: built.auditLog,
     errors: built.errors,
-    metrics: built.metrics,
     crons: built.crons,
     loops: built.loops,
     deploymentLayer: built.deploymentLayerStore,

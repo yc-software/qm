@@ -720,8 +720,6 @@ export interface TurnRequest {
   displayText?: string;
   turnWallClockMs?: number;
   timezone?: string;
-  intakePreambleMs?: number;
-  clientSentAt?: number;
   approval?: { requestId: string; approved: boolean; scope?: ApprovalScope };
   proactiveOpener?: boolean;
   analyticsSuppressed?: boolean;

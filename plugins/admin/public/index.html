@@ -1682,47 +1682,6 @@
         text-decoration: underline;
         text-underline-offset: 2px;
       }
-      .spark {
-        color: var(--muted);
-        display: block;
-      }
-      tr.openable:hover .spark {
-        color: var(--text);
-      }
-      .dist {
-        display: flex;
-        flex-direction: column;
-        gap: 3px;
-        max-width: 560px;
-      }
-      .dist-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 12.5px;
-        font-variant-numeric: tabular-nums;
-      }
-      .dist-label {
-        flex: none;
-        width: 84px;
-        text-align: right;
-        color: var(--muted);
-      }
-      .dist-track {
-        flex: 1 1 auto;
-        height: 12px;
-      }
-      .dist-bar {
-        display: block;
-        height: 100%;
-        background: var(--ink);
-        border-radius: 2px;
-      }
-      .dist-count {
-        flex: none;
-        width: 64px;
-        color: var(--muted);
-      }
       tr.openable.unlinkable {
         cursor: default;
       }
@@ -6817,7 +6776,6 @@
         users: "Users",
         keychain: "Keychain",
         user: "User",
-        metrics: "Metrics",
         spend: "Spend",
         egress: "Egress",
         history: "Sessions",
@@ -6838,7 +6796,6 @@
       };
       const SCOPED = new Set([
         "governance",
-        "metrics",
         "egress",
         "history",
         "files",
@@ -7310,7 +7267,6 @@
         if (st.view === "crons" && st.cron) p.set("cron", st.cron);
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
-        if (st.view === "metrics" && st.phase) p.set("phase", st.phase);
         const spendWindow = st.view === "spend" ? governanceUI.spend.spendWindow(st) : null;
         if (spendWindow && spendWindow.preset === null) {
           p.set("from", spendWindow.from);
@@ -7379,7 +7335,6 @@
           cron: p.get("cron") || null,
           own: p.get("own") || null,
           mem: p.get("mem") || null,
-          phase: p.get("phase") || null,
           range: p.get("range") || null,
           from: p.get("from") || null,
           to: p.get("to") || null,
@@ -7423,7 +7378,6 @@
           "memory",
           "audit",
           "egress",
-          "metrics",
           "history",
           "slack",
           "judgments",
@@ -7681,9 +7635,7 @@
       function pageShell(opts = {}) {
         const bar = $("shellbar");
         bar.textContent = "";
-        const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "metrics", "memory"].includes(
-          view,
-        );
+        const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "memory"].includes(view);
         bar.classList.toggle("logs-shell", logView);
         const counts = document.createElement("div");
         counts.className = "log-counts";
@@ -9212,7 +9164,6 @@
       function paintData(root, data) {
         root.textContent = "";
         ({
-          metrics: renderMetrics,
           spend: renderSpend,
           egress: renderEgress,
           history: renderHistory,
@@ -9301,84 +9252,6 @@
         return d;
       }
 
-      const PHASE_META = {
-        total: ["Total turn", "End-to-end wall time, request to reply"],
-        ttft: ["First token", "Time until the first streamed token"],
-        slackInflight: ["Slack pickup", "Socket receive to submit: how long the message sat in the Slack plugin"],
-        intakePreamble: ["Intake preamble", "Surface-side work before the request left for core"],
-        queue: ["Queue wait", "Waiting for a worker to claim the run"],
-        dispatch: ["Dispatch", "Surface receive to core hand-off"],
-        ingress: ["Ingress", "Core receive to model start: parse, resolve, prepare"],
-        detect: ["Reply decision", "Deciding whether to speak in a channel"],
-        compact: ["History compaction", "Compacting a long transcript before the model call"],
-        provision: ["Machine provision", "Booting or resuming the sandbox machine"],
-        materialize: ["Skills materialize", "Copying resolved skills onto the machine"],
-        creds: ["Credentials restore", "Restoring keychain credentials onto the machine"],
-        layers: ["Workspace layers", "Restoring workspace layers at provision time"],
-        compile: ["Prompt compile", "Assembling the system prompt"],
-        recall: ["Memory recall", "Injecting durable memory into the prompt"],
-        lease: ["Session lease", "Loading the session and acquiring the writer lease"],
-        exec: ["Command exec", "Commands the agent ran in the machine"],
-        stream: ["Stream + append", "Streaming tokens out and appending the turn"],
-        deliver: ["Slack deliver", "The final Slack post/update round-trip"],
-        capture: ["Memory capture", "Post-turn fact extraction, off the critical path"],
-      };
-      const phaseLabel = (key) => (PHASE_META[key] || [titleCase(key)])[0];
-      const phaseDesc = (key) => (PHASE_META[key] || [])[1] || "";
-      function turnKindWords(s) {
-        if (s.provisioned === true) return s.coldStart === true ? "cold machine boot" : "warm machine";
-        if (s.provisioned === false) return "no machine";
-        return "";
-      }
-      function sparkline(daily, valueOf = (r) => r.p50) {
-        const vals = (daily || [])
-          .slice(-14)
-          .map(valueOf)
-          .filter((v) => v != null);
-        if (vals.length < 2) {
-          const s = document.createElement("span");
-          s.className = "subline";
-          s.textContent = "None";
-          return s;
-        }
-        const w = 84,
-          h = 20,
-          pad = 2;
-        const min = Math.min(...vals),
-          max = Math.max(...vals);
-        const y = (v) => (max === min ? h / 2 : pad + (h - 2 * pad) * (1 - (v - min) / (max - min)));
-        const x = (i) => pad + (w - 2 * pad) * (vals.length === 1 ? 0.5 : i / (vals.length - 1));
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.setAttribute("width", w);
-        svg.setAttribute("height", h);
-        svg.setAttribute("class", "spark");
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-        line.setAttribute("points", vals.map((v, i) => x(i).toFixed(1) + "," + y(v).toFixed(1)).join(" "));
-        line.setAttribute("fill", "none");
-        line.setAttribute("stroke", "currentColor");
-        line.setAttribute("stroke-width", "1.5");
-        svg.appendChild(line);
-        return svg;
-      }
-      function renderMetrics(root, d) {
-        governanceUI.metrics.metrics(root, d, {
-          phase: urlToState().phase,
-          scope,
-          pageShell,
-          defaultShell,
-          go,
-          phaseLabel,
-          phaseDesc,
-          fmtMs,
-          fmtPct,
-          fmtTokens,
-          plural,
-          shortName,
-          relTime,
-          turnKindWords,
-          sparkline,
-        });
-      }
       function spendQuery(st) {
         const { from, to, bucket } = governanceUI.spend.spendWindow(st);
         return new URLSearchParams({ from, to, bucket }).toString();

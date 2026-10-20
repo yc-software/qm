@@ -126,13 +126,7 @@ test("all five unattended read grant types are accepted on create", async () => 
     {
       schedule: { everyMs: 3_600_000 },
       action: "nightly usage analysis",
-      unattendedGrants: [
-        "admin.sessions.read",
-        "admin.audit.read",
-        "admin.metrics.read",
-        "admin.egress.read",
-        "admin.files.read",
-      ],
+      unattendedGrants: ["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"],
     },
     claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
   );
@@ -140,7 +134,6 @@ test("all five unattended read grant types are accepted on create", async () => 
   assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, [
     "admin.sessions.read",
     "admin.audit.read",
-    "admin.metrics.read",
     "admin.egress.read",
     "admin.files.read",
   ]);

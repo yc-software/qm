@@ -3,6 +3,7 @@ import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
+import { markFirstToken } from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools } from "./orchestrator/external-tools.ts";
 import { isBackendCredential } from "../credentials/keychain.ts";
 import { resolveBrowserModel } from "../model/browser-model.ts";
@@ -566,8 +567,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ? input.origin.entryTs
           : undefined;
       const coreReceivedAt = Date.now();
-      let detectMs: number | undefined;
-      let compactMs: number | undefined;
       const turnTimezone = isValidCapabilityTimezone(input.timezone) ? input.timezone : undefined;
 
       if (!deps.identity.isInternal(actor)) {
@@ -1267,10 +1266,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let type: SessionType = "channel";
       if (conversation.kind === "dm") type = "dm";
       else if (conversation.kind === "group") type = "group";
-      let leaseMs = 0;
-      let leaseWaitMs = 0;
-      const perf = { credsMs: 0 };
-      const sessionStart = Date.now();
       const session = await deps.sessions.getOrCreateByThread(
         conversation.threadRef,
         type,
@@ -1280,7 +1275,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
       );
       screenSession.id = session.id;
-      leaseMs += Date.now() - sessionStart;
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
@@ -1401,7 +1395,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const isolateOwnerKeychain = !external && (openSpeakerKeychain || openAutomationKeychain);
       const ownerAuthAvailable = isolateOwnerKeychain;
       const connectorEnv: Record<string, string> = {};
-      const credsStart = Date.now();
       const commandCredentials: CommandCredential[] = [];
       const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
       const credentialIdentities = new Map<string, string>();
@@ -1548,7 +1541,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       await registerConnectorCredentials(addCredentialToCatalog);
-      perf.credsMs += Date.now() - credsStart;
       // Service credentials: one read of the org's credential list and one grant scan feed both
       // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
@@ -1863,8 +1855,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       }
       let toolCalls = 0;
-      let execMs = 0;
-      let execCount = 0;
       let harnessOnGapWork: ((work: GapWork) => void) | undefined;
       const emitGapWork = (phase: GapPhase, start: number, end: number): void => {
         try {
@@ -1905,9 +1895,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
 
       const {
-        box,
-        scratchBox,
-        ownerAuthBox,
         ownerAuthCommand,
         provision,
         provisionScratch,
@@ -1917,7 +1904,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         useSkill,
         provisionForReach,
         reclaimBox,
-        provisionPending,
         invalidateProvision,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
@@ -1948,8 +1934,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ...(input.runId ? { runId: input.runId } : {}),
         ...(input.surface ? { surface: input.surface } : {}),
       });
-      leaseWaitMs += acquired.waitedMs;
-      leaseMs += Date.now() - leaseStart - acquired.waitedMs;
       if (!acquired.lease) return acquired.refusal;
       const lease = acquired.lease;
       if (!ambientTurn) assignSessionTitle();
@@ -2347,7 +2331,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           )
         ) {
           const detectHistory = filterHistory((await historyWindow()).entries.slice(-DETECT_HISTORY_TAIL));
-          const detectStart = Date.now();
           const decision = await deps.harness.models.shouldRespond({
             session,
             message: input.text,
@@ -2363,10 +2346,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
             },
           });
-          detectMs = Date.now() - detectStart;
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;
-            const declineStatus = reactions ? "react" : "silent";
             deps.auditLog.record({
               at: Date.now(),
               principalId: actor.id,
@@ -2379,15 +2360,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               `[orchestrator] turn.${reactions ? "react" : "silent"} (detection ${reactions ? `acknowledged emoji=${reactions.join(",")}` : "declined"}) thread=${conversation.threadRef}` +
                 (decision.reason ? ` reason=${JSON.stringify(decision.reason)}` : ""),
             );
-            deps.metrics?.record({
-              totalMs: 0,
-              sessionId: session.id,
-              ...(input.runId ? { runId: input.runId } : {}),
-              ingressMs: Math.max(0, Date.now() - coreReceivedAt),
-              detectMs,
-              status: declineStatus,
-              scopeLabel: scopeId,
-            });
             return reactions
               ? { status: "react", sessionId: session.id, reactions }
               : { status: "silent", sessionId: session.id };
@@ -2754,10 +2726,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
           onGapWork: (work) => {
-            if (work.phase === "exec") {
-              execMs += Math.max(0, work.end - work.start);
-              execCount += 1;
-            }
             try {
               harnessOnGapWork?.(work);
             } catch (e) {
@@ -2835,9 +2803,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await historyWindow()).entries;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
-        const recallMs = Date.now() - recallStart;
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
@@ -2849,7 +2815,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resumePlan = resumeStrategy(visibleHistory, partial);
         }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
-        const compactStart = Date.now();
         const history = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
             cancel: turnAbort.signal,
@@ -2865,7 +2830,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         contextRecovered =
           history !== visibleHistory &&
           history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
-        compactMs = Date.now() - compactStart;
         const documentInputs = strictReadOnly
           ? { documents: [], notices: [] }
           : await loadDocumentInputs(
@@ -2981,7 +2945,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           input.approval && approvalRecord?.kind !== "input"
             ? [...visibleHistory].reverse().find((e) => e.type === "user" && !isOverheardEntry(e))
             : undefined;
-        const resumedFromSeq = pausedTurnUserEntry?.seq;
         const approvalReplay =
           !!pausedTurnUserEntry &&
           String((pausedTurnUserEntry.payload as { text?: string } | null)?.text ?? "").trim() === input.text.trim();
@@ -3037,8 +3000,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           void provision(true).catch(swallowAs("orchestrator: eager provision", undefined));
         }
         const turnStart = Date.now();
-        let firstChunkAt: number | undefined;
-        let lastChunkAt: number | undefined;
+        let firstTokenMarked = false;
         const emittedEntries: SessionEntry[] = [];
         let turnRuntime: TurnRuntime | undefined;
         const syntheticPrompt = syntheticInput || partial || approvalReplay || !!releasedToolOutput;
@@ -3618,9 +3580,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onDelta: (chunk: string) => {
-              const now = Date.now();
-              if (firstChunkAt === undefined) firstChunkAt = now;
-              lastChunkAt = now;
+              if (!firstTokenMarked) {
+                firstTokenMarked = true;
+                markFirstToken();
+              }
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
@@ -3673,14 +3636,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         let runtimeHandoffs = restoredRuntime ? 1 : 0;
         const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
           let segment = await runHarnessSegment(...args);
-          let modelCalls = segment.modelCalls ?? 0;
-          const usage = { cacheRead: 0, cacheWrite: 0, uncachedInput: 0 };
-          const addUsage = () => {
-            if (segment.cacheUsage)
-              for (const key of ["cacheRead", "cacheWrite", "uncachedInput"] as const)
-                usage[key] += segment.cacheUsage[key];
-          };
-          addUsage();
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
@@ -3721,14 +3676,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               inbound.images.length ? { images: inbound.images } : {},
               { history: resumedHistory },
             );
-            modelCalls += segment.modelCalls ?? 0;
-            addUsage();
           }
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
-            modelCalls,
-            cacheUsage: usage,
           };
         };
         let result = await runHarnessTurn(turnInput, {
@@ -3800,7 +3751,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           }
         }
-        const totalMs = Date.now() - turnStart;
 
         const stagedAttachments = attachStaging.staged();
         const harvestedAck = (() => {
@@ -3822,68 +3772,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const pausing = outcome.paused;
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
-        let metricProvisionMs: number | undefined;
-        if (box.provisionMs !== undefined) metricProvisionMs = box.provisionMs;
-        else if (scratchBox.provisionMs !== undefined) metricProvisionMs = scratchBox.provisionMs;
-        else if (ownerAuthBox.provisionMs !== undefined) metricProvisionMs = ownerAuthBox.provisionMs;
-        deps.metrics?.record({
-          totalMs,
-          sessionId: session.id,
-          ...(turnUserSeq !== undefined ? { turnSeq: turnUserSeq } : {}),
-          ...(input.runId ? { runId: input.runId } : {}),
-          ...(firstChunkAt !== undefined ? { ttftMs: firstChunkAt - turnStart } : {}),
-          ...(firstChunkAt !== undefined ? { streamMs: (lastChunkAt ?? firstChunkAt) - firstChunkAt } : {}),
-          ...(typeof input.intakePreambleMs === "number" ? { intakePreambleMs: input.intakePreambleMs } : {}),
-          ...(typeof input.clientSentAt === "number"
-            ? { dispatchMs: Math.max(0, coreReceivedAt - input.clientSentAt) }
-            : {}),
-          ingressMs: Math.max(0, turnStart - coreReceivedAt),
-          ...(detectMs !== undefined ? { detectMs } : {}),
-          ...(compactMs !== undefined ? { compactMs } : {}),
-          ...(typeof input.queueMs === "number" ? { queueMs: Math.max(0, input.queueMs) } : {}),
-          ...(resumedFromSeq !== undefined ? { resumedFromSeq } : {}),
-          status: pausing ? "paused" : "ok",
-          scopeLabel: scopeId,
-          provisioned:
-            !!box.handle ||
-            !!box.pending ||
-            provisionPending() ||
-            !!scratchBox.handle ||
-            !!ownerAuthBox.handle ||
-            !!ownerAuthBox.pending,
-          ...((box.handle ?? box.pending ?? scratchBox.handle ?? ownerAuthBox.handle ?? ownerAuthBox.pending)
-            ? {
-                coldStart: !!(box.handle ??
-                  box.pending ??
-                  scratchBox.handle ??
-                  ownerAuthBox.handle ??
-                  ownerAuthBox.pending)!.coldStart,
-              }
-            : {}),
-          modelCalls: result.modelCalls ?? 0,
-          toolCalls,
-          ...(metricProvisionMs !== undefined ? { provisionMs: metricProvisionMs } : {}),
-          ...(box.materializeMs !== undefined ? { materializeMs: box.materializeMs } : {}),
-          ...(perf.credsMs > 0 ? { credsMs: perf.credsMs } : {}),
-          ...(result.compileMs !== undefined ? { compileMs: result.compileMs } : {}),
-          recallMs,
-          leaseMs,
-          ...(leaseWaitMs > 0 ? { leaseWaitMs } : {}),
-          ...(execCount > 0 ? { execMs } : {}),
-          ...(result.cacheUsage
-            ? {
-                cacheRead: result.cacheUsage.cacheRead,
-                cacheWrite: result.cacheUsage.cacheWrite,
-                uncachedInput: result.cacheUsage.uncachedInput,
-              }
-            : {}),
-        });
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
         if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
-            const captureStart = Date.now();
             try {
               await onTurnEnd({
                 scopeId: memoryScopeId,
@@ -3907,13 +3800,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 },
                 e,
               );
-            } finally {
-              deps.metrics?.record({
-                totalMs: 0,
-                status: "capture",
-                scopeLabel: scopeId,
-                captureMs: Date.now() - captureStart,
-              });
             }
           })();
           pendingCaptures.set(memoryScopeId, capture);

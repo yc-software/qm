@@ -41,7 +41,6 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -159,7 +158,6 @@ export interface ServerDeps {
   screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
   errors?: ErrorLog;
-  metrics?: MetricsSink;
   crons?: CronStore;
   loops?: LoopServiceDeps;
   runs?: RunStore;

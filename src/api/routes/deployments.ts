@@ -201,8 +201,10 @@ interface DeploymentHttp2Connection {
 }
 const deploymentHttp2Sessions = new Map<string, DeploymentHttp2Connection>();
 
+const TRACE_HEADERS = ["sentry-trace", "baggage", "traceparent", "tracestate"];
+
 function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string[]> {
-  const out = proxyHeaders(req.headers, ["host", ...GATEWAY_AUTH_HEADERS]);
+  const out = proxyHeaders(req.headers, ["host", ...GATEWAY_AUTH_HEADERS, ...TRACE_HEADERS]);
   const kept = String(out.cookie ?? "")
     .split(";")
     .map((part) => part.trim())

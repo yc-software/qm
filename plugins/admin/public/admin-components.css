@@ -1097,25 +1097,7 @@ dialog.credential-dialog {
   cursor: not-allowed;
 }
 
-:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card {
-  margin: 24px 0 0;
-  padding: 20px 0 0;
-  border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card > .head {
-  margin: 0 0 12px;
-  padding: 0;
-  border: 0;
-}
-:where(html body[data-subview="metrics"]) #app-view #main #view-data > .card > .body {
-  padding: 0;
-  min-width: 0;
-}
-:where(html body:is([data-subview="metrics"], [data-subview="design-system"])) #app-view #main .statline {
+:where(html body[data-subview="design-system"]) #app-view #main .statline {
   margin: 0 0 16px;
   padding: 0;
   border: 0;
@@ -1124,80 +1106,6 @@ dialog.credential-dialog {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .primaryline {
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 1.4;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .subline {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-}
-:where(html body[data-subview="metrics"]) #app-view #main :is(th, td) {
-  padding: 9px 10px;
-  vertical-align: middle;
-}
-:where(html body[data-subview="metrics"]) #app-view #main :is(th, td):first-child {
-  padding-left: 0;
-}
-:where(html body[data-subview="metrics"]) #app-view #main :is(th, td):last-child {
-  padding-right: 0;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-:where(html body[data-subview="metrics"]) #app-view #main th:not(:first-child) {
-  text-align: right;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .spark {
-  margin-left: auto;
-  color: var(--muted);
-}
-:where(html body[data-subview="metrics"]) #app-view #main .dist {
-  gap: 8px;
-  max-width: 640px;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .dist-row {
-  font-size: 13px;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .dist-track {
-  height: 8px;
-  background: var(--subtle);
-  border-radius: 999px;
-  overflow: hidden;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .dist-bar {
-  background: var(--cta);
-  border-radius: 999px;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .shellbar:has(.back) {
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-:where(html body[data-subview="metrics"]) #app-view #main .shellbar .back {
-  flex-basis: 100%;
-  min-height: 24px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  text-align: left;
-  font-weight: 400;
-}
-@media (max-width: 640px) {
-  :where(html body[data-subview="metrics"]) #app-view #main table {
-    min-width: 620px;
-  }
-  :where(html body[data-subview="metrics"]) #app-view #main .shell-context {
-    flex-basis: 100%;
-    white-space: normal;
-  }
 }
 
 :where(html body:is([data-subview="audit"], [data-subview="egress"])) #app-view #main #view-data > .card {

@@ -10,7 +10,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import { countedClaims, isTerminal, releasesDedupKey, runPriority } from "./run-store.ts";
+import { countedClaims, isTerminal, releasesDedupKey, runPriority, withTraceCarrier } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -335,7 +335,15 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
            ON CONFLICT (idempotency_key) DO NOTHING
            RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [id, sessionId, jsonbStringify(request), dedupKey ?? null, maxAttempts, Date.now(), priority],
+          [
+            id,
+            sessionId,
+            jsonbStringify(withTraceCarrier(request)),
+            dedupKey ?? null,
+            maxAttempts,
+            Date.now(),
+            priority,
+          ],
         );
         if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
         const existing = await runs.getByDedupKey(dedupKey!);

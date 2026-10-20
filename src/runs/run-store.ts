@@ -3,11 +3,18 @@ import type { RunSignal, RunSignalStore } from "./run-signal-store.ts";
 import type { TurnResult } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
+import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 
 type RunStatus = "pending" | "running" | "done" | "failed";
 
 export type RunPriority = 0 | 1 | 2;
 export const MAX_PREEMPTIONS = 3;
+
+export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput {
+  const { trace: _stale, ...rest } = request;
+  const trace = request.swarm ? undefined : traceCarrier();
+  return trace ? { ...rest, trace } : rest;
+}
 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
   if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;

@@ -136,10 +136,6 @@ test("a custom spend window round-trips through the URL and replaces the preset 
     "/admin/spend?range=7d",
     "an impossible custom window never displaces the preset",
   );
-  assert.equal(
-    stateToUrl({ view: "metrics", scope: "org:acme", from: "2026-09-01", to: "2026-10-01" }),
-    "/admin/metrics?scope=org%3Aacme",
-  );
   const router = routerAt("/admin/spend", "?from=2026-09-01&to=2026-10-01");
   const st = router.urlToState();
   assert.equal(st.from, "2026-09-01");

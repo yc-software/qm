@@ -1,8 +1,7 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
-import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
-import { traceStatus } from "../../plugins/chassis/src/timing.ts";
+import { nameRequest, reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -87,7 +86,6 @@ const UNATTENDED_READ_PATHS: Record<string, (pathname: string) => boolean> = {
     p === "/v1/admin/errors" ||
     p === "/v1/admin/runs",
   "admin.audit.read": (p) => p === "/v1/admin/audit",
-  "admin.metrics.read": (p) => p === "/v1/admin/metrics",
   "admin.egress.read": (p) => p === "/v1/admin/egress",
   "admin.files.read": (p) =>
     p === "/v1/admin/files" || p === "/v1/admin/files/read" || p === "/v1/admin/files/download",
@@ -539,20 +537,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
-  const requestNames = new WeakMap<IncomingMessage, string>();
   const server = createHttpServer((req, res) => {
-    const finishTiming =
-      req.url === "/healthz" || req.url === "/readyz"
-        ? undefined
-        : startTiming("http.server", `${req.method ?? "GET"} /*`);
-    if (finishTiming)
-      res.once("close", () =>
-        finishTiming({
-          name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
-          status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
-          data: { url: req.url, http_status: res.writableFinished ? String(res.statusCode) : undefined },
-        }),
-      );
     req.on("error", () => res.destroy());
     res.on("error", () => res.destroy());
     void front(req, res).catch((err: unknown) => respondError(req, res, err));
@@ -593,12 +578,12 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     armBodyDeadline(req, 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
-      requestNames.set(req, "/deployment-proxy/*");
+      nameRequest(base.method, "/deployment-proxy/*");
       return;
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
-      if ("path" in raw.route) requestNames.set(req, raw.route.path);
+      if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
         base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth.aud);
@@ -608,7 +593,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       return;
     }
     const matched = findRoute(apiRoutes, base.method, base.pathname);
-    if (matched && "path" in matched.route) requestNames.set(req, matched.route.path);
+    if (matched && "path" in matched.route) nameRequest(base.method, matched.route.path);
     const routeAuth = matched?.route.auth;
     const acceptsSourceAuth = !matched || routeAuth === "source" || routeAuth === "either";
     if (wiring.secret && !capabilityFromHeaders(req) && routeAuth !== "public" && acceptsSourceAuth) {

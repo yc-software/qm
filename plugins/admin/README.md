@@ -76,7 +76,7 @@ runtime grants).
 status) · `POST /api/logout` ·
 `GET /api/scopes/:scopeId` + `PUT /api/scopes/:scopeId/:resource`
 (`command-policy|soul|egress`) ·
-`GET /api/{metrics|errors|audit|crons|deployments|skills|sessions|runs|files}?scope=` ·
+`GET /api/{errors|audit|crons|deployments|skills|sessions|runs|files}?scope=` ·
 `GET /api/sessions/:id?scope=` (transcript) · `GET /api/sessions/:id/llm?scope=`
 (captured model requests) · `GET /api/files/read?id=` + `GET /api/files/download?id=` (document content) ·
 `GET /api/retention` (org-wide) · `GET /api/users` (org-wide; roster + grants) ·

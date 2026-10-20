@@ -4,7 +4,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createScopedEventSink } from "../src/admin/scoped-event-sink.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
-import { createMetricsSink } from "../src/admin/metrics-sink.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -62,14 +61,6 @@ test("error log records and lists scope-filtered newest-first", async () => {
   assert.ok(typeof mine[0]?.ts === "number");
   assert.equal(await log.count(), 2, "count totals every event");
   assert.equal(await log.count({ scopeId: s1 }), 1, "count honors the scope filter");
-});
-
-test("metrics sink honors the since cutoff via the shared sink", async () => {
-  const sink = createMetricsSink();
-  sink.record({ totalMs: 10, status: "ok", scopeLabel: s1 });
-  const cutoff = Date.now() + 1;
-  assert.equal((await sink.list({ since: cutoff })).length, 0, "nothing at/after a future cutoff");
-  assert.equal((await sink.list()).length, 1);
 });
 
 test("audit log is now bounded (latent leak fixed) and preserves insertion order", async () => {

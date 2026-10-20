@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { installPrincipalLinks } from "../src/directory/person.ts";
-import { cacheHitRatio } from "../src/admin/metrics-sink.ts";
+import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import type { SpendRow } from "../src/sessions/session-store.ts";
 import { spendCsv, spendExportRows, summarizeSpend, type SpendReport } from "../src/api/routes/admin/spend.ts";
 
