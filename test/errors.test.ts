@@ -206,3 +206,16 @@ test("field enumeration failures preserve the message and stack", () => {
   });
   assert.equal(errDetail(hostile), errDetail(error));
 });
+
+test("error fields redact credential-shaped keys, including nested request headers", () => {
+  const error = Object.assign(new Error("A request error occurred: connect ECONNREFUSED"), {
+    code: "slack_webapi_request_error",
+    token: "xoxb-top-level",
+    original: { config: { headers: { Authorization: "Bearer xoxb-nested", Accept: "application/json" } } },
+  });
+  const detail = errDetail(error);
+  assert.ok(!detail.includes("xoxb"));
+  assert.match(detail, /token=\[Redacted\]/);
+  assert.match(detail, /"Authorization":"\[Redacted\]","Accept":"application\/json"/);
+  assert.match(detail, /code=slack_webapi_request_error/);
+});
