@@ -6900,10 +6900,7 @@
           try {
             data = text ? JSON.parse(text) : null;
           } catch (error) {
-            console.warn(
-              `[swallowed] admin api ${method} ${path}: non-JSON ${res.status} body: ${text.slice(0, 200)}`,
-              error,
-            );
+            console.warn(`[swallowed] admin api ${method} ${path}: non-JSON ${res.status} response`, error);
           }
           return { ok: res.ok, status: res.status, data };
         } catch (error) {
