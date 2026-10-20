@@ -440,7 +440,7 @@ for (const bucket of ["day", "week"] as const) {
   });
 }
 
-test("spendExportRows keeps the ledger grain, merging principal aliases into one person per day, origin and model", (t) => {
+test("spendExportRows keeps the ledger grain, merging principal aliases into one person per day, source and model", (t) => {
   installPrincipalLinks({ canonical: (id) => (id === "slack-alice" ? "alice" : undefined), aliases: () => [] });
   t.after(() => installPrincipalLinks(null));
   const labels = new Map([
@@ -466,22 +466,21 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
       r.kind,
       r.principalId,
       r.displayName,
-      r.origin,
       r.source,
       r.model,
       r.costUsd,
       r.calls,
     ]),
     [
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "live", null, 32, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "live", "m1", 3, 2],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "loop", "m1", 64, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "monitor", "m1", 4, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "swarm", "m1", 128, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "webhook", "m1", 16, 1],
-      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "cron", "m1", 8, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "loop", "m1", 64, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "swarm", "m1", 128, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "webhook", "m1", 16, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "monitor", "m1", 4, 1],
+      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "m1", 8, 2],
     ],
-    "origin keeps its live/cron/background values; source names the exact background kind",
+    "each row names its exact source, live first, then background kinds in report order",
   );
   assert.equal(rows[1]!.input, 8);
   const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY, label: (id) => labels.get(id) ?? "" });
@@ -584,7 +583,7 @@ test("spendExportRows keeps two crons in the same scope, day and model apart", (
     () => "",
   );
   assert.deepEqual(
-    rows.map((r) => [r.origin, r.cronId, r.costUsd]),
+    rows.map((r) => [r.source, r.cronId, r.costUsd]),
     [
       ["live", null, 4],
       ["cron", "a", 1],

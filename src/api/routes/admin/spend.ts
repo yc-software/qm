@@ -40,8 +40,7 @@ type SpendBucket = "day" | "week";
 const BACKGROUND_SOURCES = ["cron", "loop", "swarm", "webhook", "monitor"] as const;
 type BackgroundSource = (typeof BACKGROUND_SOURCES)[number];
 type SpendSource = "live" | BackgroundSource;
-type ExportOrigin = "live" | "cron" | "background";
-const EXPORT_ORIGINS: readonly ExportOrigin[] = ["live", "cron", "background"];
+const SPEND_SOURCES: readonly SpendSource[] = ["live", ...BACKGROUND_SOURCES];
 
 interface SpendBucketTotals {
   costUsd: number;
@@ -105,7 +104,6 @@ export interface SpendExportRow extends Tally {
   kind: string;
   principalId: string | null;
   displayName: string;
-  origin: ExportOrigin;
   source: SpendSource;
   cronId: string | null;
   model: string | null;
@@ -189,10 +187,6 @@ function bucketTotals(t: Tally): SpendBucketTotals {
 
 function spendSource(origin: SessionOrigin): SpendSource {
   return origin === "conversation" ? "live" : origin;
-}
-
-function exportOrigin(source: SpendSource): ExportOrigin {
-  return source === "live" || source === "cron" ? source : "background";
 }
 
 function isoDay(day: number): string {
@@ -388,7 +382,6 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
         kind,
         principalId: person,
         displayName: "",
-        origin: exportOrigin(source),
         source,
         cronId: row.cronId,
         model: row.model,
@@ -404,8 +397,7 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
       (a, b) =>
         byCodePoint(a.day, b.day) ||
         byCodePoint(a.scopeId, b.scopeId) ||
-        EXPORT_ORIGINS.indexOf(a.origin) - EXPORT_ORIGINS.indexOf(b.origin) ||
-        byCodePoint(a.source, b.source) ||
+        SPEND_SOURCES.indexOf(a.source) - SPEND_SOURCES.indexOf(b.source) ||
         byCodePoint(a.cronId ?? "", b.cronId ?? "") ||
         byCodePoint(a.model ?? "", b.model ?? ""),
     );

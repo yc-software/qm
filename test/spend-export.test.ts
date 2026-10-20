@@ -95,7 +95,7 @@ test("spend export: the token authorizes the export and nothing else", async () 
   }
 });
 
-test("spend export: rows keep the ledger grain with canonical people, origin buckets and the org scope, in code-point order", async () => {
+test("spend export: rows keep the ledger grain with canonical people, sources and the org scope, in code-point order", async () => {
   const s = fixture();
   try {
     const sessions = s.sessions!;
@@ -116,7 +116,7 @@ test("spend export: rows keep the ledger grain with canonical people, origin buc
         r.scopeId,
         r.kind,
         r.principalId,
-        r.origin,
+        r.source,
         r.cronId,
         r.model,
         r.calls,
@@ -124,7 +124,7 @@ test("spend export: rows keep the ledger grain with canonical people, origin buc
       ]),
       [
         [iso(today), "channel:C1", "channel", null, "live", null, "claude-opus-5", 1, 3],
-        [iso(today), "channel:C1", "channel", null, "background", null, "claude-opus-5", 1, 4],
+        [iso(today), "channel:C1", "channel", null, "webhook", null, "claude-opus-5", 1, 4],
         [iso(today), "personal:U1", "person", "U1", "live", null, "claude-opus-5", 1, 1],
         [iso(today), "personal:alice", "person", "alice", "live", null, "claude-opus-5", 2, 3],
         [iso(today), "personal:alice", "person", "alice", "cron", "nightly", "gpt-6-astra", 1, 0.5],
