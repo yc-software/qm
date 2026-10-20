@@ -6900,11 +6900,11 @@
           try {
             data = text ? JSON.parse(text) : null;
           } catch (error) {
-            console.warn(`[swallowed] admin api ${method} ${path}: non-JSON ${res.status} response`, error);
+            console.warn("[swallowed] admin api: non-JSON response", method, path, res.status, error);
           }
           return { ok: res.ok, status: res.status, data };
         } catch (error) {
-          console.warn(`[swallowed] admin api ${method} ${path}`, error);
+          console.warn("[swallowed] admin api: request failed", method, path, error);
           return { ok: false, status: 0, data: { message: "Network request failed." } };
         }
       }
