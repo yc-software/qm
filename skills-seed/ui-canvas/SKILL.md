@@ -34,7 +34,7 @@ can do in QM, with no sandbox. That is why it exists, and why you must hold to t
    dismissing the canvas restores the page. Don't change their account, conversations or
    other data that the request didn't ask for.
 4. Load nothing from other origins: no remote scripts, no `fetch` to third parties. The one
-   exception is showing a whole page in an iframe window, and only through the `ui-frame`
+   exception is embedding a whole page in an iframe, and only through the `ui-embed`
    skill.
 5. If the task needs any of that, do that part with your ordinary tools or ask the person
    to do it in the normal UI, and say why.
