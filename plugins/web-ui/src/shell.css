@@ -1016,6 +1016,10 @@ a.chat-row-open {
 .archived-toggle:hover {
   color: var(--foreground);
 }
+.archived-toggle:disabled {
+  color: var(--muted-foreground);
+  cursor: progress;
+}
 .archived-toggle:focus-visible {
   background: var(--secondary);
 }

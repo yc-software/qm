@@ -48,6 +48,9 @@ test("the sidebar pages chats from the server and keeps pinned, open and selecte
     assert.equal(sidebar.querySelectorAll(".recent-project-children .session-row").length, 0);
     projectToggle.click();
     button(sidebar, "Show more conversations").click();
+    const loading = button(sidebar, "Show more conversations");
+    assert.ok(loading.disabled && loading.getAttribute("aria-busy") === "true");
+    assert.ok(loading.querySelector(".thinking-sheen"));
     await until(
       () => sidebar.querySelectorAll(".session-row").length === 103,
       () => sidebar.querySelectorAll(".session-row").length,

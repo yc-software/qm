@@ -76,7 +76,7 @@ import {
 } from "./session-list";
 import { tip } from "./tooltip";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
-import { copyText, menuSelect, relTime, workingWave } from "./ui";
+import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { listPageTpl } from "./list-page";
@@ -369,9 +369,10 @@ export function renderList(): void {
               class="archived-toggle"
               type="button"
               ?disabled=${pageLoading === "active"}
+              aria-busy=${pageLoading === "active" ? "true" : "false"}
               @click=${() => void loadMoreSessions("active")}
             >
-              Show more conversations
+              ${sheenLabel("Show more conversations", pageLoading === "active")}
             </button>`
           : nothing
       }
@@ -380,21 +381,22 @@ export function renderList(): void {
           ? html`
               <button class="archived-toggle ${showArchived ? "open" : ""}" @click=${toggleShowArchived}>
                 ${icon(showArchived ? ChevronDown : ChevronRight, 14)}
-                <span>Archived</span>
+                ${sheenLabel("Archived", pageLoading === "archived" && !archivedLoaded)}
               </button>
               ${
                 showArchived
                   ? html`<div class="archived-children">
                       ${groupedRows(archivedItems, shownThreads)}
                       ${
-                        archivedCursor || pageLoading === "archived"
+                        archivedCursor
                           ? html`<button
                               class="archived-toggle"
                               type="button"
                               ?disabled=${pageLoading === "archived"}
+                              aria-busy=${pageLoading === "archived" ? "true" : "false"}
                               @click=${() => void loadMoreSessions("archived")}
                             >
-                              Show more archived conversations
+                              ${sheenLabel("Show more archived conversations", pageLoading === "archived")}
                             </button>`
                           : nothing
                       }
@@ -654,8 +656,14 @@ export function drawChatsPage(): void {
   if (chatsPageCursor)
     rows.push(
       html`<div class="list-footer">
-        <button class="btn" type="button" ?disabled=${chatsPageLoading} @click=${() => void loadChatsPage(true)}>
-          Show more conversations
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${chatsPageLoading}
+          aria-busy=${chatsPageLoading ? "true" : "false"}
+          @click=${() => void loadChatsPage(true)}
+        >
+          ${sheenLabel("Show more conversations", chatsPageLoading)}
         </button>
       </div>`,
     );
