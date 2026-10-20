@@ -1,5 +1,4 @@
 import "./instrument.ts";
-import { createItemsPromotion } from "./sessions/items-promotion.ts";
 import { createBackgroundController } from "./runs/background-controller.ts";
 import { createManagedSlack } from "./surfaces/slack-managed.ts";
 import { randomBytes } from "node:crypto";
@@ -16,13 +15,7 @@ import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
 
-if (
-  config.stageItemsCutover &&
-  (config.sessionStore !== "postgres" || !config.databaseUrl || !config.backgroundDeploymentId)
-)
-  throw new Error("Staged items promotion requires Postgres and controlled background ownership");
 const built = buildApp(config);
-const itemsPromotion = config.stageItemsCutover ? await createItemsPromotion(config.databaseUrl!) : undefined;
 await migrateRegisteredPgSchemas(config.databaseUrl);
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
@@ -46,7 +39,6 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
-  itemsPromotion,
 });
 
 await built.config.hydrate?.();
@@ -54,7 +46,7 @@ await built.refreshCustomProviders();
 await built.identity.hydrate();
 await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
-if (!itemsPromotion) built.runtime.start();
+built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
@@ -62,20 +54,6 @@ server.listen(config.port, () => {
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
-
-if (itemsPromotion) {
-  const poll = setInterval(() => {
-    void itemsPromotion
-      .refresh()
-      .catch((error) => console.error("[qm] items promotion check failed:", errMessage(error)));
-  }, 500);
-  try {
-    await itemsPromotion.wait();
-  } finally {
-    clearInterval(poll);
-  }
-  built.runtime.start();
-}
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;
@@ -214,7 +192,6 @@ function shutdown(signal: string): void {
       async stop() {
         await backgroundController?.stop();
         await built.runtime.stop();
-        await itemsPromotion?.close();
       },
       releaseInFlightRuns: () => built.runtime.releaseInFlightRuns(),
     },

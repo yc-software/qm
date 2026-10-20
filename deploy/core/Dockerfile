@@ -23,7 +23,6 @@ RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
 COPY src ./src
-COPY scripts/ops/items-copy.ts ./scripts/ops/items-copy.ts
 COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed

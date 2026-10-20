@@ -41,13 +41,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { itemsMigration } from "./items-schema.ts";
-import {
-  DROP_SESSION_TAPE_SQL,
-  LEGACY_TAPE_STEPS_SIZE_GUARD_SQL,
-  LEGACY_TAPE_STEPS_SQL,
-  PREPARE_TAPE_DROP_SQL,
-} from "./legacy-tape-steps.ts";
+import { ITEMS_CUTOVER_MIGRATIONS, LEGACY_TAPE_MIGRATIONS } from "./legacy-history-migrations.ts";
 import {
   cronIdOf,
   legacyOriginPattern,
@@ -69,9 +63,9 @@ import {
   msOf,
   AGENT_REPLY_ITEM,
   SEARCHABLE_ITEM,
+  searchTypeExpr,
   USER_KINDS,
 } from "./items.ts";
-import { ITEMS_CUTOVER_SQL } from "./items-cutover.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 const threadRefOriginExpr = (threadRef: string): string =>
@@ -241,10 +235,7 @@ const LAST_PREVIEW_LEN = 100;
 
 const storedPreview = (payload: unknown, maxLen: number): string => pgTextSafe(userMessagePreview(payload, maxLen));
 
-export function createPostgresSessionStore(
-  connectionString: string,
-  opts: StoreOptions & { stageItemsCutover?: boolean } = {},
-): SessionStore {
+export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
 
@@ -870,19 +861,7 @@ export function createPostgresSessionStore(
         id: "sessions/store/0028-drop-run-tasks",
         statements: [`DROP TABLE IF EXISTS task_events`, `DROP TABLE IF EXISTS tasks`],
       },
-      {
-        id: "sessions/store/0029-legacy-tape-steps",
-        statements: LEGACY_TAPE_STEPS_SQL,
-      },
-      {
-        id: "sessions/store/0030-legacy-tape-steps-size-guard",
-        statements: LEGACY_TAPE_STEPS_SIZE_GUARD_SQL,
-      },
-      {
-        id: "sessions/store/0031-drop-session-tape",
-        prepare: PREPARE_TAPE_DROP_SQL,
-        statements: DROP_SESSION_TAPE_SQL,
-      },
+      ...LEGACY_TAPE_MIGRATIONS,
       {
         id: "sessions/store/0032-session-goals",
         statements: [
@@ -914,15 +893,23 @@ export function createPostgresSessionStore(
         prepare: [SESSION_ORIGIN_BACKFILL_SQL],
         statements: [],
       },
-      ...(opts.stageItemsCutover
-        ? []
-        : [
-            itemsMigration,
-            {
-              id: "sessions/store/0036-items-cutover",
-              statements: ITEMS_CUTOVER_SQL,
-            },
-          ]),
+      ...ITEMS_CUTOVER_MIGRATIONS,
+      {
+        id: "sessions/store/0037-drop-legacy-history",
+        statements: [
+          `SET LOCAL lock_timeout = '60s'`,
+          `DROP TRIGGER IF EXISTS session_entry_search ON items`,
+          `DROP FUNCTION IF EXISTS sync_item_search(), sync_session_entry_search()`,
+          `DROP VIEW IF EXISTS session_transcript_entries`,
+          `DROP TABLE IF EXISTS session_entry_search, legacy_session_entries, session_entries, session_tape,
+             legacy_tape_steps, legacy_turn_runs, legacy_tape_steps_progress, legacy_tape_skipped,
+             legacy_tape_writes, legacy_prep_runs`,
+          `DROP PROCEDURE IF EXISTS prepare_legacy_tape_steps(INT)`,
+          `DROP FUNCTION IF EXISTS legacy_tape_written(), legacy_tape_steps_batch(TEXT[], BIGINT),
+             entry_search_text(text), items_copy_payload(text), items_copy_payload(jsonb)`,
+          `DROP SCHEMA IF EXISTS items_copy_ops CASCADE`,
+        ],
+      },
     ],
     [
       {
@@ -934,17 +921,6 @@ export function createPostgresSessionStore(
             ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;
           END IF;
         END $safe_jsonb_parallel$`,
-        ],
-      },
-      {
-        id: "sessions/maintenance/entry-search-text-parallel",
-        statements: [
-          `DO $entry_search_text_parallel$
-        BEGIN
-          IF to_regprocedure('entry_search_text(text)') IS NOT NULL THEN
-            ALTER FUNCTION entry_search_text(text) PARALLEL UNSAFE;
-          END IF;
-        END $entry_search_text_parallel$`,
         ],
       },
     ],
@@ -1523,7 +1499,6 @@ export function createPostgresSessionStore(
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_entry_search WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM sessions WHERE id = $1", [sessionId]);
       });
@@ -1543,7 +1518,6 @@ export function createPostgresSessionStore(
         await client.query("DELETE FROM session_llm_requests WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_leases WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM participants WHERE session_id = $1", [sessionId]);
-        await client.query("DELETE FROM session_entry_search WHERE session_id = $1", [sessionId]);
         await client.query("DELETE FROM session_pins WHERE session_id = $1", [sessionId]);
         return true;
       });
@@ -1670,14 +1644,18 @@ export function createPostgresSessionStore(
       const ts = tsPrefixQuery(query);
       if (!ts) return [];
       const rows = await q(
-        `SELECT h.session_id, h.seq, h.type, h.author, h.text, h.created_at,
+        `SELECT i.session_id, i.seq, ${searchTypeExpr("i")} AS type,
+                CASE WHEN i.kind IN ${USER_KINDS} AND jsonb_typeof(i.body -> 'name') = 'string'
+                     THEN i.body ->> 'name' END AS author,
+                i.text, ${msOf("i.created_at")} AS created_at,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM session_entry_search h
-           JOIN participants p ON p.session_id = h.session_id AND p.principal_id = $1
-           JOIN sessions s ON s.id = h.session_id
-          WHERE h.search_tsv @@ to_tsquery('simple', $2)
-            AND ${withinParticipantWindow("h", "p", false)}
-          ORDER BY h.created_at DESC, h.session_id, h.seq DESC
+           FROM items i
+           JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
+           JOIN sessions s ON s.id = i.session_id
+          WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
+            AND ${SEARCHABLE_ITEM("i")}
+            AND ${withinParticipantWindow("i", "p")}
+          ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
         [principalId, ts, Math.max(1, Math.min(limit, 200))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
@@ -1701,56 +1679,6 @@ export function createPostgresSessionStore(
           },
         ];
       });
-    },
-
-    async appendSearchEntries(lease, rows): Promise<void> {
-      if (!rows.length) return;
-      await withLease(lease, "search index append without a valid session lease", async (client) => {
-        for (const row of rows) {
-          await client.query(
-            `INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (session_id, seq) DO NOTHING`,
-            [
-              lease.sessionId,
-              row.seq,
-              row.type,
-              row.author?.replaceAll("\u0000", "") ?? null,
-              row.text.replaceAll("\u0000", ""),
-              row.createdAt,
-            ],
-          );
-        }
-      });
-    },
-
-    async searchIndexCoverage(sessionId): Promise<number> {
-      const rows = await q("SELECT COALESCE(MAX(seq), -1) AS n FROM session_entry_search WHERE session_id = $1", [
-        sessionId,
-      ]);
-      return Number(rows[0]?.n ?? -1);
-    },
-
-    async missingSearchEntries(sessionId): Promise<number> {
-      const rows = await q(
-        `WITH missing AS MATERIALIZED (
-           SELECT e.text AS text FROM items e
-            WHERE e.tenant_id = ${TENANT} AND e.session_id = $1 AND ${SEARCHABLE_ITEM("e")}
-              AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)
-         )
-         SELECT COUNT(*) AS n FROM missing WHERE COALESCE(btrim(text), '') <> ''`,
-        [sessionId],
-      );
-      return Number(rows[0]?.n ?? 0);
-    },
-
-    async lastSearchableEntrySeq(sessionId): Promise<number> {
-      const rows = await q(
-        `SELECT COALESCE(MAX(i.seq), -1) AS n FROM items i
-          WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND ${SEARCHABLE_ITEM("i")}
-            AND btrim(i.text) <> ''`,
-        [sessionId],
-      );
-      return Number(rows[0]?.n ?? -1);
     },
 
     async scanAll(): Promise<Session[]> {

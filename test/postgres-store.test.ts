@@ -937,8 +937,7 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   await s.addParticipant(a.id, "DEL1");
   await s.addParticipant(keep.id, "DEL1");
   const { lease } = await s.acquireLease(a.id);
-  const hi = await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-  await s.appendSearchEntries(lease!, [{ seq: hi.seq, type: "user", text: "hi", createdAt: hi.createdAt }]);
+  await s.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
   await s.recordLlmRequest(a.id, {
     turnSeq: 0,
     step: 0,
@@ -952,7 +951,6 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", {
   assert.equal(await s.get(a.id), null, "session row gone");
   assert.equal(await s.getByThread("del-t1"), null, "thread index gone");
   assert.equal((await s.getEntries(a.id)).length, 0, "entries gone");
-  assert.equal(await s.searchIndexCoverage(a.id), -1, "search index rows gone");
   assert.equal((await s.listLlmRequests(a.id)).length, 0, "llm requests gone");
   assert.equal(
     (await s.listByParticipant("DEL1")).some((x) => x.id === a.id),
@@ -1741,9 +1739,7 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
     await raw.query(`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
       LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
       BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
-    await raw.query(
-      "CREATE INDEX safe_jsonb_parallel_repair_test ON legacy_session_entries ((safe_jsonb(payload) ->> 'ts'))",
-    );
+    await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON sessions ((safe_jsonb(title) ->> 'ts'))");
 
     const s = createPostgresSessionStore(URL!);
     await s.scanAll();
@@ -1753,14 +1749,12 @@ test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => 
          FROM pg_proc
         WHERE oid IN (
           'safe_json(text)'::regprocedure,
-          'safe_jsonb(text)'::regprocedure,
-          'entry_search_text(text)'::regprocedure
+          'safe_jsonb(text)'::regprocedure
         )`,
     );
     assert.deepEqual(
       new Map(result.rows.map((row) => [row.proname as string, row.proparallel as string])),
       new Map([
-        ["entry_search_text", "u"],
         ["safe_json", "u"],
         ["safe_jsonb", "u"],
       ]),
@@ -2875,7 +2869,7 @@ test("pg search: message writes populate the index and tool results stay unfinda
   const sess = await s.getOrCreateByThread("srch-idx-1", "dm", scope);
   await s.addParticipant(sess.id, "UIDX", undefined, { includeHistory: true });
   const lease = (await s.acquireLease(sess.id)).lease!;
-  const user = await s.append(lease, {
+  await s.append(lease, {
     type: "user",
     payload: { text: "please rotate the deploy key", name: "alex" },
     scopeLabel: scope,
@@ -2885,75 +2879,35 @@ test("pg search: message writes populate the index and tool results stay unfinda
     payload: { tool: "execute", callId: "c1", isError: false, result: "secret broker value QQ17" },
     scopeLabel: scope,
   });
-  const reply = await s.append(lease, {
+  await s.append(lease, {
     type: "assistant",
     payload: { text: "Rotated the deploy key." },
     scopeLabel: scope,
   });
 
   const before = await s.searchEntries("UIDX", "deploy key");
-  assert.equal(before.length, 2, "message writes serve an indexed session");
-
-  await s.appendSearchEntries(lease, [
-    { seq: user.seq, type: "user", author: "alex", text: "please rotate the deploy key", createdAt: user.createdAt },
-    { seq: reply.seq, type: "assistant", text: "Rotated the deploy key.", createdAt: reply.createdAt },
-  ]);
-  assert.equal(await s.searchIndexCoverage(sess.id), reply.seq);
-  assert.deepEqual(
-    await s.searchEntries("UIDX", "deploy key"),
-    before,
-    "re-appending indexed rows leaves search hits unchanged",
-  );
+  assert.equal(before.length, 2, "message writes are searchable immediately");
+  assert.equal(before.find((hit) => hit.type === "user")?.author, "alex");
 
   await s.append(lease, { type: "user", payload: { text: "also rotate the staging deploy key" }, scopeLabel: scope });
   assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "a new message is indexed immediately");
 
   assert.deepEqual(await s.searchEntries("UIDX", "secret broker"), [], "tool results are unfindable");
 
-  await s.appendSearchEntries(lease, [
-    { seq: user.seq, type: "user", text: "replacement text is ignored", createdAt: user.createdAt },
-  ]);
-  assert.equal((await s.searchEntries("UIDX", "deploy key")).length, 3, "re-appending an indexed seq is a no-op");
-
   await s.addParticipant(sess.id, "ULATE2");
-  const post = await s.append(lease, { type: "user", payload: { text: "deploy key postscript" }, scopeLabel: scope });
-  await s.appendSearchEntries(lease, [
-    { seq: post.seq, type: "user", text: "deploy key postscript", createdAt: post.createdAt },
-  ]);
+  await s.append(lease, { type: "user", payload: { text: "deploy key postscript" }, scopeLabel: scope });
   const late = await s.searchEntries("ULATE2", "deploy key");
-  assert.equal(late.length, 1, "a latecomer only searches index rows inside their window");
+  assert.equal(late.length, 1, "a latecomer only searches messages inside their window");
   assert.equal(late[0]!.text, "deploy key postscript");
 
-  const nul = await s.append(lease, {
+  await s.append(lease, {
     type: "user",
     payload: { text: "nul\u0000riddled deploy key", name: "e\u0000ve" },
     scopeLabel: scope,
   });
-  await s.appendSearchEntries(lease, [
-    {
-      seq: nul.seq,
-      type: "user",
-      author: "e\u0000ve",
-      text: "nul\u0000riddled deploy key",
-      createdAt: nul.createdAt,
-    },
-  ]);
   const nulHits = await s.searchEntries("UIDX", "nulriddled");
   assert.equal(nulHits.length, 1, "a NUL byte in the text never wedges the index write");
   assert.equal(nulHits[0]!.author, "eve");
-
-  await s.append(lease, {
-    type: "tool_result",
-    payload: { tool: "execute", callId: "c2", isError: false, result: "trailing tool output" },
-    scopeLabel: scope,
-  });
-  const emptyReply = await s.append(lease, { type: "assistant", payload: { text: "  " }, scopeLabel: scope });
-  assert.equal(
-    await s.lastSearchableEntrySeq(sess.id),
-    nul.seq,
-    "convergence tracks the last searchable entry, not trailing tool output or blank replies",
-  );
-  assert.ok(emptyReply.seq > nul.seq);
   await s.releaseLease(lease);
 });
 
@@ -3070,11 +3024,6 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
     for (let j = 0; j < 4; j++) {
       const entry = await store.append(lease, { type: "user", payload: { text: "document limit" }, scopeLabel: scope });
       expected.push({ sessionId: session.id, seq: entry.seq });
-      if (j % 2 === 0) {
-        await store.appendSearchEntries(lease, [
-          { seq: entry.seq, type: "user", text: "document limit", createdAt: entry.createdAt },
-        ]);
-      }
     }
     await store.releaseLease(lease);
   }
@@ -3088,61 +3037,48 @@ test("pg search: globally limits indexed hits across sessions", { skip }, async 
   }
 });
 
-test("pg search: writes are atomic, items are append-only, and deletes keep the index current", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const session = await store.getOrCreateByThread("search-atomic", "dm", scopeId("personal", "UATOMIC"));
-  await store.addParticipant(session.id, "UATOMIC", undefined, { includeHistory: true });
-  const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: URL });
-  const lease = (await store.acquireLease(session.id)).lease!;
-  try {
-    await pool.query(
-      "ALTER TABLE session_entry_search ADD CONSTRAINT search_test_failure CHECK (text <> 'rejectindex')",
-    );
-    await assert.rejects(
-      store.append(lease, { type: "user", payload: { text: "rejectindex" }, scopeLabel: session.scopeId }),
-    );
-    assert.equal(await store.latestEntrySeq(session.id), -1);
-    assert.equal(await store.missingSearchEntries(session.id), 0);
-    await pool.query("ALTER TABLE session_entry_search DROP CONSTRAINT search_test_failure");
-    const entry = await store.append(lease, {
-      type: "user",
-      payload: { text: "original document" },
-      scopeLabel: session.scopeId,
-    });
-    await assert.rejects(
-      pool.query("UPDATE items SET body=$3 WHERE session_id=$1 AND seq=$2", [
-        session.id,
-        entry.seq,
-        { text: "edited document", name: "Editor" },
-      ]),
-      /UPDATE on items is forbidden/,
-    );
-    assert.equal((await store.searchEntries("UATOMIC", "original")).length, 1);
-    await pool.query("DELETE FROM session_entry_search WHERE session_id=$1", [session.id]);
-    assert.equal(await store.missingSearchEntries(session.id), 1);
-    assert.deepEqual(await store.searchEntries("UATOMIC", "original"), [], "search reads only the index");
-    await pool.query(
-      "INSERT INTO session_entry_search(session_id,seq,type,text,created_at) VALUES($1,$2,'user',$3,$4)",
-      [session.id, entry.seq, "original document", entry.createdAt],
-    );
-    assert.equal((await store.searchEntries("UATOMIC", "original")).length, 1);
-    await assert.rejects(
-      pool.query("DELETE FROM items WHERE session_id=$1", [session.id]),
-      /only allowed through its session/,
-    );
-    await pool.query("DELETE FROM sessions WHERE id=$1", [session.id]);
-    assert.equal(
-      (await pool.query("SELECT count(*)::int AS n FROM session_entry_search WHERE session_id=$1", [session.id]))
-        .rows[0].n,
-      0,
-    );
-  } finally {
-    await pool.query("ALTER TABLE session_entry_search DROP CONSTRAINT IF EXISTS search_test_failure");
-    await store.releaseLease(lease);
-    await pool.end();
-  }
-});
+test(
+  "pg search: reads items directly, items are append-only, and deleting the session removes its hits",
+  { skip },
+  async () => {
+    const store = createPostgresSessionStore(URL!);
+    const session = await store.getOrCreateByThread("search-atomic", "dm", scopeId("personal", "UATOMIC"));
+    await store.addParticipant(session.id, "UATOMIC", undefined, { includeHistory: true });
+    const pg = (await import("pg")).default;
+    const pool = new pg.Pool({ connectionString: URL });
+    const lease = (await store.acquireLease(session.id)).lease!;
+    try {
+      const entry = await store.append(lease, {
+        type: "user",
+        payload: { text: "original document" },
+        scopeLabel: session.scopeId,
+      });
+      await assert.rejects(
+        pool.query("UPDATE items SET body=$3 WHERE session_id=$1 AND seq=$2", [
+          session.id,
+          entry.seq,
+          { text: "edited document", name: "Editor" },
+        ]),
+        /UPDATE on items is forbidden/,
+      );
+      assert.equal((await store.searchEntries("UATOMIC", "original")).length, 1);
+      await assert.rejects(
+        pool.query("DELETE FROM items WHERE session_id=$1", [session.id]),
+        /only allowed through its session/,
+      );
+      assert.equal(
+        (await pool.query("SELECT to_regclass('session_entry_search') AS t")).rows[0].t,
+        null,
+        "no separate search table",
+      );
+    } finally {
+      await store.releaseLease(lease).catch(() => {});
+      await store.deleteSession(session.id);
+      await pool.end();
+    }
+    assert.deepEqual(await store.searchEntries("UATOMIC", "original"), []);
+  },
+);
 
 test("pg session store: bounded participant listing is recent and optional", { skip }, async () => {
   let at = 1000;
