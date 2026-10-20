@@ -54,7 +54,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
       await client.connect(transport);
       return await work(client);
     } catch (e) {
-      const status = e instanceof StreamableHTTPError && e.code ? ` (HTTP ${e.code})` : "";
+      const status = e instanceof StreamableHTTPError && (e.code ?? 0) > 0 ? ` (HTTP ${e.code})` : "";
       throw new Error(`mcp ${op} failed${status}`, { cause: e });
     } finally {
       await transport.terminateSession().catch(swallowAs("mcp: end session", undefined));
