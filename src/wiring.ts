@@ -2,7 +2,6 @@ import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
 import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
-import { brokerCredentialAuthHeader } from "./api/credential-broker.ts";
 import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
@@ -274,6 +273,7 @@ import {
   createLayeredSecretSource,
 } from "./credentials/secret-source.ts";
 import {
+  credentialRequestHeaders,
   createKeychain,
   type ConnectorTokenStore,
   type OAuthToken,
@@ -1525,7 +1525,7 @@ export function buildApp(
           const rec = keychain
             ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
             : null;
-          return rec ? { host: rec.host, enabled: rec.enabled, header: brokerCredentialAuthHeader(rec) } : null;
+          return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
         },
       }),
     auditLog,

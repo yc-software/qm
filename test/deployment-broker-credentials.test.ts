@@ -88,11 +88,16 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     ],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x api": "1" } } }], /not a valid HTTP header name/],
     [[{ ...entry, injection: { ...entry.injection, headers: { Host: "evil.example" } } }], /cannot set host/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { Upgrade: "websocket" } } }], /cannot set upgrade/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "a\u0001b" } } }], /valid HTTP header value/],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-api-key": "1" } } }], /cannot set x-api-key/],
     [[{ ...entry, injection: { headers: { Authorization: "Bearer other" } } }], /cannot set authorization/],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "1", "X-V": "2" } } }], /more than once/],
-    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "1\r\nx-evil: 1" } } }], /single line/],
-    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /single line/],
+    [
+      [{ ...entry, injection: { ...entry.injection, headers: { "x-v": "1\r\nx-evil: 1" } } }],
+      /valid HTTP header value/,
+    ],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /valid HTTP header value/],
     [[{ ...entry, displayName: "" }], /displayName/],
   ];
   for (const [list, pattern, extra] of cases) {

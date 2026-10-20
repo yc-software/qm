@@ -5,6 +5,7 @@ import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import {
   credentialInjectionError,
+  credentialRequestHeaders,
   type DecryptedServiceCredential,
   type ServiceCredentialReader,
 } from "../credentials/keychain.ts";
@@ -81,23 +82,15 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [string, string] {
-  const injHeader = rec.injection?.header || "Authorization";
-  const rawScheme = rec.injection?.scheme ?? "Bearer ";
-  const injScheme = rawScheme && !/\s$/.test(rawScheme) ? `${rawScheme} ` : rawScheme;
-  return [injHeader, `${injScheme}${rec.secret}`];
-}
-
 export function brokerRequestHeaders(
   rec: DecryptedServiceCredential,
   caller: Record<string, string>,
 ): Record<string, string> {
-  const fixed = rec.injection?.headers ?? {};
-  const [authHeader, authValue] = brokerCredentialAuthHeader(rec);
-  const owned = new Set([...Object.keys(fixed), authHeader].map((name) => name.toLowerCase()));
+  const injected = credentialRequestHeaders(rec);
+  const owned = new Set(Object.keys(injected).map((name) => name.toLowerCase()));
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(caller)) if (!owned.has(name.toLowerCase())) headers[name] = value;
-  return { ...headers, ...fixed, [authHeader]: authValue };
+  return { ...headers, ...injected };
 }
 
 type CredentialGrant =
