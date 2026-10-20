@@ -94,8 +94,9 @@ than this release protect their task while a turn runs, so the first `qm up`
 that replaces them cannot finish before their longest in-flight turn ends
 (protection expires after 60 minutes at most); run that one deploy with a
 longer deadline or when no long turn is in flight. The candidate migration task
-gets the same deadline (default 30 minutes); a migration still running then is
-left to finish and `up` fails without changing services.
+and the private live-session canary also wait up to `QM_AWS_ROLLOUT_DEADLINE_MS`
+(default 30 minutes for them); a task still running then is left to finish, and a
+migration that outlasts it fails `up` before any service changes.
 
 AWS deployments can opt into durable background ownership with
 `aws.backgroundWorkControl: true`. The CLI allocates a unique

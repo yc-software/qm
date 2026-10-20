@@ -428,7 +428,6 @@ else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: pr
 else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) console.log(JSON.stringify({ tasks: [] }));
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
-else if (a.includes("ecs wait tasks-stopped")) console.log("");
 else if (a.includes("ecs describe-tasks") && s.missingPolls > 0) { s.missingPolls--; save(); console.log(JSON.stringify({ tasks: [], failures: [{ arn: "arn:aws:ecs:us-west-2:123456789012:task/canary", reason: s.failureReason || "MISSING" }] })); }
 else if (a.includes("ecs describe-tasks") && s.runningPolls > 0) { s.runningPolls--; save(); console.log(JSON.stringify({ tasks: [{ lastStatus: "RUNNING", containers: [{ name: "core" }] }], failures: [] })); }
 else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ lastStatus: "STOPPED", stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
@@ -1285,7 +1284,7 @@ test("AWS up scales services to the configured desired count and live check flag
     process.env.AWS_FAKE_CANARY_EXIT = "1";
     await assert.rejects(
       () => awsCheckLive(scaled(), { report: false }),
-      /core: private live session smoke failed: canary task exited 1/,
+      /core: private live session smoke failed: AWS canary task exited 1/,
     );
     if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
@@ -2839,7 +2838,6 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.match(calls, /ecs run-task .*--launch-type FARGATE/);
     assert.match(calls, /subnet-a/);
     assert.match(calls, /src\/migrate-main\.ts/);
-    assert.doesNotMatch(calls, /ecs wait/);
     assert.match(calls, /ecs deregister-task-definition/);
     assert.ok(calls.indexOf("dynamodb put-item") < calls.indexOf("ecs run-task"));
     assert.ok(calls.indexOf("rds describe-db-instances") < calls.indexOf("ecs run-task"));
@@ -2897,13 +2895,13 @@ test("AWS migration polls a long-running task to its deadline without stopping i
     setState({ runningPolls: 0, missingPolls: 1e9 });
     await assert.rejects(
       () => awsMigrateCandidate(single, dir, candidatePath),
-      /task\/canary is still MISSING and was left running/,
+      /ECS still does not list arn:aws:ecs:us-west-2:123456789012:task\/canary/,
     );
 
     setState({ missingPolls: 1, failureReason: "ACCESS_DENIED" });
     await assert.rejects(
       () => awsMigrateCandidate(single, dir, candidatePath),
-      /migration task failed \(ACCESS_DENIED\)/,
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary failed \(ACCESS_DENIED\)/,
     );
     calls = readFileSync(fake.log, "utf8");
     assert.equal(calls.match(/ecs describe-tasks/g)?.length, 1);
@@ -3276,7 +3274,10 @@ test("AWS migration failure deregisters the candidate task and releases the depl
   );
   const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 1 });
   try {
-    await assert.rejects(() => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath), /migration task failed/);
+    await assert.rejects(
+      () => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath),
+      /migration task exited 1: migration failed/,
+    );
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /ecs deregister-task-definition/);
     assert.match(calls, /dynamodb delete-item/);
@@ -3308,7 +3309,7 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: candidatePath }),
-      /migration task failed/,
+      /migration task exited 1: migration failed/,
     );
     const calls = readFileSync(fake.log, "utf8");
     assert.doesNotMatch(calls, /ecs (?:deregister-task-definition|update-service)/);
