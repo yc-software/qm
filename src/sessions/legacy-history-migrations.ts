@@ -746,6 +746,23 @@ SELECT (SELECT id FROM qm_tenant), e.session_id, e.seq,
     ],
   },
   {
+    id: "sessions/store/0035-items-keep-call-ids",
+    statements: [
+      `DO $keep_call_ids$
+   BEGIN
+     IF to_regclass('session_entries') IS NULL
+        OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN
+       RETURN;
+     END IF;
+     UPDATE items i SET body = i.body || jsonb_build_object('callId', p.j ->> 'callId')
+       FROM session_entries e CROSS JOIN LATERAL (SELECT items_copy_payload(e.payload) AS j OFFSET 0) p
+      WHERE i.kind IN ('ToolCall', 'ToolResult') AND i.call_id IS NULL
+        AND e.session_id = i.session_id AND e.seq = i.seq
+        AND jsonb_typeof(p.j -> 'callId') = 'string' AND p.j ->> 'callId' <> '';
+   END $keep_call_ids$`,
+    ],
+  },
+  {
     id: "sessions/store/0036-items-cutover",
     expectedChecksum: "43c41a637d03afe4ce8d1314298783a8190c56da4e0d25aa3bf810c13fb6f439",
     statements: [
