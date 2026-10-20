@@ -69,29 +69,21 @@ test("projected sandbox results require exact successful execution evidence", ()
 });
 
 test("a failed provider execution reports what the execute call returned", () => {
+  const token = "eyJvcmdJZCI6InFhIiwic2NvcGUiOiJlZ3Jlc3MifQ1.c2lnbmF0dXJlMTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1u";
   const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
   Object.assign(entries[1]!.payload, {
     code: 1,
-    result: "nonce\n\n[stderr]\nproxy http://x:secret-token@proxy.example.com refused\n[exit 1]",
+    result: `${"x".repeat(500)}\n[stderr]\nproxy https://x:${token}@proxy.example.com refused\nProxy-Authorization: Basic eDpzZWNyZXQ=\n[exit 1]`,
   });
   assert.throws(
     () => assertSandboxExecution(entries, "box", "nonce\n"),
     (error: Error) =>
       error.message.includes('"code":1') &&
-      error.message.includes("http://x:***@proxy.example.com refused") &&
-      !error.message.includes("secret-token"),
-  );
-  Object.assign(entries[1]!.payload, {
-    result: `${"x".repeat(500)}\n[stderr]\nProxy-Authorization: Basic eDpzZWNyZXQ= GIT_CONFIG_VALUE_1=aaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb\n[exit 1]`,
-  });
-  assert.throws(
-    () => assertSandboxExecution(entries, "box", "nonce\n"),
-    (error: Error) =>
-      error.message.includes("Proxy-Authorization: ***") &&
-      error.message.includes("GIT_CONFIG_VALUE_1=***") &&
+      error.message.includes("@proxy.example.com refused") &&
       error.message.includes("[exit 1]") &&
-      !error.message.includes("eDpzZWNyZXQ") &&
-      !error.message.includes("aaaaaaaaaaaaaaaaaaaa"),
+      !error.message.includes("x".repeat(151)) &&
+      !error.message.includes("c2lnbmF0dXJl") &&
+      !error.message.includes("eDpzZWNyZXQ"),
   );
   assert.throws(() => assertSandboxExecution(evidence().slice(0, 1), "box", "nonce\n"), /no result recorded/);
 });

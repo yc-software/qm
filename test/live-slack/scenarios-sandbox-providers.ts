@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { SandboxBackendName } from "../../src/sandbox/sandbox-routing.ts";
+import { redactSecrets } from "../../src/harness/redact-secrets.ts";
 import { isObj } from "../../src/util/objects.ts";
 import type { Scenario } from "./harness.ts";
 
@@ -26,15 +27,8 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
   );
 }
 
-function redactCredentials(text: string): string {
-  return text
-    .replace(/(\/\/[^\s:/@]*:)[^\s@]+@/g, "$1***@")
-    .replace(/(authorization:\s*)(?:\w+\s+)?\S+/gi, "$1***")
-    .replace(/[\w-]{16,}\.[\w-]{16,}(?:\.[\w-]{16,})?/g, "***");
-}
-
 function describeExecuteResult(p: Record<string, unknown>): string {
-  const result = typeof p.result === "string" ? redactCredentials(p.result) : p.result;
+  const result = typeof p.result === "string" ? redactSecrets(p.result) : p.result;
   const shown =
     typeof result === "string" && result.length > 400 ? `${result.slice(0, 150)}…${result.slice(-250)}` : result;
   return JSON.stringify({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: shown });
