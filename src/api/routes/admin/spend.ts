@@ -246,10 +246,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
   >();
   const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
-  const cronBuckets = new Map<
-    string,
-    { scopeId: ScopeId; sources: ScopeId[]; byOrigin: Record<OriginBucket, Tally> }
-  >();
+  const cronBuckets = new Map<string, { scopeId: ScopeId; byOrigin: Record<OriginBucket, Tally> }>();
   const orgOrigins = emptyOrigins();
   for (const row of rows) {
     const { key, person, kind } = resolveScope(row.scopeId);
@@ -265,10 +262,9 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
     if (row.cronId !== null) {
       let cron = cronBuckets.get(row.cronId);
       if (!cron) {
-        cron = { scopeId: key, sources: [], byOrigin: emptyOrigins() };
+        cron = { scopeId: row.scopeId, byOrigin: emptyOrigins() };
         cronBuckets.set(row.cronId, cron);
       }
-      if (!cron.sources.includes(row.scopeId)) cron.sources.push(row.scopeId);
       addRow(cron.byOrigin[origin], row);
     }
     let model = modelBuckets.get(row.model);
@@ -294,10 +290,10 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const scopes = entities.filter((e) => e.principalId === null).sort(byCostThenId);
 
   const crons = [...cronBuckets.entries()]
-    .map(([cronId, { scopeId, sources, byOrigin }]) => ({
+    .map(([cronId, { scopeId, byOrigin }]) => ({
       cronId,
       scopeId,
-      scopeName: displayNameOf(sources, opts.label),
+      scopeName: opts.label(scopeId),
       info: opts.cron(cronId),
       ...totalsOf(byOrigin),
     }))

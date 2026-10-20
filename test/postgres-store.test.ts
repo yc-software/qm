@@ -325,70 +325,118 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
   }
 });
 
-test("pg spend refresh takes today, then the stalest days, at least two per pass", { skip }, async (t) => {
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
-  const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
+test("pg spend refresh recomputes saved days whose rows predate cron ids", { skip }, async () => {
   const day = 86_400_000;
-  const base = Date.UTC(2025, 5, 1);
-  const today = base + 3 * day;
-  let at = base;
-  let elapsed = 0;
-  let slow = false;
-  const store = createPostgresSessionStore(url.toString(), {
-    now: () => {
-      if (slow) elapsed += 10_000;
-      return at;
-    },
-  });
-  const raw = new pg.Pool({ connectionString: url.toString() });
-  const scope = scopeId("personal", "spend-order");
-  const session = await store.getOrCreateByThread("spend-order", "dm", scope);
-  const bill = async (offset: number) => {
-    at = base + offset * day;
+  const base = Date.UTC(2024, 6, 1);
+  const store = createPostgresSessionStore(URL!, { now: () => base + 3_600_000 });
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const scope = scopeId("personal", `cron-shape-${randomUUID()}`);
+  const cronId = `shape-${randomUUID().slice(0, 8)}`;
+  const session = await store.getOrCreateByThread(`agent:main:cron:${cronId}`, "dm", scope);
+  const range = { from: base, to: base + day };
+  try {
     await store.recordLlmRequest(session.id, {
       turnSeq: null,
       step: 0,
-      model: "order",
+      model: "shape",
       scopeLabel: scope,
       usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
     });
-    at = today;
-  };
-  const slowPass = async () => {
-    slow = true;
     await store.refreshSpendRollup!();
-    slow = false;
-  };
-  const pending = async () =>
-    (await raw.query("SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL ORDER BY day")).rows.map(
-      (r) => Number(r.day) - base / day,
+    await raw.query(
+      "UPDATE session_spend_days SET rows = (SELECT jsonb_agg(r - 'cron_id') FROM jsonb_array_elements(rows) r) WHERE day = $1",
+      [base / day],
     );
-  try {
-    for (const offset of [0, 1, 2, 3]) {
-      await bill(offset);
-      at = base + offset * day;
-      await store.refreshSpendRollup!();
-    }
-    for (const offset of [0, 1, 2, 3]) await bill(offset);
-    t.mock.method(Date, "now", () => elapsed);
-    await slowPass();
-    assert.deepEqual(await pending(), [1, 2]);
-    await bill(2);
-    await bill(3);
-    await slowPass();
-    assert.deepEqual(await pending(), [2]);
-    await slowPass();
-    assert.deepEqual(await pending(), []);
+    assert.deepEqual(
+      (await store.spendReport!(range)).rows.map((r) => r.cronId),
+      [null],
+    );
+    await createPostgresSessionStore(URL!, { now: () => base + 3_600_000 }).refreshSpendRollup!();
+    assert.deepEqual(
+      (await store.spendReport!(range)).rows.map((r) => r.cronId),
+      [cronId],
+    );
   } finally {
+    await store.deleteSession(session.id);
     await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 });
+
+test(
+  "pg spend refresh takes the newest dirty day, then the stalest days, at least two per pass",
+  { skip },
+  async (t) => {
+    const pg = (await import("pg")).default;
+    const admin = new pg.Pool({ connectionString: URL });
+    const schema = `spend_order_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const url = new globalThis.URL(URL!);
+    url.searchParams.set("options", `-c search_path=${schema}`);
+    const day = 86_400_000;
+    const base = Date.UTC(2025, 5, 1);
+    let clock = base + 3 * day;
+    let at = base;
+    let elapsed = 0;
+    let slow = false;
+    const store = createPostgresSessionStore(url.toString(), {
+      now: () => {
+        if (slow) elapsed += 10_000;
+        return at;
+      },
+    });
+    const raw = new pg.Pool({ connectionString: url.toString() });
+    const scope = scopeId("personal", "spend-order");
+    const session = await store.getOrCreateByThread("spend-order", "dm", scope);
+    const bill = async (offset: number) => {
+      at = base + offset * day;
+      await store.recordLlmRequest(session.id, {
+        turnSeq: null,
+        step: 0,
+        model: "order",
+        scopeLabel: scope,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+      });
+      at = clock;
+    };
+    const slowPass = async () => {
+      clock += 60_000;
+      at = clock;
+      slow = true;
+      await store.refreshSpendRollup!();
+      slow = false;
+    };
+    const pending = async () =>
+      (await raw.query("SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL ORDER BY day")).rows.map(
+        (r) => Number(r.day) - base / day,
+      );
+    try {
+      for (const offset of [0, 1, 2, 3]) {
+        await bill(offset);
+        at = base + offset * day;
+        await store.refreshSpendRollup!();
+      }
+      for (const offset of [0, 1, 2, 3]) await bill(offset);
+      t.mock.method(Date, "now", () => elapsed);
+      await slowPass();
+      assert.deepEqual(await pending(), [1, 2]);
+      await bill(2);
+      await bill(3);
+      await slowPass();
+      assert.deepEqual(await pending(), [2]);
+      await slowPass();
+      assert.deepEqual(await pending(), []);
+      clock = base + 10 * day;
+      for (const offset of [0, 1, 2]) await bill(offset);
+      await slowPass();
+      assert.deepEqual(await pending(), [1]);
+    } finally {
+      await raw.end();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    }
+  },
+);
 
 test(
   "pg saved spend resolves session changes after commit and preserves non-finite legacy costs",
@@ -1231,6 +1279,8 @@ test(
 
       await q("UPDATE sessions SET origin = NULL, origin_id = NULL WHERE id = ANY($1)", [ids]);
       await q("DELETE FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]);
+      const unrelated = randomUUID();
+      await q("INSERT INTO session_spend_dirty(session_id) VALUES ($1)", [unrelated]);
       await q("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0034-session-origin-backfill'");
       await applyPgMigrations(raw, registeredPgMigrations(URL!));
       assert.deepEqual(await columns(), shapes, "the migration derives the same values the insert path wrote");
@@ -1239,6 +1289,11 @@ test(
         await q("SELECT session_id FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]),
         [],
         "filling in the columns leaves no spend to recompute",
+      );
+      assert.deepEqual(
+        await q("DELETE FROM session_spend_dirty WHERE session_id = $1 RETURNING session_id", [unrelated]),
+        [{ session_id: unrelated }],
+        "another transaction's pending spend survives the backfill",
       );
     } finally {
       await raw.end();

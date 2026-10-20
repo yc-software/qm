@@ -300,7 +300,7 @@ export class SpendView {
             this.data.crons?.length ? "No crons match." : "No cron spend in this window.",
             (i) => {
               const row = crons[i];
-              if (row) s.openCronRuns(row.cronId, row.info?.ownerScopeId);
+              if (row) s.openCronRuns(row.cronId, row.info?.ownerScopeId ?? row.scopeId);
             },
           )}
         </div>`,

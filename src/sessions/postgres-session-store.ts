@@ -219,6 +219,7 @@ function parsedPayload(raw: unknown): unknown {
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
+  let savedDaysWithoutCronIdsQueued = false;
 
   const notOverheard = (col: string): string =>
     `(${col}.payload IS NULL OR ${col}.payload NOT LIKE '%"overheard":true%')`;
@@ -1969,6 +1970,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async refreshSpendRollup() {
       const started = Date.now();
+      if (!savedDaysWithoutCronIdsQueued) {
+        await q(
+          `INSERT INTO session_spend_dirty(day)
+           SELECT day FROM session_spend_days WHERE rows @? '$[*] ? (!exists(@.cron_id))'
+           ON CONFLICT DO NOTHING`,
+        );
+        savedDaysWithoutCronIdsQueued = true;
+      }
       await withPgTransaction(await pool(), async (client) => {
         const changed = await client.query(
           "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",
@@ -1990,8 +1999,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const days = await q(
         `SELECT d.day FROM (SELECT DISTINCT day FROM session_spend_dirty WHERE day IS NOT NULL) d
          LEFT JOIN session_spend_days c ON c.day = d.day
-         ORDER BY d.day = $1 DESC, c.updated_at NULLS FIRST, d.day DESC`,
-        [Math.floor(now() / 86_400_000)],
+         ORDER BY d.day = max(d.day) OVER () DESC, c.updated_at NULLS FIRST, d.day DESC`,
       );
       for (const [index, { day }] of days.entries()) {
         try {

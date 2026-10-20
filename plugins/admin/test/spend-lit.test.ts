@@ -421,7 +421,7 @@ test("spend view: Custom turns the current window into two editable UTC days, ap
 });
 
 test("spend view: crons show each cron's spend under its title, scope and schedule, filter, and open the cron's runs", () => {
-  const opened: (string | undefined)[][] = [];
+  const opened: string[][] = [];
   const downloads: string[] = [];
   const cron = (cronId: string, costUsd: number, scopeId: string, scopeName: string, info: unknown) => ({
     ...person("", costUsd, { principalId: null, scopeId, kind: "person" }),
@@ -448,7 +448,7 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
     {
       cronName: (c: { id: string; title?: string }) => c.title || `Cron ${c.id.slice(0, 6)}`,
       shortSchedule: (schedule: { cron: string }) => schedule.cron,
-      openCronRuns: (cronId: string, scope?: string) => opened.push([cronId, scope]),
+      openCronRuns: (cronId: string, scope: string) => opened.push([cronId, scope]),
       downloadCsv: (breakdown?: string) => downloads.push(breakdown ?? "entity"),
     },
   );
@@ -466,7 +466,7 @@ test("spend view: crons show each cron's spend under its title, scope and schedu
   rows()[1]!.click();
   rows()[0]!.click();
   assert.deepEqual(opened, [
-    ["gone1234567890", undefined],
+    ["gone1234567890", "personal:alice"],
     ["abc123", "channel:C1"],
   ]);
   [...f.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Export cron CSV")!.click();

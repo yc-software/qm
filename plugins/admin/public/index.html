@@ -7475,8 +7475,7 @@
         return GOV_LIKE.has(v);
       }
       function historyIsIndex() {
-        const st = urlToState();
-        return view === "history" && orgWideView() && !st.session && !(st.historyKind === "cron" && st.cron);
+        return view === "history" && orgWideView() && !urlToState().session;
       }
       function renderCurrentData() {
         if (historyIsIndex()) return void renderScopeIndex();
@@ -9396,7 +9395,7 @@
           window: governanceUI.spend.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
           openCronRuns: (cron, cronScope) =>
-            go({ view: "history", scope: cronScope || "org:" + orgId, session: null, historyKind: "cron", cron }),
+            go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),
           setRange: (range) => go({ ...urlToState(), view: "spend", range, from: null, to: null }),
           setCustomRange: (from, to) => go({ ...urlToState(), view: "spend", range: null, from, to }),
           downloadCsv: (breakdown = "entity") => {
