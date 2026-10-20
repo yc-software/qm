@@ -907,6 +907,17 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         END $safe_jsonb_parallel$`,
         ],
       },
+      {
+        id: "sessions/maintenance/entry-search-text-parallel",
+        statements: [
+          `DO $entry_search_text_parallel$
+        BEGIN
+          IF to_regprocedure('entry_search_text(text)') IS NOT NULL THEN
+            ALTER FUNCTION entry_search_text(text) PARALLEL UNSAFE;
+          END IF;
+        END $entry_search_text_parallel$`,
+        ],
+      },
     ],
   );
 
