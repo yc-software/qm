@@ -758,6 +758,47 @@ fn window_id(w: &El) -> u32 {
     }
 }
 
+fn exact_window(pid: i32, id: u32) -> Option<El> {
+    if id == 0 {
+        return None;
+    }
+    let app = app_element(pid);
+    let windows: Vec<_> = [attr(&app, "AXFocusedWindow"), attr(&app, "AXMainWindow")]
+        .into_iter()
+        .flatten()
+        .chain(attr(&app, "AXWindows").into_iter().flat_map(list))
+        .collect();
+    windows
+        .iter()
+        .cloned()
+        .chain(windows.iter().flat_map(|w| attr(w, "AXSheets").into_iter().flat_map(list)))
+        .find(|w| window_id(w) == id && bool_attr(w, "AXMinimized") != Some(true))
+}
+
+pub(crate) fn focused_window_id(pid: i32) -> Option<u32> {
+    attr(&app_element(pid), "AXFocusedWindow").map(|w| window_id(&w)).filter(|id| *id != 0)
+}
+
+pub(crate) fn focus_activation_window(pid: i32, id: u32) -> Option<(core_graphics::geometry::CGRect, CGPoint)> {
+    let window = exact_window(pid, id)?;
+    let f = frame(&window)?;
+    let activation: CGPoint = ax_value(&window, "AXActivationPoint", 1)?;
+    if ![f.x, f.y, f.w, f.h, activation.x, activation.y].iter().all(|n| n.is_finite()) || f.w <= 0.0 || f.h <= 0.0 {
+        return None;
+    }
+    Some((core_graphics::geometry::CGRect::new(&pt(f.x, f.y), &CGSize::new(f.w, f.h)), activation))
+}
+
+pub(crate) fn restore_focused_window(pid: i32, id: u32) -> Result<(), Failure> {
+    let window = exact_window(pid, id).ok_or_else(|| fail(ErrorCode::ActionFailed, "Original focused window is no longer available"))?;
+    let status = unsafe { AXUIElementPerformAction(window.as_CFTypeRef(), cfs("AXRaise").as_concrete_TypeRef()) };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(fail(ErrorCode::ActionFailed, format!("Restoring original focused window failed (AXError {status})")))
+    }
+}
+
 fn on_current_space(win: u32) -> bool {
     let Some(windows) = copy_window_info(kCGWindowListOptionOnScreenOnly, 0) else {
         return false;
