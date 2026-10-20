@@ -22,3 +22,6 @@ __pycache__/
 docs/master.html
 
 .context/
+
+runs/
+bench/cases/
