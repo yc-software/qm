@@ -9,7 +9,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items upgrade test";
 
 test(
-  "pg upgrade from a pre-items release: startup migrations copy history into items, then drop the legacy tables",
+  "pg upgrade from a pre-items release: startup migrations copy history into items",
   { skip },
   async () => {
     const pg = (await import("pg")).default;
@@ -96,19 +96,6 @@ test(
           { seq: "10", turn_id: runId },
         ],
       );
-
-      const legacyTables = await raw.query(
-        `SELECT name FROM unnest(ARRAY['session_entries', 'legacy_session_entries', 'session_entry_search',
-           'session_tape', 'legacy_tape_steps', 'legacy_turn_runs', 'legacy_tape_steps_progress']) AS name
-          WHERE to_regclass(name) IS NOT NULL`,
-      );
-      assert.deepEqual(legacyTables.rows, [], "every legacy history table is dropped");
-      const leftovers = await raw.query(
-        `SELECT proname FROM pg_proc WHERE pronamespace = current_schema()::regnamespace
-            AND proname IN ('entry_search_text', 'sync_item_search', 'items_copy_payload')
-          UNION ALL SELECT tgname FROM pg_trigger WHERE tgrelid = 'items'::regclass AND tgname = 'session_entry_search'`,
-      );
-      assert.deepEqual(leftovers.rows, [], "legacy search and copy functions and triggers are dropped");
 
       const { lease } = await store.acquireLease(sessionId);
       assert.ok(lease);

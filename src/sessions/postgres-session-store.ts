@@ -894,22 +894,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         statements: [],
       },
       ...ITEMS_CUTOVER_MIGRATIONS,
-      {
-        id: "sessions/store/0037-drop-legacy-history",
-        statements: [
-          `SET LOCAL lock_timeout = '60s'`,
-          `DROP TRIGGER IF EXISTS session_entry_search ON items`,
-          `DROP FUNCTION IF EXISTS sync_item_search(), sync_session_entry_search()`,
-          `DROP VIEW IF EXISTS session_transcript_entries`,
-          `DROP TABLE IF EXISTS session_entry_search, legacy_session_entries, session_entries, session_tape,
-             legacy_tape_steps, legacy_turn_runs, legacy_tape_steps_progress, legacy_tape_skipped,
-             legacy_tape_writes, legacy_prep_runs`,
-          `DROP PROCEDURE IF EXISTS prepare_legacy_tape_steps(INT)`,
-          `DROP FUNCTION IF EXISTS legacy_tape_written(), legacy_tape_steps_batch(TEXT[], BIGINT),
-             entry_search_text(text), items_copy_payload(text), items_copy_payload(jsonb)`,
-          `DROP SCHEMA IF EXISTS items_copy_ops CASCADE`,
-        ],
-      },
     ],
     [
       {
