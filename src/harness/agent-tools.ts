@@ -4432,8 +4432,7 @@ const RETRY_SAFE_FIELD = "retrySafe";
 
 const RETRY_SAFE_SCHEMA = Type.Optional(
   Type.Boolean({
-    description:
-      "true if re-running this exact call is harmless (reads, searches, idempotent writes) so the platform may re-run it after an interruption; false if it would duplicate a side effect (sending a message, charging, creating a record).",
+    description: "true if re-running this call is harmless (read or idempotent); false if it repeats a side effect.",
   }),
 );
 const RERUN_INPUT_MAX_CHARS = 4_000;

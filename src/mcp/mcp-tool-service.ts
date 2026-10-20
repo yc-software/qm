@@ -15,6 +15,18 @@ import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const MAX_RESULT_CHARS = 60_000;
+const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
+
+function modelInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = schema.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) return schema;
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+  const dropped = DROPPED_OPTIONAL_PARAMS.filter((name) => Object.hasOwn(properties, name) && !required.has(name));
+  if (!dropped.length) return schema;
+  const kept = { ...(properties as Record<string, unknown>) };
+  for (const name of dropped) delete kept[name];
+  return { ...schema, properties: kept };
+}
 
 export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
   return servers.flatMap((s) =>
@@ -153,7 +165,7 @@ export function createMcpToolService(opts: {
             serverId: server.id,
             remoteName: tool.name,
             description: tool.description || `${tool.name} on ${server.name}`,
-            inputSchema: tool.inputSchema,
+            inputSchema: modelInputSchema(tool.inputSchema),
             readOnly: server.readOnly,
           });
         }
