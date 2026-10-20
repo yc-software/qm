@@ -115,24 +115,31 @@ export interface SmtpVerifyOptions {
 
 export class SmtpRejectedError extends Error {}
 
-function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
+export function smtpTlsMode(declared: string | undefined, port: number): SmtpTlsMode {
   const mode = declared?.trim().toLowerCase();
   if (mode === "implicit" || mode === "none" || mode === "starttls") return mode;
   return port === 465 ? "implicit" : "starttls";
 }
 
+export function smtpTransport(host: string, port: number, tls: SmtpTlsMode, auth?: { user: string; pass: string }) {
+  return createTransport({
+    host,
+    port,
+    secure: tls === "implicit",
+    requireTLS: tls === "starttls",
+    ignoreTLS: tls === "none",
+    ...(auth ? { auth } : {}),
+    connectionTimeout: PROBE_TIMEOUT_MS,
+    greetingTimeout: PROBE_TIMEOUT_MS,
+    socketTimeout: PROBE_TIMEOUT_MS,
+  });
+}
+
 export async function smtpVerify(options: SmtpVerifyOptions): Promise<void> {
   try {
-    await createTransport({
-      host: options.host,
-      port: options.port,
-      secure: options.tls === "implicit",
-      requireTLS: options.tls === "starttls",
-      ignoreTLS: options.tls === "none",
-      auth: { user: options.username, pass: options.password },
-      connectionTimeout: PROBE_TIMEOUT_MS,
-      greetingTimeout: PROBE_TIMEOUT_MS,
-      socketTimeout: PROBE_TIMEOUT_MS,
+    await smtpTransport(options.host, options.port, options.tls, {
+      user: options.username,
+      pass: options.password,
     }).verify();
   } catch (e) {
     if ((e as { code?: unknown }).code === "EAUTH") throw new SmtpRejectedError(errMessage(e));
