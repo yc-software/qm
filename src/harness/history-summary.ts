@@ -4,6 +4,7 @@ import { contextSummaryPayload } from "../sessions/session-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
 import { providerTurnError } from "./provider-error.ts";
+import { countAllTokens } from "../util/tokens.ts";
 
 type StreamFn = NonNullable<Parameters<typeof generateSummary>[9]>;
 
@@ -20,6 +21,28 @@ const SUMMARY_INSTRUCTIONS = [
   "Do not include secrets or credentials. Keep the summary under 8,000 characters.",
 ].join("\n");
 
+const SUMMARY_RESERVE_TOKENS = 20_000;
+
+function transcriptWithinWindow(messages: SessionEntry[], model: Model<Api>, previousSummary?: string): string {
+  const budget =
+    model.contextWindow -
+    SUMMARY_RESERVE_TOKENS -
+    countAllTokens(SUMMARY_INSTRUCTIONS) -
+    (previousSummary ? countAllTokens(previousSummary) : 0);
+  let low = 0;
+  let high = messages.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (countAllTokens(compactTranscript(messages.slice(mid))) <= budget) high = mid;
+    else low = mid + 1;
+  }
+  const omitted = messages.slice(0, low);
+  const notice = omitted.length
+    ? `[${omitted.length} earlier entries (seq ${omitted[0]!.seq}-${omitted.at(-1)!.seq}) exceeded the summarizer's context window and are not shown; they remain available through the history tool.]\n`
+    : "";
+  return notice + compactTranscript(messages.slice(low));
+}
+
 export async function summarizeHistory(
   history: SessionEntry[],
   model: Model<Api>,
@@ -31,7 +54,13 @@ export async function summarizeHistory(
     (entry) => !contextSummaryPayload(entry) && (!previousSummary || entry.seq > previousSummary.throughSeq),
   );
   const text = await generateSummary(
-    [{ role: "user", content: compactTranscript(messages), timestamp: messages.at(-1)?.createdAt ?? 0 }],
+    [
+      {
+        role: "user",
+        content: transcriptWithinWindow(messages, model, previousSummary?.text),
+        timestamp: messages.at(-1)?.createdAt ?? 0,
+      },
+    ],
     model,
     10_000,
     undefined,

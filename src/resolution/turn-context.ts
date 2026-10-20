@@ -91,7 +91,7 @@ export async function resolveTurnContext(input: ContextInput) {
       return {
         recalled: heads
           .filter(({ head }) => head.content.trim())
-          .map(({ scope, head }) => `### ${scope}\n${head.content.trim()}`)
+          .map(({ scope, head }) => `### ${scope}\n${head.content.trim().replace(/^### (?=[^\s:]+:)/gm, "#### ")}`)
           .join("\n\n"),
         records: heads.flatMap(({ head }) => head.records?.records ?? []),
         complete: heads.every(({ head }) => !!head.records),

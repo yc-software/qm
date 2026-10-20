@@ -34,6 +34,7 @@ function run(over: Partial<Run>): Run {
     turnUserSeq: null,
     dedupKey: null,
     attempts: 1,
+    handbacks: 0,
     errorAttempts: 0,
     maxAttempts: 3,
     leaseToken: null,

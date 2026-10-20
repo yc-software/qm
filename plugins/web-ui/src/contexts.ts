@@ -1269,7 +1269,12 @@ async function runMemberSearch(context: CoreContext, query: string): Promise<voi
   contextsState.memberSearching = true;
   drawContexts();
   try {
-    const response = await api<{ matches?: DirectoryMatch[] }>(`/api/directory/resolve?q=${encodeURIComponent(query)}`);
+    const exclude = projectPeople(context)
+      .map((id) => `&exclude=${encodeURIComponent(id)}`)
+      .join("");
+    const response = await api<{ matches?: DirectoryMatch[] }>(
+      `/api/directory/resolve?q=${encodeURIComponent(query)}${exclude}`,
+    );
     if (searchSeq !== memberSearchSeq || contextsState.memberProjectId !== projectId) return;
     contextsState.memberMatches = (response.matches ?? []).filter((match) => match.type === "internal");
     contextsState.memberSearchedQuery = query;

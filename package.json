@@ -77,17 +77,18 @@
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",
-    "@earendil-works/pi-ai": "https://github.com/yc-software/qm/releases/download/vendored-pi-ai-0.82.0-qm.1/earendil-works-pi-ai-0.82.0-qm.1.tgz",
+    "@earendil-works/pi-ai": "file:vendor/pi-ai/earendil-works-pi-ai-0.82.0-qm.2.tgz",
     "@earendil-works/pi-coding-agent": "https://github.com/yc-software/qm/releases/download/vendored-pi-coding-agent-0.82.0-security.6/earendil-works-pi-coding-agent-0.82.0-qm-security.6.tgz",
     "@fly/sprites": "0.2.3",
     "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@openai/codex": "0.156.1",
     "@opencode-ai/plugin": "1.18.31",
     "@opencode-ai/sdk": "1.18.31",
     "@sentry/node": "10.75.0",
     "@slack/bolt": "^4.7.3",
-    "@slack/socket-mode": "^2.0.7",
+    "@slack/socket-mode": "https://github.com/yc-software/qm/releases/download/vendored-slack-socket-mode-2.0.7-qm.1/slack-socket-mode-2.0.7-qm.1.tgz",
     "@slack/web-api": "^7.19.0",
     "@smithy/signature-v4": "^5.6.6",
     "@superserve/sdk": "^0.8.3",
@@ -126,7 +127,8 @@
     "undici": "8.10.2",
     "ip-address": "10.7.2",
     "protobufjs": "7.6.5",
-    "@earendil-works/pi-ai": "$@earendil-works/pi-ai"
+    "@earendil-works/pi-ai": "$@earendil-works/pi-ai",
+    "@slack/socket-mode": "$@slack/socket-mode"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -145,7 +147,6 @@
     "oxlint": "^1.74.0",
     "prettier": "3.9.1",
     "typescript": "^5.8.2",
-    "typescript-eslint": "^8.61.0",
-    "@modelcontextprotocol/sdk": "1.31.0"
+    "typescript-eslint": "^8.61.0"
   }
 }

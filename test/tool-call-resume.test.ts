@@ -432,7 +432,7 @@ for (const [label, payload] of [
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
     assert.ok(isResumeNote(turn.input));
-    assert.match(turn.input, /routine platform deploy/);
+    assert.match(turn.input, /routine platform restart/);
     assert.match(turn.input, /almost never warrants mentioning|almost never worth mentioning/);
     assert.match(turn.input, /unknown outcome/);
     assert.match(turn.input, /check what actually happened before redoing anything with side effects/);

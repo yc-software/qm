@@ -278,3 +278,27 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   assert.deepEqual(await parentCompleted.promise, { started: true });
   assert.deepEqual(notifications, ["child/started", "parent/completed"]);
 });
+
+test(
+  "a Codex app-server that stops reading fails its requests instead of crashing core",
+  { timeout: 5000 },
+  async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-epipe-"));
+    const binary = join(dir, "codex");
+    writeFileSync(binary, `#!${process.execPath}\nprocess.stdin.destroy();\nsetTimeout(() => {}, 4000);\n`);
+    chmodSync(binary, 0o755);
+    const server = new CodexAppServer({
+      binaryPath: binary,
+      cwd: dir,
+      onNotification: async () => {},
+      onRequest: async () => null,
+    });
+    t.after(async () => {
+      await server.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const payload = "x".repeat(1024 * 1024);
+    await assert.rejects(server.request("big", { payload }));
+  },
+);

@@ -10,7 +10,20 @@ export async function verificationUpstream() {
     beta?: string;
     gatewayKey?: string;
   }[] = [];
-  const behavior = { status: 200, empty: false, hang: false, rejectFast: false };
+  type Scripted = {
+    status?: number;
+    message?: string;
+    text?: string;
+    inputTokens?: number;
+    toolUse?: { name: string; input: unknown };
+  };
+  const behavior: {
+    status: number;
+    empty: boolean;
+    hang: boolean;
+    rejectFast: boolean;
+    script?: (body: Record<string, unknown>) => Scripted;
+  } = { status: 200, empty: false, hang: false, rejectFast: false };
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => {
@@ -27,12 +40,14 @@ export async function verificationUpstream() {
         gatewayKey: req.headers["x-gateway-key"] as string,
       });
       if (behavior.hang) return;
-      const status = behavior.rejectFast && body.speed === "fast" ? 400 : behavior.status;
+      const scripted = req.url?.endsWith("/messages") ? behavior.script?.(body) : undefined;
+      const status = scripted?.status ?? (behavior.rejectFast && body.speed === "fast" ? 400 : behavior.status);
       if (status !== 200) {
         res.writeHead(status, { "content-type": "application/json" });
         return res.end(
           JSON.stringify({
-            error: { message: `${status} private-provider-detail`, type: "invalid_request_error" },
+            type: "error",
+            error: { message: scripted?.message ?? `${status} private-provider-detail`, type: "invalid_request_error" },
           }),
         );
       }
@@ -41,7 +56,7 @@ export async function verificationUpstream() {
         return res.end(JSON.stringify({ data: [] }));
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
-      const text = behavior.empty ? "" : "VERIFIED MODEL REPLY";
+      const text = behavior.empty ? "" : (scripted?.text ?? "VERIFIED MODEL REPLY");
       const send = (type: string, data: object) =>
         res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
       if (req.url?.endsWith("/messages")) {
@@ -53,13 +68,28 @@ export async function verificationUpstream() {
             content: [],
             model: body.model,
             stop_reason: null,
-            usage: { input_tokens: 5, output_tokens: 0 },
+            usage: { input_tokens: scripted?.inputTokens ?? 5, output_tokens: 0 },
           },
         });
-        send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
-        send("content_block_delta", { index: 0, delta: { type: "text_delta", text } });
+        if (scripted?.toolUse) {
+          const { name, input } = scripted.toolUse;
+          send("content_block_start", {
+            index: 0,
+            content_block: { type: "tool_use", id: `toolu_${requests.length}`, name, input: {} },
+          });
+          send("content_block_delta", {
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
+          });
+        } else {
+          send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+          send("content_block_delta", { index: 0, delta: { type: "text_delta", text } });
+        }
         send("content_block_stop", { index: 0 });
-        send("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } });
+        send("message_delta", {
+          delta: { stop_reason: scripted?.toolUse ? "tool_use" : "end_turn" },
+          usage: { input_tokens: scripted?.inputTokens ?? 5, output_tokens: 3 },
+        });
         send("message_stop", {});
       } else {
         const item = {

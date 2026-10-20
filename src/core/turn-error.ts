@@ -1,9 +1,28 @@
 import { headSlice } from "../util/text.ts";
+import { redactSecrets } from "../harness/redact-secrets.ts";
 
 export class NonRetryableTurnError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "NonRetryableTurnError";
+  }
+}
+
+const INTERRUPTION_TEXT = {
+  stall: "the turn stopped making progress",
+  shutdown: "the worker shut down mid-turn",
+  lease_lost: "the run lost its worker lease",
+  deadline: "the turn hit its time limit",
+} as const;
+
+export type TurnInterruptionKind = keyof typeof INTERRUPTION_TEXT;
+
+export class TurnInterrupted extends NonRetryableTurnError {
+  readonly kind: TurnInterruptionKind;
+  constructor(kind: TurnInterruptionKind) {
+    super(INTERRUPTION_TEXT[kind]);
+    this.name = "TurnInterrupted";
+    this.kind = kind;
   }
 }
 
@@ -23,16 +42,24 @@ export class ProviderTurnError extends Error {
   readonly code: ProviderErrorCode;
   readonly retryable: boolean;
   readonly status?: number;
+  readonly retryAfterMs?: number;
   readonly raw: string;
   constructor(
     message: string,
-    info: { code: ProviderErrorCode; retryable: boolean; status?: number | undefined; raw: string },
+    info: {
+      code: ProviderErrorCode;
+      retryable: boolean;
+      status?: number | undefined;
+      retryAfterMs?: number | undefined;
+      raw: string;
+    },
   ) {
     super(message);
     this.name = "ProviderTurnError";
     this.code = info.code;
     this.retryable = info.retryable;
     if (info.status !== undefined) this.status = info.status;
+    if (info.retryAfterMs !== undefined) this.retryAfterMs = info.retryAfterMs;
     this.raw = info.raw;
   }
 }
@@ -64,6 +91,6 @@ export function isModelBudget(err: unknown): err is ProviderTurnError {
 export function turnFailureMessage(err: unknown): string {
   if (isModelBudget(err)) return MODEL_BUDGET_TEXT;
   return (err instanceof NonRetryableTurnError || err instanceof ProviderTurnError) && err.message.trim()
-    ? err.message
+    ? redactSecrets(err.message)
     : GENERIC_TURN_FAILURE;
 }

@@ -313,3 +313,87 @@ test("a controlled inactive Slack runtime cannot open a socket through configura
   await runtime.reconcile();
   assert.equal(starts, 1);
 });
+
+test("failed Slack account retries independently while background ownership and another account stay active", async () => {
+  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
+  const { createBackgroundOwnershipStore } = await import("../src/runs/background-ownership.ts");
+  const { createBackgroundController } = await import("../src/runs/background-controller.ts");
+  const store = createBackgroundOwnershipStore(createMemoryMap());
+  const errors: unknown[] = [];
+  let inactive = true;
+  let attempts = 0;
+  let healthyStarts = 0;
+  let stops = 0;
+  const failed = createSlackRuntimeReconciler({
+    startPaused: true,
+    intervalMs: 5,
+    load: async () => ({ version: "first", config: "inactive" }),
+    startPlugin: async () => {
+      attempts++;
+      if (inactive) throw new Error("account_inactive");
+      return {
+        stop: async () => {
+          stops++;
+        },
+      };
+    },
+    onError: (error) => errors.push(error),
+  });
+  const healthy = createSlackRuntimeReconciler({
+    startPaused: true,
+    intervalMs: 5,
+    load: async () => ({ version: "first", config: "healthy" }),
+    startPlugin: async () => {
+      healthyStarts++;
+      return {
+        stop: async () => {
+          stops++;
+        },
+      };
+    },
+  });
+  const controller = createBackgroundController({
+    store,
+    deploymentId: "deployment",
+    start: async () => {
+      failed.start();
+      healthy.start();
+    },
+    fence() {},
+    relinquish: async () => {
+      await failed.stop();
+      await healthy.stop();
+    },
+    drained: async () => {},
+    onError: (error) => {
+      throw error;
+    },
+    pollMs: 60_000,
+  });
+  await store.set({ ownerDeploymentId: "deployment", setBy: "test" });
+  try {
+    controller.start();
+    await controller.reconcile();
+    await healthy.reconcile();
+    assert.equal(controller.canClaim(), true);
+    assert.equal(healthyStarts, 1);
+    const deadline = Date.now() + 2000;
+    while (attempts < 2) {
+      assert.ok(Date.now() < deadline, "failed account should retry");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(errors.length >= 1);
+    assert.equal(controller.canClaim(), true);
+    inactive = false;
+    await failed.reconcile();
+    assert.equal(healthyStarts, 1);
+  } finally {
+    await controller.stop();
+    await failed.stop();
+    await healthy.stop();
+  }
+  assert.equal(stops, 2);
+  const stoppedAttempts = attempts;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(attempts, stoppedAttempts);
+});

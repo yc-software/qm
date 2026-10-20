@@ -193,3 +193,21 @@ test("Composio verifier forwards only the opaque session and redirects safely", 
   );
   composioReturnTo = null;
 });
+
+test("a memory save without the editor's read revision is refused, never rebased onto the latest", async () => {
+  const before = calls.length;
+  const save = (body: object) => fetch(`${base}/api/memory`, { method: "PUT", headers, body: JSON.stringify(body) });
+  assert.equal((await save({ content: "# Memory\n\n- stale" })).status, 428);
+  assert.deepEqual(calls.slice(before), [], "the core is not asked for the current revision");
+  assert.equal((await save({ content: "# Memory\n\n- edit", revision: "r1" })).status, 200);
+  assert.deepEqual(
+    calls.slice(before).map((c) => ({ ...c, url: c.url.split("?")[0] })),
+    [
+      {
+        method: "PUT",
+        url: "/v1/memory",
+        body: { principalId: "alice", content: "# Memory\n\n- edit", revision: "r1" },
+      },
+    ],
+  );
+});

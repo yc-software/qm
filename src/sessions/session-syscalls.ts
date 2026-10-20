@@ -7,7 +7,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { filterHistoryForAudience } from "../resolution/context-filter.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
@@ -365,12 +365,19 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
   };
 }
 
+function audienceCompatible(
+  source: Pick<OrchestratorInput, "actor" | "conversation">,
+  target: Pick<OrchestratorInput, "actor" | "conversation">,
+): boolean {
+  const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
+  return [target.actor.id, ...target.conversation.audience.map((person) => person.id)].every((id) => allowed.has(id));
+}
+
 function assertAudienceCompatible(
   source: Pick<OrchestratorInput, "actor" | "conversation">,
   target: Pick<OrchestratorInput, "actor" | "conversation">,
 ): void {
-  const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
-  if ([target.actor.id, ...target.conversation.audience.map((person) => person.id)].some((id) => !allowed.has(id)))
+  if (!audienceCompatible(source, target))
     throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
@@ -593,11 +600,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
               if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
-              try {
-                assertAudienceCompatible(
+              if (
+                !audienceCompatible(
                   { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
                   caller,
-                );
+                )
+              )
+                continue;
+              try {
                 if (binding.memoryContext) {
                   const history = await visibleHistory(sender);
                   if (
@@ -622,8 +632,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 }
                 visible.push(message);
                 if (visible.length >= 4) break;
-              } catch {
-                continue;
+              } catch (error) {
+                swallow(`session mailbox: visibility lookup for message ${message.id} (left pending)`, error);
               }
             }
             if (visible.length || Date.now() >= deadline) return visible;

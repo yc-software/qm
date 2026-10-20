@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iptables && rm 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY vendor/pi-ai/earendil-works-pi-ai-0.82.0-qm.2.tgz ./vendor/pi-ai/
 COPY .husky/install.mjs .husky/install.mjs
 RUN npm ci --omit=dev
 

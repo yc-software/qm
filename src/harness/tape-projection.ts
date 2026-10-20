@@ -222,6 +222,7 @@ export function projectTapeEntries(
   const events: DraftEvent[] = [];
   let sawTrigger = false;
   let coarseReplyMirrorPending = false;
+  let heldText: DraftEntry | undefined;
   for (const row of rows) {
     const eventName = contextEventName(row);
     if (eventName === "legacy_import" || eventName === "legacy_patch") return null;
@@ -239,6 +240,7 @@ export function projectTapeEntries(
         });
         coarseReplyMirrorPending = false;
         sawTrigger = false;
+        heldText = undefined;
         continue;
       }
       const mirror = entryMirror(row);
@@ -289,6 +291,8 @@ export function projectTapeEntries(
       if (isTrigger) sawTrigger = true;
       events.push({ kind: "item", item: draft });
     } else if (message.role === "assistant") {
+      if (heldText) events.push({ kind: "item", item: heldText });
+      heldText = undefined;
       for (const block of thinkingBlocksFromContent(message.content)) {
         events.push({
           kind: "item",
@@ -296,8 +300,11 @@ export function projectTapeEntries(
         });
       }
       const calls = toolCallBlocks(message.content);
-      if (!calls.length) continue;
       const text = textFromContent(message.content).trim();
+      if (!calls.length) {
+        if (text) heldText = { type: "text", payload: { text }, scopeLabel: row.scopeLabel, createdAt: row.createdAt };
+        continue;
+      }
       if (text) {
         events.push({
           kind: "item",

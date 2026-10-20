@@ -197,8 +197,9 @@ function sessionIDFromMessages(messages: OpenCodeWithParts[]): string | undefine
   return undefined;
 }
 
-export function needsHistoryImport(messages: OpenCodeWithParts[], history: OpenCodeWithParts[] | undefined): boolean {
-  return history !== undefined && messages.length === 1;
+export function withHistory(messages: OpenCodeWithParts[], history: OpenCodeWithParts[]): OpenCodeWithParts[] {
+  const present = new Set(messages.map((message) => message.info.id));
+  return [...history.filter((message) => !present.has(message.info.id)), ...messages];
 }
 
 const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
@@ -279,9 +280,7 @@ const OpenCodeBridgePlugin: Plugin = async ({ client }) => {
       if (!sessionID || !currentLastUser) return;
       const context = await sessionContext(sessionID);
       const history = context.history ?? context.messages;
-      if (needsHistoryImport(output.messages, history)) {
-        output.messages.splice(0, output.messages.length, ...(history ?? []), currentLastUser);
-      }
+      if (history?.length) output.messages.splice(0, output.messages.length, ...withHistory(output.messages, history));
       await request(`session/${encodeURIComponent(sessionID)}/capture`, {
         method: "POST",
         body: JSON.stringify({ system: context.systemPrompt ?? "", messages: output.messages }),

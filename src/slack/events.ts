@@ -383,7 +383,18 @@ export function registerSlackEvents(
     }
   });
 
-  for (const evt of ["channel_created", "channel_rename", "channel_unarchive"] as const) {
+  for (const evt of [
+    "channel_created",
+    "channel_rename",
+    "channel_unarchive",
+    "channel_archive",
+    "channel_deleted",
+    "channel_left",
+    "group_archive",
+    "group_unarchive",
+    "group_rename",
+    "group_left",
+  ] as const) {
     app.event(evt, async ({ event, body, client }: EventArgs) => {
       const e = parseLifecycleEvent(event);
       if (deduper.seen(dedupeKey({ event_id: parseEventId(body), channel: e.channel, ts: e.eventTs }))) return;

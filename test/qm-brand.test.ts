@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import test from "node:test";
+import { gunzipSync } from "node:zlib";
 
 const shortName = ["w", "c"].join("");
 const accessibilityName = [shortName, "ag"].join("");
@@ -152,6 +153,10 @@ test("tracked files use only QM branding", () => {
   const legacyContent = paths.flatMap((path) => {
     const content = readTrackedContent(path);
     if (!content || isCompressedMedia(content)) return [];
+    if (content.subarray(0, 2).equals(Buffer.from([0x1f, 0x8b])))
+      return findLegacyNames(gunzipSync(content).toString("latin1"), { generatedJavaScript: true }).map(
+        (match) => `${path}:${match}`,
+      );
     const encodedDocumentFixture =
       path.startsWith("test/fixtures/documents/") &&
       (content.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) ||

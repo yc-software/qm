@@ -1,0 +1,61 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index ff687de..67da799 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -371,6 +371,7 @@ export const stream = (model, context, options) => {
+             const requestOptions = {
+                 signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
++                ...(options?.fetchOptions ? { fetchOptions: options.fetchOptions } : {}),
+                 maxRetries: 0,
+             };
+             const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index 1ba8f44..a69777d 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -136,6 +136,7 @@ export const stream = (model, context, options) => {
+             const requestOptions = {
+                 signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
++                ...(options?.fetchOptions ? { fetchOptions: options.fetchOptions } : {}),
+                 maxRetries: 0,
+             };
+             const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index f583a46..96f0b62 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -106,6 +106,7 @@ export const stream = (model, context, options) => {
+             const requestOptions = {
+                 signal: idle.signal,
+                 ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
++                ...(options?.fetchOptions ? { fetchOptions: options.fetchOptions } : {}),
+                 maxRetries: 0,
+             };
+             const idleClient = client.withOptions({ fetch: idleTimeoutFetch(options?.timeoutMs, idle.controller, client.fetch) });
+diff --git a/dist/api/simple-options.js b/dist/api/simple-options.js
+index 7b08245..aa79025 100644
+--- a/dist/api/simple-options.js
++++ b/dist/api/simple-options.js
+@@ -20,6 +20,7 @@ export function buildBaseOptions(model, context, options, apiKey) {
+         onPayload: options?.onPayload,
+         onResponse: options?.onResponse,
+         timeoutMs: options?.timeoutMs,
++        fetchOptions: options?.fetchOptions,
+         websocketConnectTimeoutMs: options?.websocketConnectTimeoutMs,
+         maxRetries: options?.maxRetries,
+         maxRetryDelayMs: options?.maxRetryDelayMs,
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 7a2a2a4..09cf68d 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -88,6 +88,8 @@ export interface StreamOptions {
+      * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
+      */
+     timeoutMs?: number;
++    /** qm patch: extra fetch init (e.g. { redirect: "error" }) for anthropic-messages, openai-responses and openai-completions requests. */
++    fetchOptions?: RequestInit;
+     /**
+      * WebSocket connect timeout in milliseconds for providers that support
+      * WebSocket transports. This covers the connection/open handshake only;

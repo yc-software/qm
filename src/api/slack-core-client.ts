@@ -274,6 +274,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     async noteSurfaceHistoryGap(container, note) {
       if (!deps.memory) return;
       const kind = (await deps.surfaceCache?.containerState(container))?.kind;
+      if (kind !== "group" && kind !== "channel") return;
       await deps.memory.capture(scopeId(kind === "group" ? "group" : "channel", container), [note], Date.now());
     },
 

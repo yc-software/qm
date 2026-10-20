@@ -1,4 +1,5 @@
 import { memoryForRequest } from "./memory-access.ts";
+import { replaceAtReadRevision } from "../../memory/memory-service.ts";
 import { isSessionStatus } from "../../sessions/session-status.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
@@ -16,6 +17,7 @@ import {
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { customModelCatalog } from "../../model/custom-providers.ts";
 import { errMessage } from "../../util/errors.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -590,13 +592,11 @@ async function putSelfMemory(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const memory = memoryForRequest(ctx, principalId);
   if (typeof b.content !== "string") return sendJson(res, 400, { error: "bad_request", message: "content required" });
+  if (typeof b.revision !== "string")
+    return sendJson(res, 428, { error: "revision_required", message: "revision (from GET /v1/memory) required" });
   if (!memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
-  const saved =
-    typeof b.revision === "string" && b.revision !== "" && memory.replaceIfRevision
-      ? await memory.replaceIfRevision(scope, b.content, b.revision, principalId)
-      : (await memory.replace(scope, b.content, principalId), true);
-  if (!saved) {
+  if (!(await replaceAtReadRevision(memory, scope, b.content, b.revision, principalId))) {
     const head = await memory.readHead?.(scope);
     return sendJson(res, 409, { error: "conflict", message: "Memory changed while you were editing.", ...head });
   }
@@ -795,14 +795,7 @@ async function agentMemory(ctx: ApiCtx): Promise<void> {
         error: "bad_request",
         message: "content (string) and revision (string, from GET /v1/memory/self) required",
       });
-    let replaced = false;
-    if (b.revision)
-      replaced = (await memory.replaceIfRevision?.(write, b.content, b.revision, capability.actorId)) === true;
-    else if (!(await memory.readHead?.(write))?.revision) {
-      await memory.replace(write, b.content, capability.actorId);
-      replaced = true;
-    }
-    if (!replaced)
+    if (!(await replaceAtReadRevision(memory, write, b.content, b.revision, capability.actorId)))
       return sendJson(res, 409, {
         error: "revision_conflict",
         message: "The notebook changed since it was read; GET it again and rewrite from the current version.",
@@ -1192,6 +1185,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
         providerStatus.openai ||
         providerStatus.openrouter ||
         providerStatus.modelIds?.size ||
+        (harnessId === "pi" && customModelCatalog().length) ||
         deps.harnessCarriedModelAuth,
       ),
     }),

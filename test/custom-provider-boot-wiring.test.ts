@@ -10,6 +10,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModelForHarness } from "../src/model/pi-models.ts";
+import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -66,6 +67,10 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     assert.equal(body.effective.modelId, "acme-large");
     assert.ok(body.modelsByHarness.pi?.includes("acme-large"));
     assert.equal(body.modelCatalog["acme-large"]?.provider, "acme-gateway");
+
+    const surface = await fetch(`${base}/v1/surface-config`, { headers: ADMIN });
+    assert.equal(((await surface.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
+    assert.equal(validateWebTurnModelOptions({ model: "acme-large" }, null), null);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

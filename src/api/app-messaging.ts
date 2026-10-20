@@ -509,11 +509,11 @@ export function createMessagingMethods(
         ...(isPrivate !== undefined ? { isPrivate } : {}),
       });
     },
-    async resolveRecipient(query) {
-      const stored = await deps.directory.resolve(query);
+    async resolveRecipient(query, exclude = []) {
+      const stored = await deps.directory.resolve(query, exclude);
       if (stored.kind !== "none") return stored;
       const match = pickMatch(
-        await identityMembers(),
+        (await identityMembers()).filter((member) => !exclude.includes(member.principalId)),
         query,
         (member) => member.principalId,
         (member) => member.displayName,

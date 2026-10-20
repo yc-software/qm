@@ -11033,7 +11033,7 @@
       function isStablePrefixMiss(u) {
         const ratio = cacheHitRatio(u);
         if (ratio === null) return false;
-        return u.cacheWrite >= 1024 && ratio < 0.1;
+        return u.cacheRead + u.cacheWrite + u.uncachedInput >= 1024 && ratio < 0.1;
       }
       function metaChip(text, kind = "") {
         const s = document.createElement("span");

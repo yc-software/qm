@@ -90,7 +90,7 @@ export function runResultDelivery(
     const detail = adminUrl ? ` — full error: ${adminUrl}` : "";
     return { destination, text: `⚠️ I couldn't finish that turn: ${clause}${detail}`, provenance, idempotencyKey };
   }
-  if (run.result?.status === "ok" && (run.result.reply || run.result.attachments?.length)) {
+  if (run.result?.status === "ok" && !run.result.stopped && (run.result.reply || run.result.attachments?.length)) {
     return {
       destination,
       text: run.result.reply ?? "",

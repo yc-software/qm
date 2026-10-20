@@ -256,8 +256,9 @@ test("finalAttempt also marks the claim-cap park — an error on an over-claimed
 
   await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 5 });
   for (let i = 0; i < 2; i++) {
-    const r = await runs.claim("w1", 5_000);
-    await runs.releaseLease(r!.id, r!.leaseToken!);
+    await runs.claim("w1", 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await runs.reapExpired();
   }
   const third = await runs.claim("w1", 5_000);
   await assert.rejects(processRun({ runs, orchestrator, leaseTtlMs: 5_000 }, third!), /hiccup/);

@@ -673,6 +673,7 @@ export function createChatSurface(
       ...(harnessSupportsEffort(harness) ? { effortLevel: ctx.composer.state.effortLevel } : {}),
       ...(harnessSupportsFastMode(harness) ? { fastMode: ctx.composer.state.fastMode } : {}),
       harness,
+      model: selected.model.id,
       scopeId: chatState.scopeId,
       channelName: chatState.contextName,
     };
@@ -2003,7 +2004,6 @@ export function createChatSurface(
   async function forkFromMessage(index: number): Promise<void> {
     const agent = chatState.agent;
     const sessionId = chatState.sessionId;
-    const sourceThreadRef = chatState.threadRef;
     if (!agent || !sessionId || pendingFork) return;
     const messages = agent.state.messages;
     if (!messages[index]) return;
@@ -2023,7 +2023,7 @@ export function createChatSurface(
       replacePendingSession(pendingRef, forked.session);
       if (chatState.agent !== agent || chatState.sessionId !== sessionId) return;
       const split = inheritedTranscript(forked.session, forked.entries ?? []);
-      ctx.composer.carryModelPick(sourceThreadRef, forked.session.threadRef);
+      const runtime = ctx.composer.selectedRuntime();
       mountContinuable(
         forked.session.threadRef,
         forked.session.id,
@@ -2033,6 +2033,7 @@ export function createChatSurface(
         forked.session,
         entriesToMessages(split.inherited, transcriptModel()),
       );
+      ctx.composer.adoptRuntime(runtime);
       renderList();
     } catch (err) {
       ctx.composer.state.error = errMessage(err, "Could not fork the conversation.");

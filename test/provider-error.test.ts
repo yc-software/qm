@@ -107,15 +107,77 @@ test("gateway model_unavailable is its own code so the turn falls back", () => {
   assert.equal(providerTurnError(failedWith({ status: 404, type: "model_unavailable" })).code, "model_unavailable");
 });
 
-test("over-window prompts classify as context_too_long from structured signals", () => {
+test("over-window prompts classify as context_too_long through pi-ai's overflow classifier", () => {
   assert.equal(providerTurnError(failedWith({ status: 413, type: "request_too_large" })).code, "context_too_long");
-  const anthropic400 = failedWith({ status: 400, type: "invalid_request_error" });
+  const anthropic400 = (errorMessage: string) =>
+    ({ ...failedWith({ status: 400, type: "invalid_request_error" }), errorMessage }) as AssistantMessage;
   assert.equal(
-    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 195_000 }).code,
+    providerTurnError(anthropic400("400 prompt is too long: 203512 tokens > 200000 maximum")).code,
     "context_too_long",
   );
   assert.equal(
-    providerTurnError(anthropic400, { contextWindow: 200_000, lastInputTokens: 20_000 }).code,
+    providerTurnError(anthropic400("400 messages: text content blocks must be non-empty")).code,
     "bad_request",
   );
+});
+
+test("a provider 429 carries its Retry-After delay onto the typed turn error", async (t) => {
+  for (const headers of [{ "retry-after": "120" }, { "retry-after-ms": "120000" }]) {
+    const server = createServer((_req, res) => {
+      res.writeHead(429, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify({ error: { message: "slow down", type: "rate_limit_error" } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => server.close());
+    const { port } = server.address() as { port: number };
+    const failed = await stream(
+      {
+        id: "m",
+        name: "m",
+        api: "openai-completions",
+        provider: "gateway",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000,
+        maxTokens: 100,
+      } as Model<"openai-completions">,
+      { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      { apiKey: "k" },
+    ).result();
+    const error = providerTurnError(failed);
+    assert.equal(error.code, "rate_limit");
+    assert.equal(error.retryable, true);
+    assert.equal(error.retryAfterMs, 120_000);
+  }
+});
+
+test("a bodyless provider failure is explained by its code, with the transport detail kept", () => {
+  const failed = (extra: Partial<AssistantMessage>) =>
+    ({ role: "assistant", stopReason: "error", content: [], errorMessage: "terminated", ...extra }) as AssistantMessage;
+  assert.equal(
+    providerTurnError(failed({})).message,
+    "The request to the model provider failed before the reply finished: terminated",
+  );
+  assert.equal(
+    providerTurnError(failed({ errorMessage: "", providerError: { status: 503 } })).message,
+    "The model provider is temporarily unavailable.",
+  );
+  assert.equal(providerTurnError(failed({ providerError: { status: 429 } })).code, "rate_limit");
+  assert.match(
+    providerTurnError(failed({ providerError: { status: 429 } })).message,
+    /^The model provider is rate-limiting/,
+  );
+});
+
+test("typed budget, auth and rate-limit failures keep their code even when the text reads like an overflow", () => {
+  const withOverflowText = (providerError: AssistantMessage["providerError"]) =>
+    ({
+      ...failedWith(providerError),
+      errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+    }) as AssistantMessage;
+  assert.equal(providerTurnError(withOverflowText({ status: 400, type: "budget_exceeded" })).code, "model_budget");
+  assert.equal(providerTurnError(withOverflowText({ status: 401, type: "authentication_error" })).code, "auth");
+  assert.equal(providerTurnError(withOverflowText({ status: 429, type: "rate_limit_error" })).code, "rate_limit");
 });

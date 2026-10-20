@@ -109,6 +109,31 @@ test("memory drafts preserve newer edits through an in-flight save", async () =>
   dom.window.close();
 });
 
+test("memory saves carry the read revision and show a conflict instead of overwriting", async () => {
+  const { dom, root, c, ui } = fixture();
+  const sent: any[] = [];
+  const replies = [
+    { ok: true, data: { revision: "r2" } },
+    { ok: false, status: 409, data: { message: "conflict" } },
+  ];
+  c.api = async (...args: any[]) => (sent.push(args[2]), replies.shift());
+  ui.memory(root, { content: "saved", revision: "r1" }, c);
+  const input = root.querySelector("textarea")!;
+  for (const text of ["first", "second"]) {
+    input.value = text;
+    input.dispatchEvent(new dom.window.Event("input"));
+    root.querySelector("button")!.click();
+    await tick();
+  }
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
+    { content: "first", revision: "r1" },
+    { content: "second", revision: "r2" },
+  ]);
+  assert.match(root.querySelector("#st-memory")!.textContent!, /changed since you opened it/);
+  assert.equal(c.draft, "second");
+  dom.window.close();
+});
+
 test("files search renders from query data and preserves keyboard opening", () => {
   const { dom, root, c, ui } = fixture();
   let opened = "";

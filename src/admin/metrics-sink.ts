@@ -52,14 +52,14 @@ export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; unca
 
 export function isStablePrefixMiss(
   s: { cacheRead?: number; cacheWrite?: number; uncachedInput?: number },
-  opts: { minWrite?: number; maxReadShare?: number } = {},
+  opts: { minInput?: number; maxReadShare?: number } = {},
 ): boolean | null {
   const ratio = cacheHitRatio(s);
   if (ratio === null) return null;
-  const minWrite = opts.minWrite ?? 1024;
+  const minInput = opts.minInput ?? 1024;
   const maxReadShare = opts.maxReadShare ?? 0.1;
-  const write = s.cacheWrite ?? 0;
-  return write >= minWrite && ratio < maxReadShare;
+  const input = (s.cacheRead ?? 0) + (s.cacheWrite ?? 0) + (s.uncachedInput ?? 0);
+  return input >= minInput && ratio < maxReadShare;
 }
 
 interface TurnMetricPatch {

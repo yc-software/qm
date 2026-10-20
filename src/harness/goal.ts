@@ -29,7 +29,7 @@
  *   (wind down when exhausted; never auto-complete).
  */
 import type { LlmCallUsage } from "../sessions/session-store.ts";
-import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
+import { type GrindBudget, type GrindMeter, grindState, usageTokens } from "./grind.ts";
 
 type GoalStatus = "active" | "paused" | "complete";
 
@@ -118,8 +118,8 @@ export function createGoalRecord(input: {
   };
 }
 
-export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null): void {
-  goal.tokensUsed += Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
+export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null | undefined): void {
+  goal.tokensUsed += usageTokens(usage);
 }
 
 function escapeTags(text: string): string {

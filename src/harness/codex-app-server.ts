@@ -87,6 +87,7 @@ export class CodexAppServer {
     const receiveLine = (line: string) => {
       this.eventTail = this.eventTail.then(() => this.receive(line)).catch((error) => this.failTransport(error));
     };
+    this.process.stdin!.on("error", (error) => this.failTransport(error));
     this.process.stdout!.setEncoding("utf8");
     this.process.stdout!.on("data", (chunk: string) => {
       const lines = (pendingOutput + chunk).split("\n");

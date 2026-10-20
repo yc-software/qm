@@ -9,6 +9,7 @@ import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { countAllTokens } from "../src/util/tokens.ts";
 
 const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";
@@ -158,4 +159,40 @@ test("Astra compaction serializes a supported reasoning effort through the provi
   assert.ok(request, "compaction must reach the provider's HTTP transport");
   assert.equal(request.model, "gpt-6-astra");
   assert.equal(request.reasoning?.effort, "low");
+});
+
+test("compaction input stays inside the summarizer's window whatever the text density", async () => {
+  const small = { ...model, contextWindow: 30_000 };
+  const priorSummary = createContextSummaryPayload(0, `## Goal\n${"earlier work ".repeat(400)}`);
+  for (const filler of ["x".repeat(9_000), "日本語の文章".repeat(150), "word ".repeat(180)]) {
+    const history = [
+      entry(0, "system", priorSummary),
+      ...Array.from({ length: 60 }, (_, i) => entry(i + 1, "user", { text: `step ${i + 1} ${filler}` })),
+    ];
+    let prompt = "";
+    await summarizeHistory(history, small, (_model, context) => {
+      prompt = contentText(context.messages[0]!.content);
+      return response();
+    });
+    const tokens = countAllTokens(prompt);
+    assert.ok(tokens <= small.contextWindow - 10_000, `${tokens} prompt tokens`);
+    assert.ok(tokens >= (small.contextWindow - 20_000) / 2, `only ${tokens} prompt tokens kept`);
+    assert.match(prompt, /earlier entries \(seq 1-\d+\) exceeded the summarizer's context window/);
+    assert.match(prompt, /user#60/);
+  }
+});
+
+test("compaction input stays inside the window when dense text follows a long sparse stretch", async () => {
+  const window = { ...model, contextWindow: 100_000 };
+  const history = Array.from({ length: 100 }, (_, i) =>
+    entry(i + 1, "user", { text: i < 80 ? "plain words ".repeat(330) : "日本語の文章です".repeat(500) }),
+  );
+  let prompt = "";
+  await summarizeHistory(history, window, (_model, context) => {
+    prompt = contentText(context.messages[0]!.content);
+    return response();
+  });
+  const tokens = countAllTokens(prompt);
+  assert.ok(tokens <= window.contextWindow - 10_000, `${tokens} prompt tokens`);
+  assert.match(prompt, /user#100/);
 });

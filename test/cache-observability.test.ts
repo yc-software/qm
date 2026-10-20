@@ -90,6 +90,12 @@ test("isStablePrefixMiss: flags a big-write/near-zero-read turn, not a small col
   assert.equal(isStablePrefixMiss({ cacheRead: 50_000, cacheWrite: 0, uncachedInput: 100 }), false);
   assert.equal(isStablePrefixMiss({ cacheRead: 0, cacheWrite: 200, uncachedInput: 50 }), false);
   assert.equal(isStablePrefixMiss({}), null);
+  assert.equal(
+    isStablePrefixMiss({ cacheRead: 0, cacheWrite: 0, uncachedInput: 50_000 }),
+    true,
+    "a provider that reports no cache writes (OpenAI) still shows a full miss",
+  );
+  assert.equal(isStablePrefixMiss({ cacheRead: 0, cacheWrite: 0, uncachedInput: 500 }), false);
 });
 
 test("metrics: the cache aggregate reflects warm turns and flags a stable-prefix miss", async () => {
@@ -224,6 +230,7 @@ test("viewer: the ratio + miss math matches the server's canonical helpers", () 
     { cacheRead: 100, cacheWrite: 0, uncachedInput: 0 },
     { cacheRead: 0, cacheWrite: 50_000, uncachedInput: 100 },
     { cacheRead: 80, cacheWrite: 10, uncachedInput: 10 },
+    { cacheRead: 0, cacheWrite: 0, uncachedInput: 50_000 },
   ]) {
     assert.equal(v.viewerCacheHitRatio(u), cacheHitRatio(u), "viewer ratio == server ratio");
     assert.equal(v.viewerIsStablePrefixMiss(u), isStablePrefixMiss(u) === true, "viewer miss == server miss");

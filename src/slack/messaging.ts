@@ -1,4 +1,5 @@
 import { extractPrivateContinuation } from "./external-access.ts";
+import { safeClip } from "./safe-cut.ts";
 import {
   type ReactionDirective,
   MAX_REACTIONS_PER_TURN,
@@ -23,7 +24,7 @@ export async function updateSlackMessage(
   await client.chat.update({
     channel,
     ts,
-    text: text.length > SLACK_TEXT_LIMIT ? `${text.slice(0, SLACK_TEXT_LIMIT - 1)}…` : text,
+    text: safeClip(text, SLACK_TEXT_LIMIT - 1),
     ...botIdentityArgs(),
     unfurl_links: false,
     unfurl_media: false,

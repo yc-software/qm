@@ -14,7 +14,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import { customProviderApi, isCustomModelId } from "../model/custom-providers.ts";
-import type { CustomProviderProtocol, CustomProviderSpec } from "../model/custom-providers.ts";
+import type { CustomProviderSpec } from "../model/custom-providers.ts";
+import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import {
   DEFAULT_AGENT_MODEL_ID,
   modelServiceable,
@@ -58,8 +59,7 @@ const OPENCODE_VERSION = "1.18.31";
 const OPENCODE_IDLE_WAIT_MS = 30 * 60_000;
 export const OPENCODE_STARTUP_TIMEOUT_MS = 90_000;
 
-function customProviderNpm(protocol: CustomProviderProtocol): string {
-  const api = customProviderApi(protocol);
+function providerNpm(api: string | undefined): string {
   if (api === "anthropic-messages") return "@ai-sdk/anthropic";
   if (api === "openai-responses") return "@ai-sdk/openai";
   return "@ai-sdk/openai-compatible";
@@ -82,6 +82,46 @@ export interface OpenCodeHarnessOptions extends HarnessToolPlumbing {
    * running apply to the next server start.
    */
   resolveCustomProviders?: () => Promise<Array<{ spec: CustomProviderSpec; apiKey?: string }>>;
+  modelGateway?: ModelGatewayTransportConfig;
+}
+
+function gatewayProviderId(api: string | undefined): string {
+  return `qm-gateway-${api ?? "openai-completions"}`;
+}
+
+function gatewayProviderConfig(gateway: ModelGatewayTransportConfig): Record<string, unknown> {
+  const providers: Record<string, { npm: string; name: string; options: unknown; models: Record<string, unknown> }> =
+    {};
+  for (const [id, target] of Object.entries(gateway.models)) {
+    const model = resolveModel(id);
+    const providerId = gatewayProviderId(model?.api);
+    providers[providerId] ??= {
+      npm: providerNpm(model?.api),
+      name: "Model gateway",
+      options: {
+        baseURL: `${gateway.url.replace(/\/v1$/, "")}/v1`,
+        apiKey: gateway.apiKey,
+        headers: { [gateway.apiKeyHeader]: gateway.apiKey },
+      },
+      models: {},
+    };
+    providers[providerId].models[target] = {
+      name: model?.name ?? target,
+      reasoning: model?.reasoning ?? false,
+      ...(model
+        ? {
+            limit: { context: model.contextWindow, output: model.maxTokens },
+            cost: {
+              input: model.cost.input,
+              output: model.cost.output,
+              cache_read: model.cost.cacheRead,
+              cache_write: model.cost.cacheWrite,
+            },
+          }
+        : {}),
+    };
+  }
+  return providers;
 }
 
 export function openCodeHarnessConfigOptions(config: Config): OpenCodeHarnessOptions {
@@ -198,7 +238,9 @@ function sessionToken(secret: string, sessionId: string): string {
   return createHmac("sha256", secret).update(sessionId).digest("base64url");
 }
 
-export function modelRef(id: string): { providerID: string; modelID: string } {
+export function modelRef(id: string, gateway?: ModelGatewayTransportConfig): { providerID: string; modelID: string } {
+  const gatewayTarget = gateway?.models[id];
+  if (gatewayTarget) return { providerID: gatewayProviderId(resolveModel(id)?.api), modelID: gatewayTarget };
   // A registered custom model wins before slash-splitting: gateway model ids
   // routinely contain slashes (e.g. "bedrock/claude-x" behind LiteLLM), and
   // those must route to the registered provider, not a phantom "bedrock".
@@ -382,9 +424,15 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-async function waitForSessionIdle(client: OpencodeClient, sessionId: string, timeoutMs: number): Promise<void> {
+async function waitForSessionIdle(
+  client: OpencodeClient,
+  sessionId: string,
+  timeoutMs: number,
+  aborted: AbortSignal,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (aborted.aborted) return;
     const response = await client.session.status();
     const status = response.data?.[sessionId] as { type?: string } | undefined;
     if (!status || status.type === "idle") return;
@@ -708,11 +756,13 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         const pluginUrl = pathToFileURL(join(import.meta.dirname, "opencode-plugin.ts")).href;
         const enabledTools = Object.fromEntries(definitions.map((item) => [item.name, true]));
         const custom = (await opts.resolveCustomProviders?.()) ?? [];
+        await opts.modelGateway?.refresh?.();
+        const gatewayProviders = opts.modelGateway ? gatewayProviderConfig(opts.modelGateway) : {};
         const customProviderConfig = Object.fromEntries(
           custom.map(({ spec, apiKey }) => [
             spec.id,
             {
-              npm: customProviderNpm(spec.protocol),
+              npm: providerNpm(customProviderApi(spec.protocol)),
               name: spec.name,
               options: { baseURL: spec.baseUrl, ...(apiKey ? { apiKey } : {}) },
               models: Object.fromEntries(
@@ -743,11 +793,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           lsp: false,
           formatter: false,
           instructions: [],
-          enabled_providers: ["anthropic", "openai", ...custom.map(({ spec }) => spec.id)],
+          enabled_providers: [
+            "anthropic",
+            "openai",
+            ...custom.map(({ spec }) => spec.id),
+            ...Object.keys(gatewayProviders),
+          ],
           provider: {
             anthropic: { options: { apiKey: opts.apiKey ?? "" } },
             openai: { options: { apiKey: opts.openaiApiKey ?? "" } },
             ...customProviderConfig,
+            ...gatewayProviders,
           },
           tools: {
             ...enabledTools,
@@ -887,14 +943,18 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const rt = await ensureRuntime();
     if (turn.cancel?.aborted) return { reply: "", stopped: true };
     const selectedModel = turn.runtime?.modelId ?? resolveModelId(turn.scopeLabel);
-    const model = modelRef(selectedModel);
+    const model = modelRef(selectedModel, opts.modelGateway);
     const created = await rt.client.session.create({ body: { title: `qm:${turn.session.id}` } });
     const session = created.data;
     if (!session) throw new Error(`OpenCode session creation failed: ${JSON.stringify(created.error)}`);
     const sessionId = session.id;
     if (turn.cancel?.aborted) {
-      await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await rt.client.session
+        .abort({ path: { id: sessionId }, throwOnError: true })
+        .catch((error) => swallow("opencode session abort", error));
+      await rt.client.session
+        .delete({ path: { id: sessionId }, throwOnError: true })
+        .catch((error) => swallow("opencode session delete", error));
       return { reply: "", stopped: true };
     }
     const ref = harnessToolContext(turn);
@@ -935,7 +995,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
     const abort = async (stopped: boolean) => {
       state.stopped ||= stopped;
       controller.abort();
-      await rt.client.session.abort({ path: { id: sessionId } }).catch(() => undefined);
+      await rt.client.session
+        .abort({ path: { id: sessionId }, throwOnError: true })
+        .catch((error) => swallow("opencode session abort", error));
     };
     const onCancel = () => {
       void abort(false);
@@ -948,7 +1010,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       await abort(false);
       active.delete(sessionId);
       turn.cancel.removeEventListener("abort", onCancel);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await rt.client.session
+        .delete({ path: { id: sessionId }, throwOnError: true })
+        .catch((error) => swallow("opencode session delete", error));
       return { reply: "", stopped: true };
     }
     const wallMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
@@ -984,7 +1048,7 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       documents: HarnessTurnInput["documents"] = [],
       intake: SteerIntake,
     ): Promise<void> => {
-      const pending = (async () => {
+      const submitted = (async () => {
         const parts = [
           { type: "text" as const, text },
           ...images.map((image, index) => ({
@@ -1012,10 +1076,15 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           if (index >= 0) state.steers.splice(index, 1);
           throw error;
         }
-        await waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS);
       })();
-      queuedSignals.add(pending);
-      return pending;
+      queuedSignals.add(
+        submitted
+          .then(() =>
+            waitForSessionIdle(rt.client, sessionId, wallMs > 0 ? wallMs : OPENCODE_IDLE_WAIT_MS, controller.signal),
+          )
+          .catch((error) => swallow("opencode queued steer", error)),
+      );
+      return submitted;
     };
     const stopSignals =
       opts.signals && turn.runId
@@ -1040,9 +1109,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             { onError: (error) => swallow("opencode signal poll", error), drainOnStop: true },
           )
         : null;
-    const flushLlmRequests = async () => {
+    const flushLlmRequests = async (): Promise<HarnessTurnResult["cacheUsage"]> => {
       const captures = state.captures.splice(0);
-      if (!turn.recordLlmRequest || captures.length === 0) return;
+      if (captures.length === 0) return undefined;
       const capturesBySession = new Map<string, LlmCapture[]>();
       for (const capture of captures) {
         const group = capturesBySession.get(capture.sessionId) ?? [];
@@ -1065,8 +1134,17 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           group.forEach((capture, index) => infoByCapture.set(capture, infos[index]!));
         }),
       );
+      let cacheUsage: HarnessTurnResult["cacheUsage"];
       for (const capture of captures) {
         const info = infoByCapture.get(capture);
+        const usage = usageFromInfo(info);
+        if (usage)
+          cacheUsage = {
+            cacheRead: (cacheUsage?.cacheRead ?? 0) + usage.cacheRead,
+            cacheWrite: (cacheUsage?.cacheWrite ?? 0) + usage.cacheWrite,
+            uncachedInput: (cacheUsage?.uncachedInput ?? 0) + usage.input,
+          };
+        if (!turn.recordLlmRequest) continue;
         const created = info?.time?.created;
         const completed = info?.time?.completed;
         try {
@@ -1082,12 +1160,13 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
             stepGapMs: null,
             toolWallMs: null,
             gapPhases: null,
-            usage: usageFromInfo(info),
+            usage,
           });
         } catch (error) {
           swallow("opencode: llm request record", error);
         }
       }
+      return cacheUsage;
     };
     const prompt = [turn.input, turn.environment].filter((item) => item?.trim()).join("\n\n");
     const promptParts: Array<Record<string, unknown>> = [
@@ -1177,6 +1256,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
           : await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         if (finalEntry) await tapeReplyCheckpoint(turn, finalEntry);
       }
+      const modelCalls = state.captures.length;
+      const cacheUsage = await flushLlmRequests();
       return {
         reply,
         ...(interrupted ? { stopped: true as const } : {}),
@@ -1185,7 +1266,8 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
         ...(ref.silentRequested ? { silent: true } : {}),
         ...(ref.pendingApprovals?.length ? { pendingApprovals: ref.pendingApprovals } : {}),
         ...(ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
-        modelCalls: state.captures.length,
+        modelCalls,
+        ...(cacheUsage ? { cacheUsage } : {}),
       };
     } finally {
       if (timer) clearTimeout(timer);
@@ -1205,7 +1287,9 @@ export function createOpenCodeHarness(opts: OpenCodeHarnessOptions = {}): Harnes
       }
       await flushLlmRequests();
       for (const [id, candidate] of active) if (candidate.turn === turn) active.delete(id);
-      await rt.client.session.delete({ path: { id: sessionId } }).catch(() => undefined);
+      await rt.client.session
+        .delete({ path: { id: sessionId }, throwOnError: true })
+        .catch((error) => swallow("opencode session delete", error));
     }
   };
 

@@ -112,17 +112,38 @@ test("a skill whose seed directory was removed stops resolving after the next in
   writeSeedSkill(dir, "kept", "kept", "# Kept");
   writeSeedSkill(dir, "retired", "retired", "# Retired");
   writeSeedSkill(plugin, "plugin-skill", "plugin", "# Plugin");
-  const pluginOpts = { scopeId: org, createdBy: "system:plugin-skills", reviewer: "system:plugin-skills-reviewer" };
-  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
+  const pluginOpts = {
+    scopeId: org,
+    createdBy: "system:plugin-skills",
+    reviewer: "system:plugin-skills-reviewer",
+    prune: true,
+  };
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org, prune: true });
   await installSeedSkills(skills, { dirs: [plugin], ...pluginOpts });
 
   rmSync(join(dir, "retired"), { recursive: true });
-  await installSeedSkills(skills, { dirs: [dir], scopeId: org });
+  await installSeedSkills(skills, { dirs: [dir], scopeId: org, prune: true });
   await installSeedSkills(skills, { dirs: [plugin, join(plugin, "unmounted")], ...pluginOpts });
 
   assert.equal((await skills.resolve("retired", [org])).skill, null);
   assert.ok((await skills.resolve("kept", [org])).skill);
   assert.ok((await skills.resolve("plugin-skill", [org])).skill, "a missing catalog directory archives nothing");
+});
+
+test("a fallback install of the baked layer folder keeps durable layer skills that folder lacks", async () => {
+  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const org = scopeId("org", "default-org");
+  const layer = { scopeId: org, createdBy: "system:deployment-layer", reviewer: "system:deployment-layer-reviewer" };
+  const dynamic = mkdtempSync(join(tmpdir(), "seed-layer-dynamic-"));
+  writeSeedSkill(dynamic, "baked", "baked", "# Baked");
+  writeSeedSkill(dynamic, "added-later", "added later", "# Added later");
+  await installSeedSkills(skills, { dirs: [dynamic], ...layer });
+
+  const baked = mkdtempSync(join(tmpdir(), "seed-layer-baked-"));
+  writeSeedSkill(baked, "baked", "baked", "# Baked");
+  await installSeedSkills(skills, { dirs: [baked], ...layer });
+
+  assert.ok((await skills.resolve("added-later", [org])).skill);
 });
 
 test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", async () => {

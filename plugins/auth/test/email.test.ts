@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readConfig } from "../src/config.ts";
-import { mailerFor, renderMessage, renderSignInEmail, resendMailer } from "../src/email.ts";
+import { mailerFor, renderSignInEmail, resendMailer } from "../src/email.ts";
 import { testEnv } from "./helpers.ts";
 
 const cfg = readConfig(testEnv());
@@ -50,48 +50,6 @@ test("the link is HTML-escaped so a crafted token cannot break out of the anchor
   assert.ok(!message.html.includes("<script>alert(1)</script>"));
   assert.ok(!message.html.includes("<script> ·"));
   assert.match(message.html, /&lt;script&gt;/);
-});
-
-test("the MIME message is a well-formed multipart/alternative", () => {
-  const raw = renderMessage(
-    cfg,
-    { to: "admin@example.com", subject: "Sign in to qm", text: "plain", html: "<p>rich</p>" },
-    Date.UTC(2026, 0, 2, 3, 4, 5),
-  );
-  const boundary = /boundary="([^"]+)"/.exec(raw)![1]!;
-  assert.match(raw, /^From: qm <no-reply@example\.com>\r\n/);
-  assert.match(raw, /\r\nTo: admin@example\.com\r\n/);
-  assert.match(raw, /\r\nDate: Fri, 02 Jan 2026 03:04:05 GMT\r\n/);
-  assert.match(raw, /\r\nMessage-ID: <[0-9a-f]{32}@example\.com>\r\n/);
-  assert.equal(raw.split(`--${boundary}`).length, 4);
-  assert.equal(
-    Buffer.from(
-      /text\/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([^\r]+)/.exec(raw)![1]!,
-      "base64",
-    ).toString("utf8"),
-    "plain",
-  );
-  assert.ok(raw.endsWith(`--${boundary}--\r\n`));
-});
-
-test("header injection through the subject or recipient is neutralised", () => {
-  const raw = renderMessage(cfg, {
-    to: "admin@example.com\r\nBcc: attacker@evil.test",
-    subject: "Sign in\r\nBcc: attacker@evil.test",
-    text: "plain",
-    html: "<p>rich</p>",
-  });
-  const headers = raw.split("\r\n\r\n")[0]!.split("\r\n");
-  assert.deepEqual(
-    headers.map((line) => line.split(":")[0]),
-    ["From", "To", "Subject", "Date", "Message-ID", "MIME-Version", "Auto-Submitted", "Content-Type"],
-    "a CRLF in a header value must not fold into a new header line",
-  );
-});
-
-test("a non-ASCII subject is RFC 2047 encoded", () => {
-  const raw = renderMessage(cfg, { to: "a@b.test", subject: "Se connecter à qm", text: "x", html: "<p>x</p>" });
-  assert.match(raw, /\r\nSubject: =\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=\r\n/);
 });
 
 test("the Resend transport reports the provider's message id and surfaces refusals", async () => {

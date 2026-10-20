@@ -524,6 +524,7 @@ export interface Delivery {
   recipientThreadRef?: string;
   deliverLatencyMs?: number;
   slackApiMs?: number;
+  audience?: string[];
 }
 
 export interface SurfaceContextQuery {
@@ -792,6 +793,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
+  failureMessage?: string;
   refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
   adminUrl?: string;
   runId?: string;

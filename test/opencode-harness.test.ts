@@ -182,6 +182,7 @@ test("OpenCode records real usage, cost, and timings for each captured model cal
     totalTokens: 183,
     costUsd: 0.0353,
   });
+  assert.deepEqual(result.cacheUsage, { cacheRead: 50, cacheWrite: 10, uncachedInput: 100 });
 });
 
 test("OpenCode startup failure reports the sidecar's real output and honors the configured timeout", async (t) => {
@@ -288,6 +289,7 @@ test("OpenCode records requests without usage attribution when captures and assi
       { step: 1, usage: null, durationMs: null },
     ],
   );
+  assert.equal(result.cacheUsage, undefined);
 });
 
 test("latestAssistantParts skips errored and aborted messages, returning the latest successful reply", async () => {
@@ -811,3 +813,162 @@ for (const shutdown of [false, true]) {
     );
   });
 }
+
+test("a configured model gateway serves OpenCode turns, aliases included, with the gateway key header", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "opencode-gateway-"));
+  const dump = join(dir, "config.json");
+  const prompts = join(dir, "prompts.jsonl");
+  const handlers = `
+    if (req.method === "POST" && message) {
+      require("node:fs").appendFileSync(${JSON.stringify(prompts)}, (await readBody(req)) + "\\n");
+      await capture(message[1], { system: "s", messages: [{ role: "user" }] });
+      return json(res, ${okAssistant});
+    }
+    if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+  `;
+  const bin = fakeSidecar(dir, "gateway", handlers);
+  const wrapped = join(dir, "gateway-wrapped");
+  writeFileSync(
+    wrapped,
+    `#!/bin/sh\nprintf '%s' "$OPENCODE_CONFIG_CONTENT" > ${JSON.stringify(dump)}\nexec ${JSON.stringify(bin)} "$@"\n`,
+  );
+  chmodSync(wrapped, 0o755);
+  let refreshed = 0;
+  const harness = createOpenCodeHarness({
+    binaryPath: wrapped,
+    modelGateway: {
+      url: "https://gateway.internal/v1",
+      apiKey: "gw-key",
+      apiKeyHeader: "x-api-key",
+      models: { "claude-opus-5-5": "fleet-opus", "gpt-5.6-sol": "fleet-sol" },
+      refresh: async () => {
+        refreshed++;
+      },
+    },
+  });
+  try {
+    for (const modelId of ["claude-opus-5-5", "gpt-5.6-sol"])
+      await harness.turns.runTurn(turnInput([], [], { runtime: { modelId } }));
+    const config = JSON.parse(readFileSync(dump, "utf8"));
+    const anthropic = config.provider["qm-gateway-anthropic-messages"];
+    assert.ok(config.enabled_providers.includes("qm-gateway-anthropic-messages"));
+    assert.equal(anthropic.npm, "@ai-sdk/anthropic");
+    assert.deepEqual(anthropic.options, {
+      baseURL: "https://gateway.internal/v1",
+      apiKey: "gw-key",
+      headers: { "x-api-key": "gw-key" },
+    });
+    assert.ok(anthropic.models["fleet-opus"].cost.input > 0);
+    assert.equal(config.provider["qm-gateway-openai-responses"].npm, "@ai-sdk/openai");
+    assert.ok(config.provider["qm-gateway-openai-responses"].models["fleet-sol"]);
+    const sent = readFileSync(prompts, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).model);
+    assert.deepEqual(sent, [
+      { providerID: "qm-gateway-anthropic-messages", modelID: "fleet-opus" },
+      { providerID: "qm-gateway-openai-responses", modelID: "fleet-sol" },
+    ]);
+    assert.equal(refreshed, 1);
+  } finally {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Stop sent while a queued steer is still running ends the turn without waiting for the steer", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-steer-stop-"));
+  const steered = join(dir, "steered");
+  const binary = fakeSidecar(
+    dir,
+    "steer-stop",
+    `
+    if (req.method === "POST" && url.pathname.endsWith("/prompt_async")) {
+      await readBody(req);
+      require("node:fs").writeFileSync(${JSON.stringify(steered)}, "1");
+      return json(res, {});
+    }
+    if (req.method === "POST" && url.pathname.endsWith("/abort")) { process.qaAborted = true; return json(res, true); }
+    if (url.pathname === "/session/status") return json(res, process.qaAborted ? {} : { ses_main: { type: "busy" } });
+    if (req.method === "POST" && message) {
+      await readBody(req);
+      while (!process.qaAborted) await new Promise((resolve) => setTimeout(resolve, 10));
+      return json(res, ${okAssistant});
+    }
+    if (req.method === "GET" && message) return json(res, [${okAssistant}]);
+  `,
+  );
+  const signals = createMemoryRunSignalStore();
+  const harness = createOpenCodeHarness({ binaryPath: binary, signals, turnWallClockMs: 6_000 });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const turn = turnInput([], []);
+  turn.runId = "opencode-steer-stop";
+  await signals.send(turn.runId, { kind: "steer", text: "also this", ts: "steer.1" });
+  const running = harness.turns.runTurn(turn);
+  while (!existsSync(steered)) await new Promise((resolve) => setTimeout(resolve, 5));
+  const stoppedAt = Date.now();
+  await signals.send(turn.runId, { kind: "abort" });
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.ok(Date.now() - stoppedAt < 3_000, `Stop took ${Date.now() - stoppedAt}ms`);
+});
+
+test("a Stop logs OpenCode session abort and delete failures instead of dropping them", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-opencode-abort-delete-fail-"));
+  const cancel = new AbortController();
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (line: string) => void warnings.push(line));
+  const partialAssistant = okAssistant.replace("hello from fake", "Partial answer");
+  const harness = createOpenCodeHarness({
+    binaryPath: fakeSidecar(
+      dir,
+      "abort-delete-fail",
+      `
+        if (req.method === "POST" && message) {
+          await readBody(req);
+          globalThis.pendingPrompt = res;
+          require("node:fs").writeFileSync(${JSON.stringify(join(dir, "started"))}, "1");
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/abort")) {
+          if (globalThis.pendingPrompt) { json(globalThis.pendingPrompt, ${partialAssistant}); globalThis.pendingPrompt = null; }
+          res.writeHead(503, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ name: "UnknownError", data: { message: "abort unavailable" } }));
+        }
+        if (req.method === "DELETE" && url.pathname === "/session/ses_main") {
+          res.writeHead(500, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ name: "UnknownError", data: { message: "delete failed" } }));
+        }
+        if (req.method === "GET" && message) return json(res, []);
+      `,
+    ),
+    turnWallClockMs: 5_000,
+  });
+  t.after(async () => {
+    await harness.turns.close?.();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const entries: SessionEntry[] = [];
+  const running = harness.turns.runTurn(turnInput(entries, [], { runId: "abort-delete-fail", cancel: cancel.signal }));
+  const deadline = Date.now() + 4_000;
+  while (!existsSync(join(dir, "started"))) {
+    if (Date.now() > deadline) throw new Error("mock OpenCode never started");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  cancel.abort();
+  const result = await running;
+  assert.equal(result.stopped, true);
+  assert.ok(
+    warnings.some(
+      (line) => line.startsWith("[swallowed] opencode session abort") && line.includes("abort unavailable"),
+    ),
+    warnings.join("\n"),
+  );
+  assert.ok(
+    warnings.some((line) => line.startsWith("[swallowed] opencode session delete") && line.includes("delete failed")),
+    warnings.join("\n"),
+  );
+});

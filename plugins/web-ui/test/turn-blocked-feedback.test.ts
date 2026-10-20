@@ -101,3 +101,17 @@ test("a successfully queued send still resolves with its run", async () => {
   const queued = await queueTurn("web:u:t", "hello", fakeAgent(), undefined, "key-1");
   assert.deepEqual(queued, { runId: "r-9", text: "hello" });
 });
+
+test("a queued turn sends the picked model with the picked harness, not the agent's stale model", async () => {
+  let sent: Record<string, unknown> = {};
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return { ok: true, status: 200, text: async () => JSON.stringify({ status: "queued", runId: "run-1" }) };
+  }) as unknown as typeof fetch;
+  const stale = {
+    state: { model: { id: "unknown", api: "anthropic", provider: "anthropic" }, messages: [], isStreaming: false },
+  } as unknown as Agent;
+  await queueTurn("web:u:t", "hello", stale, () => ({ harness: "pi", model: "claude-opus-5" }), "key-2");
+  assert.equal(sent.harness, "pi");
+  assert.equal(sent.model, "claude-opus-5");
+});

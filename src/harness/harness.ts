@@ -23,6 +23,7 @@ import type {
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
+import type { GrindMeter } from "./grind.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
@@ -133,6 +134,7 @@ export interface HarnessTurnInput {
   systemPrompt: string;
   history: SessionEntry[];
   goal?: GoalRecord | null;
+  goalMeter?: GrindMeter;
   tools: ToolContext;
   commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string): boolean;
@@ -201,6 +203,7 @@ export interface HarnessDetectResult {
 export interface HarnessCompactInput {
   session: Session;
   history: SessionEntry[];
+  model?: string;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 
@@ -218,7 +221,7 @@ export interface HarnessModelUtilities {
   judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
   screenSecurity?(input: HarnessSecurityScreenInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
-  generateTitle?(transcript: string): Promise<string | undefined>;
+  generateTitle?(transcript: string, signal?: AbortSignal): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 

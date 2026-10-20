@@ -1,6 +1,6 @@
 # Model gateways
 
-Pi can route model calls through an authenticated gateway instead of holding provider keys. Set `MODEL_GATEWAY_URL`, `MODEL_GATEWAY_API_KEY`, and `MODEL_GATEWAY_API_KEY_HEADER`. The key stays server-side. No model list is required.
+Pi can route model calls through an authenticated gateway instead of holding provider keys. Set `MODEL_GATEWAY_URL`, `MODEL_GATEWAY_API_KEY`, and `MODEL_GATEWAY_API_KEY_HEADER`. The key stays server-side. No model list is required. QM never follows a redirect from the gateway, so set `MODEL_GATEWAY_URL` to its final address.
 
 QM discovers models using authenticated `GET /v1/models` and `GET /model_group/info`, the end-user metadata endpoint implemented by LiteLLM. A base URL ending in `/v1` is supported; both endpoints retain any preceding path prefix. Discovery uses the same key as inference, rejects redirects, and ignores upstream credential and endpoint fields.
 

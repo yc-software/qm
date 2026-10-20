@@ -192,17 +192,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     labelLcCol: string,
     cols: string,
     map: (r: Record<string, unknown>) => T,
+    exclude: readonly string[] = [],
   ): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
     const qn = normDirectoryQuery(query);
     if (!qn) return { kind: "none" };
-    const from = `FROM ${table} WHERE org_id = $1`;
+    const from = `FROM ${table} WHERE org_id = $1 AND NOT (${idCol} = ANY($3::text[]))`;
 
-    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn]);
+    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn, exclude]);
     if (byId.length) return { kind: "one", item: map(byId[0]!) };
 
     const exact = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId, qn],
+      [orgId, qn, exclude],
     );
     if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
     if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
@@ -210,12 +211,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     const esc = likeEscape(qn);
     let pool2 = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId, `${esc}%`],
+      [orgId, `${esc}%`, exclude],
     );
     if (!pool2.length) {
       pool2 = await q(
         `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-        [orgId, `%${esc}%`],
+        [orgId, `%${esc}%`, exclude],
       );
     }
     if (!pool2.length) return { kind: "none" };
@@ -664,13 +665,21 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows.length ? memberRow(rows[0]!) : null;
     },
 
-    async resolve(query) {
+    async resolve(query, exclude = []) {
       const bySlackId = await q(
-        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND slack_id = $2 LIMIT 1`,
-        [orgId, query.trim()],
+        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND slack_id = $2 AND NOT (principal_id = ANY($3::text[])) LIMIT 1`,
+        [orgId, query.trim(), exclude],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
-      const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);
+      const m = await pick(
+        query,
+        "directory_members",
+        "principal_id",
+        "display_name_lc",
+        MEMBER_COLS,
+        memberRow,
+        exclude,
+      );
       if (m.kind === "one") return { kind: "one", member: m.item };
       if (m.kind === "ambiguous") return { kind: "ambiguous", candidates: m.items };
       return { kind: "none" };

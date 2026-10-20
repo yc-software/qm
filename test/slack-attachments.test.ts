@@ -356,3 +356,26 @@ test("uploadFailureNote blames files:write only for permission-class errors", ()
   assert.doesNotMatch(note, /files:write/);
   assert.match(note, /invalid_arguments/);
 });
+
+test("a linked cloud document is named as one and its link is kept, without blaming file permissions", async () => {
+  const out = await processInboundFiles(
+    [
+      {
+        id: "F1",
+        name: "Roadmap",
+        mode: "external",
+        external_type: "gdrive",
+        permalink: "https://docs.example.com/d/1",
+      },
+    ],
+    async () => {
+      throw new Error("must not download");
+    },
+    async () => ({ blobId: "b" }),
+  );
+  assert.deepEqual(out.attachments, []);
+  assert.equal(out.issues.length, 1);
+  assert.match(out.issues[0]!, /linked gdrive document/);
+  assert.match(out.issues[0]!, /https:\/\/docs\.example\.com\/d\/1/);
+  assert.doesNotMatch(out.issues[0]!, /files:read/);
+});

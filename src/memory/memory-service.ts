@@ -82,6 +82,19 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
+export async function replaceAtReadRevision(
+  memory: MemoryService,
+  scopeId: ScopeId,
+  content: string,
+  revision: string,
+  author?: string,
+): Promise<boolean> {
+  if (revision) return (await memory.replaceIfRevision?.(scopeId, content, revision, author)) === true;
+  if ((await memory.readHead?.(scopeId))?.revision) return false;
+  await memory.replace(scopeId, content, author);
+  return true;
+}
+
 export function recallBody(body: string): string {
   const trimmed = body.trim();
   return trimmed ? capTail(trimmed, RECALL_MAX_CHARS) : "";

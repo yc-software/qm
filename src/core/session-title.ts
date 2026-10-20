@@ -8,6 +8,15 @@ import { headSlice } from "../util/text.ts";
 import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
+const TITLE_GENERATION_TIMEOUT_MS = 8_000;
+
+class TitleTimeout extends Error {}
+
+function titleErrorCode(error: unknown): string {
+  if (error instanceof TitleRejected) return `rejected_${error.rule}`;
+  return error instanceof TitleTimeout ? "timeout" : "generation_failed";
+}
+
 function fallbackSessionTitle(text: string): string | undefined {
   const clean = stripTurnBoilerplate(text).replace(/\s+/g, " ").trim();
   if (!clean) return undefined;
@@ -19,7 +28,10 @@ export function createSessionTitles(deps: {
   harness: Harness;
   sessionStateBus?: SessionStateBus;
   errors?: ErrorLog;
+  titleGenerationTimeoutMs?: number;
 }) {
+  const timeoutMs = deps.titleGenerationTimeoutMs ?? TITLE_GENERATION_TIMEOUT_MS;
+
   async function generateAndStore(
     sessionId: string,
     scopeId: ScopeId,
@@ -29,19 +41,31 @@ export function createSessionTitles(deps: {
   ): Promise<string | undefined> {
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
+    const abort = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
     try {
-      title = await deps.harness.models.generateTitle?.(transcript);
+      title = await Promise.race([
+        deps.harness.models.generateTitle?.(transcript, abort.signal),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            abort.abort();
+            reject(new TitleTimeout(`title generation exceeded ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
     } catch (e) {
       deps.errors?.record(
         {
           category: "session_title",
-          code: e instanceof TitleRejected ? `rejected_${e.rule}` : "generation_failed",
+          code: titleErrorCode(e),
           message: errMessage(e),
           scopeLabel: scopeId,
           sessionId,
         },
         e,
       );
+    } finally {
+      clearTimeout(timer);
     }
     title ??= fallbackText ? fallbackSessionTitle(fallbackText) : undefined;
     if (title) {

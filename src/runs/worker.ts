@@ -4,12 +4,18 @@ import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
-import { isNonRetryable, NonRetryableTurnError, turnFailureMessage } from "../core/turn-error.ts";
+import {
+  isNonRetryable,
+  NonRetryableTurnError,
+  ProviderTurnError,
+  TurnInterrupted,
+  turnFailureMessage,
+} from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
-import { errorParks, type Run, type RunStore } from "./run-store.ts";
+import { crashClaims, errorParks, type Run, type RunStore } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { retryDelay } from "./retry-delay.ts";
+import { runRetryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
 
 export interface ProcessDeps {
@@ -33,7 +39,7 @@ export async function processRun(
   if (token === null) throw new Error(`processRun called with an unleased run ${run.id}`);
   const intervalMs = deps.heartbeatIntervalMs ?? Math.max(1_000, Math.floor(deps.leaseTtlMs / 3));
   const cancel = new AbortController();
-  const onShutdown = (): void => cancel.abort();
+  const onShutdown = (): void => cancel.abort(new TurnInterrupted("shutdown"));
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
   let workDeadline: ReturnType<typeof setTimeout> | undefined;
@@ -54,7 +60,7 @@ export async function processRun(
           console.warn(
             `[worker] run ${run.id} lost its lease after ${consecutiveLost} consecutive beats; cancelling the in-process turn`,
           );
-          cancel.abort();
+          cancel.abort(new TurnInterrupted("lease_lost"));
         }
       })
       .catch((err: unknown) => {
@@ -72,9 +78,9 @@ export async function processRun(
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
     if (run.request.swarm) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
-      workDeadline = setTimeout(() => cancel.abort(), turnMs);
+      workDeadline = setTimeout(() => cancel.abort(new TurnInterrupted("deadline")), turnMs);
     }
-    if (run.request.swarm && run.attempts > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    if (run.request.swarm && crashClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
@@ -91,6 +97,10 @@ export async function processRun(
     });
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
+    if (result.status === "failed") {
+      await deps.runs.fail(run.id, token, result.reason ?? turnFailureMessage(undefined), { retry: false });
+      return result;
+    }
     if (!(await deps.runs.complete(run.id, token, result))) {
       throw new Error(`run ${run.id} lost its lease before completion`);
     }
@@ -111,7 +121,7 @@ export async function processRun(
       );
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !isNonRetryable(err),
-      retryAfterMs: retryDelay(run.errorAttempts),
+      retryAfterMs: runRetryDelay(run.errorAttempts, err instanceof ProviderTurnError ? err.retryAfterMs : undefined),
     });
     throw err;
   } finally {

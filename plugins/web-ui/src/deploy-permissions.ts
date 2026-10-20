@@ -131,8 +131,12 @@ export async function openDeploymentPermissions(id: string, title: string, owner
     error = "";
     draw();
     try {
+      const exclude = [owner, ...grantees.map((grant) => grant.scope)]
+        .filter((scope) => scope.startsWith("personal:"))
+        .map((scope) => `&exclude=${encodeURIComponent(scope.slice("personal:".length))}`)
+        .join("");
       const response = await api<{ matches?: DirectoryMatch[] }>(
-        `/api/directory/resolve?q=${encodeURIComponent(term)}`,
+        `/api/directory/resolve?q=${encodeURIComponent(term)}${exclude}`,
       );
       if (sequence !== searchSequence || !dialog.isConnected) return;
       matches = (response.matches ?? [])

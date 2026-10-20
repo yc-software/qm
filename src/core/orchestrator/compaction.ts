@@ -68,6 +68,7 @@ export interface CompactionContext {
     actorId: string;
     model?: string;
     includeSecurityTainted?: boolean;
+    visibleTo: (entries: SessionEntry[]) => SessionEntry[];
   }): void;
 }
 
@@ -119,6 +120,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       const raw = await deps.harness.models.compactHistory({
         session: input.session,
         history: plan.toSummarize,
+        ...(input.model ? { model: input.model } : {}),
         recordModelCall: (rec) => {
           deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
           void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
@@ -340,6 +342,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     actorId: string;
     model?: string;
     includeSecurityTainted?: boolean;
+    visibleTo: (entries: SessionEntry[]) => SessionEntry[];
   }): void {
     if (compactionPending.has(input.sessionId)) return;
     compactionPending.add(input.sessionId);
@@ -351,7 +354,9 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         if (!session) return;
         const maxContextTokens = tokenBudgetFor(input.scopeId, input.model);
         const entries = (await deps.sessions.getContextWindow(input.sessionId)).entries;
-        const history = forModelContext(entries, { includeSecurityTainted: input.includeSecurityTainted });
+        const history = input.visibleTo(
+          forModelContext(entries, { includeSecurityTainted: input.includeSecurityTainted }),
+        );
         if (!overBudgetFraction(history, maxContextTokens, COMPACT_SOFT_FRACTION)) return;
         const snapshotSeq = entries.at(-1)?.seq ?? -1;
         const summarized = await summarizeForCompaction({
@@ -367,9 +372,11 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         if (!lease) return;
         const since = await deps.sessions.getEntries(input.sessionId, { sinceSeq: snapshotSeq + 1 });
         if (!since.some((entry) => !!contextSummaryPayload(entry) || !!memoryContextPayload(entry))) {
-          const current = forModelContext((await deps.sessions.getContextWindow(input.sessionId)).entries, {
-            includeSecurityTainted: input.includeSecurityTainted,
-          });
+          const current = input.visibleTo(
+            forModelContext((await deps.sessions.getContextWindow(input.sessionId)).entries, {
+              includeSecurityTainted: input.includeSecurityTainted,
+            }),
+          );
           await writeCompaction({ session, lease, summarized, goalSource: latestGoalEntry(current) });
         }
       } catch (e) {

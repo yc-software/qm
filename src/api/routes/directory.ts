@@ -162,7 +162,7 @@ async function resolveDirectory(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q) return sendJson(res, 400, { error: "bad_request", message: "q (a name to resolve) required" });
-  const r = await app.resolveRecipient(q);
+  const r = await app.resolveRecipient(q, url.searchParams.getAll("exclude").filter(Boolean));
   let found: DirectoryMember[] = [];
   if (r.kind === "one") found = [r.member];
   else if (r.kind === "ambiguous") found = r.candidates;

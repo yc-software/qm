@@ -164,7 +164,7 @@ test("strict approval of an admin read cannot authorize an admin mutation", asyn
   await tool.execute("read", { action: "whoami" }, undefined, undefined, {} as never);
   const blocked = await tool.execute(
     "write",
-    { action: "replace_memory", scope: "org:test", value: { content: "synthetic replacement" } },
+    { action: "replace_memory", scope: "org:test", value: { content: "synthetic replacement", revision: "r1" } },
     undefined,
     undefined,
     {} as never,

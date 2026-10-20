@@ -158,7 +158,7 @@ test("toSlackMrkdwn disarms encoded mass mentions outside code, leaves real ment
   );
   assert.equal(
     toSlackMrkdwn("code stays verbatim: `<!here>` and\n```\nnotify '<!channel>'\n```"),
-    "code stays verbatim: `<!here>` and\n```\nnotify '<!channel>'\n```",
+    "code stays verbatim: `&lt;!here&gt;` and\n```\nnotify '&lt;!channel&gt;'\n```",
   );
 });
 
@@ -172,6 +172,7 @@ test("neutralizeMassMentions only touches the encoded broadcast forms", () => {
 
 test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
   setMentionIndex(
+    "default",
     new Map([
       ["ankit", "U111"],
       ["alex", "U222"],
@@ -197,17 +198,17 @@ test("armUserMentions: plain @name arms to <@id> via toSlackMrkdwn", () => {
     assert.equal(toSlackMrkdwn("hi @Ankit Gupta Sharma Rao"), "hi @Ankit Gupta Sharma Rao");
     assert.equal(toSlackMrkdwn("hi @Ankit Torres"), "hi @Ankit Torres");
   } finally {
-    setMentionIndex(new Map());
+    setMentionIndex("default", new Map());
   }
 });
 
 test("armUserMentions: reserved broadcast names never arm", () => {
-  setMentionIndex(new Map([["here", "U911"]]));
+  setMentionIndex("default", new Map([["here", "U911"]]));
   try {
     assert.equal(toSlackMrkdwn("hey @here look"), "hey @here look");
     assert.equal(toSlackMrkdwn("<!here> look"), "@​here look");
   } finally {
-    setMentionIndex(new Map());
+    setMentionIndex("default", new Map());
   }
 });
 
@@ -270,10 +271,10 @@ test("wire mentions can be disarmed wholesale or only for the identities another
 });
 
 test("a label-less wire mention is disarmed to the person's name when the directory knows it", () => {
-  setMentionIndex(new Map([["ada", "U1"]]));
+  setMentionIndex("default", new Map([["ada", "U1"]]));
   try {
     assert.equal(neutralizeMentions("hi <@U1> and <@U2>"), "hi @ada and @U2");
   } finally {
-    setMentionIndex(new Map());
+    setMentionIndex("default", new Map());
   }
 });

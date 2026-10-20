@@ -90,6 +90,7 @@ export function renderOverheard(p: OverheardEntryPayload): string {
 }
 
 type PiTextBlock = { type: "text"; text: string };
+type PiImageRefBlock = { type: "image"; mimeType: string; artifactRef: string };
 type PiToolCallBlock = { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> };
 type PiZeroUsage = {
   input: number;
@@ -99,8 +100,8 @@ type PiZeroUsage = {
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 };
-export type PiReplayMessage =
-  | { role: "user"; content: PiTextBlock[]; timestamp: number }
+export type PiReplayMessage<UserBlock = PiTextBlock> =
+  | { role: "user"; content: UserBlock[]; timestamp: number }
   | {
       role: "assistant";
       content: Array<PiTextBlock | PiToolCallBlock>;
@@ -115,6 +116,7 @@ export type PiReplayMessage =
       content: PiTextBlock[];
       isError: boolean;
       timestamp: number;
+      interrupted?: true;
     };
 
 export function zeroUsage(): PiZeroUsage {
@@ -135,20 +137,91 @@ function entryText(e: SessionEntry): string {
 const hasToolCall = (m: PiReplayMessage): boolean =>
   m.role === "assistant" && m.content.some((c) => c.type === "toolCall");
 
+function withoutSnapshot(environment: string, snapshot: string): string {
+  const separated = [`\n\n${snapshot}`, `${snapshot}\n\n`, snapshot].find((part) => environment.includes(part));
+  if (!separated) return environment;
+  const rest = environment.replace(separated, () => "");
+  const empty = "<environment>\n\n</environment>";
+  return rest.startsWith(empty) ? rest.slice(empty.length).trimStart() : rest;
+}
+
+export function withoutStaleSnapshots<M>(
+  messages: readonly M[],
+  history: readonly SessionEntry[],
+  currentRunId?: string,
+): M[] {
+  const boundary = history.findLast((e) => contextSummaryPayload(e))?.seq;
+  if (boundary === undefined) return [...messages];
+  const stale = new Map<string, string>();
+  const kept = new Set<string>();
+  for (const e of history) {
+    if (e.type !== "user") continue;
+    const p = e.payload as { environment?: unknown; stateSnapshot?: unknown; runId?: unknown } | null;
+    if (typeof p?.environment !== "string") continue;
+    const current = currentRunId !== undefined && p.runId === currentRunId;
+    if (e.seq > boundary || current || typeof p.stateSnapshot !== "string" || !p.stateSnapshot) kept.add(p.environment);
+    else stale.set(p.environment, withoutSnapshot(p.environment, p.stateSnapshot));
+  }
+  for (const environment of kept) stale.delete(environment);
+  if (!stale.size) return [...messages];
+  const project = (text: string): string => {
+    for (const [environment, projected] of stale) {
+      if (!text.includes(environment)) continue;
+      return projected || !text.includes(`\n\n${environment}`)
+        ? text.replace(environment, () => projected)
+        : text.replace(`\n\n${environment}`, () => "");
+    }
+    return text;
+  };
+  return messages.map((message) => {
+    const m = message as { role?: unknown; content?: unknown };
+    if (m.role !== "user") return message;
+    if (typeof m.content === "string") return { ...message, content: project(m.content) };
+    if (!Array.isArray(m.content)) return message;
+    return {
+      ...message,
+      content: m.content.map((block: { type?: unknown; text?: unknown }) =>
+        block?.type === "text" && typeof block.text === "string" ? { ...block, text: project(block.text) } : block,
+      ),
+    };
+  });
+}
+
+function imageRefs(e: SessionEntry): PiImageRefBlock[] {
+  const attachments = (e.payload as { attachments?: unknown } | null)?.attachments;
+  if (!Array.isArray(attachments)) return [];
+  return attachments.flatMap((a: { mimetype?: unknown; artifactId?: unknown; direction?: unknown }) =>
+    a?.direction === "in" &&
+    typeof a.mimetype === "string" &&
+    a.mimetype.startsWith("image/") &&
+    typeof a.artifactId === "string"
+      ? [{ type: "image" as const, mimeType: a.mimetype, artifactRef: a.artifactId }]
+      : [],
+  );
+}
+
 export function reconstructMessagesFromHistory(history: readonly SessionEntry[]): PiReplayMessage[] {
+  return reconstruct(history, false) as PiReplayMessage[];
+}
+
+function reconstruct(
+  history: readonly SessionEntry[],
+  withImageRefs: boolean,
+): PiReplayMessage<PiTextBlock | PiImageRefBlock>[] {
   const resultByCallId = new Map<string, SessionEntry>();
   for (const e of history) {
     if (e.type !== "tool_result") continue;
     const cid = (e.payload as { callId?: unknown } | null)?.callId;
     if (typeof cid === "string" && cid) resultByCallId.set(cid, e);
   }
-  const raw: PiReplayMessage[] = [];
-  const userMsg = (text: string, ts: number): PiReplayMessage => ({
+  type Msg = PiReplayMessage<PiTextBlock | PiImageRefBlock>;
+  const raw: Msg[] = [];
+  const userMsg = (text: string, ts: number): Msg => ({
     role: "user",
     content: [{ type: "text", text }],
     timestamp: ts,
   });
-  const asstText = (text: string, ts: number): PiReplayMessage => ({
+  const asstText = (text: string, ts: number): Msg => ({
     role: "assistant",
     content: [{ type: "text", text }],
     timestamp: ts,
@@ -171,7 +244,13 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
         const t = [entryText(e), typeof environment === "string" ? environment.trim() : ""]
           .filter(Boolean)
           .join("\n\n");
-        if (t) raw.push(userMsg(t, e.createdAt));
+        const images = withImageRefs ? imageRefs(e) : [];
+        if (t || images.length)
+          raw.push({
+            role: "user",
+            content: [...(t ? [{ type: "text" as const, text: t }] : []), ...images],
+            timestamp: e.createdAt,
+          });
       }
     } else if (e.type === "assistant") {
       const t = entryText(e);
@@ -219,6 +298,7 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
           ],
           isError: rp.isError === true || rp.interrupted === true,
           timestamp: re.createdAt,
+          ...(rp.interrupted === true ? { interrupted: true } : {}),
         });
       } else {
         raw.push({
@@ -228,12 +308,13 @@ export function reconstructMessagesFromHistory(history: readonly SessionEntry[])
           content: [{ type: "text", text: INTERRUPTED_TOOL_RESULT }],
           isError: true,
           timestamp: e.createdAt,
+          interrupted: true,
         });
       }
     }
   }
 
-  const out: PiReplayMessage[] = [];
+  const out: Msg[] = [];
   for (const m of raw) {
     const prev = out[out.length - 1];
     if (prev && prev.role === "user" && m.role === "user") {
@@ -274,13 +355,13 @@ export async function appendCoverageImport(
 
 export function coverageImportEvent(entries: readonly SessionEntry[]): {
   event: "legacy_import";
-  messages: PiReplayMessage[];
+  messages: PiReplayMessage<PiTextBlock | PiImageRefBlock>[];
   scopes: ScopeId[];
 } {
   const context = forModelContext([...entries]);
   return {
     event: "legacy_import",
-    messages: reconstructMessagesFromHistory(context),
+    messages: reconstruct(context, true),
     scopes: [...new Set(context.map((e) => e.scopeLabel))],
   };
 }

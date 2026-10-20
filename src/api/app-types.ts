@@ -338,7 +338,13 @@ export interface App {
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{
+    session: Session;
+    entries: TranscriptEntry[];
+    earlierEntries?: number;
+    pins?: SessionPinView[];
+    runtime?: RuntimeChoice;
+  } | null>;
   canViewSessionSnapshot(
     sessionId: string,
     principalId: string,
@@ -516,7 +522,7 @@ export interface App {
   ): Promise<boolean>;
   setDirectoryWorkspaceUrl(url: string): Promise<void>;
   directoryMeta(): Promise<DirectoryMeta>;
-  resolveRecipient(query: string): Promise<RecipientResolution>;
+  resolveRecipient(query: string, exclude?: readonly string[]): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   directoryMember(principalId: string): Promise<DirectoryMember | null>;
   samePerson(a: string, b: string): Promise<boolean>;

@@ -107,7 +107,9 @@ async function saveProvider() {
   provider.error = false;
   redraw();
   try {
-    const saved = await config.api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
+    const saved = provider.editing
+      ? await config.api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body)
+      : await config.api("POST", "/api/custom-providers", { ...body, id });
     if (session !== provider.session) return;
     if (!saved.ok) {
       provider.error = true;

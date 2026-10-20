@@ -93,7 +93,10 @@ test("an org admin's capability token can read and rewrite a scope's notebook vi
     const putRes = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PUT",
       headers: { "x-agent-capability": cap, "content-type": "application/json" },
-      body: JSON.stringify({ content: "# Memory\n\n- standup is 9:30 every day." }),
+      body: JSON.stringify({
+        content: "# Memory\n\n- standup is 9:30 every day.",
+        revision: (await s.built.memory.readHead!(ORG)).revision,
+      }),
     });
     assert.equal(putRes.status, 200);
 
@@ -139,7 +142,10 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
     const response = await fetch(url, {
       method: "PUT",
       headers: { "x-agent-capability": token, "content-type": "application/json" },
-      body: JSON.stringify({ content: "# Memory\n\n- Large channel standing rule." }),
+      body: JSON.stringify({
+        content: "# Memory\n\n- Large channel standing rule.",
+        revision: (await s.built.memory.readHead!(ORG)).revision,
+      }),
     });
     assert.equal(response.status, 200);
     await response.text();
@@ -433,11 +439,22 @@ test("content reads need a DM-scoped token", async () => {
       },
     );
     assert.equal(personalNotebook.status, 403);
+    await s.built.memory.replace(scopeId("personal", "U1"), "# Memory\n\n- SECRET_CANARY");
+    const stalePut = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(scopeId("personal", "U1"))}`, {
+      method: "PUT",
+      headers: { "x-agent-capability": fromChannel, "content-type": "application/json" },
+      body: JSON.stringify({ content: "x", revision: "stale" }),
+    });
+    assert.equal(stalePut.status, 409);
+    assert.doesNotMatch(await stalePut.text(), /SECRET_CANARY/, "a refused rewrite does not return the notebook");
 
     const put = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
       method: "PUT",
       headers: { "x-agent-capability": fromChannel, "content-type": "application/json" },
-      body: JSON.stringify({ content: "# Memory\n\n- launch day is June 24." }),
+      body: JSON.stringify({
+        content: "# Memory\n\n- launch day is June 24.",
+        revision: (await s.built.memory.readHead!(ORG)).revision,
+      }),
     });
     assert.equal(put.status, 200);
     const orgNotebook = await fetch(`${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`, {
@@ -814,12 +831,20 @@ test("native admin tools use the authenticated handler, including its live autho
       { current: { admin: { call, operationsAvailable: true } } as ToolContext },
       { controlTools: true },
     ).find((t) => t.name === "admin")!;
+    const before = await tool.execute(
+      "native-read-before",
+      { action: "memory", scope: target },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const { revision } = JSON.parse((before.content[0] as { text: string }).text).body as { revision: string };
     const written = await tool.execute(
       "native-write",
       {
         action: "replace_memory",
         scope: target,
-        value: { content: "- synthetic admin tool fixture" },
+        value: { content: "- synthetic admin tool fixture", revision },
       },
       undefined,
       undefined,

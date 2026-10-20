@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   findTrailingPartialTurn,
+  handoffNote,
   isResumeNote,
   resumeNote,
   resumeStrategy,
@@ -242,10 +243,10 @@ test("resumeStrategy restarts when the dead attempt recorded no work", () => {
   assert.deepEqual(resumeStrategy([user("x", 1)], { userSeq: 1, workEntries: 0 }), { kind: "restart" });
 });
 
-test("the resume notes name the routine deploy, and only the retry note promises a complete record", () => {
+test("the resume notes name a routine restart, and only the retry note promises a complete record", () => {
   const note = resumeNote();
   assert.ok(isResumeNote(note));
-  assert.match(note, /routine platform deploy/);
+  assert.match(note, /routine platform restart/);
   assert.match(note, /almost never worth mentioning to the user/);
   assert.match(note, /unknown outcome/);
   const retried = resumeNote({ strategy: { kind: "retry", call: { callId: "c1", tool: "history", input: {} } } });
@@ -254,10 +255,11 @@ test("the resume notes name the routine deploy, and only the retry note promises
   assert.doesNotMatch(retried, /unknown outcome/);
   assert.match(retried, /Continue from where you left off/);
   assert.doesNotMatch(retried, /history|c1/);
-  const handoff = resumeNote({ cause: "runtime-change" });
-  assert.ok(isResumeNote(handoff));
-  assert.doesNotMatch(handoff, /deploy/);
-  assert.match(handoff, /unknown outcome/);
+  for (const kind of ["context", "runtime"] as const) {
+    const handoff = handoffNote(kind);
+    assert.ok(isResumeNote(handoff));
+    assert.doesNotMatch(handoff, /interrupted mid-turn|restart|deploy/);
+  }
 });
 
 test("a tool_result marked interrupted does not answer its call, so the call is still resumable", () => {

@@ -31,7 +31,7 @@ function harness(failRestore = false) {
   return { deploy, counts: () => ({ applies, destroys }) };
 }
 
-function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint" | "setStatus" | "setAppliedVersion") {
+function persistenceFailureHarness(failMethod: "setVersionImage" | "markRunning") {
   const base = createDeployStore();
   let armed = false;
   let failed = false;
@@ -121,7 +121,7 @@ test("restore is idempotent for retries and concurrent callers", async () => {
   assert.equal((await deploy.restoreDeployment(d.id)).status, "running");
 });
 
-for (const failMethod of ["setVersionImage", "setEndpoint", "setStatus", "setAppliedVersion"] as const) {
+for (const failMethod of ["setVersionImage", "markRunning"] as const) {
   test(`restore destroys the runtime and remains archived when ${failMethod} fails`, async () => {
     const { deploy, arm, destroys } = persistenceFailureHarness(failMethod);
     const d = await deploy.deploy({

@@ -185,15 +185,8 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   }
 
   async function mutate(id: string, edit: (s: Skill) => Skill): Promise<Skill> {
-    if (skills.update) {
-      const next = await skills.update(id, edit);
-      if (!next) throw new Error(`unknown skill: ${id}`);
-      return next;
-    }
-    const current = await skills.get(id);
-    if (!current) throw new Error(`unknown skill: ${id}`);
-    const next = edit(current);
-    await skills.put(next.id, next);
+    const next = await skills.update(id, edit);
+    if (!next) throw new Error(`unknown skill: ${id}`);
     return next;
   }
 

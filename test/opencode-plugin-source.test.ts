@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { needsHistoryImport } from "../src/harness/opencode-plugin.ts";
+import { withHistory } from "../src/harness/opencode-plugin.ts";
 
 const source = readFileSync(new URL("../src/harness/opencode-plugin.ts", import.meta.url), "utf8");
 const harnessSource = readFileSync(new URL("../src/harness/opencode-harness.ts", import.meta.url), "utf8");
@@ -28,28 +28,24 @@ test("OpenCode plugin forwards calls and honors bridge termination", () => {
 test("OpenCode plugin replaces core context without dropping the live user message", () => {
   assert.match(source, /Object\.assign\(output\.headers, context\.proxyHeaders \?\? \{\}\)/);
   assert.match(source, /output\.system\.splice\(0, output\.system\.length, context\.systemPrompt\)/);
-  assert.match(source, /currentLastUser = output\.messages\.findLast/);
-  assert.match(
-    source,
-    /output\.messages\.splice\(0, output\.messages\.length, \.\.\.\(history \?\? \[\]\), currentLastUser\)/,
-  );
   assert.doesNotMatch(source, /"permission\.ask"/);
 });
 
-test("OpenCode plugin imports empty history only on the first model step", () => {
-  const user = { info: { id: "user", role: "user", sessionID: "session" }, parts: [] };
-  const assistant = { info: { id: "assistant", role: "assistant", sessionID: "session" }, parts: [] };
-  assert.equal(needsHistoryImport([user], []), true);
-  assert.equal(needsHistoryImport([user, assistant], []), false);
-});
-
-test("OpenCode plugin recognizes imported non-empty history", () => {
-  const user = { info: { id: "user", role: "user", sessionID: "session" }, parts: [] };
-  const prior = { info: { id: "prior", role: "assistant", sessionID: "session" }, parts: [] };
-  const toolStep = { info: { id: "tool-step", role: "assistant", sessionID: "session" }, parts: [] };
-  assert.equal(needsHistoryImport([user], [prior]), true);
-  assert.equal(needsHistoryImport([prior, user], [prior]), false);
-  assert.equal(needsHistoryImport([user, toolStep], [prior]), false);
+test("OpenCode plugin keeps prior history on every model step of a turn", () => {
+  const message = (id: string, role: string) =>
+    ({ info: { id, role, sessionID: "session" }, parts: [] }) as unknown as Parameters<typeof withHistory>[1][number];
+  const history = [message("prior-user", "user"), message("prior-answer", "assistant")];
+  const user = message("user", "user");
+  const toolStep = message("tool-step", "assistant");
+  const ids = (messages: ReturnType<typeof withHistory>) => messages.map((entry) => entry.info.id);
+  assert.deepEqual(ids(withHistory([user], history)), ["prior-user", "prior-answer", "user"]);
+  assert.deepEqual(ids(withHistory([user, toolStep], history)), ["prior-user", "prior-answer", "user", "tool-step"]);
+  assert.deepEqual(ids(withHistory(withHistory([user, toolStep], history), history)), [
+    "prior-user",
+    "prior-answer",
+    "user",
+    "tool-step",
+  ]);
 });
 
 test("OpenCode prompt disables bridged tools absent from this turn", () => {

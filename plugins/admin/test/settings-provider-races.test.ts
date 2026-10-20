@@ -103,3 +103,29 @@ test("reasoning edits preserve pricing and omitted positional fields", () => {
   assert.equal(models[1].reasoning, true);
   dom.window.close();
 });
+
+test("Add creates with POST and shows the server's refusal of an existing id, while Edit replaces with PUT", async () => {
+  const { dom, ui, requests, open } = fixture();
+  const sent: Array<{ method: string; path: string; body: any }> = [];
+  ui.configureProviders({
+    api: (method: string, path: string, body: unknown) => {
+      sent.push({ method, path, body });
+      return new Promise((resolve, reject) => requests.push({ resolve, reject }));
+    },
+    refresh: async () => {},
+  });
+  ui.openProvider();
+  Object.assign(ui.provider.draft, { id: "acme", name: "Dup", url: "https://d.example.com", models: "dup-1" });
+  dom.window.document.getElementById("custom-provider-save")!.click();
+  assert.deepEqual([sent[0]!.method, sent[0]!.path, sent[0]!.body.id], ["POST", "/api/custom-providers", "acme"]);
+  requests[0]!.resolve({
+    ok: false,
+    data: { error: "provider_exists", message: 'A provider with the id "acme" already exists.' },
+  });
+  await tick();
+  assert.match(ui.provider.message, /A provider with the id "acme" already exists/);
+  open("acme");
+  dom.window.document.getElementById("custom-provider-save")!.click();
+  assert.deepEqual([sent[1]!.method, sent[1]!.path], ["PUT", "/api/custom-providers/acme"]);
+  dom.window.close();
+});

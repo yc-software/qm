@@ -68,17 +68,24 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
   };
 
   const migrateContainer = async (container: string): Promise<boolean> => {
-    const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
+    const inspected = await dexec([
+      "inspect",
+      "--format",
+      '{"running":{{json .State.Running}},"networks":{{json .NetworkSettings.Networks}}}',
+      container,
+    ]);
     if (inspected.code !== 0) {
       if (/no such (?:object|container)|not found/i.test(inspected.stderr)) return false;
       throw new Error(`docker inspect ${container} failed: ${inspected.stderr.trim()}`);
     }
-    let attached: Record<string, unknown>;
+    let state: { running?: unknown; networks?: Record<string, unknown> | null };
     try {
-      attached = JSON.parse(inspected.stdout) as Record<string, unknown>;
+      state = JSON.parse(inspected.stdout) as typeof state;
     } catch {
       throw new Error(`docker inspect ${container} returned invalid network state`);
     }
+    if (state.running !== true) return false;
+    const attached = state.networks ?? {};
     const target = `${container}-net`;
     await ensureNetwork(target);
     if (!(target in attached)) {

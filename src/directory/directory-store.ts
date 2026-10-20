@@ -54,7 +54,7 @@ export interface DirectoryStore {
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;
-  resolve(query: string): Promise<RecipientResolution>;
+  resolve(query: string, exclude?: readonly string[]): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelMembership(channelId: string, principalId: string): Promise<boolean | undefined>;
@@ -305,11 +305,12 @@ export function createDirectoryStore(): DirectoryStore {
     async get(principalId) {
       return members.find((m) => samePerson(m.principalId, principalId)) ?? null;
     },
-    async resolve(query) {
-      const bySlackId = members.find((x) => x.slackId && x.slackId === query.trim());
+    async resolve(query, exclude = []) {
+      const pool = exclude.length ? members.filter((x) => !exclude.includes(x.principalId)) : members;
+      const bySlackId = pool.find((x) => x.slackId && x.slackId === query.trim());
       if (bySlackId) return { kind: "one", member: bySlackId };
       const m = pickMatch(
-        members,
+        pool,
         query,
         (x) => x.principalId,
         (x) => x.displayName,

@@ -128,11 +128,11 @@ test("reconciliation retries a persisted move without another incoming message",
   };
   await assert.rejects(manager.move(client, "r1", "D1", "10.2"));
   client.reactions.add = add;
-  await createTaskAcknowledgements(store, createNoopLeaderLease()).reconcile(client);
+  await createTaskAcknowledgements(store, createNoopLeaderLease()).reconcile(() => client);
   assert.deepEqual(events.slice(-2), ["add:10.2:memo", "remove:10.1:memo"]);
   assert.equal((await store.get("r1"))?.synced, true);
   const count = events.length;
-  await manager.reconcile(client);
+  await manager.reconcile(() => client);
   assert.equal(events.length, count);
 });
 
@@ -156,7 +156,7 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
     });
     await manager.move(client, run.id, "D1", "10.1");
     const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
-    await restarted.reconcile(client);
+    await restarted.reconcile(() => client);
     assert.equal((await store.get(run.id))?.finished, false);
     const claimed = await runs.claimById(run.id, "test", 10000);
     assert.ok(claimed);
@@ -174,13 +174,13 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
       outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
     );
     if (finalDelivery) {
-      await restarted.reconcile(client);
+      await restarted.reconcile(() => client);
       assert.equal((await store.get(run.id))?.finished, false);
       assert.ok(!events.some((event) => event.startsWith("remove:")));
       if (outbound === "run") await restarted.finish(client, run.id);
       await deliveries.ack(finalDelivery.id, Date.now());
     }
-    await restarted.reconcile(client);
+    await restarted.reconcile(() => client);
     assert.equal((await store.get(run.id))?.finished, true);
     assert.equal(events.at(-1), "remove:10.1:eyes");
   });

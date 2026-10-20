@@ -1,3 +1,5 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index 70ead54..158acc8 100644
 --- a/dist/api/anthropic-messages.js
 +++ b/dist/api/anthropic-messages.js
 @@ -1,3 +1,4 @@
@@ -5,7 +7,7 @@
  import Anthropic from "@anthropic-ai/sdk";
  import { calculateCost } from "../models.js";
  import { splitDeferredTools } from "../utils/deferred-tools.js";
-@@ -531,6 +532,8 @@
+@@ -531,6 +532,8 @@ export const stream = (model, context, options) => {
                          if (stopReasonResult.errorMessage) {
                              output.errorMessage = stopReasonResult.errorMessage;
                          }
@@ -14,7 +16,7 @@
                      }
                      // Only update usage fields if present (not null).
                      // Preserves input_tokens from message_start when proxies omit it in message_delta.
-@@ -579,6 +582,9 @@
+@@ -579,6 +582,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
@@ -24,6 +26,8 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/azure-openai-responses.js b/dist/api/azure-openai-responses.js
+index 6bd8924..875b1bc 100644
 --- a/dist/api/azure-openai-responses.js
 +++ b/dist/api/azure-openai-responses.js
 @@ -1,6 +1,6 @@
@@ -34,7 +38,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { headersToRecord } from "../utils/headers.js";
  import { getProviderEnvValue } from "../utils/provider-env.js";
-@@ -107,6 +107,9 @@
+@@ -107,6 +107,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatAzureOpenAIError(error);
@@ -44,9 +48,11 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/bedrock-converse-stream.js b/dist/api/bedrock-converse-stream.js
+index 5201c71..ccb729c 100644
 --- a/dist/api/bedrock-converse-stream.js
 +++ b/dist/api/bedrock-converse-stream.js
-@@ -3,7 +3,7 @@
+@@ -3,7 +3,7 @@ import { NodeHttpHandler } from "@smithy/node-http-handler";
  import { HttpProxyAgent } from "http-proxy-agent";
  import { HttpsProxyAgent } from "https-proxy-agent";
  import { calculateCost } from "../models.js";
@@ -55,7 +61,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { providerHeadersToRecord } from "../utils/headers.js";
  import { parseStreamingJson } from "../utils/json-parse.js";
-@@ -164,6 +164,8 @@
+@@ -164,6 +164,8 @@ export const stream = (model, context, options = {}) => {
                      if (errorMessage) {
                          output.errorMessage = errorMessage;
                      }
@@ -64,7 +70,7 @@
                  }
                  else if (item.metadata) {
                      handleMetadata(item.metadata, model, output);
-@@ -201,6 +203,9 @@
+@@ -201,6 +203,9 @@ export const stream = (model, context, options = {}) => {
              }
              output.stopReason = options.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatBedrockError(error);
@@ -74,6 +80,8 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/google-generative-ai.js b/dist/api/google-generative-ai.js
+index ea76487..56b0fb7 100644
 --- a/dist/api/google-generative-ai.js
 +++ b/dist/api/google-generative-ai.js
 @@ -1,6 +1,6 @@
@@ -84,7 +92,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { providerHeadersToRecord } from "../utils/headers.js";
  import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-@@ -212,6 +212,9 @@
+@@ -212,6 +212,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -94,6 +102,8 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/google-vertex.js b/dist/api/google-vertex.js
+index f59fef7..2a9e74a 100644
 --- a/dist/api/google-vertex.js
 +++ b/dist/api/google-vertex.js
 @@ -1,6 +1,6 @@
@@ -104,7 +114,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { providerHeadersToRecord } from "../utils/headers.js";
  import { getProviderEnvValue } from "../utils/provider-env.js";
-@@ -221,6 +221,9 @@
+@@ -221,6 +221,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -114,6 +124,8 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
+index 093ab81..64edbbf 100644
 --- a/dist/api/mistral-conversations.js
 +++ b/dist/api/mistral-conversations.js
 @@ -1,3 +1,4 @@
@@ -121,7 +133,7 @@
  import { Mistral } from "@mistralai/mistralai";
  import { calculateCost, clampThinkingLevel } from "../models.js";
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
-@@ -52,6 +53,9 @@
+@@ -52,6 +53,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatMistralError(error);
@@ -131,9 +143,11 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index 705d9aa..edb43bb 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -11,7 +11,7 @@
+@@ -11,7 +11,7 @@ import { registerSessionResourceCleanup } from "../session-resources.js";
  import { combineAbortSignals } from "../utils/abort-signals.js";
  import { splitDeferredTools } from "../utils/deferred-tools.js";
  import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic, formatThrownValue, } from "../utils/diagnostics.js";
@@ -142,7 +156,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { headersToRecord } from "../utils/headers.js";
  import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.js";
-@@ -340,6 +340,9 @@
+@@ -340,6 +340,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -152,6 +166,8 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index ed81baa..ad2800a 100644
 --- a/dist/api/openai-completions.js
 +++ b/dist/api/openai-completions.js
 @@ -1,6 +1,6 @@
@@ -162,7 +178,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { shortHash } from "../utils/hash.js";
  import { headersToRecord } from "../utils/headers.js";
-@@ -331,6 +331,8 @@
+@@ -331,6 +331,8 @@ export const stream = (model, context, options) => {
                      if (finishReasonResult.errorMessage) {
                          output.errorMessage = finishReasonResult.errorMessage;
                      }
@@ -171,7 +187,7 @@
                      hasFinishReason = true;
                  }
                  if (choice.delta) {
-@@ -450,6 +452,9 @@
+@@ -450,6 +452,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatProviderError(normalizeProviderError(error));
@@ -181,6 +197,8 @@
              // Some providers via OpenRouter give additional information in this field.
              // normalizeProviderError already stringifies the parsed body (error.error)
              // into errorMessage, so only append the raw metadata when it is not already
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index cbc70c2..07558fa 100644
 --- a/dist/api/openai-responses.js
 +++ b/dist/api/openai-responses.js
 @@ -1,7 +1,7 @@
@@ -192,7 +210,7 @@
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
  import { headersToRecord } from "../utils/headers.js";
  import { getProviderEnvValue } from "../utils/provider-env.js";
-@@ -136,6 +136,9 @@
+@@ -136,6 +136,9 @@ export const stream = (model, context, options) => {
              }
              output.stopReason = options?.signal?.aborted ? "aborted" : "error";
              output.errorMessage = formatOpenAIResponsesError(error);
@@ -202,9 +220,11 @@
              stream.push({ type: "error", reason: output.stopReason, error: output });
              stream.end();
          }
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 0a1b769..7a2a2a4 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -288,8 +288,19 @@
+@@ -288,8 +288,20 @@ export interface AssistantMessage {
      usage: Usage;
      stopReason: StopReason;
      errorMessage?: string;
@@ -220,13 +240,16 @@
 +    type?: string;
 +    code?: string;
 +    body?: unknown;
++    retryAfterMs?: number;
 +}
  export interface ToolResultMessage<TDetails = any> {
      role: "toolResult";
      toolCallId: string;
+diff --git a/dist/utils/error-body.d.ts b/dist/utils/error-body.d.ts
+index b6c6730..e3adb0e 100644
 --- a/dist/utils/error-body.d.ts
 +++ b/dist/utils/error-body.d.ts
-@@ -19,6 +19,9 @@
+@@ -19,6 +19,9 @@ export declare function normalizeProviderError(error: unknown): NormalizedProvid
   * - no prefix: `"<status>: <body>"`
   * - prefix:    `"<prefix> (<status>): <body>"`
   */
@@ -236,13 +259,16 @@
  export declare function formatProviderError(norm: NormalizedProviderError, prefix?: string): string;
  export declare function truncateErrorText(text: string, maxChars: number): string;
  export declare function safeJsonStringify(value: unknown): string;
+diff --git a/dist/utils/error-body.js b/dist/utils/error-body.js
+index e92f49d..317cd97 100644
 --- a/dist/utils/error-body.js
 +++ b/dist/utils/error-body.js
-@@ -29,6 +29,61 @@
+@@ -28,6 +28,77 @@ export function normalizeProviderError(error) {
+         messageCarriesBody,
      };
  }
- /**
-+ * qm patch (vendored-pi-ai-0.82.0-qm.1): structured copy of a provider HTTP
++/**
++ * qm patch (vendored-pi-ai-0.82.0-qm.2): structured copy of a provider HTTP
 + * failure, kept next to errorMessage so callers can classify failures without
 + * parsing display text. Returns undefined when the error carries neither an
 + * HTTP status nor a response body (e.g. a plain network or abort error).
@@ -267,7 +293,23 @@
 +        result.code = code;
 +    if (body !== undefined)
 +        result.body = body;
++    const retryAfterMs = extractRetryAfterMs(sdkError.headers);
++    if (retryAfterMs !== undefined)
++        result.retryAfterMs = retryAfterMs;
 +    return result;
++}
++function extractRetryAfterMs(headers) {
++    if (!headers || typeof headers.get !== "function")
++        return undefined;
++    const millis = Number.parseFloat(headers.get("retry-after-ms") ?? "");
++    if (Number.isFinite(millis) && millis >= 0)
++        return Math.round(millis);
++    const retryAfter = headers.get("retry-after");
++    if (!retryAfter)
++        return undefined;
++    const seconds = Number.parseFloat(retryAfter);
++    const delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
++    return Number.isFinite(delayMs) && delayMs >= 0 ? Math.round(delayMs) : undefined;
 +}
 +function pickBodyValue(error) {
 +    if (isNonEmptyObject(error.error))
@@ -296,7 +338,6 @@
 +    }
 +    return undefined;
 +}
-+/**
+ /**
   * Probe the HTTP status, first numeric hit wins, in SDK-field order:
   * `statusCode` (Mistral) → `status` (`openai`, `@google/genai`) →
-  * `$metadata.httpStatusCode` (Bedrock) → `$response.statusCode` (Bedrock).

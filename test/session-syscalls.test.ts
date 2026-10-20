@@ -1904,3 +1904,36 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   }
   assert.equal(started.length, 4);
 });
+
+test("a failed visibility lookup leaves the message pending and records why", async () => {
+  const r = await rig();
+  const opened = await r.syscallsFor(r.room).open({ task: "dig", name: "digger" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const { lease } = await r.sessions.acquireLease(child.id);
+  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found it" }, scopeLabel: scope });
+  await r.sessions.releaseLease(lease!);
+  const { run } = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, origin: { kind: "direct" }, text: "parent task" },
+  });
+  const claimed = await r.runs.claimById(run.id, "parent-worker", 30_000);
+  await r.runs.complete(run.id, claimed!.leaseToken!, { status: "ok", reply: "ready" });
+  const sent = await r.syscallsFor(child).write({ target: "parent", text: "found it" });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  const visibleEntries = r.sessions.visibleEntries.bind(r.sessions);
+  r.sessions.visibleEntries = async () => {
+    throw new Error("connection terminated unexpectedly");
+  };
+  const warned: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => warned.push(args.join(" "));
+  try {
+    assert.deepEqual(await r.syscallsFor(r.room).receive!(), []);
+  } finally {
+    console.warn = original;
+  }
+  assert.ok(warned.some((line) => line.includes("connection terminated unexpectedly")));
+  r.sessions.visibleEntries = visibleEntries;
+  assert.equal((await r.syscallsFor(r.room).receive!()).length, 1, "the message is still pending");
+});

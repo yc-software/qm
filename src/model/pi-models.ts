@@ -1,9 +1,9 @@
 import { gatewayModelCatalog, gatewayModelsVersion, isGatewayModelId, resolveGatewayModel } from "./gateway-models.ts";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import { parseModelOverlay, type ModelOverlay } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { customModelCatalog, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -54,6 +54,12 @@ export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "co
   );
 }
 
+function piSupportsEffort(model: Model<Api>, level: string): boolean {
+  if (level === "auto") return true;
+  const supported: readonly string[] = getSupportedThinkingLevels(model);
+  return supported.includes(level === "ultracode" ? "max" : level);
+}
+
 export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
   const model = modelId ? resolveModel(modelId) : undefined;
   return THINKING_LEVELS.filter((level) => {
@@ -61,7 +67,7 @@ export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string)
       return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
     if (level === "default")
       return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
+    if (harnessId === "pi") return !model || piSupportsEffort(model, level);
     if (harnessId === "claude") return level !== "ultracode";
     if (harnessId === "codex") return level !== "max" && level !== "ultracode";
     return level === "auto";
@@ -452,6 +458,7 @@ export function defaultWebuiModelIds(): readonly string[] {
     ...DEFAULT_WEBUI_MODEL_IDS,
     ...gatewayModelCatalog(true).map((m) => m.id),
     ...[...overlays.values()].filter((m) => m.webui).map((m) => m.id),
+    ...customModelCatalog().map((m) => m.id),
   ];
 }
 
@@ -475,11 +482,19 @@ export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }>
   (m) => m.base,
 ).map((m) => ({ id: m.id, name: m.name }));
 
+function knownCost(cost: PiModel["cost"]): PiModel["cost"] {
+  return Object.fromEntries(
+    Object.entries(cost).map(([key, rate]) => [key, typeof rate === "number" && rate < 0 ? 0 : rate]),
+  ) as PiModel["cost"];
+}
+
 function builtinModel(id: string): PiModel | undefined {
   for (const provider of MODEL_PROVIDERS) {
     const m = getModel(provider, id);
     if (!m) continue;
-    return m;
+    return Object.values(m.cost).some((rate) => typeof rate === "number" && rate < 0)
+      ? { ...m, cost: knownCost(m.cost) }
+      : m;
   }
   return undefined;
 }
@@ -491,7 +506,7 @@ function cloneModel(model: PiModel, id: string, name: string, overrides: Partial
     id,
     name,
     input: [...model.input],
-    cost: structuredClone(overrides.cost ?? model.cost),
+    cost: knownCost(structuredClone(overrides.cost ?? model.cost)),
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.thinkingLevelMap || overrides.thinkingLevelMap
       ? { thinkingLevelMap: { ...model.thinkingLevelMap, ...overrides.thinkingLevelMap } }
@@ -576,7 +591,11 @@ export function resolveBuiltinModel(id: string): PiModel | undefined {
 }
 
 function resolveBaseModel(id: string): PiModel | undefined {
-  if (isGatewayModelId(id)) return resolveGatewayModel(id);
+  if (isGatewayModelId(id)) {
+    const model = resolveGatewayModel(id);
+    const native = model ? resolveBuiltinModel(model.name) : undefined;
+    return model && native?.thinkingLevelMap ? { ...model, thinkingLevelMap: native.thinkingLevelMap } : model;
+  }
   if (unavailableOverlays.has(id)) return undefined;
   const builtin = resolveBuiltinModel(id);
   if (builtin) return builtin;
@@ -631,7 +650,8 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
   if (id && modelRequestOverrides(id)) return harness === "pi" || harness === "mock";
-  if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));
+  if (id && isGatewayModelId(id))
+    return (harness === "pi" || harness === "opencode" || harness === "mock") && Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
   if (overlays.has(id)) return harness === "pi" || harness === "mock";
   if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id))
@@ -694,7 +714,12 @@ export function modelProviderAvailabilityFor(
   managedKeys: ModelProviderAvailability = configKeys,
 ): ModelProviderAvailability {
   if (harness === "pi") return managedKeys;
-  if (harness === "opencode") return { ...providerFlags(configKeys), openrouter: false };
+  if (harness === "opencode")
+    return {
+      ...providerFlags(configKeys),
+      openrouter: false,
+      ...(managedKeys.modelIds ? { modelIds: managedKeys.modelIds } : {}),
+    };
   if (harness === "codex")
     return { ...providerFlags(configKeys), openai: configKeys.openai || Boolean(configKeys.codexOAuth) };
   return ALL_PROVIDERS_AVAILABLE;
@@ -715,6 +740,18 @@ export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
   const model = resolveModel(id, useOrgEndpoints);
   if (!model) throw new Error(`Unsupported model: ${id}`);
   return model;
+}
+
+export const FAST_COST_MULTIPLIER = 2;
+
+export function scaleCost<T>(cost: T, factor: number): T {
+  if (!cost || typeof cost !== "object") return cost;
+  const out: Record<string, unknown> = { ...(cost as Record<string, unknown>) };
+  for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
+    if (typeof out[key] === "number") out[key] = (out[key] as number) * factor;
+  }
+  if (Array.isArray(out.tiers)) out.tiers = out.tiers.map((t) => scaleCost(t, factor));
+  return out as T;
 }
 
 export function modelSupportsFastMode(modelId: string | undefined): boolean {

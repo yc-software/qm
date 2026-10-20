@@ -18,6 +18,7 @@ import {
   codexChildEnv,
   codexProviderFailure,
   codexUsageTotals,
+  priceCodexUsage,
   codexChildToolAllowed,
   codexReasoningEffort,
   codexReplayCallId,
@@ -143,6 +144,8 @@ rl.on("line", (line) => {
     return send({ id: "finish-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "finish-1", tool: "finish_silently", arguments: { reason: "nothing new" } } });
   }
   if (msg.id === "finish-call" && msg.result) {
+    send({ method: "item/agentMessage/delta", params: { threadId: "thread-stop", turnId: "turn-stop", itemId: "late-msg", delta: "LEAK" } });
+    send({ method: "item/completed", params: { threadId: "thread-stop", turnId: "turn-stop", item: { id: "late-msg", type: "agentMessage", text: "LEAK", phase: "commentary" } } });
     lateTool = setTimeout(() => send({ id: "late-call", method: "item/tool/call", params: { threadId: "thread-stop", turnId: "turn-stop", callId: "late-1", tool: "history", arguments: { query: "must not run" } } }), 25);
     return;
   }
@@ -999,9 +1002,11 @@ for (const surfaceTools of [false, true]) {
       rmSync(dir, { recursive: true, force: true });
     });
     const entries: SessionEntry[] = [];
+    const deltas: string[] = [];
     const scope = { kind: "org", id: "test" } as unknown as ScopeId;
     const result = await harness.turns.runTurn({
       session: { id: "terminal-tool" } as Session,
+      onDelta: (delta) => deltas.push(delta),
       input: "poll",
       systemPrompt: "finish silently",
       history: [],
@@ -1025,6 +1030,8 @@ for (const surfaceTools of [false, true]) {
 
     assert.equal(result.silent, true);
     assert.notEqual(result.reply, "BAD");
+    assert.deepEqual(deltas, []);
+    assert.equal(JSON.stringify(entries).includes("LEAK"), false);
     assert.equal(
       entries.some((entry) => entry.type === "assistant"),
       false,
@@ -1495,11 +1502,122 @@ test("Codex reads cumulative usage totals off the app-server's token notificatio
     codexUsageTotals({
       tokenUsage: { total: { inputTokens: 400, outputTokens: 90, cachedInputTokens: 120 }, last: { inputTokens: 40 } },
     }),
-    { input: 400, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 },
+    { input: 280, output: 90, cacheRead: 120, cacheWrite: 0, totalTokens: 490, costUsd: 0 },
   );
   assert.equal(codexUsageTotals({ tokenUsage: { last: { inputTokens: 40 } } }), null);
   assert.equal(codexUsageTotals(null), null);
 });
+
+test("Codex prices API-key turns from the model registry, including long-context and fast tiers", () => {
+  const usage = codexUsageTotals({
+    tokenUsage: { total: { inputTokens: 1_000_000, outputTokens: 100_000, cachedInputTokens: 400_000 } },
+  })!;
+  assert.equal(usage.input, 600_000);
+  assert.ok(Math.abs(priceCodexUsage(usage, "gpt-5.6-sol", false).costUsd - 8.12) < 1e-9);
+  assert.ok(Math.abs(priceCodexUsage(usage, "gpt-5.6-sol", true).costUsd - 16.24) < 1e-9);
+  assert.equal(priceCodexUsage(usage, "not-a-registry-model", false).costUsd, 0);
+});
+
+function usageCodexBinary(dir: string, updates: unknown[]): string {
+  const path = join(dir, "usage-codex");
+  writeFileSync(
+    path,
+    `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+const updates = ${JSON.stringify(updates)};
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === "thread/start") return send({ id: msg.id, result: { thread: { id: "thread-1" }, model: "gpt-5.6-sol" } });
+  if (msg.method === "turn/start") {
+    send({ id: msg.id, result: { turn: { id: "turn-1", status: "inProgress", items: [] } } });
+    for (const tokenUsage of updates) send({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage } });
+    send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "item-1", text: "done", phase: "final_answer" } } });
+    return send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } });
+  }
+  if (msg.id !== undefined) send({ id: msg.id, result: msg.method === "initialize" ? { userAgent: "fake" } : {} });
+});
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function usageSnapshots(calls: Array<{ input: number; cached: number; output: number }>): unknown[] {
+  const total = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  return calls.map((call) => {
+    const last = {
+      inputTokens: call.input,
+      cachedInputTokens: call.cached,
+      outputTokens: call.output,
+      totalTokens: call.input + call.output,
+    };
+    total.inputTokens += last.inputTokens;
+    total.cachedInputTokens += last.cachedInputTokens;
+    total.outputTokens += last.outputTokens;
+    total.totalTokens += last.totalTokens;
+    return { total: { ...total }, last, modelContextWindow: 400_000 };
+  });
+}
+
+for (const scenario of [
+  {
+    name: "many small calls stay on short-context rates even when the turn passes 272k",
+    calls: Array.from({ length: 8 }, () => ({ input: 50_000, cached: 40_000, output: 1_000 })),
+    duplicateAt: 3,
+    fast: false,
+    costUsd: 0.608,
+    tokens: { input: 80_000, cacheRead: 320_000, output: 8_000 },
+  },
+  {
+    name: "fast mode doubles the per-call price",
+    calls: Array.from({ length: 8 }, () => ({ input: 50_000, cached: 40_000, output: 1_000 })),
+    duplicateAt: 0,
+    fast: true,
+    costUsd: 1.216,
+    tokens: { input: 80_000, cacheRead: 320_000, output: 8_000 },
+  },
+  {
+    name: "one call above 272k uses long-context rates",
+    calls: [{ input: 300_000, cached: 0, output: 1_000 }],
+    duplicateAt: -1,
+    fast: false,
+    costUsd: 2.43,
+    tokens: { input: 300_000, cacheRead: 0, output: 1_000 },
+  },
+]) {
+  test(`Codex API-key billing: ${scenario.name}`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "qm-codex-billing-test-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const snapshots = usageSnapshots(scenario.calls);
+    if (scenario.duplicateAt >= 0) snapshots.splice(scenario.duplicateAt + 1, 0, snapshots[scenario.duplicateAt]);
+    const harness = createCodexHarness({
+      binaryPath: usageCodexBinary(dir, snapshots),
+      env: { ...testHarnessEnv(dir), OPENAI_API_KEY: "sk-test" },
+      turnWallClockMs: 5_000,
+    });
+    t.after(async () => await harness.turns.close?.());
+    const records: HarnessLlmRequestRecord[] = [];
+    const scope = { kind: "org", id: "test" } as unknown as ScopeId;
+    await harness.turns.runTurn({
+      session: { id: "billing" } as Session,
+      input: "hi",
+      systemPrompt: "be concise",
+      history: [],
+      tools: {} as HarnessTurnInput["tools"],
+      scopeLabel: scope,
+      orgScopeId: scope,
+      runtime: { modelId: "gpt-5.6-sol", fastMode: scenario.fast },
+      emit: async (entry) => ({ ...entry, sessionId: "billing", seq: 1, createdAt: Date.now() }) as SessionEntry,
+      recordModelCall: () => {},
+      recordLlmRequest: (rec) => void records.push(rec),
+    } as HarnessTurnInput);
+    const usage = records.at(-1)?.usage;
+    assert.ok(usage);
+    assert.ok(Math.abs(usage.costUsd - scenario.costUsd) < 1e-9, `costUsd ${usage.costUsd}`);
+    assert.deepEqual({ input: usage.input, cacheRead: usage.cacheRead, output: usage.output }, scenario.tokens);
+  });
+}
 
 function failingProviderCodexBinary(dir: string, mode: "turnFailed" | "startRejected"): string {
   const path = join(dir, `failing-codex-${mode}`);
@@ -1670,7 +1788,8 @@ test("Codex records one llm row per turn carrying real timings and usage, even w
   };
   t.after(() => rmSync(dir, { recursive: true, force: true }));
 
-  await runWith(fakeCodexBinary(dir), "telemetry-ok");
+  const result = await runWith(fakeCodexBinary(dir), "telemetry-ok");
+  assert.deepEqual(result.cacheUsage, { cacheRead: 0, cacheWrite: 0, uncachedInput: 320 });
   assert.equal(records.length, 1);
   const ok = records[0]!;
   assert.equal(ok.turnSeq, 4);

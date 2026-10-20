@@ -1625,7 +1625,13 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, url } = c;
       const q = (url.searchParams.get("q") ?? "").trim().slice(0, 80);
       if (!q) return json(res, 400, { error: "bad_request", message: "q required" });
-      return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}`);
+      const exclude = url.searchParams
+        .getAll("exclude")
+        .filter((id) => id && id.length <= 200)
+        .slice(0, 500)
+        .map((id) => `&exclude=${encodeURIComponent(id)}`)
+        .join("");
+      return relayCore(res, "GET", `/v1/directory/resolve?q=${encodeURIComponent(q)}${exclude}`);
     },
   },
   {
@@ -2132,18 +2138,14 @@ const apiRoutes: readonly WebRoute[] = [
       if (!p) return;
       if (typeof p.content !== "string")
         return json(res, 400, { error: "bad_request", message: "content must be a string" });
-      const content = p.content;
-      const revision =
-        typeof p.revision === "string"
-          ? p.revision
-          : await coreFetch("GET", `/v1/memory?principalId=${encodeURIComponent(user)}`).then((head) => {
-              try {
-                return String((JSON.parse(head.text) as { revision?: unknown }).revision ?? "");
-              } catch {
-                return "";
-              }
-            });
-      return relayCore(res, "PUT", "/v1/memory", JSON.stringify({ principalId: user, content, revision }));
+      if (typeof p.revision !== "string")
+        return json(res, 428, { error: "revision_required", message: "revision (from GET /api/memory) required" });
+      return relayCore(
+        res,
+        "PUT",
+        "/v1/memory",
+        JSON.stringify({ principalId: user, content: p.content, revision: p.revision }),
+      );
     },
   },
   {

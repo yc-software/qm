@@ -755,12 +755,13 @@ export function buildApp(
   let skillsReady: Promise<void>;
   if (config.seedSkills) {
     const installCatalogs = async (): Promise<void> => {
-      await installSeedSkills(skills, { dirs: [config.skillsSeedDir], scopeId: orgScope });
+      await installSeedSkills(skills, { dirs: [config.skillsSeedDir], scopeId: orgScope, prune: true });
       await installSeedSkills(skills, {
         dirs: config.pluginSkillDirs.filter((dir) => !layerSkillsDir || resolve(dir) !== layerSkillsDir),
         scopeId: orgScope,
         createdBy: "system:plugin-skills",
         reviewer: "system:plugin-skills-reviewer",
+        prune: true,
       });
     };
     skillsReady = Promise.all([
@@ -1364,7 +1365,11 @@ export function buildApp(
   };
   let companyCodexAuthStore: CodexAuthStore | undefined;
   if (config.codexAuthCredential && keychain)
-    companyCodexAuthStore = keychainCodexAuthStore({ keychain, credentialId: config.codexAuthCredential });
+    companyCodexAuthStore = keychainCodexAuthStore({
+      keychain,
+      credentialId: config.codexAuthCredential,
+      lock: advisoryLock,
+    });
   else if (config.codexAuthFile) companyCodexAuthStore = fileCodexAuthStore(config.codexAuthFile);
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> => {
     const keys: ProviderKeys = await resolveModelProviderKeys();
@@ -1385,7 +1390,7 @@ export function buildApp(
       harness,
       configuredModelForHarness(config, harness),
       baseModelProviders(config) ??
-        (harness === "pi" && gatewayTransport
+        ((harness === "pi" || harness === "opencode") && gatewayTransport
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
@@ -1409,6 +1414,7 @@ export function buildApp(
         signals: runSignals,
         tasks,
         mcpTools,
+        ...(gatewayTransport ? { modelGateway: gatewayTransport } : {}),
         resolveCustomProviders: async () => {
           const enabled = await customProviders.enabled();
           return Promise.all(

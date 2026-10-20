@@ -97,18 +97,21 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   const remote = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    if (req.method !== "POST") return void res.writeHead(405).end();
     const rpc = JSON.parse(Buffer.concat(chunks).toString());
+    if (rpc.id === undefined) return void res.writeHead(202).end();
     if (rpc.method === "tools/call") calls++;
+    const results: Record<string, unknown> = {
+      initialize: {
+        protocolVersion: rpc.params?.protocolVersion,
+        capabilities: { tools: {} },
+        serverInfo: { name: "crm", version: "1" },
+      },
+      "tools/list": { tools: [{ name: "identity", inputSchema: { type: "object" } }] },
+      "tools/call": { content: [{ type: "text", text: req.headers.authorization }] },
+    };
     res.setHeader("content-type", "application/json");
-    res.end(
-      JSON.stringify({
-        id: rpc.id,
-        result:
-          rpc.method === "tools/list"
-            ? { tools: [{ name: "identity", inputSchema: { type: "object" } }] }
-            : { content: [{ type: "text", text: req.headers.authorization }] },
-      }),
-    );
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: results[rpc.method] }));
   });
   remote.listen(0, "127.0.0.1");
   await once(remote, "listening");

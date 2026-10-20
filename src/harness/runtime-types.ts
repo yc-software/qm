@@ -1,5 +1,6 @@
 import type { RuntimeChoice } from "./harness.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
+import type { ProviderTurnError } from "../core/turn-error.ts";
 
 export interface RuntimeRequest {
   action: "get" | "set" | "inherit";
@@ -15,7 +16,7 @@ interface RuntimeHandoff {
   lifetime: "task" | "scope";
 }
 
-export type HarnessHandoff = RuntimeHandoff | { context: "recent" };
+export type HarnessHandoff = RuntimeHandoff | { context: "recent"; overflow?: ProviderTurnError };
 
 export type RuntimeResult =
   | { ok: false; error: string; message?: string; candidates?: string[] }

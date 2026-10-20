@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Grant, GrantedHandle, Principal, ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
 import { parseRef, refPrefix } from "./resource-ref.ts";
@@ -15,13 +16,30 @@ type ScopeEntitlement = (p: Principal, scope: ScopeId, sessionScopeId: ScopeId, 
 
 export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy?: string) => Promise<boolean>;
 
-function toHandle(g: Grant): GrantedHandle {
-  return {
-    handlePath: `shared/${basename(g.ref)}`,
-    ownerScopeId: g.ownerScopeId,
-    ownerPath: g.ref,
-    permission: g.permission,
-  };
+function toHandles(grants: readonly Grant[]): GrantedHandle[] {
+  const sources = new Map<string, Set<string>>();
+  for (const g of grants) {
+    const name = basename(g.ref);
+    const set = sources.get(name) ?? new Set<string>();
+    set.add(`${g.ownerScopeId}\0${g.ref}`);
+    sources.set(name, set);
+  }
+  return grants.map((g) => {
+    const name = basename(g.ref);
+    const shared = (sources.get(name)?.size ?? 0) > 1;
+    return {
+      handlePath: `shared/${shared ? distinctName(name, `${g.ownerScopeId}\0${g.ref}`) : name}`,
+      ownerScopeId: g.ownerScopeId,
+      ownerPath: g.ref,
+      permission: g.permission,
+    };
+  });
+}
+
+function distinctName(name: string, source: string): string {
+  const tag = createHash("sha256").update(source).digest("hex").slice(0, 8);
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}-${tag}${name.slice(dot)}` : `${name}-${tag}`;
 }
 
 function ownerOf(scopeId: ScopeId): string | null {
@@ -182,21 +200,21 @@ export function createAclStore(
     },
     async handlesFor(scopeIds) {
       const set = new Set(scopeIds);
-      return (await persist.all()).filter((g) => isFileGrant(g) && set.has(g.granteeScopeId)).map(toHandle);
+      return toHandles((await persist.all()).filter((g) => isFileGrant(g) && set.has(g.granteeScopeId)));
     },
     async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const reaches = (p: Principal, g: Grant) =>
         entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
         entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return (await persist.all())
-        .filter(
+      return toHandles(
+        (await persist.all()).filter(
           (g) =>
             isFileGrant(g) &&
             audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
             audience.every((p) => reaches(p, g)),
-        )
-        .map(toHandle);
+        ),
+      );
     },
     async grantsFor(ownerScopeId, ref) {
       return (await persist.all()).filter((g) => g.ownerScopeId === ownerScopeId && g.ref === ref);
