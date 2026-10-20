@@ -207,15 +207,22 @@ test("field enumeration failures preserve the message and stack", () => {
   assert.equal(errDetail(hostile), errDetail(error));
 });
 
-test("error fields redact credential-shaped keys, including nested request headers", () => {
+test("error fields redact credentials in nested keys, raw request headers and urls", () => {
   const error = Object.assign(new Error("A request error occurred: connect ECONNREFUSED"), {
     code: "slack_webapi_request_error",
     token: "xoxb-top-level",
-    original: { config: { headers: { Authorization: "Bearer xoxb-nested", Accept: "application/json" } } },
+    original: {
+      config: {
+        url: "https://slack.test/api/chat.delete?token=xoxb-in-url",
+        headers: { Authorization: "Bearer xoxb-nested", "x-api-key": "k-header", Accept: "application/json" },
+      },
+      request: { _header: "POST /api/chat.delete HTTP/1.1\r\nAuthorization: Bearer xoxb-raw\r\n\r\n" },
+      credentials: { accessKeyId: "AKIAEXAMPLE", secretAccessKey: "s3cr3t", sessionToken: "sess" },
+    },
   });
   const detail = errDetail(error);
-  assert.ok(!detail.includes("xoxb"));
-  assert.match(detail, /token=\[redacted\]/);
-  assert.match(detail, /"Authorization":"\[redacted\]","Accept":"application\/json"/);
+  for (const secret of ["xoxb", "k-header", "s3cr3t", 'sess"']) assert.ok(!detail.includes(secret), secret);
   assert.match(detail, /code=slack_webapi_request_error/);
+  assert.match(detail, /"Accept":"application\/json"/);
+  assert.match(detail, /connect ECONNREFUSED/);
 });

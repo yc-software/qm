@@ -1,5 +1,5 @@
 import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
-import { redactSecrets } from "../../harness/redact-secrets.ts";
+import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { errMessage } from "../../util/errors.ts";
 import { personIds, samePerson } from "../../directory/person.ts";
 import { composioUserIds, credential, request as composioRequest } from "./composio.ts";

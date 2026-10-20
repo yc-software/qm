@@ -1,4 +1,21 @@
-import { isSensitiveKey } from "../../plugins/chassis/src/sensitive-keys.ts";
+const SENSITIVE_KEY_SUFFIXES = [
+  "token",
+  "apikey",
+  "secret",
+  "accesskey",
+  "privatekey",
+  "credential",
+  "credentials",
+  "password",
+  "passphrase",
+  "authorization",
+  "cookie",
+];
+
+export function isSensitiveKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+  return SENSITIVE_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
 
 function redactStructuredDiagnosticsValue(value: unknown, sensitive = false): unknown {
   if (sensitive) return "[redacted]";

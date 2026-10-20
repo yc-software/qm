@@ -1,4 +1,4 @@
-import { isSensitiveKey } from "./sensitive-keys.ts";
+import { isSensitiveKey, redactSecrets } from "./redact-secrets.ts";
 
 export function errMessage(e: unknown, fallback?: string): string {
   if (e instanceof Error) return e.message;
@@ -60,7 +60,7 @@ function errorFields(e: unknown): string {
                   return item;
                 })
               : String(value);
-          return `${key}=${descriptor.get ? "[Getter]" : text}`;
+          return `${key}=${descriptor.get ? "[Getter]" : redactSecrets(text)}`;
         } catch {
           return `${key}=[Unserializable]`;
         }

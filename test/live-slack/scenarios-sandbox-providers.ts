@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { SandboxBackendName } from "../../src/sandbox/sandbox-routing.ts";
-import { redactSecrets } from "../../src/harness/redact-secrets.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../src/util/objects.ts";
 import { headSlice, tailSlice } from "../../src/util/text.ts";
 import type { Scenario } from "./harness.ts";

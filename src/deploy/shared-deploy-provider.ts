@@ -2,7 +2,7 @@ import { LRUCache } from "lru-cache";
 import type { ExecResult } from "../sandbox/sandbox.ts";
 import { shq } from "../util/shell.ts";
 import { errMessage, swallow } from "../util/errors.ts";
-import { redactSecrets } from "../harness/redact-secrets.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
 import type { Deployment } from "./deploy-store.ts";
 import { normalizeRelPath, readTree } from "./deploy-fs.ts";
