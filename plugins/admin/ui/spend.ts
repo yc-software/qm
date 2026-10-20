@@ -44,11 +44,7 @@ const CRON_COLUMNS: Array<[string, string]> = [
 ];
 
 const rowName = (row: any) =>
-  "source" in row
-    ? row.label
-    : "model" in row
-      ? row.model || "Unknown model"
-      : row.displayName || row.principalId || row.scopeId || "";
+  "model" in row ? row.model || "Unknown model" : row.displayName || row.principalId || row.scopeId || "";
 
 const fmtUsd = (n: any) => "$" + (Number(n) || 0).toFixed(2);
 
@@ -217,7 +213,7 @@ export class SpendView {
   sourceCells(row: any) {
     const s = this.services;
     return [
-      { text: row.label },
+      { text: row.displayName },
       { text: fmtUsd(row.costUsd), cls: "num" },
       { text: row.share == null ? "n/a" : s.fmtPct(row.share), cls: "num" },
       { text: Number(row.calls || 0).toLocaleString(), cls: "num" },
@@ -272,13 +268,13 @@ export class SpendView {
         const totals = this.data.org?.background?.sources?.[source] || {};
         return {
           source,
-          label,
+          displayName: label,
           costUsd: Number(totals.costUsd) || 0,
           calls: Number(totals.calls) || 0,
           tokens: Number(totals.tokens) || 0,
           share: backgroundTotal > 0 ? (Number(totals.costUsd) || 0) / backgroundTotal : null,
         };
-      }).filter((row) => row.label.toLowerCase().includes(needle)),
+      }).filter((row) => row.costUsd > 0 && row.displayName.toLowerCase().includes(needle)),
     );
     const models = sorted((this.data.models || []).filter((row: any) => rowName(row).toLowerCase().includes(needle)));
     const series = this.data.series || [];
@@ -342,7 +338,7 @@ export class SpendView {
         table(
           this.header(SOURCE_COLUMNS),
           sources.map((row: any) => this.sourceCells(row)),
-          "No sources match.",
+          backgroundTotal > 0 ? "No sources match." : "No background spend in this window.",
         ),
       )}${card(
         "Spend per cron",
