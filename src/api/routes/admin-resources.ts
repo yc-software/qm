@@ -1174,9 +1174,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(delivery === "env" ? { envKey } : {}),
         host: delivery === "env" ? "" : host,
         ...(typeof b.secret === "string" && b.secret ? { secret: b.secret } : {}),
-        ...(delivery === "broker" &&
-        effectiveInjection &&
-        (effectiveInjection.header || effectiveInjection.scheme || effectiveInjection.actor !== undefined)
+        ...(delivery === "broker" && effectiveInjection && Object.keys(effectiveInjection).length
           ? { injection: effectiveInjection }
           : {}),
         ...(delivery === "broker" ? brokerMethods : {}),

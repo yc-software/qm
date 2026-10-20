@@ -101,7 +101,7 @@ const getCfg = async (base: string) =>
       enabled: boolean;
       grantees: string[];
       updatedAt: number;
-      injection?: { header?: string; scheme?: string; actor?: boolean };
+      injection?: { header?: string; scheme?: string; actor?: boolean; headers?: Record<string, string> };
       allowedMethods?: string[];
       allowedPathPrefixes?: string[];
     }>;
@@ -334,6 +334,20 @@ test("partial credential updates preserve capability lists while explicit empty 
     );
     loaded = (await getCfg(srv.base)).serviceCredentials[0]!;
     assert.equal(loaded.enabled, false, "omitting enabled preserves a disabled credential");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a credential whose injection only adds fixed headers keeps them", async () => {
+  const srv = start();
+  try {
+    const injection = { headers: { "x-api-version": "2025-11-01" } };
+    assert.equal(
+      (await putCred(srv.base, { slug: "k", name: "K", secret: "s", host: "h.example", injection })).status,
+      200,
+    );
+    assert.deepEqual((await getCfg(srv.base)).serviceCredentials[0]!.injection, injection);
   } finally {
     await srv.close();
   }
