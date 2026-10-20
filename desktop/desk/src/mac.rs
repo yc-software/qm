@@ -514,6 +514,7 @@ fn send_key_events(pid: i32, steps: Vec<crate::keys::Event>, text: Option<&str>,
     let prepared = steps.into_iter().map(|step| key_event(step, text)).collect::<Result<Vec<_>, _>>()?;
     let mut failure = None;
     let mut releasing = false;
+    let mut pressed = crate::keys::Pressed::default();
     for (step, e) in prepared {
         if step.release && !releasing {
             cancellation::wait(Duration::from_millis(hold.min(10_000) as u64));
@@ -530,7 +531,9 @@ fn send_key_events(pid: i32, steps: Vec<crate::keys::Event>, text: Option<&str>,
                 continue;
             }
         }
-        post(e, pid);
+        if pressed.record(step) {
+            post(e, pid);
+        }
     }
     failure.map_or(Ok(()), Err)
 }
@@ -556,15 +559,19 @@ fn with_modifiers(pid: i32, flags: CGEventFlags, action: impl FnOnce() -> Result
         .map(|step| key_event(step, None))
         .collect::<Result<Vec<_>, _>>()?;
     let (down, up): (Vec<_>, Vec<_>) = prepared.into_iter().partition(|(step, _)| !step.release);
+    let mut pressed = crate::keys::Pressed::default();
     let result = (|| {
-        for (_, event) in down {
+        for (step, event) in down {
             active()?;
+            pressed.record(step);
             post(event, pid);
         }
         action()
     })();
-    for (_, event) in up {
-        post(event, pid);
+    for (step, event) in up {
+        if pressed.record(step) {
+            post(event, pid);
+        }
     }
     result
 }

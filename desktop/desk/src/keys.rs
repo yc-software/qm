@@ -37,6 +37,21 @@ pub struct Event {
     pub release: bool,
 }
 
+#[derive(Default)]
+pub struct Pressed(Vec<u16>);
+
+impl Pressed {
+    pub fn record(&mut self, event: Event) -> bool {
+        if event.release {
+            let Some(at) = self.0.iter().position(|code| *code == event.code) else { return false };
+            self.0.remove(at);
+        } else {
+            self.0.push(event.code);
+        }
+        true
+    }
+}
+
 fn modifier(code: u16) -> Option<u64> {
     match code {
         54 | 55 => Some(COMMAND),
@@ -295,6 +310,24 @@ fn code(k: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupted_chords_release_only_posted_down_events() {
+        let events = events(17, COMMAND | SHIFT);
+        for (downs, expected) in [(0, vec![]), (1, vec![56, 56]), (2, vec![56, 55, 55, 56]), (3, vec![56, 55, 17, 17, 55, 56])] {
+            let mut pressed = Pressed::default();
+            let sent: Vec<_> = events
+                .iter()
+                .filter(|event| !event.release)
+                .take(downs)
+                .chain(events.iter().filter(|event| event.release))
+                .filter(|event| pressed.record(**event))
+                .collect();
+            assert_eq!(sent.iter().map(|event| event.code).collect::<Vec<_>>(), expected);
+            assert_eq!(sent.iter().filter(|event| event.down).count(), sent.iter().filter(|event| !event.down).count());
+            assert!(sent.last().is_none_or(|event| event.flags == 0));
+        }
+    }
 
     #[test]
     fn named_key_coverage() {
