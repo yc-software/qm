@@ -42,7 +42,7 @@ test("a connection missing configured permissions can be reconnected or disconne
     const app = widget.querySelector<HTMLButtonElement>(".connection-picker-app")!;
     assert.equal(app.disabled, false);
     assert.equal(app.getAttribute("aria-label"), "Reconnect Gmail");
-    assert.match(widget.textContent ?? "", /Gmail\s+needs new permissions/);
+    assert.match(widget.textContent ?? "", /Gmail needs new permissions/);
     app.click();
     await settle(() => JSON.parse(sessionStorage.getItem("qm-connection-return:test:tester") ?? "{}").accountId);
     assert.deepEqual(

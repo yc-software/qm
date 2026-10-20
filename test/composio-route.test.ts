@@ -314,6 +314,40 @@ test("connections report scopes the app's configuration grants that an older con
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
 });
 
+test("scopes covered by a broader or differently written grant are not reported missing", async () => {
+  const f = fixture();
+  await f.own();
+  const account = (id: string, config: string, scope: string) => ({
+    id,
+    user_id: composioUserId(orgId(), "alice"),
+    status: "ACTIVE",
+    toolkit: { slug: id.slice(3) },
+    auth_config: { id: config },
+    state: { val: { scope } },
+  });
+  f.replies.push(
+    {
+      items: [
+        account("ca_github", "ac_github", "user,gist,admin:org"),
+        account("ca_outlook", "ac_outlook", "https://graph.microsoft.com/Mail.Read offline_access"),
+        account("ca_slack", "ac_slack", "files:write,chat:write"),
+      ],
+    },
+    { credentials: { scopes: ["user", "user:email", "gist", "read:org", "repo"] } },
+    { credentials: { scopes: ["Mail.Read", "offline_access", "Mail.Send"] } },
+    { credentials: { scopes: ["files:read", "chat:write"] } },
+  );
+  const r = await f.invoke("/v1/composio/connections");
+  assert.deepEqual(
+    r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
+    [
+      ["ca_github", ["repo"]],
+      ["ca_outlook", ["Mail.Send"]],
+      ["ca_slack", ["files:read"]],
+    ],
+  );
+});
+
 test("people can disconnect only their own connections, on a turn they started", async () => {
   const f = fixture();
   await f.own();
@@ -721,6 +755,23 @@ test("ending the run during account lookup prevents execution", async () => {
   assert.equal((await f.invoke("/v1/composio/execute", execution, null, privateCap)).status, 403);
   assert.equal(f.calls.length, 2);
   assert.ok(f.calls.every((call) => call.init?.method === "GET"));
+});
+
+test("ending the run during account lookup prevents disconnecting", async () => {
+  const f = fixture();
+  await f.own();
+  const original = f.deps.composioFetch!;
+  f.deps.composioFetch = async (...args) => {
+    const response = await original(...args);
+    f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    return response;
+  };
+  f.replies.push(aliceAccount);
+  assert.equal((await f.invoke("/v1/composio/disconnect", { accountId: "ca_alice" }, null, privateCap)).status, 403);
+  assert.deepEqual(
+    f.calls.map((call) => call.init?.method),
+    ["GET"],
+  );
 });
 
 test("shared org connections recheck grants for every audience member", async () => {

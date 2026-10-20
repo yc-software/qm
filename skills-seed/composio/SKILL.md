@@ -28,12 +28,12 @@ Check `connections` before work that depends on an app. If the app is in the cat
 
 ## Reconnect or disconnect an app
 
-Each account from `connections` lists `missingScopes`: permissions the app's current configuration grants that this connection never received, usually because the configuration gained scopes after the user connected. Providers such as X can't upgrade an existing token, so the only fix is a fresh consent.
+Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection never got. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.
 
-- When a tool fails with 403, `insufficient_scope`, or a similar permission error, check that account's `missingScopes`. If it is non-empty, or the error plainly names a missing permission, tell the user in one sentence and offer to reconnect. Don't retry the call first.
-- In web chat, show `::connect-apps{toolkit="twitter"}` as its own paragraph. For a connected app it offers Reconnect and Disconnect, and after a verified reconnect it removes the replaced connection itself.
-- In Slack conversations, mint a new link with `authorize` (step 3 below). Once the new account ID is listed in `connections`, remove the old one with `apps("disconnect", {accountId: oldAccount.id})`. Never disconnect the old account before the new one is listed.
-- When the user asks to remove or reset a connection, use `apps("disconnect", {accountId})` on a turn they started, then confirm with `connections`. It only removes the caller's own connections and can't be undone; they would have to connect again.
+- When a tool fails with 403 or an insufficient-scope error and that account's `missingScopes` is non-empty, say so in one sentence and offer to reconnect instead of retrying.
+- In web chat, show `::connect-apps{toolkit="twitter"}`. For a connected app it offers Reconnect and Disconnect, and removes the replaced account itself after a verified reconnect.
+- Elsewhere, `authorize` a new link (step 3 below). Once the new account ID is listed in `connections`, remove the old one with `apps("disconnect", {accountId})`, never before.
+- When asked to remove or reset a connection, call `apps("disconnect", {accountId})` on a turn the user started. It only removes their own connections and can't be undone.
 
 ## Backend API
 

@@ -46,6 +46,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  returnReplaces?: string;
   openNewChat?: boolean;
 }
 
@@ -107,6 +108,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         path: "/s/sess-deep",
         service: { id: "gmail", name: "Gmail" },
         accountId: "ca_test",
+        ...(opts.returnReplaces ? { replaces: opts.returnReplaces } : {}),
         widget: opts.returnWidget ?? "welcome",
         expiresAt: Date.now() + 60000,
         picker: { query: "mail", expanded: true },

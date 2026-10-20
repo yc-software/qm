@@ -30,7 +30,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) =>
       (method === "GET" &&
         ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
-      (method === "POST" && ["authorize", "execute"].some((name) => path === `/v1/composio/${name}`)),
+      (method === "POST" && ["authorize", "execute", "disconnect"].some((name) => path === `/v1/composio/${name}`)),
     guidance:
       "Use the composio skill for backend app access. Never load a Composio project key or call its SDK directly. Execution binds accounts to your identity and sharing permissions.",
     routes: [
@@ -50,6 +50,12 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/composio/execute",
         summary: "{tool,accountId,version,arguments} executes a discovered tool using your own active connection",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/disconnect",
+        summary:
+          "{accountId} permanently removes one of your own connections on a human-started turn; use when asked to remove or reset one, or to retire the old account after a reconnect",
       },
       {
         method: "GET",

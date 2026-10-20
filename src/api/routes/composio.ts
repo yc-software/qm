@@ -299,21 +299,54 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
+async function ownedAccount(
+  ctx: ApiCtx,
+  access: { key: string; principal: string },
+  accountId: string,
+): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
+  const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`);
+  const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
+  return account.id === accountId &&
+    typeof account.user_id === "string" &&
+    composioUserIds(access.principal).includes(account.user_id) &&
+    toolkit &&
+    toolkit !== "composio"
+    ? { account, toolkit }
+    : null;
+}
+
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const scopes = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     return Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [];
-  } catch {
+  } catch (error) {
+    const mask = createExactSecretValueMasker([key]);
+    reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
     return [];
   }
+}
+
+const RANK = ["read", "write", "admin"];
+
+function grants(held: string, scope: string): boolean {
+  if (held === scope || scope.startsWith(`${held}:`)) return true;
+  if (held.slice(held.lastIndexOf("/") + 1) === scope) return true;
+  const [heldLevel, heldResource] = held.split(":");
+  const [level, resource] = scope.split(":");
+  return (
+    Boolean(resource) &&
+    heldResource === resource &&
+    RANK.indexOf(heldLevel!) >= RANK.indexOf(level!) &&
+    RANK.includes(level!)
+  );
 }
 
 function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
   const granted = account.state?.val?.scope;
   if (typeof granted !== "string" || !granted.trim()) return [];
-  const held = new Set(granted.split(/[\s,]+/));
-  return configured.filter((scope) => !held.has(scope));
+  const held = granted.split(/[\s,]+/).filter(Boolean);
+  return configured.filter((scope) => !held.some((candidate) => grants(candidate, scope)));
 }
 
 async function connections(ctx: ApiCtx): Promise<void> {
@@ -375,19 +408,12 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
   if (typeof accountId !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(accountId))
     return sendJson(ctx.res, 400, { error: "invalid_account" });
-  const path = `/connected_accounts/${encodeURIComponent(accountId)}`;
   try {
-    const account = await request(ctx, access.key, path);
-    const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
-    if (
-      account.id !== accountId ||
-      typeof account.user_id !== "string" ||
-      !composioUserIds(access.principal).includes(account.user_id) ||
-      !toolkit ||
-      toolkit === "composio"
-    )
-      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
-    await request(ctx, access.key, path, undefined, 20_000, "DELETE");
+    const owned = await ownedAccount(ctx, access, accountId);
+    if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const { toolkit } = owned;
+    if (!(await activeRun(ctx))) return;
+    await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
     audit(ctx.deps, {
       principalId: access.principal,
       action: "composio.disconnected",
@@ -464,18 +490,10 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
   const resource = `${body.accountId}/${body.tool}@${body.version}`;
   try {
-    const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(body.accountId)}`);
-    const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
-    if (
-      account.id !== body.accountId ||
-      typeof account.user_id !== "string" ||
-      !composioUserIds(access.principal).includes(account.user_id) ||
-      account.status !== "ACTIVE" ||
-      account.is_disabled === true ||
-      !toolkit ||
-      toolkit === "composio"
-    )
+    const owned = await ownedAccount(ctx, access, body.accountId);
+    if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true)
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const { account, toolkit } = owned;
     const tool = await request(
       ctx,
       access.key,
@@ -488,7 +506,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(account.user_id))
+    if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx.deps, {
       principalId: access.principal,
