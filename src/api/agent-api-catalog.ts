@@ -28,6 +28,7 @@ const CONVERSATION_UPDATE =
 const FAMILIES: AgentApiFamily[] = [
   {
     match: (method, path) =>
+      (method === "POST" && path === "/v1/composio/twitter/media") ||
       (method === "GET" &&
         ["identity", "connections", "toolkits", "tools"].some((name) => path === `/v1/composio/${name}`)) ||
       (method === "POST" && ["authorize", "execute", "disconnect"].some((name) => path === `/v1/composio/${name}`)),
@@ -62,6 +63,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/composio/identity",
         summary:
           "read your canonical Composio userId and verified linked userIds used by the web app picker; this selects accounts and does not grant access to them",
+      },
+      {
+        method: "POST",
+        path: "/v1/composio/twitter/media",
+        summary:
+          "{accountId,data} uploads one base64 PNG, JPEG or WebP image (5 MB max) through your own active X connection and returns mediaId for a post's media ids",
       },
     ],
   },

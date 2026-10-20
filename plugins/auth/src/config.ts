@@ -1,8 +1,9 @@
-import type { SmtpTlsMode } from "./smtp.ts";
 import { isMissingOrPlaceholder } from "../../chassis/src/env.ts";
 import { parsePasswordHash } from "./password.ts";
 
 type EmailTransportKind = "resend" | "smtp";
+
+type SmtpTlsMode = "starttls" | "implicit" | "none";
 
 interface SmtpSettings {
   host: string;

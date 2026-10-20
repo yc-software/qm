@@ -60,26 +60,27 @@ function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string)
   };
 }
 
-test("gmail reply MIME threads correctly and survives a UTF-8 body", () => {
-  const mime = buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" })!;
-  assert.match(mime, /^To: ada@example\.com\r\n/);
-  assert.match(mime, /Subject: Re: Quarterly numbers\r\n/);
-  assert.match(mime, /In-Reply-To: <msg-1@mail>\r\n/);
-  assert.match(mime, /References: <msg-1@mail>\r\n/);
+test("gmail reply MIME threads correctly and survives a UTF-8 body", async () => {
+  const mime = (await buildGmailReplyMime(gmailItem, { body: "Confirmed — see attached. ✅" }))!.toString();
+  assert.match(mime, /^To: ada@example\.com\r$/m);
+  assert.match(mime, /^Subject: Re: Quarterly numbers\r$/m);
+  assert.match(mime, /^In-Reply-To: <msg-1@mail>\r$/m);
+  assert.match(mime, /^References: <msg-1@mail>\r$/m);
   const body = mime.split("\r\n\r\n")[1]!;
   assert.equal(Buffer.from(body.replaceAll("\r\n", ""), "base64").toString("utf8"), "Confirmed — see attached. ✅");
 });
 
-test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", () => {
+test("subjects keep an existing Re: and non-ASCII subjects get RFC 2047 encoding", async () => {
   assert.equal(
     replySubject(item("gmail", { gmail: { threadId: "t", subject: "RE: hello" } }), { body: "x" }),
     "RE: hello",
   );
   assert.equal(replySubject(gmailItem, { body: "x", subject: "Override" }), "Override");
-  const mime = buildGmailReplyMime(item("gmail", { gmail: { threadId: "t", subject: "café plans", to: ["a@b.c"] } }), {
-    body: "x",
-  })!;
-  assert.match(mime, /Subject: =\?UTF-8\?B\?/);
+  const mime = (await buildGmailReplyMime(
+    item("gmail", { gmail: { threadId: "t", subject: "café plans", to: ["a@b.c"] } }),
+    { body: "x" },
+  ))!.toString();
+  assert.match(mime, /^Subject: =\?UTF-8\?[BQ]\?[\x21-\x7e]+\?=\r$/m);
 });
 
 test("a gmail item with no recipient anywhere refuses to send", async () => {
@@ -114,6 +115,24 @@ test("gmail send posts base64url raw with the thread id", async () => {
   assert.doesNotMatch(body.raw, /[+/=]/);
 });
 
+test("a Gmail send refusal reports the upstream status and response excerpt", async () => {
+  const result = await gmailAdapter.act(
+    {
+      owner: "josh",
+      tokens: tokens({ "gmail.googleapis.com": "tok" }),
+      fetchImpl: async () => new Response("Recipient address rejected", { status: 400 }),
+    },
+    gmailItem,
+    "send",
+    { body: "Confirmed." },
+  );
+  assert.deepEqual(result, {
+    ok: false,
+    reason: "upstream",
+    message: "Gmail refused the send (400): Recipient address rejected",
+  });
+});
+
 test("the held proposal is what goes out when the action carries no draft", async () => {
   let sent = "";
   const fetchImpl = (async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -133,8 +152,7 @@ test("the held proposal is what goes out when the action carries no draft", asyn
     {},
   );
   assert.equal(result.ok, true);
-  const encoded = sent.split("\r\n\r\n")[1]!;
-  assert.equal(Buffer.from(encoded, "base64").toString("utf8"), "the held draft");
+  assert.equal(sent.split("\r\n\r\n")[1], "the held draft\r\n");
 });
 
 test("a missing connector reads as not_connected, not an exception", async () => {
@@ -425,9 +443,9 @@ test("Gmail sends only through the explicitly bound account, including legacy se
 
 test("Gmail drafts preserve recipient lists and reject invalid recipients without falling back", async () => {
   const addresses = Array.from({ length: 15 }, (_, i) => `person${i}@example.com`);
-  const mime = buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] })!;
-  assert.ok(mime.startsWith(`To: ${addresses.join(", ")}\r\n`));
-  assert.equal(buildGmailReplyMime(gmailItem, { body: "Hi", to: [] }), null);
+  const mime = (await buildGmailReplyMime(gmailItem, { body: "Hi", to: addresses, cc: [] }))!.toString();
+  assert.ok(mime.replaceAll("\r\n ", " ").startsWith(`To: ${addresses.join(", ")}\r\n`));
+  assert.equal(await buildGmailReplyMime(gmailItem, { body: "Hi", to: [] }), null);
   const held = { ...gmailItem, proposal: { data: { body: "Previously saved" }, by: "human" as const, at: 1 } };
   for (const to of [["x".repeat(8001)], Array(101).fill("a@example.com"), ["a@example.com\nBcc: b@example.com"]]) {
     assert.equal(gmailAdapter.parseProposal({ body: "Hi", to }), null);

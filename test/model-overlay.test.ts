@@ -55,7 +55,7 @@ import {
   fastModeModelIds,
   defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
-import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
@@ -177,17 +177,7 @@ test("template capabilities are inherited and overlay API models cannot silently
   );
 });
 
-test("collisions are rejected in both registration orders and OpenRouter failure rebuilds local choices", async () => {
-  const custom = {
-    id: "gateway",
-    name: "Gateway",
-    protocol: "openai" as const,
-    baseUrl: "https://example.invalid/v1",
-    models: [{ id: MODEL_ID }],
-  };
-  setCustomProviders([custom]);
-  assert.throws(() => validateModelOverlay(spec), /already registered/);
-  setCustomProviders([]);
+test("OpenRouter failure rebuilds local choices", async () => {
   let fail = false;
   const fetcher: typeof fetch = async () => {
     if (fail) throw new Error("offline");
@@ -195,12 +185,10 @@ test("collisions are rejected in both registration orders and OpenRouter failure
   };
   await selectableModelCatalog(fetcher);
   setModelOverlays([validateModelOverlay(spec)]);
-  assert.throws(() => validateCustomProviderSpec(custom), /already registered/);
   fail = true;
   assert.ok((await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
   setModelOverlays([], [MODEL_ID]);
   assert.ok(!(await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
-  assert.throws(() => validateCustomProviderSpec(custom), /already registered/);
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {

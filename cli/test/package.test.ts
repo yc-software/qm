@@ -44,27 +44,45 @@ test(
       const packed = JSON.parse(
         execFileSync("npm", ["pack", "--json", "--pack-destination", dir], { cwd: cliDir, encoding: "utf8", env }),
       ) as Array<{ filename: string; files: Array<{ path: string }> }>;
-      const tarball = join(dir, packed[0]!.filename);
       const deployment = join(dir, "deployment");
       const awsDeployment = join(dir, "aws-deployment");
-      const tarballBytes = readFileSync(tarball);
       const packageManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8")) as Record<string, unknown>;
       const version = packageManifest["version"] as string;
+      const published = new Map([
+        ["@yc-software/qm", { manifest: packageManifest, bytes: readFileSync(join(dir, packed[0]!.filename)) }],
+      ]);
+      for (const name of Object.keys(packageManifest["dependencies"] as Record<string, string>)) {
+        const source = join(cliDir, "node_modules", name);
+        const [dependency] = JSON.parse(
+          execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
+            cwd: source,
+            encoding: "utf8",
+            env,
+          }),
+        ) as Array<{ filename: string }>;
+        published.set(name, {
+          manifest: JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as Record<string, unknown>,
+          bytes: readFileSync(join(dir, dependency!.filename)),
+        });
+      }
       registry = createServer((request, response) => {
         const origin = `http://${request.headers.host}`;
-        if (request.url && decodeURIComponent(request.url) === "/@yc-software/qm") {
+        const path = decodeURIComponent(request.url ?? "").slice(1);
+        const metadata = published.get(path);
+        if (metadata) {
+          const release = metadata.manifest["version"] as string;
           response.setHeader("content-type", "application/json");
           response.end(
             JSON.stringify({
-              name: "@yc-software/qm",
-              "dist-tags": { latest: version },
+              name: path,
+              "dist-tags": { latest: release },
               versions: {
-                [version]: {
-                  ...packageManifest,
+                [release]: {
+                  ...metadata.manifest,
                   dist: {
-                    tarball: `${origin}/@yc-software/qm/-/qm-${version}.tgz`,
-                    shasum: createHash("sha1").update(tarballBytes).digest("hex"),
-                    integrity: `sha512-${createHash("sha512").update(tarballBytes).digest("base64")}`,
+                    tarball: `${origin}/${path}/-/package-${release}.tgz`,
+                    shasum: createHash("sha1").update(metadata.bytes).digest("hex"),
+                    integrity: `sha512-${createHash("sha512").update(metadata.bytes).digest("base64")}`,
                   },
                 },
               },
@@ -72,9 +90,11 @@ test(
           );
           return;
         }
-        if (request.url === `/@yc-software/qm/-/qm-${version}.tgz`) {
+        const tarball = /^(.+)\/-\/package-[^/]+\.tgz$/.exec(path);
+        const archive = tarball && published.get(tarball[1]!);
+        if (archive) {
           response.setHeader("content-type", "application/octet-stream");
-          response.end(tarballBytes);
+          response.end(archive.bytes);
           return;
         }
         response.statusCode = 404;
@@ -141,7 +161,7 @@ test(
       registry = undefined;
       const bin = join(deployment, "node_modules", ".bin", "qm");
       const awsBin = join(awsDeployment, "node_modules", ".bin", "qm");
-      rmSync(tarball);
+      rmSync(join(dir, packed[0]!.filename));
 
       assert.ok(existsSync(join(deployment, "deployment.md")));
       assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "SKILL.md")));

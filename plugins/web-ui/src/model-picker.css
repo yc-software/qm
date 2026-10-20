@@ -33,10 +33,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.model-control .menu-button {
-  max-width: min(280px, 46vw);
-  color: var(--foreground);
-}
 .menu-popover {
   position: absolute;
   bottom: calc(100% + 8px);

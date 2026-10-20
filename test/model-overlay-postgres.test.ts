@@ -113,10 +113,12 @@ test(
       ]);
       assert.deepEqual(
         raced.map((response) => response.status),
-        raced[0]!.status === 200 ? [200, 400] : [409, 200],
+        [200, 200],
       );
       await read(first.base);
-      await read(second.base);
+      const both = (await read(second.base)).modelCatalog;
+      assert.ok(both["overlay-race-model"]);
+      assert.equal(both["custom/race-gateway/overlay-race-model"]?.name, "overlay-race-model");
       const cold = await start(isolatedDatabaseUrl, upstream.url);
       processes.push(cold.child);
       const coldConfig = await read(cold.base);
