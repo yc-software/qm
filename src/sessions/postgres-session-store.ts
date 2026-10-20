@@ -1772,7 +1772,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       }
       params.push(page.limit);
       const rows = await q(
-        `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.created_at, s.messages, s.turns,
+        `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.origin, s.created_at, s.messages, s.turns,
                 ${lastActivityExpr("s")} AS last_activity, s.first_user_preview, s.last_user_preview
            FROM sessions s
           WHERE ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${cronClause}${keysetClause}
@@ -1785,7 +1785,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       return rows.map((r) => ({
         id: r.id as string,
         type: r.type as Session["type"],
-        origin: sessionOrigin(r.thread_ref as string | null),
+        origin: r.origin as SessionOrigin,
         scopeId: r.scope_id as Session["scopeId"],
         threadRef: r.thread_ref as Session["threadRef"],
         turns: Number(r.turns ?? 0),
