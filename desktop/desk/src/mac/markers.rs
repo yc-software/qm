@@ -2,9 +2,7 @@ use super::*;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXTextMarkerGetTypeID() -> usize;
     fn AXTextMarkerRangeGetTypeID() -> usize;
-    fn AXTextMarkerRangeCreate(allocator: CFTypeRef, start: CFTypeRef, end: CFTypeRef) -> CFTypeRef;
 }
 
 pub(super) enum Read {
@@ -43,33 +41,20 @@ fn bounded(range: El, mut query: impl FnMut(&str, &El) -> Option<CFType>) -> Opt
     Some(Read::Text { range, raw, attributed })
 }
 
-fn attribute(e: &El, name: &str) -> Option<El> {
+fn read_element(e: &El, mut query: impl FnMut(&str, &El) -> Option<CFType>) -> Option<Read> {
     if cancellation::cancelled() {
-        None
-    } else {
-        attr(e, name)
-    }
-}
-
-pub(super) fn read(e: &El) -> Option<Read> {
-    let start = attribute(e, "AXStartTextMarker")?;
-    let end = attribute(e, "AXEndTextMarker")?;
-    let marker_type = unsafe { AXTextMarkerGetTypeID() };
-    if start.type_of() != marker_type || end.type_of() != marker_type {
         return None;
     }
-    let range = unsafe { AXTextMarkerRangeCreate(std::ptr::null(), start.as_CFTypeRef(), end.as_CFTypeRef()) };
-    if range.is_null() {
-        return None;
-    }
-    let result = bounded(unsafe { CFType::wrap_under_create_rule(range) }, |name, range| parameter(e, name, range))?;
-    if cancellation::cancelled()
-        || attribute(e, "AXStartTextMarker").as_ref() != Some(&start)
-        || attribute(e, "AXEndTextMarker").as_ref() != Some(&end)
-    {
+    let range = query("AXTextMarkerRangeForUIElement", e)?;
+    let result = bounded(range.clone(), &mut query)?;
+    if cancellation::cancelled() || query("AXTextMarkerRangeForUIElement", e).as_ref() != Some(&range) {
         return None;
     }
     Some(result)
+}
+
+pub(super) fn read(e: &El) -> Option<Read> {
+    read_element(e, |name, argument| parameter(e, name, argument))
 }
 
 #[cfg(test)]
@@ -77,13 +62,64 @@ mod tests {
     use super::*;
 
     extern "C" {
+        fn AXTextMarkerRangeCreate(allocator: CFTypeRef, start: CFTypeRef, end: CFTypeRef) -> CFTypeRef;
         fn AXTextMarkerCreate(allocator: CFTypeRef, bytes: *const u8, length: isize) -> CFTypeRef;
     }
 
     fn range() -> El {
+        range_ending_at(b"b")
+    }
+
+    fn range_ending_at(bytes: &[u8]) -> El {
         let start = unsafe { CFType::wrap_under_create_rule(AXTextMarkerCreate(std::ptr::null(), b"a".as_ptr(), 1)) };
-        let end = unsafe { CFType::wrap_under_create_rule(AXTextMarkerCreate(std::ptr::null(), b"b".as_ptr(), 1)) };
+        let end = unsafe { CFType::wrap_under_create_rule(AXTextMarkerCreate(std::ptr::null(), bytes.as_ptr(), bytes.len() as isize)) };
         unsafe { CFType::wrap_under_create_rule(AXTextMarkerRangeCreate(std::ptr::null(), start.as_CFTypeRef(), end.as_CFTypeRef())) }
+    }
+
+    #[test]
+    fn marker_observation_uses_exact_element_range_and_rechecks_it() {
+        let element = cfs("leaf").as_CFType();
+        let expected_range = range();
+        assert_eq!(expected_range, range());
+        let mut calls = vec![];
+        let result = read_element(&element, |name, argument| {
+            calls.push(name.to_string());
+            match name {
+                "AXTextMarkerRangeForUIElement" => {
+                    assert_eq!(argument, &element);
+                    Some(range())
+                }
+                "AXLengthForTextMarkerRange" => {
+                    assert_eq!(argument, &expected_range);
+                    Some(CFNumber::from(4).as_CFType())
+                }
+                "AXAttributedStringForTextMarkerRange" => {
+                    assert_eq!(argument, &expected_range);
+                    Some(CFAttributedString::new(&cfs("leaf")).as_CFType())
+                }
+                _ => panic!("unexpected range query"),
+            }
+        });
+        assert!(matches!(result, Some(Read::Text { raw, .. }) if raw == "leaf"));
+        assert_eq!(
+            calls,
+            [
+                "AXTextMarkerRangeForUIElement",
+                "AXLengthForTextMarkerRange",
+                "AXAttributedStringForTextMarkerRange",
+                "AXTextMarkerRangeForUIElement"
+            ]
+        );
+        let mut range_reads = 0;
+        assert!(read_element(&element, |name, _| match name {
+            "AXTextMarkerRangeForUIElement" => {
+                range_reads += 1;
+                Some(if range_reads == 1 { range() } else { range_ending_at(b"c") })
+            }
+            "AXLengthForTextMarkerRange" => Some(CFNumber::from(4).as_CFType()),
+            _ => Some(CFAttributedString::new(&cfs("leaf")).as_CFType()),
+        })
+        .is_none());
     }
 
     #[test]
