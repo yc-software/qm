@@ -81,6 +81,18 @@ test("a failed provider execution reports what the execute call returned", () =>
       error.message.includes("http://x:***@proxy.example.com refused") &&
       !error.message.includes("secret-token"),
   );
+  Object.assign(entries[1]!.payload, {
+    result: `${"x".repeat(500)}\n[stderr]\nProxy-Authorization: Basic eDpzZWNyZXQ= GIT_CONFIG_VALUE_1=aaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbb\n[exit 1]`,
+  });
+  assert.throws(
+    () => assertSandboxExecution(entries, "box", "nonce\n"),
+    (error: Error) =>
+      error.message.includes("Proxy-Authorization: ***") &&
+      error.message.includes("GIT_CONFIG_VALUE_1=***") &&
+      error.message.includes("[exit 1]") &&
+      !error.message.includes("eDpzZWNyZXQ") &&
+      !error.message.includes("aaaaaaaaaaaaaaaaaaaa"),
+  );
   assert.throws(() => assertSandboxExecution(evidence().slice(0, 1), "box", "nonce\n"), /no result recorded/);
 });
 

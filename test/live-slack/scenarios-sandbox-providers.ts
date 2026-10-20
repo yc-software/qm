@@ -26,9 +26,17 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
   );
 }
 
+function redactCredentials(text: string): string {
+  return text
+    .replace(/(\/\/[^\s:/@]*:)[^\s@]+@/g, "$1***@")
+    .replace(/(authorization:\s*)(?:\w+\s+)?\S+/gi, "$1***")
+    .replace(/[\w-]{16,}\.[\w-]{16,}(?:\.[\w-]{16,})?/g, "***");
+}
+
 function describeExecuteResult(p: Record<string, unknown>): string {
-  const result = typeof p.result === "string" ? p.result.replace(/(\/\/[^\s:/@]*:)[^\s@]+@/g, "$1***@") : p.result;
-  const shown = typeof result === "string" && result.length > 400 ? `${result.slice(0, 400)}…` : result;
+  const result = typeof p.result === "string" ? redactCredentials(p.result) : p.result;
+  const shown =
+    typeof result === "string" && result.length > 400 ? `${result.slice(0, 150)}…${result.slice(-250)}` : result;
   return JSON.stringify({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: shown });
 }
 
