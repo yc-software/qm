@@ -1549,6 +1549,9 @@ impl Desk {
         if self.enabled.get(&app.pid).is_some_and(|state| state.ready) {
             return Ok(());
         }
+        if str_attr(ax, "AXRole").as_deref() != Some("AXApplication") {
+            return Err(fail(ErrorCode::ActionFailed, "Accessibility application root is unavailable; observe again"));
+        }
         let required = electron_app(app);
         if let std::collections::hash_map::Entry::Vacant(slot) = self.enabled.entry(app.pid) {
             let mut prior = vec![];
