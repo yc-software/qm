@@ -1,5 +1,5 @@
 use crate::protocol::{ErrorCode, Failure};
-use core_foundation::base::{CFRetain, CFType, CFTypeRef, TCFType};
+use core_foundation::base::{CFRetain, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
@@ -15,17 +15,13 @@ use std::time::{Duration, Instant};
 
 static EXPECTED_FOREGROUND: AtomicI32 = AtomicI32::new(0);
 
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGSessionCopyCurrentDictionary() -> CFTypeRef;
-}
-
 fn screen_available() -> bool {
-    let session = unsafe { CGSessionCopyCurrentDictionary() };
-    if session.is_null() {
+    let Some(session) = objc2_core_graphics::CGSessionCopyCurrentDictionary() else {
         return false;
-    }
-    let session = unsafe { CFDictionary::<CFString, CFType>::wrap_under_create_rule(session as _) };
+    };
+    let session = unsafe {
+        CFDictionary::<CFString, CFType>::wrap_under_get_rule(objc2_core_foundation::CFRetained::as_ptr(&session).as_ptr().cast())
+    };
     let field = |name: &str| session.find(CFString::new(name)).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from);
     field("CGSSessionScreenIsLocked") != Some(true) && field("kCGSSessionOnConsoleKey") == Some(true)
 }
