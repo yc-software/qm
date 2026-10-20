@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
   fetchCoreText,
+  relayCoreStream,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
@@ -688,11 +689,7 @@ async function coreFetch(
   });
 }
 
-async function coreFetchCap(
-  method: HttpMethod,
-  pathWithQuery: string,
-  rawBody = "",
-): Promise<{ status: number; text: string }> {
+async function mintSessionCap(): Promise<{ token: string } | { status: number; text: string }> {
   const cap = await coreFetch("POST", "/v1/session-cap", "");
   if (cap.status !== 200) return { status: cap.status === 401 ? 401 : 503, text: cap.text };
   let token: string | undefined;
@@ -703,9 +700,19 @@ async function coreFetchCap(
   }
   if (!token)
     return { status: 503, text: JSON.stringify({ error: "not_configured", message: "no session capability" }) };
+  return { token };
+}
+
+async function coreFetchCap(
+  method: HttpMethod,
+  pathWithQuery: string,
+  rawBody = "",
+): Promise<{ status: number; text: string }> {
+  const cap = await mintSessionCap();
+  if (!("token" in cap)) return cap;
   const r = await fetch(`${CORE}${pathWithQuery}`, {
     method,
-    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: token },
+    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: cap.token },
     ...(rawBody ? { body: rawBody } : {}),
     redirect: "manual",
   });
@@ -713,11 +720,27 @@ async function coreFetchCap(
 }
 
 async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  relay(res, await coreFetch(method, pathWithQuery, rawBody));
+  const portalTok = portalTokenStore.getStore();
+  return relayCoreStream(res, {
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    method,
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+  });
 }
 
 async function relayCap(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  relay(res, await coreFetchCap(method, pathWithQuery, rawBody));
+  const cap = await mintSessionCap();
+  if (!("token" in cap)) return relay(res, cap);
+  return relayCoreStream(res, {
+    origin: CORE,
+    method,
+    path: pathWithQuery,
+    body: rawBody,
+    headers: { [CAPABILITY_HEADER]: cap.token },
+  });
 }
 
 /**
@@ -2848,7 +2871,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/webhooks",
     handle: async (c) => {
       const { res, user } = c;
-      return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
+      return relayCore(res, "GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
     },
   },
   {
@@ -3081,7 +3104,7 @@ const apiRoutes: readonly WebRoute[] = [
         verification,
         ...(filters ? { filters } : {}),
       });
-      return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
+      return relayCore(res, "POST", "/v1/webhooks", reqBody);
     },
   },
   {
