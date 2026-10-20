@@ -30,8 +30,6 @@ const runtimeReadKey = (key: string) => key.replace(/-runtime$/, "Runtime");
 export class SettingsState extends SettingState {
   context: Data = {};
   selected = "";
-  open = false;
-  active = 0;
   editing = false;
   history: Data[] = [];
   collect(_validate = true): Data {
@@ -67,10 +65,9 @@ export class SettingsState extends SettingState {
     this.saving = false;
     this.changed();
   }
-  add(id = this.selected) {
-    if (id && !this.draft.ids.includes(id)) this.draft.ids.push(id);
+  add() {
+    if (this.selected && !this.draft.ids.includes(this.selected)) this.draft.ids.push(this.selected);
     this.selected = "";
-    this.active = 0;
     this.changed();
   }
   remove(id: string) {
@@ -153,9 +150,7 @@ function card(s: SettingsState) {
   if (s.key === "branding") return brandingCard(s);
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
-  const query = s.selected.trim().toLowerCase();
-  const matches = available.filter((m) => label(s, m.id).toLowerCase().includes(query));
-  const canAdd = available.some((m) => m.id === s.selected.trim());
+  const canAdd = available.some((m) => m.id === s.selected);
   return html`<section
     class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
     id="card-webui-models"
@@ -164,61 +159,24 @@ function card(s: SettingsState) {
     <div class="body">
       <div class="model-add-row">
         <div class="model-add-field">
-          <label for="webui-models-add">Add a model</label>
-          <div class=${classMap({ dd: true, open: s.open && !!matches.length })}>
-            <input
-              id="webui-models-add"
-              role="combobox"
-              autocomplete="off"
-              aria-autocomplete="list"
-              aria-controls="webui-models-options"
-              aria-expanded=${s.open && !!matches.length ? "true" : "false"}
-              aria-activedescendant=${matches[s.active] ? `webui-models-option-${s.active}` : ""}
-              placeholder=${available.length ? "Search models…" : "All models enabled"}
-              .value=${s.selected}
-              ?disabled=${!available.length}
-              @focus=${() => ((s.open = true), s.render())}
-              @blur=${() => ((s.open = false), s.render())}
-              @input=${(e: Event) => {
-                s.selected = value(e);
-                s.open = true;
-                s.active = 0;
-                s.render();
-              }}
-              @keydown=${(e: KeyboardEvent) => {
-                const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
-                if (step && matches.length) s.active = (s.active + step + matches.length) % matches.length;
-                else if (e.key === "Enter" && (matches[s.active] || canAdd))
-                  s.add(s.open && matches[s.active] ? matches[s.active]!.id : s.selected);
-                else if (e.key === "Escape") s.open = false;
-                else return;
-                e.preventDefault();
-                s.open = e.key !== "Escape";
-                s.render();
-              }}
-            />
-            <div class="dd-menu" id="webui-models-options" role="listbox">
-              ${matches.map(
-                (m, i) =>
-                  html`<div
-                    class=${classMap({ "dd-item": true, active: i === s.active })}
-                    id=${`webui-models-option-${i}`}
-                    role="option"
-                    aria-selected=${i === s.active ? "true" : "false"}
-                    @mousedown=${(e: Event) => (e.preventDefault(), s.add(m.id))}
-                  >
-                    ${label(s, m.id)}
-                  </div>`,
-              )}
-            </div>
-          </div>
+          <label for="webui-models-add">Add a model</label
+          ><input
+            id="webui-models-add"
+            list="webui-models-options"
+            autocomplete="off"
+            placeholder="Search models…"
+            .value=${s.selected}
+            ?disabled=${!available.length}
+            @input=${(e: Event) => {
+              s.selected = value(e);
+              s.render();
+            }}
+            @keydown=${(e: KeyboardEvent) => e.key === "Enter" && canAdd && s.add()}
+          /><datalist id="webui-models-options">
+            ${available.map((m) => html`<option value=${m.id}>${label(s, m.id)}</option>`)}
+          </datalist>
         </div>
-        <button
-          type="button"
-          id="webui-models-add-button"
-          ?disabled=${!canAdd}
-          @click=${() => s.add(s.selected.trim())}
-        >
+        <button type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
           + Add model
         </button>
       </div>
