@@ -12,6 +12,7 @@ use objc2::rc::autoreleasepool;
 use objc2_app_kit::{NSApplicationActivationOptions, NSEvent, NSEventModifierFlags, NSEventType, NSRunningApplication};
 use objc2_foundation::NSPoint;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -239,6 +240,69 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     }
 }
 
+#[derive(Default)]
+pub struct Enforcers {
+    entries: RefCell<HashMap<i32, crate::intervention::Retained>>,
+}
+
+impl Enforcers {
+    fn ensure(&self, pid: i32) -> Result<std::sync::Arc<crate::intervention::RetainedState>, Failure> {
+        let failure = self.entries.borrow().get(&pid).and_then(|entry| entry.state.check().err());
+        if let Some(mut failure) = failure {
+            if let Err(cleanup) = self.remove(pid, true) {
+                failure.message.push_str(&format!("; cleanup: {}", cleanup.message));
+            }
+            return Err(failure);
+        }
+        let mut entries = self.entries.borrow_mut();
+        if !entries.contains_key(&pid) {
+            if entries.len() >= 32 {
+                return Err(Failure::new(ErrorCode::ActionFailed, "Retained app protection limit reached"));
+            }
+            entries.insert(pid, crate::intervention::Retained::begin(pid)?);
+        }
+        let state = std::sync::Arc::clone(&entries[&pid].state);
+        state.check()?;
+        Ok(state)
+    }
+
+    fn check(&self, pid: i32) -> Result<(), Failure> {
+        self.entries.borrow().get(&pid).map_or(Ok(()), |entry| entry.state.check())
+    }
+
+    pub fn clear(&self) -> Result<(), Failure> {
+        let pids: Vec<_> = self.entries.borrow().keys().copied().collect();
+        let errors: Vec<_> = pids.into_iter().filter_map(|pid| self.remove(pid, true).err().map(|error| error.message)).collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Failure::new(ErrorCode::ActionFailed, errors.join("; ")))
+        }
+    }
+
+    pub fn remove(&self, pid: i32, same_process: bool) -> Result<(), Failure> {
+        if let Some(retained) = self.entries.borrow_mut().remove(&pid) {
+            let deactivate = same_process && retained.state.same_process() && retained.state.focused() && frontmost() != Some(pid);
+            retained.state.menu(None);
+            let result = if deactivate { synthetic_focus(pid, 0, 2) } else { Ok(()) };
+            drop(retained);
+            result?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Enforcers {
+    fn drop(&mut self) {
+        let pids: Vec<_> = self.entries.borrow().keys().copied().collect();
+        for pid in pids {
+            if let Err(error) = self.remove(pid, true) {
+                eprintln!("App protection cleanup failed: {}", error.message);
+            }
+        }
+    }
+}
+
 thread_local! {
     static ACTIVATION: RefCell<Weak<Activation>> = const { RefCell::new(Weak::new()) };
 }
@@ -247,6 +311,7 @@ struct Activation {
     original: i32,
     selected: Cell<(i32, u32)>,
     activated: RefCell<Vec<(i32, u32)>>,
+    retained: Rc<Enforcers>,
 }
 
 impl Activation {
@@ -275,7 +340,14 @@ pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original))?;
+    let state = activation.retained.ensure(target)?;
+    if !state.ready(window)? {
+        activation.activated.borrow_mut().retain(|(pid, _)| *pid != target);
+        activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original))?;
+        state.activated(window);
+    } else {
+        activation.selected.set((target, window));
+    }
     check_current()
 }
 
@@ -294,17 +366,19 @@ pub struct Focus {
 }
 
 impl Focus {
-    pub fn begin(target: i32, window: u32) -> Result<Self, Failure> {
+    pub fn begin(target: i32, window: u32, retained: Rc<Enforcers>) -> Result<Self, Failure> {
         if !screen_available() {
             return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
         }
+        retained.ensure(target)?;
         let original = frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?;
         let keyboard_owner = crate::intervention::keyboard_focus_pid()?;
         let intervention = crate::intervention::Intervention::begin(target, original, keyboard_owner)?;
         if keyboard_owner != crate::intervention::keyboard_focus_pid()? || frontmost() != Some(original) {
             return Err(Failure::new(ErrorCode::ActionFailed, "Focus changed while starting input; stopped"));
         }
-        let activation = Rc::new(Activation { original, selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()) });
+        let activation =
+            Rc::new(Activation { original, selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()), retained });
         ACTIVATION.with(|current| *current.borrow_mut() = Rc::downgrade(&activation));
         let guard = Self { activation, intervention: Some(intervention) };
         EXPECTED_FOREGROUND.store(original, Ordering::Release);
@@ -315,31 +389,17 @@ impl Focus {
     pub fn finish(&mut self) -> Result<(), Failure> {
         EXPECTED_FOREGROUND.store(0, Ordering::Release);
         ACTIVATION.with(|current| *current.borrow_mut() = Weak::new());
-        let activated = self.activation.activated.take();
-        if activated.is_empty() {
-            return Ok(());
-        }
-        let until = Instant::now() + Duration::from_millis(80);
-        while Instant::now() < until && !crate::cancellation::cancelled() {
-            std::thread::sleep(Duration::from_millis(8));
-        }
-        let mut failures = Vec::new();
-        for (target, _) in activated.into_iter().rev() {
-            if frontmost() != Some(target) {
-                if let Err(error) = synthetic_focus(target, 0, 2) {
-                    failures.push(format!("deactivation PID {target}: {}", error.message));
-                }
-            }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(Failure::new(ErrorCode::ActionFailed, failures.join("; ")))
-        }
+        self.activation.activated.borrow_mut().clear();
+        self.intervention.take();
+        Ok(())
     }
 
     pub fn check(&self) -> Result<(), Failure> {
         check_current()?;
+        self.activation.retained.check(self.activation.selected.get().0)?;
+        for (pid, _) in self.activation.activated.borrow().iter() {
+            self.activation.retained.check(*pid)?;
+        }
         if let Some(intervention) = &self.intervention {
             intervention.check()?;
         }
@@ -379,7 +439,7 @@ mod tests {
 
     #[test]
     fn activation_tracks_effective_owner_and_balanced_cleanup_targets() {
-        let state = Activation { original: 1, selected: Cell::new((41, 7)), activated: RefCell::new(Vec::new()) };
+        let state = Activation { original: 1, selected: Cell::new((41, 7)), activated: RefCell::new(Vec::new()), retained: Rc::default() };
         assert!(state.activated.borrow().is_empty());
         let sent = RefCell::new(Vec::new());
         let send = |pid, window, subtype| {
@@ -399,7 +459,7 @@ mod tests {
 
     #[test]
     fn failed_target_activation_preserves_previous_target_and_cleanup() {
-        let state = Activation { original: 1, selected: Cell::new((1, 0)), activated: RefCell::new(Vec::new()) };
+        let state = Activation { original: 1, selected: Cell::new((1, 0)), activated: RefCell::new(Vec::new()), retained: Rc::default() };
         state.ensure(1, 0, |_, _, _| panic!("foreground activation")).unwrap();
         assert!(state.ensure(41, 0, |_, _, _| panic!("missing window activation")).is_err());
         assert!(state.ensure(41, 7, |_, _, _| Err(Failure::new(ErrorCode::ActionFailed, "failed"))).is_err());

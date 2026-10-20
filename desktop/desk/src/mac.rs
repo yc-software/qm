@@ -150,12 +150,33 @@ fn now_ms() -> i64 {
 struct Notices {
     last: AtomicI64,
     generation: AtomicU64,
+    menu: Option<std::sync::Arc<crate::intervention::RetainedState>>,
+    pid: i32,
+    menus: std::cell::RefCell<Vec<(El, i32)>>,
 }
 
-extern "C" fn noticed(_: CFTypeRef, _: CFTypeRef, _: CFStringRef, refcon: *mut c_void) {
+extern "C" fn noticed(_: CFTypeRef, element: CFTypeRef, notice: CFStringRef, refcon: *mut c_void) {
     let n = unsafe { &*(refcon as *const Notices) };
     n.last.store(now_ms(), Ordering::Relaxed);
     n.generation.fetch_add(1, Ordering::Relaxed);
+    if let Some(state) = &n.menu {
+        let notice = unsafe { CFString::wrap_under_get_rule(notice) }.to_string();
+        if matches!(notice.as_str(), "AXMenuOpened" | "AXMenuClosed" | "AXUIElementDestroyed") {
+            let element = unsafe { CFType::wrap_under_get_rule(element) };
+            let mut menus = n.menus.borrow_mut();
+            if notice == "AXMenuOpened" {
+                let owner = pid_of(&element).filter(|pid| *pid > 0);
+                if let Some(owner) = owner {
+                    if !menus.iter().any(|(menu, _)| menu == &element) && menus.len() < 32 {
+                        menus.push((element, owner));
+                    }
+                }
+            } else if let Some(index) = menus.iter().position(|(menu, _)| menu == &element) {
+                menus.truncate(index);
+            }
+            state.menu(menus.last().map(|(_, owner)| *owner));
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -189,7 +210,7 @@ impl Cache {
     }
 }
 
-struct Observer {
+pub(crate) struct Observer {
     _observer: CFType,
     source: CFRunLoopSource,
     notices: Box<Notices>,
@@ -198,12 +219,16 @@ struct Observer {
 
 impl Observer {
     fn new(pid: i32, ax: &El) -> Option<Observer> {
+        Self::with_notices(pid, ax, NOTICES)
+    }
+
+    fn with_notices(pid: i32, ax: &El, names: &[&str]) -> Option<Observer> {
         let mut o: CFTypeRef = std::ptr::null();
         let status = unsafe { AXObserverCreate(pid, noticed, &mut o) };
         let observer = ax_result(status, o)?;
         let notices = Box::<Notices>::default();
         let refcon = &*notices as *const Notices as *mut c_void;
-        let added = NOTICES
+        let added = names
             .iter()
             .filter(|n| unsafe { AXObserverAddNotification(o, ax.as_CFTypeRef(), cfs(n).as_concrete_TypeRef(), refcon) } == 0)
             .count();
@@ -277,10 +302,19 @@ pub struct Desk {
     enabled: HashMap<i32, Vec<(&'static str, bool)>>,
     observers: HashMap<i32, Observer>,
     launches: HashMap<i32, Option<f64>>,
+    enforcers: std::rc::Rc<crate::focus::Enforcers>,
 }
 
 impl Drop for Desk {
     fn drop(&mut self) {
+        for (pid, launched) in &self.launches {
+            let same = NSRunningApplication::runningApplicationWithProcessIdentifier(*pid)
+                .filter(|app| !app.isTerminated())
+                .is_some_and(|app| app.launchDate().map(|d| d.timeIntervalSinceReferenceDate()) == *launched);
+            if let Err(error) = self.enforcers.remove(*pid, same) {
+                eprintln!("App protection cleanup failed: {}", error.message);
+            }
+        }
         for (pid, prior) in &self.enabled {
             let current = NSRunningApplication::runningApplicationWithProcessIdentifier(*pid)
                 .filter(|a| !a.isTerminated())
@@ -1478,6 +1512,7 @@ impl Desk {
         if self.launches.get(&app.pid) == Some(&app.launched) {
             return;
         }
+        let _ = self.enforcers.remove(app.pid, false);
         self.cache.remove(&app.pid);
         self.touched.remove(&app.pid);
         self.enabled.remove(&app.pid);
@@ -1690,7 +1725,7 @@ impl Desk {
         }
         self.validate_window(&app)?;
         let mut focus = if actions.iter().any(|a| !matches!(a, Action::Wait { .. } | Action::Raise)) {
-            Some(crate::focus::Focus::begin(app.pid, win)?)
+            Some(crate::focus::Focus::begin(app.pid, win, std::rc::Rc::clone(&self.enforcers))?)
         } else {
             None
         };
@@ -1712,6 +1747,11 @@ impl Desk {
                         failure = Some(error);
                         break;
                     }
+                }
+                if let Err(mut error) = self.enforcers.remove(app.pid, true) {
+                    error.action = Some(i as u32);
+                    failure = Some(error);
+                    break;
                 }
             }
             let paced = focus
@@ -1751,6 +1791,15 @@ impl Desk {
         let attempted = (completed as usize + 1).min(actions.len());
         if actions[..attempted].iter().any(|a| !matches!(a, Action::Wait { .. })) {
             self.touched.insert(app.pid, Instant::now());
+        }
+        if failure.is_some() || cancellation::cancelled() {
+            if let Err(error) = self.enforcers.clear() {
+                if let Some(failure) = failure.as_mut() {
+                    failure.message.push_str(&format!("; cleanup: {}", error.message));
+                } else {
+                    failure = Some(error);
+                }
+            }
         }
         let (observation, observation_failure) = match observe {
             Some((shot, diff)) => match self.observe(&app, shot, diff) {
@@ -2151,6 +2200,21 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
         return Err(fail(ErrorCode::PermissionMissing, "Screen Recording not granted; run `desk permissions --prompt`"));
     }
     crate::capture::window(window_id(w), panels, f).map_err(|m| fail(ErrorCode::ActionFailed, m))
+}
+
+pub(crate) fn input_window_geometry(id: u32) -> Option<(i32, Rect)> {
+    input::window_geometry(id)
+}
+
+pub(crate) fn menu_observer(pid: i32, state: std::sync::Arc<crate::intervention::RetainedState>) -> Option<Observer> {
+    let app = app_element(pid);
+    if unsafe { AXUIElementSetMessagingTimeout(app.as_CFTypeRef(), 0.08) } != 0 {
+        return None;
+    }
+    let mut observer = Observer::with_notices(pid, &app, &["AXMenuOpened", "AXMenuClosed", "AXUIElementDestroyed"])?;
+    observer.notices.pid = pid;
+    observer.notices.menu = Some(state);
+    Some(observer)
 }
 
 #[cfg(test)]

@@ -6,10 +6,10 @@ use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -74,10 +74,12 @@ enum TapKind {
     Notifications,
     Intervention,
     Keyboard(i32),
+    Retained(i32),
 }
 
 struct TapContext {
-    context: Arc<Context>,
+    context: Option<Arc<Context>>,
+    retained: Option<Arc<RetainedState>>,
     kind: TapKind,
 }
 
@@ -90,16 +92,25 @@ struct Tap {
 
 impl Tap {
     fn new(context: Arc<Context>, kind: TapKind) -> Result<Self, String> {
-        let mut callback = Box::new(TapContext { context, kind });
+        Self::create(TapContext { context: Some(context), retained: None, kind })
+    }
+
+    fn create(callback: TapContext) -> Result<Self, String> {
+        let mut callback = Box::new(callback);
+        let kind = callback.kind;
         let info = (&mut *callback as *mut TapContext).cast();
         let keys = (1 << 10) | (1 << 11) | (1 << 12);
         let port = unsafe {
             match kind {
-                TapKind::Keyboard(pid) => CGEvent::tap_create_for_pid(
+                TapKind::Keyboard(pid) | TapKind::Retained(pid) => CGEvent::tap_create_for_pid(
                     pid,
                     CGEventTapPlacement::TailAppendEventTap,
                     CGEventTapOptions::Default,
-                    keys | (1 << 13) | (1 << 19) | (1 << 20),
+                    if matches!(kind, TapKind::Retained(_)) {
+                        [1, 2, 6, 3, 4, 7, 25, 26, 27, 13, 19, 20].into_iter().fold(0, |mask, kind| mask | (1 << kind))
+                    } else {
+                        keys | (1 << 13) | (1 << 19) | (1 << 20)
+                    },
                     Some(receive),
                     info,
                 ),
@@ -157,7 +168,10 @@ impl Context {
 
 unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event: NonNull<CGEvent>, info: *mut c_void) -> *mut CGEvent {
     let callback = unsafe { &*(info as *const TapContext) };
-    let context = &callback.context;
+    if let Some(retained) = &callback.retained {
+        return retained.receive(callback.kind, kind, unsafe { event.as_ref() }, event.as_ptr());
+    }
+    let context = callback.context.as_ref().unwrap();
     let original = event.as_ptr();
     if kind.0 >= u32::MAX - 1 {
         context.fail("Focus protection event tap was disabled; stopped");
@@ -415,5 +429,265 @@ impl Drop for Intervention {
         if let Ok(mut active) = ACTIVE.lock() {
             *active = None;
         }
+    }
+}
+
+fn process_identity(pid: i32) -> Option<Option<f64>> {
+    objc2::rc::autoreleasepool(|_| {
+        objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .filter(|app| !app.isTerminated())
+            .map(|app| app.launchDate().map(|date| date.timeIntervalSinceReferenceDate()))
+    })
+}
+
+#[derive(Default)]
+struct LocalActivation {
+    focused: bool,
+    window: u32,
+}
+
+impl LocalActivation {
+    fn event(&mut self, kind: u32, subtype: i64) {
+        match (kind, subtype) {
+            (20, _) | (13, 1) => self.focused = true,
+            (19, _) | (13, 2) => self.focused = false,
+            _ => {}
+        }
+    }
+}
+
+pub struct RetainedState {
+    pid: i32,
+    launched: Option<f64>,
+    owners: Mutex<HashMap<i32, Option<f64>>>,
+    activation: Mutex<LocalActivation>,
+    menu: AtomicI32,
+    failure: Mutex<Option<String>>,
+    registrations: mpsc::Sender<(i32, mpsc::SyncSender<Result<(), String>>)>,
+}
+
+impl RetainedState {
+    pub fn same_process(&self) -> bool {
+        objc2::rc::autoreleasepool(|_| {
+            objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(self.pid)
+                .filter(|app| !app.isTerminated())
+                .is_some_and(|app| app.launchDate().map(|d| d.timeIntervalSinceReferenceDate()) == self.launched)
+        })
+    }
+
+    pub fn ready(&self, window: u32) -> Result<bool, Failure> {
+        self.check()?;
+        Ok(self.activation.lock().map(|state| state.focused && state.window == window).unwrap_or(false))
+    }
+
+    pub fn activated(&self, window: u32) {
+        if let Ok(mut state) = self.activation.lock() {
+            state.window = window;
+        }
+    }
+
+    pub fn focused(&self) -> bool {
+        self.activation.lock().map(|state| state.focused).unwrap_or(false)
+    }
+
+    pub fn menu(&self, owner: Option<i32>) {
+        self.menu.store(0, Ordering::Release);
+        let Some(owner) = owner else { return };
+        if owner != self.pid {
+            self.menu.store(-owner, Ordering::Release);
+            let (send, _) = mpsc::sync_channel(1);
+            if self.registrations.send((owner, send)).is_err() {
+                if let Ok(mut failure) = self.failure.lock() {
+                    *failure = Some("Menu protection stopped".into());
+                }
+            }
+        } else {
+            self.menu.store(owner, Ordering::Release);
+        }
+    }
+
+    pub fn check(&self) -> Result<(), Failure> {
+        if !self.same_process() {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Retained target process changed; observe again"));
+        }
+        match self.failure.lock() {
+            Ok(error) => error.as_ref().map_or(Ok(()), |e| Err(Failure::new(ErrorCode::ActionFailed, e.clone()))),
+            Err(_) => Err(Failure::new(ErrorCode::ActionFailed, "Retained app protection is unavailable")),
+        }
+    }
+
+    fn receive(&self, tap: TapKind, kind: CGEventType, event: &CGEvent, original: *mut CGEvent) -> *mut CGEvent {
+        if !self.same_process() {
+            return original;
+        }
+        let TapKind::Retained(pid) = tap else {
+            return original;
+        };
+        let identity = process_identity(pid);
+        if identity.is_none() || self.owners.lock().ok().and_then(|owners| owners.get(&pid).copied()) != identity {
+            return original;
+        }
+        if kind.0 >= u32::MAX - 1 {
+            if let Ok(mut failure) = self.failure.lock() {
+                *failure = Some("Retained app event tap was disabled".into());
+            }
+            return original;
+        }
+        let destination = CGEvent::integer_value_field(Some(event), CGEventField::EventTargetUnixProcessID) as i32;
+        if destination == self.pid {
+            let subtype = CGEvent::integer_value_field(Some(event), CGEventField(83));
+            let suppressed = ACTIVE.lock().ok().and_then(|active| active.clone()).is_some_and(|context| {
+                context
+                    .scope
+                    .lock()
+                    .map(|scope| {
+                        !crate::cancellation::cancelled()
+                            && context.failure.lock().map(|failure| failure.is_none()).unwrap_or(false)
+                            && scope.activation_event(destination, kind.0, subtype) == Decision::Suppress
+                    })
+                    .unwrap_or(false)
+            });
+            if !suppressed {
+                if let Ok(mut state) = self.activation.lock() {
+                    state.event(kind.0, subtype);
+                }
+            }
+        }
+        let menu = self.menu.load(Ordering::Acquire);
+        if menu > 0
+            && self.failure.lock().map(|failure| failure.is_none()).unwrap_or(false)
+            && !crate::cancellation::cancelled()
+            && matches!(kind.0, 1 | 2 | 6 | 3 | 4 | 7 | 25 | 26 | 27)
+        {
+            let window = CGEvent::integer_value_field(Some(event), CGEventField(51));
+            if let Some((owner, _)) = u32::try_from(window).ok().filter(|id| *id != 0).and_then(crate::mac::input_window_geometry) {
+                if owner != self.pid && owner != menu {
+                    return std::ptr::null_mut();
+                }
+            }
+        }
+        original
+    }
+}
+
+pub struct Retained {
+    pub state: Arc<RetainedState>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Retained {
+    pub fn begin(pid: i32) -> Result<Self, Failure> {
+        let (registrations, requests) = mpsc::channel();
+        let launched = objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .filter(|app| !app.isTerminated())
+            .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target process exited"))?
+            .launchDate()
+            .map(|d| d.timeIntervalSinceReferenceDate());
+        let state = Arc::new(RetainedState {
+            pid,
+            launched,
+            owners: Mutex::new(HashMap::from([(pid, launched)])),
+            activation: Mutex::new(LocalActivation::default()),
+            menu: AtomicI32::new(0),
+            failure: Mutex::new(None),
+            registrations,
+        });
+        let callback = Arc::clone(&state);
+        let stop = Arc::new(AtomicBool::new(false));
+        let quit = Arc::clone(&stop);
+        let (send, ready) = mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let create =
+                |pid| Tap::create(TapContext { context: None, retained: Some(Arc::clone(&callback)), kind: TapKind::Retained(pid) });
+            let Some(_observer) = crate::mac::menu_observer(pid, Arc::clone(&callback)) else {
+                let _ = send.send(Err("Cannot observe target menu lifecycle".to_string()));
+                return;
+            };
+            let mut taps = match create(pid) {
+                Ok(tap) => {
+                    let _ = send.send(Ok(()));
+                    vec![tap]
+                }
+                Err(error) => {
+                    let _ = send.send(Err(error));
+                    return;
+                }
+            };
+            let mut registered = HashSet::from([pid]);
+            while !quit.load(Ordering::Acquire) && !crate::cancellation::cancelled() && callback.same_process() {
+                while let Ok((owner, ack)) = requests.try_recv() {
+                    let result = if registered.contains(&owner) {
+                        Ok(())
+                    } else if owner <= 0 || registered.len() >= 32 {
+                        Err("Menu target registration limit reached".into())
+                    } else {
+                        process_identity(owner).ok_or_else(|| "Menu target exited".to_string()).and_then(|identity| {
+                            create(owner).map(|tap| {
+                                if let Ok(mut owners) = callback.owners.lock() {
+                                    owners.insert(owner, identity);
+                                }
+                                registered.insert(owner);
+                                taps.push(tap);
+                            })
+                        })
+                    };
+                    if let Err(error) = &result {
+                        if let Ok(mut failure) = callback.failure.lock() {
+                            *failure = Some(error.clone());
+                        }
+                    } else {
+                        let _ = callback.menu.compare_exchange(-owner, owner, Ordering::AcqRel, Ordering::Acquire);
+                    }
+                    let _ = ack.send(result);
+                }
+                CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(20), false);
+            }
+            if let Ok(mut failure) = callback.failure.lock() {
+                if failure.is_none() {
+                    *failure = Some("Retained app protection stopped".into());
+                }
+            }
+        });
+        let result = ready.recv_timeout(Duration::from_millis(350)).map_err(|e| e.to_string()).and_then(|result| result);
+        if let Err(error) = result {
+            stop.store(true, Ordering::Release);
+            let _ = thread.join();
+            return Err(Failure::new(ErrorCode::ActionFailed, error));
+        }
+        Ok(Self { state, stop, thread: Some(thread) })
+    }
+}
+
+impl Drop for Retained {
+    fn drop(&mut self) {
+        self.state.menu(None);
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod retained_tests {
+    use super::*;
+
+    #[test]
+    fn local_focus_survives_command_boundaries_and_tracks_delivered_activation() {
+        let mut state = LocalActivation::default();
+        state.event(13, 1);
+        state.window = 42;
+        assert!(state.focused);
+        state.event(10, 0);
+        state.event(13, 23);
+        assert!(state.focused);
+        assert_eq!(state.window, 42);
+        state.event(19, 0);
+        assert!(!state.focused);
+        state.event(20, 0);
+        assert!(state.focused);
+        state.event(13, 2);
+        assert!(!state.focused);
     }
 }
