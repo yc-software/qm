@@ -2,12 +2,13 @@ use crate::protocol::{ErrorCode, Failure};
 use core_foundation::base::{CFRetain, CFType, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFDictionary;
+use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::event::CGEvent;
 use foreign_types::ForeignType;
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+use objc2_app_kit::{NSApplicationActivationOptions, NSEvent, NSEventModifierFlags, NSEventType, NSRunningApplication};
 use objc2_foundation::NSPoint;
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -57,6 +58,180 @@ fn frontmost() -> Option<i32> {
     crate::mac::system_focused_pid()
 }
 
+type Update = unsafe extern "C" fn(i32) -> i32;
+
+struct Updates {
+    connection: i32,
+    enable: Update,
+    frozen: bool,
+}
+
+impl Updates {
+    fn freeze() -> Result<Self, Failure> {
+        let lookup = |name: &std::ffi::CStr| {
+            let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+            if pointer.is_null() {
+                Err(Failure::new(ErrorCode::ActionFailed, "WindowServer activation support is unavailable"))
+            } else {
+                Ok(pointer)
+            }
+        };
+        let main = unsafe { std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> i32>(lookup(c"CGSMainConnectionID")?) };
+        let disable = unsafe { std::mem::transmute::<*mut c_void, Update>(lookup(c"CGSDisableUpdate")?) };
+        let enable = unsafe { std::mem::transmute::<*mut c_void, Update>(lookup(c"CGSReenableUpdate")?) };
+        let connection = unsafe { main() };
+        if connection == 0 || unsafe { disable(connection) } != 0 {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Cannot suspend display updates for activation"));
+        }
+        Ok(Self { connection, enable, frozen: true })
+    }
+
+    fn resume(&mut self) -> Result<(), Failure> {
+        if self.frozen {
+            if unsafe { (self.enable)(self.connection) } != 0 {
+                return Err(Failure::new(ErrorCode::ActionFailed, "Cannot resume display updates after activation"));
+            }
+            self.frozen = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Updates {
+    fn drop(&mut self) {
+        if let Err(error) = self.resume() {
+            eprintln!("{}", error.message);
+        }
+    }
+}
+
+fn activate_window(target: i32, window: u32) -> Result<(), Failure> {
+    let (frame, point) = crate::mac::focus_activation_window(target, window)
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target window has no valid activation point"))?;
+    synthetic_focus(target, window, 1)?;
+    let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
+    if pointer.is_null() {
+        return Err(Failure::new(ErrorCode::ActionFailed, "Window-relative activation is unavailable"));
+    }
+    let set_location: unsafe extern "C" fn(*mut c_void, core_graphics::geometry::CGPoint) = unsafe { std::mem::transmute(pointer) };
+    autoreleasepool(|_| {
+        let events = [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp]
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let native =
+                    NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                        kind,
+                        NSPoint::new(point.x, point.y),
+                        NSEventModifierFlags::empty(),
+                        0.0,
+                        window as isize,
+                        None,
+                        index as isize + 1,
+                        1,
+                        1.0,
+                    )
+                    .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot create window activation event"))?;
+                let raw: *mut c_void = unsafe { msg_send![&*native, CGEvent] };
+                if raw.is_null() {
+                    return Err(Failure::new(ErrorCode::ActionFailed, "Cannot convert window activation event"));
+                }
+                let event = unsafe { CGEvent::from_ptr(CFRetain(raw.cast()) as _) };
+                objc2_core_graphics::CGEvent::set_location(
+                    Some(unsafe { &*event.as_ptr().cast::<objc2_core_graphics::CGEvent>() }),
+                    objc2_core_foundation::CGPoint::new(point.x, point.y),
+                );
+                event.set_integer_value_field(3, 0);
+                event.set_integer_value_field(7, 3);
+                event.set_integer_value_field(51, i64::from(window));
+                event.set_integer_value_field(91, i64::from(window));
+                event.set_integer_value_field(92, i64::from(window));
+                event.set_integer_value_field(41, std::process::id() as i64);
+                unsafe {
+                    set_location(
+                        event.as_ptr().cast(),
+                        core_graphics::geometry::CGPoint::new(point.x - frame.origin.x, point.y - frame.origin.y),
+                    )
+                };
+                Ok(event)
+            })
+            .collect::<Result<Vec<_>, Failure>>()?;
+        check_current()?;
+        for event in events {
+            event.post_to_pid(target);
+        }
+        Ok(())
+    })
+}
+
+fn restore_order(target: i32, original: i32, window: u32) -> Result<(), Failure> {
+    let windows = core_graphics::window::copy_window_info(0x11, 0)
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot verify window order after activation"))?;
+    let mut ahead = Vec::new();
+    for value in windows.iter() {
+        let value = unsafe { CFType::wrap_under_get_rule(*value) };
+        let Some(raw) = value.downcast::<CFDictionary>() else { continue };
+        let dict = unsafe { CFDictionary::<CFString, CFType>::wrap_under_get_rule(raw.as_concrete_TypeRef()) };
+        let number =
+            |name: &str| dict.find(CFString::new(name)).and_then(|value| value.downcast::<CFNumber>()).and_then(|value| value.to_i64());
+        if number("kCGWindowNumber") == Some(i64::from(window)) {
+            if ahead.contains(&(i64::from(target), number("kCGWindowLayer"))) {
+                check_current()?;
+                crate::mac::restore_focused_window(original, window)?;
+            }
+            return Ok(());
+        }
+        if let Some(owner) = number("kCGWindowOwnerPID") {
+            ahead.push((owner, number("kCGWindowLayer")));
+        }
+    }
+    Err(Failure::new(ErrorCode::ActionFailed, "Original focused window disappeared during activation"))
+}
+
+fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure> {
+    let original_window = crate::mac::focused_window_id(original);
+    let original_app = NSRunningApplication::runningApplicationWithProcessIdentifier(original)
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Original foreground app exited before activation"))?;
+    let transition = crate::intervention::ActivationTransition::begin(target, original)?;
+    let mut updates = Updates::freeze()?;
+    let activation = (|| {
+        check_current()?;
+        activate_window(target, window)?;
+        let until = Instant::now() + Duration::from_millis(80);
+        while Instant::now() < until {
+            check_current()?;
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        check_current()
+    })();
+    let restoration = (|| {
+        check_current()?;
+        if frontmost() != Some(original) && !original_app.activateWithOptions(NSApplicationActivationOptions::empty()) {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Cannot restore original foreground app after activation"));
+        }
+        let until = Instant::now() + Duration::from_millis(350);
+        while frontmost() != Some(original) && Instant::now() < until {
+            check_current()?;
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        check_current()?;
+        if frontmost() != Some(original) {
+            return Err(Failure::new(ErrorCode::ActionFailed, "Original foreground app did not return after activation"));
+        }
+        if let Some(original_window) = original_window {
+            restore_order(target, original, original_window)?;
+        }
+        check_current()
+    })();
+    let resumed = updates.resume();
+    drop(transition);
+    let result = activation.and(restoration).and(resumed);
+    if result.is_err() && frontmost() != Some(target) {
+        let _ = synthetic_focus(target, 0, 2);
+    }
+    result
+}
+
 thread_local! {
     static ACTIVATION: RefCell<Weak<Activation>> = const { RefCell::new(Weak::new()) };
 }
@@ -93,7 +268,7 @@ pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    activation.ensure(target, window, synthetic_focus)?;
+    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original))?;
     check_current()
 }
 
@@ -101,7 +276,7 @@ pub fn activate_current() -> Result<(), Failure> {
     check_current()?;
     if let Some(activation) = ACTIVATION.with(|current| current.borrow().upgrade()) {
         let (target, window) = activation.selected.get();
-        activation.ensure(target, window, synthetic_focus)?;
+        activate_target(target, window)?;
     }
     check_current()
 }
@@ -166,11 +341,14 @@ pub fn check_current() -> Result<(), Failure> {
     if expected == 0 {
         return Ok(());
     }
+    if crate::cancellation::cancelled() {
+        return Err(Failure::new(ErrorCode::ActionFailed, "Input cancelled; activation stopped"));
+    }
     if !screen_available() {
         return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
     }
     crate::intervention::check_current()?;
-    if frontmost() != Some(expected) {
+    if !frontmost().is_some_and(crate::intervention::permits_foreground) {
         return Err(Failure::new(ErrorCode::ActionFailed, "Foreground app changed during background input; stopped"));
     }
     Ok(())

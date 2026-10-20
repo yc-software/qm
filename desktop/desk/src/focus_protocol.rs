@@ -31,11 +31,43 @@ pub struct Scope {
     targets: HashSet<i32>,
     lease: Option<Lease>,
     yielded: bool,
+    activation: Option<i32>,
 }
 
 impl Scope {
     pub fn new(owner: i32, foreground: i32, keyboard_owner: i32, target: i32) -> Self {
-        Self { owner, foreground, keyboard_owner, targets: HashSet::from([target]), lease: None, yielded: false }
+        Self { owner, foreground, keyboard_owner, targets: HashSet::from([target]), lease: None, yielded: false, activation: None }
+    }
+
+    pub fn begin_activation(&mut self, target: i32) -> bool {
+        if self.yielded || self.activation.is_some() || !self.targets.contains(&target) {
+            return false;
+        }
+        self.activation = Some(target);
+        true
+    }
+
+    pub fn interrupted(&self) -> bool {
+        self.yielded
+    }
+
+    pub fn end_activation(&mut self) {
+        self.activation = None;
+    }
+
+    pub fn permits_foreground(&self, pid: i32) -> bool {
+        !self.yielded && (pid == self.foreground || self.activation == Some(pid))
+    }
+
+    pub fn activation_event(&self, destination: i32, kind: u32, subtype: i64) -> Decision {
+        if !self.yielded
+            && self.activation.is_some_and(|target| destination == target || destination == self.foreground)
+            && (kind == 19 || (kind == 13 && matches!(subtype, 2 | 22 | 23)))
+        {
+            Decision::Suppress
+        } else {
+            Decision::Pass
+        }
     }
 
     pub fn include(&mut self, pid: i32) {
@@ -85,7 +117,7 @@ impl Scope {
                 Decision::Pass
             }
             NEW_FRONT => {
-                if subject > 0 && subject != self.foreground {
+                if subject > 0 && !self.permits_foreground(subject) {
                     self.yield_to_user();
                     return Decision::Stop("System focus changed during protected input; stopped");
                 }
@@ -126,13 +158,24 @@ impl Scope {
     }
 
     pub fn observe_user_event(&mut self, kind: u32, source: i32, destination: i32) -> Decision {
+        if self.activation.is_some() && source != self.owner && !self.yielded {
+            if matches!(kind, 10..=12) && self.activation == Some(destination) {
+                return Decision::Pass;
+            }
+            self.yield_to_user();
+            return Decision::Intervened;
+        }
         match self.user_event(kind, source, destination) {
             Decision::Redirect(_) => Decision::Pass,
             decision => decision,
         }
     }
 
-    pub fn keyboard(&self, source: i32, destination: i32) -> Decision {
+    pub fn keyboard(&mut self, source: i32, destination: i32) -> Decision {
+        if self.activation == Some(destination) && source != self.owner && !self.yielded {
+            self.yield_to_user();
+            return Decision::Redirect(self.keyboard_owner);
+        }
         if !self.yielded && source != self.owner {
             if let Some(lease) = self.lease {
                 if destination == lease.thief {
@@ -147,6 +190,35 @@ impl Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_preserves_physical_input_and_limits_suppression() {
+        let mut state = Scope::new(1, 2, 2, 3);
+        assert!(state.begin_activation(3));
+        assert_eq!(state.notification(3, NEW_FRONT, 3, 0), Decision::Pass);
+        assert_eq!(state.activation_event(3, 13, 2), Decision::Suppress);
+        assert_eq!(state.activation_event(3, 13, 1), Decision::Pass);
+        assert_eq!(state.activation_event(4, 13, 2), Decision::Pass);
+        assert_eq!(state.observe_user_event(10, 7, 3), Decision::Pass);
+        assert_eq!(state.keyboard(7, 3), Decision::Redirect(2));
+        assert!(state.interrupted());
+        assert!(!state.permits_foreground(2));
+        assert_eq!(state.activation_event(3, 13, 2), Decision::Pass);
+        assert!(!state.begin_activation(3));
+    }
+
+    #[test]
+    fn activation_teardown_and_human_pointer_never_restore_focus() {
+        let mut state = Scope::new(1, 2, 2, 3);
+        assert!(state.begin_activation(3));
+        state.end_activation();
+        assert!(!state.permits_foreground(3));
+        assert_eq!(state.activation_event(3, 19, 0), Decision::Pass);
+        assert!(state.begin_activation(3));
+        assert_eq!(state.observe_user_event(1, 7, 4), Decision::Intervened);
+        assert!(!state.permits_foreground(3));
+        assert_eq!(state.activation_event(2, 13, 22), Decision::Pass);
+    }
 
     fn scope() -> Scope {
         Scope::new(100, 200, 200, 300)

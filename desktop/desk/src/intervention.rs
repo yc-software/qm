@@ -99,7 +99,7 @@ impl Tap {
                     pid,
                     CGEventTapPlacement::TailAppendEventTap,
                     CGEventTapOptions::Default,
-                    keys,
+                    keys | (1 << 13) | (1 << 19) | (1 << 20),
                     Some(receive),
                     info,
                 ),
@@ -186,8 +186,12 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
         )
     } else if matches!(callback.kind, TapKind::Intervention) {
         scope.observe_user_event(kind.0, source, destination)
-    } else if matches!(callback.kind, TapKind::Keyboard(pid) if pid == destination) && matches!(kind.0, 10..=12) {
-        scope.keyboard(source, destination)
+    } else if matches!(callback.kind, TapKind::Keyboard(pid) if pid == destination) {
+        if matches!(kind.0, 10..=12) {
+            scope.keyboard(source, destination)
+        } else {
+            scope.activation_event(destination, kind.0, field(CGEventField(83)))
+        }
     } else {
         Decision::Pass
     };
@@ -195,6 +199,9 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
         Decision::Pass => original,
         Decision::Suppress => std::ptr::null_mut(),
         Decision::Redirect(pid) => {
+            if scope.interrupted() {
+                context.fail("User typed during activation; input was returned to its original owner and automation stopped");
+            }
             CGEvent::set_integer_value_field(Some(value), CGEventField::EventTargetUnixProcessID, i64::from(pid));
             CGEvent::post_to_pid(pid, Some(value));
             std::ptr::null_mut()
@@ -234,6 +241,48 @@ pub fn include_target(pid: i32) {
         Ok(Err(error)) => context.fail(error),
         Err(_) => context.fail("Focus protection target registration did not complete within 350 ms"),
     }
+}
+
+pub struct ActivationTransition {
+    context: Arc<Context>,
+}
+
+impl ActivationTransition {
+    pub fn begin(target: i32, original: i32) -> Result<Self, Failure> {
+        include_target(target);
+        include_target(original);
+        check_current()?;
+        let context = ACTIVE
+            .lock()
+            .ok()
+            .and_then(|active| active.clone())
+            .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Activation protection is unavailable"))?;
+        let allowed = context.scope.lock().map(|mut scope| scope.begin_activation(target)).unwrap_or(false);
+        if !allowed {
+            return Err(Failure::new(
+                ErrorCode::ActionFailed,
+                "Activation protection cannot start after interruption or during another transition",
+            ));
+        }
+        Ok(Self { context })
+    }
+}
+
+impl Drop for ActivationTransition {
+    fn drop(&mut self) {
+        if let Ok(mut scope) = self.context.scope.lock() {
+            scope.end_activation();
+        }
+    }
+}
+
+pub fn permits_foreground(pid: i32) -> bool {
+    ACTIVE
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+        .and_then(|context| context.scope.lock().ok().map(|scope| scope.permits_foreground(pid)))
+        .unwrap_or(false)
 }
 
 pub struct Intervention {
