@@ -47,6 +47,7 @@ async function fixture(): Promise<{
   });
   const app = {
     listDeployments: async () => [deployment],
+    authorizesDeploymentGitAccess: async (_id: string, principalId: string) => principalId === "U1",
     deploymentGitRepoPath: async (id: string) => (id === deployment.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
   const server: Server = createServer(app, { signingSecret: SECRET });
@@ -60,7 +61,12 @@ async function authedGitUrl(
   deploymentId: string,
   permission: "read" | "write" = "read",
 ): Promise<string> {
-  const token = await mintDeployGitAccess(SECRET, { deploymentId, permission, exp: Date.now() + 60_000 });
+  const token = await mintDeployGitAccess(SECRET, {
+    deploymentId,
+    permission,
+    principalId: "U1",
+    exp: Date.now() + 60_000,
+  });
   const url = new URL(`/v1/deployments/${encodeURIComponent(deploymentId)}/git`, base);
   url.username = "deployment";
   url.password = token;

@@ -71,7 +71,7 @@ export function createResourceSearchMethods(
             crons ??= cronVisibility(deps, helpers, principalId);
             return (await crons).canSee(row);
           case "deploys":
-            return (await helpers.principalGitPermission(row, principalId)) !== null;
+            return (await helpers.principalDeploymentPermission(row, principalId)) !== null;
           case "webhooks":
             person ??= app.personMatcher(principalId);
             return canAdministerWebhook(app, row, principalId, await person);

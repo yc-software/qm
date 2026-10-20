@@ -1230,14 +1230,8 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "token is for a different deployment" });
     if (isPush && access.permission !== "write")
       return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git token is read-only" });
-    if (
-      access.principalId &&
-      !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, access.permission))
-    ) {
+    if (!access.principalId || !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId))) {
       return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git access has been revoked" });
-    }
-    if (isPush && !access.principalId) {
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "deployment git write access has been revoked" });
     }
   }
   const repoPath = await ctx.app.deploymentGitRepoPath(parts.id);
@@ -1255,10 +1249,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
       });
     const result = isPush
       ? await ctx.app.runDeploymentGitPush(parts.id, async () => {
-          if (
-            access?.principalId &&
-            !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
-          ) {
+          if (access?.principalId && !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId))) {
             const body = Buffer.from(
               JSON.stringify({ error: "forbidden", message: "deployment git write access has been revoked" }),
             );
