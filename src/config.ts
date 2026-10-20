@@ -476,7 +476,6 @@ interface ModalSandboxEnv {
   reapIdleSec?: number;
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
-  snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
 }
 
@@ -509,9 +508,6 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
     ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
     ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
-    ...(num("MODAL_SNAPSHOT_INTERVAL_SEC") !== undefined
-      ? { snapshotIntervalSec: num("MODAL_SNAPSHOT_INTERVAL_SEC") }
-      : {}),
     ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
   };
 }

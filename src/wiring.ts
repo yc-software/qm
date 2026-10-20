@@ -981,7 +981,6 @@ export function buildApp(
       }),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
-      ...(modal.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: modal.snapshotIntervalSec * 1000 } : {}),
       ...(modal.nativeSnapshotIntervalSec !== undefined
         ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
         : {}),

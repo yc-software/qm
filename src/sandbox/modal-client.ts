@@ -19,8 +19,8 @@ export interface ModalSession {
   runCommand(command: string, opts?: ModalRunOpts): Promise<ModalCommandResult>;
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
-  snapshotHome?(): Promise<{ imageId: string; expiresAtMs: number }>;
-  restoreHome?(imageId: string): Promise<void>;
+  snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }>;
+  restoreHome(imageId: string): Promise<void>;
   terminate(): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
@@ -43,7 +43,6 @@ interface ModalCreateOpts {
 
 export interface ModalClient {
   readonly lifetimeMs?: number;
-  readonly nativeSnapshots?: boolean;
   create(opts: ModalCreateOpts): Promise<ModalSession>;
   fromId(sandboxId: string): Promise<ModalSession>;
   fromName(name: string): Promise<ModalSession | null>;
@@ -237,7 +236,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
 
   return {
     lifetimeMs: sandboxTimeoutMs,
-    nativeSnapshots: true,
     async create(createOpts): Promise<ModalSession> {
       const { sdk, client, app, image } = await loadCtx();
       try {
