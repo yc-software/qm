@@ -805,7 +805,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         ${icon(ArrowUp, 16)}
       </button>`;
     }
-    const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
+    const label =
+      alwaysSteer() && canSteer(agent) ? "Steer the running task (Tab to queue)" : "Queue for after this turn";
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
@@ -1326,6 +1327,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         return;
       }
     }
+    if (e.key === "Tab" && !e.shiftKey && alwaysSteer() && canSteer(agent) && composerCanSend()) {
+      e.preventDefault();
+      void sendPrompt(agent, true);
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     void sendPrompt(agent);
@@ -1355,7 +1361,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : mintSendKey();
   }
 
-  async function queueDraft(agent: Agent): Promise<void> {
+  async function queueDraft(agent: Agent, queueOnly = false): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
     const staged = composerState.attachments;
@@ -1376,7 +1382,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    const steer = alwaysSteer() && canSteer(agent);
+    const steer = !queueOnly && alwaysSteer() && canSteer(agent);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     } else if (transientIds.size && stillHere()) {
@@ -1560,20 +1566,20 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent): Promise<void> {
+  async function sendPrompt(agent: Agent, queueOnly = false): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent);
+      await sendPromptNow(agent, queueOnly);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent): Promise<void> {
+  async function sendPromptNow(agent: Agent, queueOnly: boolean): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
-    if (agent.state.isStreaming) return queueDraft(agent);
+    if (agent.state.isStreaming) return queueDraft(agent, queueOnly);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
     const submit = options.prepareSubmit?.();

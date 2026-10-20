@@ -55,7 +55,7 @@ test("a mid-run send with the steer preference steers at once and queues only wh
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { seedRuntimeConfig, invalidateRuntimeConfigs } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { setAlwaysSteer } = await vite.ssrLoadModule("/src/core-bridge.ts");
-    const { render } = await vite.ssrLoadModule("lit");
+    const { render, nothing } = await vite.ssrLoadModule("lit");
     appState.me = { user: "tester", org: "test" };
     const model = {
       id: "alpha",
@@ -112,6 +112,10 @@ test("a mid-run send with the steer preference steers at once and queues only wh
         isStopping: () => false,
         hasLiveRun: () => live,
         hasUnresolvedApproval: () => false,
+        activePendingApprovals: () => [],
+        turnRuntime: () => null,
+        scrollToBottom() {},
+        notePendingSessionOnSend() {},
         currentTurnOptions: () => ({}),
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);
@@ -161,6 +165,29 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       );
       assert.equal(seenTags.has("Queued"), false);
       reset();
+    });
+
+    await t.test("with the preference on, Tab queues instead of steering", async () => {
+      const form = document.createElement("div");
+      document.body.append(form);
+      try {
+        composer!.state.draft = "later";
+        render(composer!.composerForm(agent), form);
+        const input = form.querySelector<HTMLTextAreaElement>(".composer-input")!;
+        assert.match(form.querySelector(".send-btn")!.getAttribute("aria-label") ?? "", /Tab to queue/);
+        const tab = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+        input.dispatchEvent(tab);
+        assert.equal(tab.defaultPrevented, true);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        draw();
+        assert.equal(turns.at(-1), "later");
+        assert.deepEqual(signalled, []);
+        assert.deepEqual(chips(), ["Queued"]);
+      } finally {
+        render(nothing, form);
+        form.remove();
+        reset();
+      }
     });
 
     await t.test("a harness that cannot steer falls back to the queue", async () => {
