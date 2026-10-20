@@ -204,7 +204,7 @@ test("pack removal and re-import identify pack skills by their pack record, not 
     const id = reg.pack.id as string;
     const lookalike = await s.built.skills.create({
       scopeId: "org:default-org",
-      manifest: { name: "hand-made", description: "native", body: "native body", requiredCapabilities: [] },
+      manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
       createdBy: `pack:${id}`,
     });
     await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
@@ -214,11 +214,11 @@ test("pack removal and re-import identify pack skills by their pack record, not 
       await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
         method: "POST",
         headers: ADMIN,
-        body: JSON.stringify({ selected: ["reg-alpha"] }),
+        body: JSON.stringify({ selected: ["reg-alpha", "reg-beta"] }),
       }),
     );
-    assert.deepEqual(imp.imported, ["reg-alpha"]);
-    assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "re-import leaves it alone");
+    assert.deepEqual(imp.imported, ["reg-beta"]);
+    assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
 
     const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
     assert.equal(del.removed, 1);
