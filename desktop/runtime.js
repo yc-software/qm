@@ -144,8 +144,14 @@
       }
       if (emit && tree) say(stateText(o));
       if (o.screenshot) {
+        const shot = o.screenshot.frame;
+        if (!shot || ![shot.x, shot.y, shot.w, shot.h].every(Number.isFinite) || shot.w <= 0 || shot.h <= 0) {
+          observedWindows.delete(this.#appIdentity);
+          this.#scale = null;
+          this.#screenshotWindow = null;
+          throw new Error("Observation has no valid screenshot frame; screenshot coordinates cannot be verified.");
+        }
         const image = await jpeg(o.screenshot);
-        const shot = o.screenshot.frame ?? o.frame;
         this.#screenshotWindow = identity;
         this.#scale = image.width / shot.w;
         this.#offset = { x: shot.x - o.frame.x, y: shot.y - o.frame.y };

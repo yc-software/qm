@@ -7,6 +7,7 @@ const source = await readFile(new URL("../runtime.js", import.meta.url), "utf8")
 
 test("coordinate actions require a screenshot of the current process, window and geometry", async () => {
   const calls = [];
+  let screenshotFrame = false;
   const observation = {
     app: "Fixture",
     pid: 100,
@@ -27,7 +28,15 @@ test("coordinate actions require a screenshot of the current process, window and
           type: "observation",
           ...structuredClone(observation),
           ...(command.screenshot
-            ? { screenshot: { png_base64: "", frame: { ...observation.frame, x: observation.frame.x - 10, w: 200 } } }
+            ? {
+                screenshot: {
+                  png_base64: "",
+                  frame:
+                    screenshotFrame === false
+                      ? { ...observation.frame, x: observation.frame.x - 10, w: 200 }
+                      : screenshotFrame,
+                },
+              }
             : {}),
         };
       },
@@ -91,6 +100,26 @@ test("coordinate actions require a screenshot of the current process, window and
     await app.click([20, 10]);
     assert.deepEqual(calls.at(-1).actions[0].target.point, { x: 0, y: 5 });
   }
+  for (const invalidFrame of [
+    undefined,
+    null,
+    {},
+    { x: 0, y: 0, w: 0, h: 100 },
+    { x: 0, y: 0, w: 100, h: -1 },
+    { x: Infinity, y: 0, w: 100, h: 100 },
+    { x: 0, y: "0", w: 100, h: 100 },
+  ]) {
+    await alias.getScreenshot({ emit: false });
+    screenshotFrame = invalidFrame;
+    await assert.rejects(alias.getScreenshot({ emit: false }), /screenshot frame/);
+    const before = calls.length;
+    assert.throws(() => app.click([20, 10]), /screenshot/i);
+    assert.throws(() => alias.click([20, 10]), /screenshot/i);
+    assert.equal(calls.length, before);
+    screenshotFrame = false;
+    await app.getScreenshot({ emit: false });
+    await app.click([20, 10]);
+  }
   const nativeWindowId = observation.window_id;
   for (const invalidId of [undefined, null, 0, -1, 0.5, 0x100000000, "200"]) {
     observation.window_id = invalidId;
@@ -123,7 +152,7 @@ test("screenshot conversion releases decoded pixels after drawing and on drawing
             tree: "",
             diffed: false,
             removed: [],
-            screenshot: { png_base64: "" },
+            screenshot: { png_base64: "", frame: { x: 0, y: 0, w: 2000, h: 1000 } },
           };
         },
       },
