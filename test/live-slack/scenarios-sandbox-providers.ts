@@ -28,6 +28,7 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
 
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
   const calls = new Set<string>();
+  const results: unknown[] = [];
   let executed = false;
   for (const entry of entries) {
     if (!isObj(entry) || !isObj(entry.payload)) continue;
@@ -37,10 +38,15 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       calls.add(p.callId);
       continue;
     }
-    if (entry.type === "tool_result" && calls.has(p.callId) && succeededWithStdout(p, stdout)) executed = true;
+    if (entry.type !== "tool_result" || !calls.has(p.callId)) continue;
+    if (succeededWithStdout(p, stdout)) executed = true;
+    results.push({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: String(p.result).slice(0, 600) });
   }
   assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
-  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);
+  assert.ok(
+    executed,
+    `no successful execute result with exact stdout on ${sandboxId}; results: ${JSON.stringify(results)}`,
+  );
 }
 
 export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backend) => ({
