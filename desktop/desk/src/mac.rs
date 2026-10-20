@@ -295,11 +295,16 @@ impl Snapshot {
     }
 }
 
+struct Enablement {
+    prior: Vec<(&'static str, bool)>,
+    ready: bool,
+}
+
 #[derive(Default)]
 pub struct Desk {
     cache: HashMap<i32, Snapshot>,
     touched: HashMap<i32, Instant>,
-    enabled: HashMap<i32, Vec<(&'static str, bool)>>,
+    enabled: HashMap<i32, Enablement>,
     observers: HashMap<i32, Observer>,
     launches: HashMap<i32, Option<f64>>,
     enforcers: std::rc::Rc<crate::focus::Enforcers>,
@@ -315,7 +320,7 @@ impl Drop for Desk {
                 eprintln!("App protection cleanup failed: {}", error.message);
             }
         }
-        for (pid, prior) in &self.enabled {
+        for (pid, enablement) in &self.enabled {
             let current = NSRunningApplication::runningApplicationWithProcessIdentifier(*pid)
                 .filter(|a| !a.isTerminated())
                 .map(|a| a.launchDate().map(|d| d.timeIntervalSinceReferenceDate()));
@@ -323,7 +328,7 @@ impl Drop for Desk {
                 continue;
             }
             let ax = app_element(*pid);
-            for (name, was) in prior {
+            for (name, was) in &enablement.prior {
                 set_attr(&ax, name, &CFBoolean::from(*was).as_CFType());
             }
         }
@@ -1541,10 +1546,10 @@ impl Desk {
     }
 
     fn enable(&mut self, app: &App, ax: &El, w: &El) -> Result<(), Failure> {
-        let required = electron_app(app);
-        if self.enabled.contains_key(&app.pid) && !required {
+        if self.enabled.get(&app.pid).is_some_and(|state| state.ready) {
             return Ok(());
         }
+        let required = electron_app(app);
         if let std::collections::hash_map::Entry::Vacant(slot) = self.enabled.entry(app.pid) {
             let mut prior = vec![];
             let mut turn_on = |name: &'static str| {
@@ -1558,7 +1563,7 @@ impl Desk {
             if !turn_on("AXManualAccessibility") {
                 turn_on("AXEnhancedUserInterface");
             }
-            slot.insert(prior);
+            slot.insert(Enablement { prior, ready: false });
         }
         for attempt in 0..=10 {
             if cancellation::cancelled() {
@@ -1577,6 +1582,7 @@ impl Desk {
                 return Err(fail(ErrorCode::ActionFailed, "Accessibility enablement cancelled"));
             }
             if ready == Some(true) || (!required && ready.is_none()) {
+                self.enabled.get_mut(&app.pid).unwrap().ready = true;
                 return Ok(());
             }
             if attempt < 10 {
@@ -1586,6 +1592,7 @@ impl Desk {
         if required {
             Err(fail(ErrorCode::ActionFailed, "Electron accessibility content is not ready; observe again"))
         } else {
+            self.enabled.get_mut(&app.pid).unwrap().ready = true;
             Ok(())
         }
     }
