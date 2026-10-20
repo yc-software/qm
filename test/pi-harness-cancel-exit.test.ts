@@ -278,7 +278,7 @@ for (const shutdown of [false, true]) {
       const stoppedEntries = entries.filter(
         (entry) => entry.type === "assistant" || (entry.payload as { kind?: unknown } | null)?.kind === "turn_stopped",
       );
-      const partial = findTrailingPartialTurn(entries, "do the thing");
+      const partial = findTrailingPartialTurn(entries, entries[0]!.seq);
       if (shutdown) {
         assert.deepEqual(stoppedEntries, [], "shutdown must not close the turn with a stop marker");
         assert.equal((entries[2]!.payload as { interrupted?: unknown }).interrupted, true);

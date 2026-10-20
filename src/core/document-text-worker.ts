@@ -9,12 +9,7 @@ try {
   });
   const result = await ast.to("text");
   const text = String(result.value);
-  parentPort?.postMessage({
-    text:
-      text.length > workerData.maxChars
-        ? `${text.slice(0, workerData.maxChars)}\n[Document text truncated at ${workerData.maxChars} characters.]`
-        : text,
-  });
+  parentPort?.postMessage({ text: text.slice(0, workerData.maxChars), truncated: text.length > workerData.maxChars });
 } catch {
   parentPort?.postMessage({ error: "Document text could not be extracted." });
 }

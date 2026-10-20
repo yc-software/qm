@@ -28,39 +28,41 @@ test("findTrailingPartialTurn finds the dead attempt's user entry and counts its
     toolResult(5),
     toolCall(6),
   ];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 3);
   assert.deepEqual(found, { userSeq: 3, workEntries: 3 });
 });
 
 test("findTrailingPartialTurn returns null when the last turn completed (assistant entry present)", () => {
   const entries = [user("do the thing", 1), toolCall(2), toolResult(3), assistant("done", 4)];
-  assert.equal(findTrailingPartialTurn(entries, "do the thing"), null);
+  assert.equal(findTrailingPartialTurn(entries, 1), null);
 });
 
-test("findTrailingPartialTurn returns null when the trailing user entry is a different request", () => {
+test("findTrailingPartialTurn returns null when the trailing user entry is not the run's turn", () => {
   const entries = [user("an older abandoned ask", 1), toolCall(2)];
-  assert.equal(findTrailingPartialTurn(entries, "build and deploy the release"), null);
+  assert.equal(findTrailingPartialTurn(entries, 3), null);
+  assert.equal(findTrailingPartialTurn([], 1), null);
 });
 
-test("findTrailingPartialTurn returns null for empty input text and empty ledgers", () => {
-  assert.equal(findTrailingPartialTurn([user("x", 1)], "   "), null);
-  assert.equal(findTrailingPartialTurn([], "do the thing"), null);
+test("a repeated message is not mistaken for the run's turn", () => {
+  const entries = [user("build and deploy the release", 1), toolCall(2), user("build and deploy the release", 3)];
+  assert.equal(findTrailingPartialTurn(entries, 1), null);
+  assert.deepEqual(findTrailingPartialTurn(entries, 3), { userSeq: 3, workEntries: 0 });
 });
 
 test("a trailing resume note from a prior dead resume is skipped, reaching the real user entry", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3), toolCall(4)];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 2 }, "the note itself is not work");
 });
 
 test("an attempt that died before recording ANY work reports workEntries 0", () => {
-  const found = findTrailingPartialTurn([user("build and deploy the release", 1)], "build and deploy the release");
+  const found = findTrailingPartialTurn([user("build and deploy the release", 1)], 1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
 test("prior resume notes alone are NOT work — repeated no-work deaths still report 0", () => {
   const entries = [user("build and deploy the release", 1), resumeEntry(2)];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
@@ -72,13 +74,13 @@ test("platform rails and render-only rows are NOT work — only tool rows replay
     ent("text", { text: "on it" }, 4),
     ent("delivery", { text: "ack" }, 5),
   ];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
 test("a prior no-work retry's restart note is skipped — later retries anchor on the human's entry", () => {
   const entries = [user("build and deploy the release", 1), ent("user", { text: LEGACY_NOTE, resumeNote: true }, 2)];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 }, "provenance stays on the original, not attempt 2's prompt");
 });
 
@@ -89,7 +91,7 @@ test("overheard catch-up rows trailing the dead attempt are skipped, reaching th
     overheard("build and deploy the release please someone", 3),
     overheard("unrelated chatter", 4),
   ];
-  const found = findTrailingPartialTurn(entries, "build and deploy the release");
+  const found = findTrailingPartialTurn(entries, 1);
   assert.deepEqual(
     found,
     { userSeq: 1, workEntries: 1 },
@@ -99,19 +101,19 @@ test("overheard catch-up rows trailing the dead attempt are skipped, reaching th
 
 test("a session whose only trailing user rows are overheard is NOT a resume", () => {
   const entries = [assistant("earlier reply", 1), overheard("build and deploy the release", 2)];
-  assert.equal(findTrailingPartialTurn(entries, "build and deploy the release"), null);
+  assert.equal(findTrailingPartialTurn(entries, 1), null);
 });
 
 test("an empty-reply completed turn still counts as completed (assistant entry with empty text)", () => {
   const entries = [user("do the thing", 1), assistant("", 2)];
-  assert.equal(findTrailingPartialTurn(entries, "do the thing"), null);
+  assert.equal(findTrailingPartialTurn(entries, 1), null);
 });
 
 test("a resume note in the ledger is skipped by its flag, not its text", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3)];
-  assert.deepEqual(findTrailingPartialTurn(entries, "build and deploy the release"), { userSeq: 1, workEntries: 1 });
+  assert.deepEqual(findTrailingPartialTurn(entries, 1), { userSeq: 1, workEntries: 1 });
   const typed = [user("build and deploy the release", 1), toolCall(2), user(LEGACY_NOTE, 3)];
-  assert.equal(findTrailingPartialTurn(typed, "build and deploy the release"), null, "typed text is a new request");
+  assert.equal(findTrailingPartialTurn(typed, 1), null, "typed text is a new request");
 });
 
 test("turnAtSeq carries the answer the attempt recorded, so a retry can replay it", () => {

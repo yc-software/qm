@@ -14,6 +14,7 @@ import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/se
 import {
   MAX_DOCUMENT_BYTES,
   documentText,
+  type ExtractedDocumentText,
   historicalDocumentMetas,
   isTextDocument,
   loadDocumentInputs,
@@ -1284,15 +1285,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
 
       const isRetry = (input.attempt ?? 1) > 1;
+      const retryUserSeq =
+        isRetry && input.runId && deps.runs ? ((await deps.runs.get(input.runId))?.turnUserSeq ?? null) : null;
       const recordedTurnForRun = async (): Promise<RecordedTurn | null> => {
-        if (!input.runId || !deps.runs) return null;
-        const seq = (await deps.runs.get(input.runId))?.turnUserSeq;
-        if (seq == null) return null;
+        if (retryUserSeq === null) return null;
         const entries = memoryBoundedEntries(await deps.sessions.getEntries(session.id));
-        if (!entries.some((entry) => entry.seq === seq)) return null;
+        if (!entries.some((entry) => entry.seq === retryUserSeq)) return null;
         return turnAtSeq(
-          entries.filter((entry) => entry.seq >= seq),
-          seq,
+          entries.filter((entry) => entry.seq >= retryUserSeq),
+          retryUserSeq,
         );
       };
       const initialMemoryWindow = await deps.sessions.getContextWindow(session.id);
@@ -2360,7 +2361,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             isRetry &&
             (recordedTurn ??
               (!memoryContextChanged &&
-                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.text)))
+                retryUserSeq !== null &&
+                findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, retryUserSeq)))
           )
         ) {
           const detectHistory = filterHistory(
@@ -2868,7 +2870,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const recallStart = Date.now();
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const recallMs = Date.now() - recallStart;
-        const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.text)) : null;
+        const partial =
+          recordedTurn ?? (retryUserSeq === null ? null : findTrailingPartialTurn(visibleHistory, retryUserSeq));
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
           const settle = resumePlan;
@@ -2917,16 +2920,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 documentsUnscreened = true;
                 continue;
               }
-              let content: string;
+              let extracted: ExtractedDocumentText;
               try {
-                content = await documentText(document, turnAbort.signal);
+                extracted = await documentText(document, turnAbort.signal);
               } catch {
                 turnAbort.signal.throwIfAborted();
                 documentsUnscreened = true;
                 continue;
               }
               const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-              for (const chunk of securityScreenChunks("tool_result:inbound_document", content)) {
+              for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text)) {
                 turnAbort.signal.throwIfAborted();
                 const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
                   ...screenTrace,
@@ -2950,7 +2953,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 );
               } else if (
                 !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
-                content.includes("[Document text truncated")
+                extracted.truncated
               )
                 documentsUnscreened = true;
             }

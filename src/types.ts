@@ -540,6 +540,8 @@ export interface SurfaceContextResult {
   hasMore?: boolean;
   nextBefore?: string;
   note?: string;
+  selfTs?: string[];
+  liveSearch?: "unconfigured" | "unconnected";
   file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
   group?: { groupId: string };
 }

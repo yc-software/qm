@@ -240,6 +240,8 @@ async function fulfillContextRequest(ctx: ApiCtx): Promise<void> {
             ...(typeof b.hasMore === "boolean" ? { hasMore: b.hasMore } : {}),
             ...(typeof b.nextBefore === "string" ? { nextBefore: b.nextBefore } : {}),
             ...(typeof b.note === "string" ? { note: b.note } : {}),
+            ...(Array.isArray(b.selfTs) ? { selfTs: b.selfTs.filter((ts) => typeof ts === "string") } : {}),
+            ...(b.liveSearch === "unconfigured" || b.liveSearch === "unconnected" ? { liveSearch: b.liveSearch } : {}),
             ...(file ? { file } : {}),
             ...(group ? { group } : {}),
           } satisfies SurfaceContextResult,

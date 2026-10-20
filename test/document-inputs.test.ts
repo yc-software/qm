@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
 import {
   documentFallbackText,
+  documentText,
   isDocumentAttachment,
   historicalDocumentMetas,
   loadDocumentInputs,
@@ -305,6 +306,22 @@ test("fallback text has one aggregate model-aware budget across all attachments"
   );
   assert.ok(JSON.stringify(payload).length < 30_000);
   assert.match(JSON.stringify(payload), /truncated to fit/);
+});
+
+test("document text reports truncation as a flag, not from the extracted wording", async () => {
+  const text = (body: string, name = "notes.txt") => ({
+    name,
+    mimeType: name.endsWith(".rtf") ? "application/rtf" : "text/plain",
+    dataBase64: Buffer.from(body).toString("base64"),
+  });
+  const quoted = await documentText(text("[Document text truncated at 5 characters.]"));
+  assert.equal(quoted.truncated, false);
+  const long = await documentText(text("x".repeat(200_001)));
+  assert.equal(long.truncated, true);
+  assert.match(long.text, /\[Document text truncated at 200000 characters\.\]$/);
+  const office = await documentText(text(`{\\rtf1 ${"y".repeat(200_100)}}`, "long.rtf"));
+  assert.equal(office.truncated, true);
+  assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
 });
 
 test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
