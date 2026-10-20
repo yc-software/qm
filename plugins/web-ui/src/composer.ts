@@ -11,7 +11,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X } from "lucide";
 import {
   api,
   ApiError,
@@ -805,12 +805,26 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         ${icon(ArrowUp, 16)}
       </button>`;
     }
-    const label =
-      alwaysSteer() && canSteer(agent) ? "Steer the running task (Tab to queue)" : "Queue for after this turn";
+    const steerFirst = alwaysSteer() && canSteer(agent);
+    const label = steerFirst ? "Steer the running task" : "Queue for after this turn";
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
+      ${
+        steerFirst
+          ? html`<button
+              class="queue-btn"
+              type="button"
+              aria-label="Queue for after this turn"
+              ${tip("Queue for after this turn")}
+              ?disabled=${!composerCanSend()}
+              @click=${() => void sendPrompt(agent, true)}
+            >
+              ${icon(ListEnd, 16)}
+            </button>`
+          : nothing
+      }
       <button class="send-btn" type="submit" ${tip(label)} aria-label=${label} ?disabled=${!composerCanSend()}>
         ${icon(ArrowUp, 16)}
       </button>
@@ -1326,20 +1340,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         e.preventDefault();
         return;
       }
-    }
-    if (
-      e.key === "Tab" &&
-      !e.shiftKey &&
-      !e.ctrlKey &&
-      !e.altKey &&
-      !e.metaKey &&
-      alwaysSteer() &&
-      canSteer(agent) &&
-      composerCanSend()
-    ) {
-      e.preventDefault();
-      void sendPrompt(agent, true);
-      return;
     }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();

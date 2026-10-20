@@ -167,22 +167,20 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       reset();
     });
 
-    await t.test("with the preference on, Tab queues instead of steering", async () => {
+    await t.test("with the preference on, the queue button queues each message instead of steering", async () => {
       const form = document.createElement("div");
       document.body.append(form);
       try {
-        composer!.state.draft = "later";
-        render(composer!.composerForm(agent), form);
-        const input = form.querySelector<HTMLTextAreaElement>(".composer-input")!;
-        assert.match(form.querySelector(".send-btn")!.getAttribute("aria-label") ?? "", /Tab to queue/);
-        const tab = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
-        input.dispatchEvent(tab);
-        assert.equal(tab.defaultPrevented, true);
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        for (const text of ["later", "and then this"]) {
+          composer!.state.draft = text;
+          render(composer!.composerForm(agent), form);
+          form.querySelector<HTMLButtonElement>(".queue-btn")!.click();
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         draw();
-        assert.equal(turns.at(-1), "later");
+        assert.deepEqual(turns.slice(-2), ["later", "and then this"]);
         assert.deepEqual(signalled, []);
-        assert.deepEqual(chips(), ["Queued"]);
+        assert.deepEqual(chips(), ["Queued", "Queued"]);
       } finally {
         render(nothing, form);
         form.remove();
