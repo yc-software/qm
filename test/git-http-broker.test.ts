@@ -200,3 +200,44 @@ test("git HTTP broker cannot use a Composio key for project-wide discovery or ex
     assert.equal(contacted, false);
   }
 });
+
+function actorDeps(injection: Record<string, unknown>, seen: Array<Record<string, string>>): ServerDeps {
+  return {
+    control: {} as ServerDeps["control"],
+    serviceCreds: {
+      getServiceCredentialSecret: async () => ({
+        slug: "gitlab",
+        name: "GitLab git",
+        secret: "tok",
+        host: "gitlab.example",
+        injection,
+        allowedMethods: ["GET", "POST"],
+        allowedPathPrefixes: ["/acme/repo.git"],
+        enabled: true,
+      }),
+    } as unknown as ServerDeps["serviceCreds"],
+    gitHttpFetch: async (_url, init) => {
+      seen.push(init.headers);
+      return { status: 200, headers: {}, body: Readable.from(["0000"]) };
+    },
+  };
+}
+
+test("git HTTP broker stamps the attested actor on actor-attributed credentials", async () => {
+  const seen: Array<Record<string, string>> = [];
+  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs", "GET", actorDeps({ actor: true }, seen));
+  await brokerGitHttp(c);
+  await text(c.res);
+  assert.equal(c.res.statusCode, 200);
+  assert.equal(seen[0]?.["x-qm-actor"], "U1");
+  assert.equal(seen[0]?.Authorization, "Bearer tok");
+});
+
+test("git HTTP broker refuses an actor-attributed credential when the actor cannot be attested", async () => {
+  const seen: Array<Record<string, string>> = [];
+  const c = ctx("/v1/credentials/git/gitlab/acme/repo.git/info/refs", "GET", actorDeps({ actor: true }, seen));
+  c.capability = { ...c.capability!, actorId: "bad actor" };
+  await brokerGitHttp(c);
+  assert.equal(c.res.statusCode, 403);
+  assert.equal(seen.length, 0);
+});
