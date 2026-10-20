@@ -62,30 +62,46 @@ thread_local! {
 }
 
 struct Activation {
-    target: i32,
-    window: u32,
-    background: bool,
-    activated: Cell<bool>,
+    original: i32,
+    selected: Cell<(i32, u32)>,
+    activated: RefCell<Vec<(i32, u32)>>,
 }
 
 impl Activation {
-    fn ensure(&self, send: impl FnOnce(i32, u32, i16) -> Result<(), Failure>) -> Result<(), Failure> {
-        if !self.background || self.activated.get() {
-            return Ok(());
+    fn ensure(&self, target: i32, window: u32, send: impl FnOnce(i32, u32, i16) -> Result<(), Failure>) -> Result<(), Failure> {
+        if target != self.original && !self.activated.borrow().contains(&(target, window)) {
+            if window == 0 {
+                return Err(Failure::new(ErrorCode::ActionFailed, "Background window has no ID; observe again"));
+            }
+            send(target, window, 1)?;
+            let mut activated = self.activated.borrow_mut();
+            if let Some(current) = activated.iter_mut().find(|(pid, _)| *pid == target) {
+                current.1 = window;
+            } else {
+                activated.push((target, window));
+            }
         }
-        if self.window == 0 {
-            return Err(Failure::new(ErrorCode::ActionFailed, "Background window has no ID; observe again"));
-        }
-        send(self.target, self.window, 1)?;
-        self.activated.set(true);
+        self.selected.set((target, window));
         Ok(())
     }
+}
+
+pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
+    check_current()?;
+    let activation = ACTIVATION
+        .with(|current| current.borrow().upgrade())
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
+    crate::intervention::include_target(target);
+    check_current()?;
+    activation.ensure(target, window, synthetic_focus)?;
+    check_current()
 }
 
 pub fn activate_current() -> Result<(), Failure> {
     check_current()?;
     if let Some(activation) = ACTIVATION.with(|current| current.borrow().upgrade()) {
-        activation.ensure(synthetic_focus)?;
+        let (target, window) = activation.selected.get();
+        activation.ensure(target, window, synthetic_focus)?;
     }
     check_current()
 }
@@ -106,7 +122,7 @@ impl Focus {
         if keyboard_owner != crate::intervention::keyboard_focus_pid()? || frontmost() != Some(original) {
             return Err(Failure::new(ErrorCode::ActionFailed, "Focus changed while starting input; stopped"));
         }
-        let activation = Rc::new(Activation { target, window, background: original != target, activated: Cell::new(false) });
+        let activation = Rc::new(Activation { original, selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()) });
         ACTIVATION.with(|current| *current.borrow_mut() = Rc::downgrade(&activation));
         let guard = Self { activation, intervention: Some(intervention) };
         EXPECTED_FOREGROUND.store(original, Ordering::Release);
@@ -117,17 +133,23 @@ impl Focus {
     pub fn finish(&mut self) -> Result<(), Failure> {
         EXPECTED_FOREGROUND.store(0, Ordering::Release);
         ACTIVATION.with(|current| *current.borrow_mut() = Weak::new());
-        if !self.activation.activated.replace(false) {
+        let activated = self.activation.activated.take();
+        if activated.is_empty() {
             return Ok(());
         }
         let until = Instant::now() + Duration::from_millis(80);
         while Instant::now() < until && !crate::cancellation::cancelled() {
             std::thread::sleep(Duration::from_millis(8));
         }
-        if frontmost() != Some(self.activation.target) {
-            synthetic_focus(self.activation.target, 0, 2)?;
+        let mut failure = None;
+        for (target, _) in activated.into_iter().rev() {
+            if frontmost() != Some(target) {
+                if let Err(error) = synthetic_focus(target, 0, 2) {
+                    failure.get_or_insert(error);
+                }
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     pub fn check(&self) -> Result<(), Failure> {
@@ -167,29 +189,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn background_activation_waits_for_synthetic_dispatch_and_runs_once() {
-        let state = Activation { target: 41, window: 7, background: true, activated: Cell::new(false) };
-        assert!(!state.activated.get());
-        state
-            .ensure(|pid, window, subtype| {
-                assert_eq!((pid, window, subtype), (41, 7, 1));
-                assert!(!state.activated.get());
-                Ok(())
-            })
-            .unwrap();
-        state.ensure(|_, _, _| panic!("duplicate activation")).unwrap();
-        assert!(state.activated.get());
+    fn activation_tracks_effective_owner_and_balanced_cleanup_targets() {
+        let state = Activation { original: 1, selected: Cell::new((41, 7)), activated: RefCell::new(Vec::new()) };
+        assert!(state.activated.borrow().is_empty());
+        let sent = RefCell::new(Vec::new());
+        let send = |pid, window, subtype| {
+            sent.borrow_mut().push((pid, window, subtype));
+            Ok(())
+        };
+        state.ensure(41, 7, send).unwrap();
+        state.ensure(42, 8, send).unwrap();
+        let (pid, window) = state.selected.get();
+        state.ensure(pid, window, |_, _, _| panic!("duplicate activation")).unwrap();
+        state.ensure(41, 9, send).unwrap();
+        assert_eq!(sent.into_inner(), vec![(41, 7, 1), (42, 8, 1), (41, 9, 1)]);
+        assert_eq!(state.selected.get(), (41, 9));
+        assert_eq!(state.activated.take(), vec![(41, 9), (42, 8)]);
+        assert!(state.activated.take().is_empty());
     }
 
     #[test]
-    fn foreground_and_failed_activation_need_no_deactivation() {
-        let mut state = Activation { target: 41, window: 0, background: false, activated: Cell::new(false) };
-        state.ensure(|_, _, _| panic!("foreground activation")).unwrap();
-        assert!(!state.activated.get());
-        state.background = true;
-        assert!(state.ensure(|_, _, _| panic!("missing window activation")).is_err());
-        state.window = 7;
-        assert!(state.ensure(|_, _, _| Err(Failure::new(ErrorCode::ActionFailed, "failed"))).is_err());
-        assert!(!state.activated.get());
+    fn failed_target_activation_preserves_previous_target_and_cleanup() {
+        let state = Activation { original: 1, selected: Cell::new((1, 0)), activated: RefCell::new(Vec::new()) };
+        state.ensure(1, 0, |_, _, _| panic!("foreground activation")).unwrap();
+        assert!(state.ensure(41, 0, |_, _, _| panic!("missing window activation")).is_err());
+        assert!(state.ensure(41, 7, |_, _, _| Err(Failure::new(ErrorCode::ActionFailed, "failed"))).is_err());
+        assert_eq!(state.selected.get(), (1, 0));
+        assert!(state.activated.borrow().is_empty());
     }
 }
