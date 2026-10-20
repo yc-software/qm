@@ -35,8 +35,22 @@ pub fn keyboard_focus_pid() -> Result<i32, Failure> {
     let mut process = ProcessSerialNumber::default();
     let mut flags = 0;
     let mut pid = 0;
-    if unsafe { query(&mut process, &mut flags) } != 0 || unsafe { resolve(&process, &mut pid) } != 0 || pid <= 0 {
-        return Err(Failure::new(ErrorCode::ActionFailed, "Cannot identify the keyboard-focus owner; input was not started"));
+    let status = unsafe { query(&mut process, &mut flags) };
+    if status != 0 {
+        return Err(Failure::new(
+            ErrorCode::ActionFailed,
+            format!("CPSGetKeyFocusProcess failed (status {status}); input was not started"),
+        ));
+    }
+    let status = unsafe { resolve(&process, &mut pid) };
+    if status != 0 {
+        return Err(Failure::new(ErrorCode::ActionFailed, format!("GetProcessPID failed (status {status}); input was not started")));
+    }
+    if pid <= 0 {
+        return Err(Failure::new(
+            ErrorCode::ActionFailed,
+            format!("Keyboard-focus lookup returned invalid PID {pid}; input was not started"),
+        ));
     }
     Ok(pid)
 }
