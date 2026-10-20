@@ -68,6 +68,22 @@ test("projected sandbox results require exact successful execution evidence", ()
   assert.throws(() => assertSandboxExecution(entries.toReversed(), "box", "nonce\n"));
 });
 
+test("a failed provider execution reports what the execute call returned", () => {
+  const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
+  Object.assign(entries[1]!.payload, {
+    code: 1,
+    result: "nonce\n\n[stderr]\nproxy http://x:secret-token@proxy.example.com refused\n[exit 1]",
+  });
+  assert.throws(
+    () => assertSandboxExecution(entries, "box", "nonce\n"),
+    (error: Error) =>
+      error.message.includes('"code":1') &&
+      error.message.includes("http://x:***@proxy.example.com refused") &&
+      !error.message.includes("secret-token"),
+  );
+  assert.throws(() => assertSandboxExecution(evidence().slice(0, 1), "box", "nonce\n"), /no result recorded/);
+});
+
 test("every provider has its own parallel execution scenario", () => {
   assert.deepEqual(sandboxProviders.toSorted(), [
     "agent37",

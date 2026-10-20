@@ -26,8 +26,15 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
   );
 }
 
+function describeExecuteResult(p: Record<string, unknown>): string {
+  const result = typeof p.result === "string" ? p.result.replace(/(\/\/[^\s:/@]*:)[^\s@]+@/g, "$1***@") : p.result;
+  const shown = typeof result === "string" && result.length > 400 ? `${result.slice(0, 400)}…` : result;
+  return JSON.stringify({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: shown });
+}
+
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
   const calls = new Set<string>();
+  const unmatched: string[] = [];
   let executed = false;
   for (const entry of entries) {
     if (!isObj(entry) || !isObj(entry.payload)) continue;
@@ -37,10 +44,13 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       calls.add(p.callId);
       continue;
     }
-    if (entry.type === "tool_result" && calls.has(p.callId) && succeededWithStdout(p, stdout)) executed = true;
+    if (entry.type !== "tool_result" || !calls.has(p.callId)) continue;
+    if (succeededWithStdout(p, stdout)) executed = true;
+    else unmatched.push(describeExecuteResult(p));
   }
   assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
-  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);
+  const seen = unmatched.length ? `; results: ${unmatched.join(" | ")}` : "; no result recorded";
+  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}${seen}`);
 }
 
 export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backend) => ({
