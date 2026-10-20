@@ -220,6 +220,14 @@ qm-onboarding-welcome {
   color: var(--success);
   flex: none;
 }
+.connection-connected .stale svg,
+.connection-picker-app.stale .connection-picker-trailing {
+  color: var(--warning);
+}
+.connection-connected .kc-text-action {
+  padding: 0 2px;
+  font-size: 10px;
+}
 .connection-result strong {
   font-weight: 550;
 }

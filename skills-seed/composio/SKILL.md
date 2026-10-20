@@ -26,6 +26,15 @@ Check `connections` before work that depends on an app. If the app is in the cat
 - For other apps in Slack conversations, mint a link with `authorize` (step 3 below) and say you'll pick the task back up when they reply.
 - If the app isn't in the catalog, say so in one sentence and don't show the picker. Look for the provider's official API or MCP server yourself. If it uses API keys, send a secure keychain drop link instead of asking for the key in chat.
 
+## Reconnect or disconnect an app
+
+Each account from `connections` lists `missingScopes`: permissions the app's current configuration grants that this connection never received, usually because the configuration gained scopes after the user connected. Providers such as X can't upgrade an existing token, so the only fix is a fresh consent.
+
+- When a tool fails with 403, `insufficient_scope`, or a similar permission error, check that account's `missingScopes`. If it is non-empty, or the error plainly names a missing permission, tell the user in one sentence and offer to reconnect. Don't retry the call first.
+- In web chat, show `::connect-apps{toolkit="twitter"}` as its own paragraph. For a connected app it offers Reconnect and Disconnect, and after a verified reconnect it removes the replaced connection itself.
+- In Slack conversations, mint a new link with `authorize` (step 3 below). Once the new account ID is listed in `connections`, remove the old one with `apps("disconnect", {accountId: oldAccount.id})`. Never disconnect the old account before the new one is listed.
+- When the user asks to remove or reset a connection, use `apps("disconnect", {accountId})` on a turn they started, then confirm with `connections`. It only removes the caller's own connections and can't be undone; they would have to connect again.
+
 ## Backend API
 
 Use the authenticated QM API from the computer through `execute` with an explicit `sandbox_id`. The Composio project key stays in QM's backend. Do not request it from the keychain, install the Composio SDK, use old SDK scripts, or call Composio directly. Existing execute approval and command policies still apply.

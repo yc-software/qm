@@ -154,9 +154,10 @@ export async function request(
   path: string,
   body?: unknown,
   timeoutMs = 20_000,
+  method = body ? "POST" : "GET",
 ): Promise<Record<string, unknown>> {
   const response = await (ctx.deps.composioFetch ?? fetch)(`https://backend.composio.dev/api/v3.1${path}`, {
-    method: body ? "POST" : "GET",
+    method,
     headers: { "x-api-key": key, "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
     redirect: "error",
@@ -298,6 +299,23 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
+async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
+  try {
+    const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
+    const scopes = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
+    return Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
+  const granted = account.state?.val?.scope;
+  if (typeof granted !== "string" || !granted.trim()) return [];
+  const held = new Set(granted.split(/[\s,]+/));
+  return configured.filter((scope) => !held.has(scope));
+}
+
 async function connections(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
@@ -309,20 +327,33 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const data = await request(ctx, access.key, `/connected_accounts?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-    const items = data.items.flatMap((item) => {
-      if (
-        !item ||
-        !userIds.includes(item.user_id) ||
-        item.status !== "ACTIVE" ||
-        item.is_disabled === true ||
-        typeof item.id !== "string" ||
-        !/^ca_[a-zA-Z0-9_-]+$/.test(item.id) ||
-        typeof item.toolkit?.slug !== "string" ||
-        !/^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
-      )
-        return [];
-      return [{ id: item.id, toolkit: item.toolkit.slug, userId: item.user_id }];
-    });
+    const accounts = data.items.filter(
+      (item) =>
+        item &&
+        userIds.includes(item.user_id) &&
+        item.status === "ACTIVE" &&
+        item.is_disabled !== true &&
+        typeof item.id === "string" &&
+        /^ca_[a-zA-Z0-9_-]+$/.test(item.id) &&
+        typeof item.toolkit?.slug === "string" &&
+        /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
+    );
+    const configIds = [
+      ...new Set(
+        accounts
+          .map((item) => item.auth_config?.id)
+          .filter((id): id is string => typeof id === "string" && /^ac_[a-zA-Z0-9_-]+$/.test(id)),
+      ),
+    ];
+    const scopes = new Map(
+      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key, id)] as const)),
+    );
+    const items = accounts.map((item) => ({
+      id: item.id,
+      toolkit: item.toolkit.slug,
+      userId: item.user_id,
+      missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
+    }));
     ctx.res.setHeader("Cache-Control", "no-store");
     return sendJson(ctx.res, 200, {
       items,
@@ -332,6 +363,46 @@ async function connections(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 502, {
       error: "composio_unavailable",
       message: "Could not check connected apps. Please try again.",
+    });
+  }
+}
+
+async function disconnect(ctx: ApiCtx): Promise<void> {
+  if ((ctx.capability && !livePersonCapability(ctx.capability)) || ctx.actor?.imp)
+    return sendJson(ctx.res, 403, { error: "human_consent_required" });
+  const access = await credential(ctx);
+  if (!access) return;
+  const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
+  if (typeof accountId !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(accountId))
+    return sendJson(ctx.res, 400, { error: "invalid_account" });
+  const path = `/connected_accounts/${encodeURIComponent(accountId)}`;
+  try {
+    const account = await request(ctx, access.key, path);
+    const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
+    if (
+      account.id !== accountId ||
+      typeof account.user_id !== "string" ||
+      !composioUserIds(access.principal).includes(account.user_id) ||
+      !toolkit ||
+      toolkit === "composio"
+    )
+      return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    await request(ctx, access.key, path, undefined, 20_000, "DELETE");
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.disconnected",
+      resource: `${toolkit}/${accountId}`,
+      scopeLabel: ctx.capability?.scopeId ?? scopeId("personal", access.principal),
+    });
+    return sendJson(ctx.res, 200, { disconnected: accountId, toolkit });
+  } catch (error) {
+    if (error instanceof ComposioHttpError && error.status === 404)
+      return sendJson(ctx.res, 404, { error: "connection_not_found" });
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: disconnect", new Error(mask(redactSecrets(errMessage(error)))));
+    return sendJson(ctx.res, 502, {
+      error: "composio_disconnect_failed",
+      message: "Could not disconnect the app. Please try again.",
     });
   }
 }
@@ -780,5 +851,6 @@ export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/composio/connections", auth: "either", handle: connections },
   { method: "GET", path: "/v1/composio/toolkits", auth: "either", handle: catalog },
   { method: "POST", path: "/v1/composio/authorize", auth: "either", handle: authorize },
+  { method: "POST", path: "/v1/composio/disconnect", auth: "either", handle: disconnect },
   { method: "GET", path: "/v1/composio/identity", auth: "either", handle: identity },
 ];

@@ -5,6 +5,7 @@ export interface ConnectionAttempt {
   user: string;
   service: { id: string; name: string };
   accountId: string;
+  replaces?: string;
   widget: string;
   expiresAt: number;
   path: string;
@@ -29,6 +30,8 @@ export function readConnectionAttempt(user: string, state: string, path: string)
       attempt.expiresAt <= Date.now() ||
       typeof attempt.accountId !== "string" ||
       !/^ca_[a-zA-Z0-9_-]+$/.test(attempt.accountId) ||
+      (attempt.replaces !== undefined &&
+        (typeof attempt.replaces !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(attempt.replaces))) ||
       typeof attempt.widget !== "string" ||
       typeof attempt.service?.id !== "string" ||
       typeof attempt.service.name !== "string" ||

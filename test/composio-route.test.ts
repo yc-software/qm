@@ -258,7 +258,7 @@ test("connections return only this actor's active accounts and strip credentials
   const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, {
-    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice") }],
+    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice"), missingScopes: [] }],
     nextCursor: "next-page",
   });
   const q = new URL(f.calls[0]!.url).searchParams;
@@ -266,6 +266,111 @@ test("connections return only this actor's active accounts and strip credentials
   assert.equal(q.get("statuses"), "ACTIVE");
   assert.equal(q.get("cursor"), "page-1");
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
+});
+
+test("connections report scopes the app's configuration grants that an older connection lacks", async () => {
+  const f = fixture();
+  await f.own();
+  const account = (id: string, scope: string | undefined, config = "ac_x") => ({
+    id,
+    user_id: composioUserId(orgId(), "alice"),
+    status: "ACTIVE",
+    toolkit: { slug: "twitter" },
+    auth_config: { id: config },
+    state: { authScheme: "OAUTH2", val: { scope, access_token: "secret-token" } },
+  });
+  f.replies.push(
+    {
+      items: [
+        account("ca_old", "tweet.read users.read offline.access"),
+        account("ca_new", "tweet.read users.read offline.access dm.read dm.write"),
+        account("ca_unknown", undefined),
+        account("ca_unreadable", "tweet.read", "ac_gone"),
+      ],
+    },
+    {
+      credentials: {
+        scopes: ["tweet.read", "users.read", "offline.access", "dm.read", "dm.write"],
+        client_secret: "s3",
+      },
+    },
+    new Response("missing", { status: 404 }),
+  );
+  const r = await f.invoke("/v1/composio/connections");
+  assert.equal(r.status, 200);
+  assert.deepEqual(
+    r.data.items.map((item: { id: string; missingScopes: string[] }) => [item.id, item.missingScopes]),
+    [
+      ["ca_old", ["dm.read", "dm.write"]],
+      ["ca_new", []],
+      ["ca_unknown", []],
+      ["ca_unreadable", []],
+    ],
+  );
+  assert.deepEqual(
+    f.calls.slice(1).map((call) => new URL(call.url).pathname),
+    ["/api/v3.1/auth_configs/ac_x", "/api/v3.1/auth_configs/ac_gone"],
+  );
+  assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
+});
+
+test("people can disconnect only their own connections, on a turn they started", async () => {
+  const f = fixture();
+  await f.own();
+  const mine = {
+    id: "ca_mine",
+    user_id: composioUserId(orgId(), "alice"),
+    status: "EXPIRED",
+    toolkit: { slug: "twitter" },
+  };
+  f.replies.push(mine, {});
+  const r = await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" });
+  assert.deepEqual([r.status, r.data], [200, { disconnected: "ca_mine", toolkit: "twitter" }]);
+  assert.deepEqual(
+    f.calls.map((call) => [call.init?.method, new URL(call.url).pathname]),
+    [
+      ["GET", "/api/v3.1/connected_accounts/ca_mine"],
+      ["DELETE", "/api/v3.1/connected_accounts/ca_mine"],
+    ],
+  );
+  assert.deepEqual(
+    f.audits.filter((e) => e.action === "composio.disconnected").map((e) => e.resource),
+    ["twitter/ca_mine"],
+  );
+
+  f.replies.push(mine, {});
+  assert.equal((await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" }, null, privateCap)).status, 200);
+
+  for (const account of [
+    { ...mine, user_id: composioUserId(orgId(), "bob") },
+    { ...mine, id: "ca_other" },
+    { ...mine, toolkit: { slug: "composio" } },
+  ]) {
+    const g = fixture();
+    await g.own();
+    g.replies.push(account);
+    assert.equal((await g.invoke("/v1/composio/disconnect", { accountId: "ca_mine" })).status, 403);
+    assert.ok(g.calls.every((call) => call.init?.method === "GET"));
+  }
+
+  const g = fixture();
+  await g.own();
+  g.replies.push(new Response("gone", { status: 404 }));
+  assert.equal((await g.invoke("/v1/composio/disconnect", { accountId: "ca_mine" })).status, 404);
+});
+
+test("disconnecting refuses automations, impersonation and malformed accounts before provider calls", async () => {
+  for (const [body, actor, capability, impersonating, status] of [
+    [{ accountId: "ca_mine" }, null, { ...privateCap, liveActor: false, triggered: true }, false, 403],
+    [{ accountId: "ca_mine" }, "alice", undefined, true, 403],
+    [{ accountId: "../ca_mine" }, "alice", undefined, false, 400],
+    [{ accountId: "ca_mine" }, null, undefined, false, 401],
+  ] as const) {
+    const f = fixture();
+    await f.own();
+    assert.equal((await f.invoke("/v1/composio/disconnect", body, actor, capability, impersonating)).status, status);
+    assert.equal(f.calls.length, 0);
+  }
 });
 
 test("connections require credential access and fail visibly on upstream errors", async () => {
@@ -732,8 +837,8 @@ test("linked account discovery and Slack status preserve historical aliases with
     const listed = await f.invoke("/v1/composio/connections?cursor=page");
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.data.items, [
-      { id: "ca_legacy", toolkit: "slack", userId: composioUserId(orgId(), aliasId) },
-      { id: "ca_current", toolkit: "slack", userId: composioUserId(orgId(), "alice") },
+      { id: "ca_legacy", toolkit: "slack", userId: composioUserId(orgId(), aliasId), missingScopes: [] },
+      { id: "ca_current", toolkit: "slack", userId: composioUserId(orgId(), "alice"), missingScopes: [] },
     ]);
     assert.equal(listed.data.nextCursor, "next");
     const query = new URL(f.calls.at(-1)!.url).searchParams;
@@ -854,8 +959,8 @@ test("linked identities retain provider accounts and Slack status until unlinked
     const listed = await f.invoke("/v1/composio/connections?cursor=page");
     assert.deepEqual(listed.data, {
       items: [
-        { id: "ca_old", toolkit: "slack", userId: alias },
-        { id: "ca_new", toolkit: "slack", userId: canonical },
+        { id: "ca_old", toolkit: "slack", userId: alias, missingScopes: [] },
+        { id: "ca_new", toolkit: "slack", userId: canonical, missingScopes: [] },
       ],
       nextCursor: "next",
     });
