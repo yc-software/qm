@@ -24,8 +24,8 @@ Invitation email uses Resend when configured. Teammate invitations contain a sin
 The existing external-user API still requires an expiry and rejects org members.
 Teammate invitations and revocations are restricted to the Admin surface.
 (`org_admin` is the only supported role for now; `team_admin` was removed — team-scoped admin
-observability is future work. See `src/admin/admin-service.ts`.) History (conversation listing with a
-by-type usage rollup, drilling into transcripts with per-turn model-context breakdowns), Files
+observability is future work. See `src/admin/admin-service.ts`.) History (newest sessions, org-wide or narrowed
+to one scope, by origin, drilling into transcripts with per-turn model-context breakdowns), Files
 (workspace contents), and Live (ongoing/recent runs) are **top-down content** views: an
 org-scope query spans the whole org; a narrower scope is limited to that scope. Every
 action is authorized in the core and audited.

@@ -378,7 +378,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
 
   const [grants, stats, onboarding] = await Promise.all([
     deps.admin?.listGrants() ?? [],
-    deps.sessions?.scopeSessionStats(personal, false, "conversation"),
+    deps.sessions?.scopeConversationCount(personal),
     deps.memory ? deps.memory.read(personal).then(detectOnboardingStatus) : null,
   ]);
   const config = deps.config
@@ -398,7 +398,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
-    stats: { sessions: stats?.total ?? 0 },
+    stats: { sessions: stats ?? 0 },
     config,
     onboarding,
   });

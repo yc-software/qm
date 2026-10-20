@@ -11,48 +11,20 @@ import {
   sessionCategory,
   type LlmRequestRecord,
   type SessionCategory,
-  type SessionStore,
   type SessionSummary,
 } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
-import { swallowAs } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
-import {
-  cronWakeOrigin,
-  deliveryOrigin,
-  parseSessionWakeRef,
-  sessionKind,
-  sessionOrigin,
-  type AdminSessionOrigin,
-} from "./origins.ts";
+import { activityCounts, scopeActivity } from "./scope-activity.ts";
+import { deliveryOrigin, parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
 
 const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
-const SCOPE_AGGREGATE_TTL_MS = 15_000;
-
-const scopeAggregates = new WeakMap<SessionStore, Map<string, { expiresAt: number; value: Promise<unknown> }>>();
-
-function sharedScopeAggregate<T>(store: SessionStore, key: string, read: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  let cache = scopeAggregates.get(store);
-  if (!cache) scopeAggregates.set(store, (cache = new Map()));
-  const hit = cache.get(key);
-  if (hit && hit.expiresAt > now) return hit.value as Promise<T>;
-  for (const [k, entry] of cache) if (entry.expiresAt <= now) cache.delete(k);
-  const value = read();
-  const entries = cache;
-  entries.set(key, { expiresAt: now + SCOPE_AGGREGATE_TTL_MS, value });
-  value.catch(() => {
-    if (entries.get(key)?.value === value) entries.delete(key);
-  });
-  return value;
-}
-
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
   return (await app.directoryMember(principalId))?.displayName?.trim() || principalId;
 }
@@ -190,76 +162,19 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
   const originFilter: AdminSessionOrigin | undefined =
     originParam === "cron" || originParam === "other_background" ? originParam : undefined;
   const cronId = url.searchParams.get("cron") || undefined;
-  const disconnected = new AbortController();
-  res.once("close", () => disconnected.abort());
-  const sessionStore = deps.sessions;
-  const stats = (sessionStore
-    ? await sharedScopeAggregate(
-        sessionStore,
-        JSON.stringify(["stats", scope, categoryFilter, originFilter, cronId]),
-        () => sessionStore.scopeSessionStats(scope, orgWide, categoryFilter, originFilter, cronId),
-      )
-    : undefined) ?? {
-    total: 0,
-    turns: 0,
-    byType: {},
-    byTypeAll: {},
-    totalByCategory: { conversation: 0, background: 0, all: 0 },
-    crons: 0,
-  };
   const limit = Math.min(
     SESSIONS_PAGE_LIMIT_MAX,
     Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || SESSIONS_PAGE_LIMIT_DEFAULT),
   );
-  if (originFilter === "cron" && !cronId) {
-    const groups = (await deps.sessions?.scopeCronGroups(scope, orgWide)) ?? [];
-    const deliveredByCron =
-      deps.deliveries && groups.length
-        ? await deps.deliveries
-            .sentRunCountsByCron(groups.map((g) => g.cronId))
-            .catch(swallowAs("api: admin cron delivered counts failed", null))
-        : null;
-    const cronLookup = groups.length ? new Map((await app.listCrons()).map((c) => [c.id, c])) : undefined;
-    const crons = await Promise.all(
-      groups.map(async (g) => ({
-        ...g,
-        ...(deliveredByCron ? { deliveredRuns: deliveredByCron.get(g.cronId) ?? 0 } : {}),
-        origin: await cronWakeOrigin(
-          app,
-          {
-            trigger: "cron",
-            sourceId: g.cronId,
-            fireKey: `agent:main:cron:${g.cronId}`,
-            fireSlot: null,
-            monologue: true,
-          },
-          scope,
-          g.scopeId,
-          cronLookup,
-        ),
-      })),
-    );
-    return sendJson(res, 200, {
-      scopeId: scope,
-      crons,
-      total: groups.length,
-      totalByCategory: stats.totalByCategory,
-      totalByType: stats.byTypeAll,
-      distinctCrons: stats.crons,
-      category,
-      turns: stats.turns,
-      byType: stats.byType,
-      limit,
-    });
-  }
-  const total = stats.total;
   const cursorParam = url.searchParams.get("cursor");
   const cursorMatch = cursorParam ? /^(\d+)~(.+)$/.exec(cursorParam) : null;
   const before = cursorMatch ? { lastActivity: Number(cursorMatch[1]), id: cursorMatch[2]! } : undefined;
-  const summaries =
+  const disconnected = new AbortController();
+  res.once("close", () => disconnected.abort());
+  const fetched =
     (await deps.sessions
       ?.scopeSessionSummaries(scope, orgWide, {
-        limit,
+        limit: limit + 1,
         signal: disconnected.signal,
         ...(before ? { before } : {}),
         ...(categoryFilter ? { category: categoryFilter } : {}),
@@ -271,14 +186,8 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
         throw error;
       })) ?? [];
   if (disconnected.signal.aborted) return;
-  const categories = new Map(summaries.map((s) => [s.id, sessionCategory(s.origin)]));
-  const background = summaries.filter((s) => categories.get(s.id) === "background");
-  const sentCounts =
-    deps.deliveries && background.length
-      ? await deps.deliveries
-          .sentCountsBySourceSessions(background.map((s) => ({ sessionId: s.id, threadRef: s.threadRef })))
-          .catch(swallowAs("api: admin sessions sent counts failed", null))
-      : null;
+  const summaries = fetched.slice(0, limit);
+  const last = fetched.length > limit ? summaries[summaries.length - 1] : undefined;
   const fireResults = await cronFireResults(app, summaries);
   const pageCronIds = new Set<string>(cronId ? [cronId] : []);
   for (const s of summaries) {
@@ -293,14 +202,14 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
       const result = cronRow ? fireResults.get(s.threadRef) || s.lastMessage || s.firstMessage : undefined;
       return {
         ...s,
-        category: categories.get(s.id)!,
+        category: sessionCategory(s.origin),
         kind: sessionKind(s),
         origin: await sessionOrigin(app, s, scope, cronLookup),
-        ...(sentCounts && categories.get(s.id) === "background" ? { delivered: sentCounts.get(s.id) ?? 0 } : {}),
         ...(result ? { result } : {}),
       };
     }),
   );
+  const activity = scopeActivity(deps.sessions);
   return sendJson(res, 200, {
     scopeId: scope,
     sessions,
@@ -314,17 +223,10 @@ export async function listAdminSessions(ctx: ApiCtx): Promise<void> {
           ),
         }
       : {}),
-    total,
-    totalByCategory: stats.totalByCategory,
-    totalByType: stats.byTypeAll,
-    distinctCrons: stats.crons,
     category,
-    turns: stats.turns,
-    byType: stats.byType,
     limit,
-    ...(summaries.length === limit
-      ? { nextCursor: `${summaries[summaries.length - 1]!.lastActivity}~${summaries[summaries.length - 1]!.id}` }
-      : {}),
+    ...(last ? { nextCursor: `${last.lastActivity}~${last.id}` } : {}),
+    ...(activity ? { counts: activityCounts(activity, scope, orgWide), countsAsOf: activity.asOf } : {}),
   });
 }
 

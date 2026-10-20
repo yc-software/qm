@@ -1222,16 +1222,6 @@
       .history-empty-scope:hover {
         color: var(--text);
       }
-      details.history-quiet {
-        margin: -4px 0 14px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      details.history-quiet summary {
-        cursor: pointer;
-        color: var(--muted);
-        font-weight: 500;
-      }
       .segmented {
         display: flex;
         align-items: center;
@@ -1248,22 +1238,6 @@
         border-color: var(--border);
         background: color-mix(in srgb, var(--text) 4%, transparent);
         font-weight: 500;
-      }
-      .dense-preview .delivery-chip {
-        margin: 0 8px 0 0;
-      }
-      .delivery-chip {
-        display: inline-flex;
-        align-items: center;
-        flex: none;
-        margin-left: 8px;
-        font-size: 11px;
-        font-weight: 500;
-        white-space: nowrap;
-        color: color-mix(in srgb, var(--ok) 75%, var(--muted));
-      }
-      .dense-row.history-silent {
-        opacity: 0.45;
       }
       .list-root {
         display: grid;
@@ -7065,12 +7039,6 @@
         }
         return d;
       }
-      function sessionCountsLabel(sessions, background) {
-        const parts = [];
-        if (sessions) parts.push(plural(sessions, "conversation"));
-        if (background) parts.push(Number(background).toLocaleString() + " background");
-        return parts.join(" · ") || "no conversations";
-      }
       function deploymentHref(dep) {
         return dep.publicUrl || "";
       }
@@ -7424,19 +7392,12 @@
         if (view === "ackemoji") return void renderAckEmojiPicks(st);
         if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
         if (view === "history" && st.session) return void showTranscript(st.session);
-        renderCurrentData();
+        renderData();
       }
 
       const GOV_LIKE = new Set(["governance", "models", "credentials", "customize", "slack-settings"]);
       function isGovLike(v) {
         return GOV_LIKE.has(v);
-      }
-      function historyIsIndex() {
-        return view === "history" && orgWideView() && !urlToState().session;
-      }
-      function renderCurrentData() {
-        if (historyIsIndex()) return void renderScopeIndex();
-        renderData();
       }
       function hasGovernanceDraft() {
         return isGovLike(view) && !!$("view-governance").querySelector(".card.dirty");
@@ -7573,7 +7534,6 @@
         if (!r.ok) {
           scopeDirNote =
             r.status === 403 ? "Only an org admin can list scopes." : r.data?.message || "Failed to load scopes.";
-          if (historyIsIndex()) renderScopeIndex();
           return;
         }
         viewLoadedAt.history = Date.now();
@@ -7584,7 +7544,7 @@
           const memoryEditor = view === "memory" && !(orgWideView() && urlToState().mem !== "edit");
 
           if (!(memoryEditor && orgWideView())) defaultShell();
-          if (view !== "governance" && !memoryEditor) renderCurrentData();
+          if (view !== "governance" && !memoryEditor) renderData();
         }
       }
       function dirLabel(id) {
@@ -7829,8 +7789,7 @@
           return;
         }
         if (view === "crons" && cronDestinationEditId) return;
-        if (historyIsIndex()) loadScopeDirectory();
-        else renderData();
+        renderData();
       });
 
       let loadedGovernanceScope = null;
@@ -9161,7 +9120,6 @@
 
       let dataReq = 0;
       let historyKind = "conversation";
-      let scopeSort = "human";
 
       const dataCache = new Map();
       function paintData(root, data) {
@@ -9433,7 +9391,7 @@
         return kind === "cron" || kind === "background" ? "background" : kind;
       }
 
-      const KIND_LABEL = { conversation: "Conversations", cron: "Crons", background: "Background" };
+      const KIND_LABEL = { conversation: "Conversations", cron: "Cron runs", background: "Background" };
       function historyModeLabel(kind) {
         return KIND_LABEL[kind] || KIND_LABEL.conversation;
       }
@@ -10279,42 +10237,6 @@
         return { block, sync: () => {} };
       }
 
-      function renderScopeIndex() {
-        ++dataReq;
-        const root = $("view-data");
-        root.textContent = "";
-        governanceUI.history.scopeIndex(root, {
-          ready: !!scopeDir,
-          note: scopeDirNote,
-          title: VIEW_TITLE.history,
-          rows: scopeDir ? scopeRows() : [],
-          sort: scopeSort,
-          pageShell,
-          plural,
-          environments: environmentDir,
-          historyKind,
-          shortName,
-          selectScope,
-          stateToUrl,
-          relTime,
-          sessionCountsLabel,
-          scopeTitle,
-          sortControl: () =>
-            twoWayToggle({
-              label: "Sort sessions",
-              options: [
-                { value: "human", label: "Human activity" },
-                { value: "all", label: "All activity" },
-              ],
-              value: scopeSort,
-              onChange: (value) => {
-                scopeSort = value;
-                renderScopeIndex();
-                $("shellbar").querySelector(".two-way-toggle input:checked")?.focus({ preventScroll: true });
-              },
-            }),
-        });
-      }
       function renderHistory(root, d) {
         governanceUI.history.history(root, d, {
           historyKind,
@@ -10341,6 +10263,7 @@
           errorStripBox,
           adminErrorCount,
           adminErrors,
+          scopeRows,
         });
       }
 

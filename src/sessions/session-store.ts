@@ -168,32 +168,13 @@ export interface SessionPage {
   signal?: AbortSignal;
 }
 
-export interface CronGroupSummary {
-  cronId: string;
+/** Per-scope session counts for the admin directory; computed off the request path and served stale. */
+export interface ScopeActivity {
   scopeId: ScopeId;
-  sessions: number;
-  turns: number;
-  messages: number;
-  lastActivity: number;
-  createdAt: number;
-}
-
-export interface ScopeSessionRollup {
-  scopeId: ScopeId;
-  sessions: number;
-  backgroundSessions: number;
-  lastActivity: number;
-  lastConversationActivity: number;
-  previewSessionId: string | null;
-}
-
-export interface ScopeSessionStats {
-  total: number;
-  turns: number;
-  byType: Record<string, number>;
-  byTypeAll: Record<string, number>;
-  totalByCategory: Record<SessionCategory | "all", number>;
+  conversations: number;
   crons: number;
+  background: number;
+  lastActivity: number;
 }
 
 export interface SpendRow {
@@ -368,10 +349,6 @@ export function sessionCategory(origin: SessionOrigin): SessionCategory {
 export function cronIdOf(threadRef: string | null | undefined): string | null {
   const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? LEGACY_CRON_ID_RE.exec(threadRef ?? "");
   return m ? m[1]! : null;
-}
-
-export function sessionBucket(origin: SessionOrigin, type: SessionType): string {
-  return origin === "conversation" ? type : origin;
 }
 
 export interface SessionRef {
@@ -633,19 +610,9 @@ export interface SessionStore {
 
   scopeSessionSummaries(scope: ScopeId, orgWide: boolean, page: SessionPage): Promise<SessionSummary[]>;
 
-  lastUserMessages(sessionIds: string[]): Promise<Map<string, string>>;
+  scopeActivity(): Promise<ScopeActivity[]>;
 
-  scopeCronGroups(scope: ScopeId, orgWide: boolean): Promise<CronGroupSummary[]>;
-
-  scopeSessionRollups(scope: ScopeId, orgWide: boolean): Promise<ScopeSessionRollup[]>;
-
-  scopeSessionStats(
-    scope: ScopeId,
-    orgWide: boolean,
-    category?: SessionCategory,
-    origin?: SessionOriginFilter,
-    cronId?: string,
-  ): Promise<ScopeSessionStats>;
+  scopeConversationCount(scope: ScopeId): Promise<number>;
 
   attributedTurns(): Promise<AttributedTurn[]>;
 

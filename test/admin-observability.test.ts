@@ -739,7 +739,16 @@ test("monitor delivery origin context is scope-gated in admin", async () => {
   }
 });
 
-test("conversation listing pages by keyset cursor; aggregates span the whole scope; offset is ignored", async () => {
+async function eventually(base: string, path: string, ready: (body: any) => boolean): Promise<any> {
+  let body = await getJson(base, path);
+  for (let i = 0; i < 50 && !ready(body); i++) {
+    await new Promise((r) => setTimeout(r, 10));
+    body = await getJson(base, path);
+  }
+  return body;
+}
+
+test("conversation listing pages by keyset cursor; counts come from the background snapshot; offset is ignored", async () => {
   const s = start();
   try {
     for (let i = 0; i < 5; i++) {
@@ -755,8 +764,7 @@ test("conversation listing pages by keyset cursor; aggregates span the whole sco
     const path = "/v1/admin/sessions?scope=org:default-org&limit=2";
     const p1 = await getJson(s.base, path);
     assert.equal(p1.sessions.length, 2, "limit bounds the returned slice");
-    assert.equal(p1.total, 5, "total spans the whole scope, not the page");
-    assert.equal(p1.byType.dm, 5, "by-type aggregate spans the whole scope");
+    assert.equal(p1.total, undefined, "the listing computes no live totals");
     assert.equal(p1.limit, 2);
     assert.equal(p1.offset, undefined, "the listing no longer reports an offset");
 
@@ -766,6 +774,13 @@ test("conversation listing pages by keyset cursor; aggregates span the whole sco
     assert.equal(p3.nextCursor, undefined, "a short page ends the walk");
     const ids = new Set([...p1.sessions, ...p2.sessions, ...p3.sessions].map((x: { id: string }) => x.id));
     assert.equal(ids.size, 5, "the three pages cover every session exactly once");
+    const exact = await getJson(s.base, "/v1/admin/sessions?scope=org:default-org&limit=5");
+    assert.equal(exact.sessions.length, 5);
+    assert.equal(exact.nextCursor, undefined, "a page that exactly fills the limit offers no empty next page");
+
+    const counted = await eventually(s.base, path, (body) => body.counts !== undefined);
+    assert.deepEqual(counted.counts, { conversation: 5, cron: 0, background: 0 }, "tab counts span the org");
+    assert.equal(typeof counted.countsAsOf, "number");
 
     const ignored = await getJson(s.base, `${path}&offset=4`);
     assert.deepEqual(
@@ -814,18 +829,22 @@ test("history separates background cron monologues from human conversations", as
 
     const conversations = await getJson(s.base, `/v1/admin/sessions?scope=${encodeURIComponent(scope)}`);
     assert.equal(conversations.category, "conversation");
-    assert.equal(conversations.total, 1, "default history lists human conversations only");
     assert.deepEqual(
       conversations.sessions.map((x: { id: string }) => x.id),
       [human.id],
     );
-    assert.deepEqual(conversations.totalByCategory, { conversation: 1, background: 1, all: 2 });
+    const counted = await eventually(
+      s.base,
+      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}`,
+      (body) => body.counts !== undefined,
+    );
+    assert.deepEqual(counted.counts, { conversation: 1, cron: 1, background: 0 }, "tab counts are per scope");
 
     const background = await getJson(
       s.base,
       `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background`,
     );
-    assert.equal(background.total, 1);
+    assert.equal(background.sessions.length, 1);
     assert.equal(background.sessions[0].id, monologue.id);
     assert.equal(background.sessions[0].category, "background");
     assert.equal(background.sessions[0].kind, "cron_monologue");
@@ -839,7 +858,7 @@ test("history separates background cron monologues from human conversations", as
     assert.equal(transcript.origin.label, "Cron monologue");
     assert.equal(transcript.origin.cronId, cron.id);
 
-    const scopes = await getJson(s.base, "/v1/admin/scopes");
+    const scopes = await eventually(s.base, "/v1/admin/scopes", (body) => body.activityAsOf !== undefined);
     const row = scopes.scopes.find((x: { scopeId: string }) => x.scopeId === scope);
     assert.equal(row.sessions, 1, "scope index counts human conversations separately");
     assert.equal(row.backgroundSessions, 1, "scope index exposes background monologues separately");
@@ -848,7 +867,7 @@ test("history separates background cron monologues from human conversations", as
   }
 });
 
-test("the Crons history lists one row per cron; ?cron= paginates that cron's fires", async () => {
+test("the Crons history lists cron fires as session rows; ?cron= paginates one cron's fires", async () => {
   const s = start();
   try {
     const scope = "channel:C7";
@@ -876,41 +895,18 @@ test("the Crons history lists one row per cron; ?cron= paginates that cron's fir
       s.base,
       `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron`,
     );
-    assert.equal(list.sessions, undefined, "grouped listing carries no per-fire rows");
-    assert.equal(list.total, 2, "one row per cron, regardless of fire count");
-    const g = list.crons.find((x: { cronId: string }) => x.cronId === cron.id);
-    assert.equal(g.sessions, 3, "the group aggregates every fire");
-    assert.equal(g.origin.cron.title, "Tweet watcher", "group row resolves the cron's name");
-    assert.equal(g.deliveredRuns, 0, "no deliveries yet: delivered rollup is zero");
-
-    await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U1", onBehalfOf: "U1" },
-      text: "recap",
-      idempotencyKey: `cron:${cron.id}:slot0:msg`,
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey: `cron:${cron.id}:slot0`,
-        sourceScopeId: scope,
-        sourceThreadRef: `cron:${cron.id}:slot0`,
-        sourceSessionId: "fire-0",
-      },
-    });
-    const relisted = await getJson(
-      s.base,
-      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron`,
-    );
+    assert.equal(list.sessions.length, 5, "every fire is its own row");
+    assert.ok(list.sessions.every((x: { origin: { kind: string } }) => x.origin.kind === "cron"));
     assert.equal(
-      relisted.crons.find((x: { cronId: string }) => x.cronId === cron.id).deliveredRuns,
-      1,
-      "the listing rolls up delivering runs per cron",
+      list.sessions.find((x: { threadRef: string }) => x.threadRef.includes(cron.id)).origin.cron.title,
+      "Tweet watcher",
+      "rows resolve the cron's name",
     );
 
     const p1 = await getJson(
       s.base,
       `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron&cron=${cron.id}&limit=2`,
     );
-    assert.equal(p1.total, 3, "drill-down total counts this cron's fires only");
     assert.equal(p1.sessions.length, 2);
     const p2 = await getJson(
       s.base,

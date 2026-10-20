@@ -99,7 +99,7 @@ function wakeSessionLabel(trigger: string, monologue?: boolean): string {
   }
 }
 
-export async function cronWakeOrigin(
+async function cronWakeOrigin(
   app: App,
   parsed: AdminWakeRef,
   requestedScope: string,

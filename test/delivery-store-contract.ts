@@ -176,28 +176,6 @@ export async function exerciseDeliveryStore(store: DeliveryStore): Promise<void>
       sourceThreadRef: "agent:main:cron:legacy",
     },
   });
-  const sentCounts = await store.sentCountsBySourceSessions([
-    { sessionId: "source-session", threadRef: "agent:main:cron:c1" },
-    { sessionId: "shadow-session", threadRef: "agent:main:cron:hb-1" },
-    { sessionId: "legacy-session", threadRef: "agent:main:cron:legacy" },
-    { sessionId: "silent-session", threadRef: "agent:main:cron:c9" },
-  ]);
-  assert.equal(
-    sentCounts.get("source-session"),
-    1,
-    "a row naming another session never counts for a page session sharing its thread",
-  );
-  assert.equal(sentCounts.get("shadow-session"), undefined, "shadow rows never count as sent");
-  assert.equal(sentCounts.get("legacy-session"), 1, "rows without sourceSessionId fall back to threadRef");
-  assert.equal(sentCounts.get("silent-session"), undefined, "sessions with no deliveries stay absent");
-  assert.equal((await store.sentCountsBySourceSessions([])).size, 0);
-
-  const runCounts = await store.sentRunCountsByCron(["c1", "hb-1", "legacy", "c9"]);
-  assert.equal(runCounts.get("c1"), 2, "distinct delivering runs per cron (session id or legacy threadRef)");
-  assert.equal(runCounts.get("legacy"), 1, "legacy provenance counts by threadRef");
-  assert.equal(runCounts.get("hb-1"), undefined, "shadow rows never count as delivered runs");
-  assert.equal(runCounts.get("c9"), undefined, "crons with no deliveries stay absent");
-  assert.equal((await store.sentRunCountsByCron([])).size, 0);
 
   const contested = await store.enqueue({
     destination: { type: "group", target: "C-race" },
@@ -333,13 +311,6 @@ export async function exerciseDeliveryExpiryRevive(
   await new Promise((r) => setTimeout(r, 400));
   assert.deepEqual(await store.claimPending("slack", 60_000), [], "the overaged notice is swept, not handed out");
   assert.ok(((await store.get(notice.id))?.expiredAt ?? 0) > 0);
-  assert.equal(
-    (await store.sentCountsBySourceSessions([{ sessionId: "notice-session", threadRef: "agent:main:cron:t1" }])).get(
-      "notice-session",
-    ),
-    undefined,
-    "dropped rows never count as sent",
-  );
 
   const revived = await store.enqueue({
     destination: { type: "slack", target: "C-restored" },

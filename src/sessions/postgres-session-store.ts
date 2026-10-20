@@ -1,15 +1,9 @@
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { jsonbStringify } from "../persistence/durable-map.ts";
-import {
-  createPgPool,
-  type PoolClient,
-  type PgQueryOptions,
-  type Rows,
-  withPgTransaction,
-} from "../persistence/pg-pool.ts";
+import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
-import { reportFailure, reportFailureAs } from "../util/errors.ts";
+import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type {
@@ -17,8 +11,7 @@ import type {
   SessionPin,
   AttributedTurn,
   EntrySearchHit,
-  CronGroupSummary,
-  ScopeSessionRollup,
+  ScopeActivity,
   DistinctScope,
   GetEntriesOptions,
   Lease,
@@ -29,7 +22,6 @@ import type {
   NewEntry,
   NewLlmRequest,
   ParticipantWindow,
-  ScopeSessionStats,
   ScreenSample,
   SessionOrigin,
   SessionOriginFilter,
@@ -1030,39 +1022,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     return full;
   };
 
-  type UserPreviews = { first: string; last: string };
-  const userPreviews = async (rows: Rows, options: PgQueryOptions): Promise<Map<string, UserPreviews>> => {
-    const out = new Map<string, UserPreviews>();
-    const missing: string[] = [];
-    for (const r of rows) {
-      const first = r.first_user_preview as string | null;
-      const last = r.last_user_preview as string | null;
-      out.set(r.id as string, { first: first ?? "", last: last ?? "" });
-      if ((first === null || last === null) && (r.turns == null || Number(r.turns) > 0)) missing.push(r.id as string);
-    }
-    if (!missing.length) return out;
-    const derived = await q(
-      `SELECT s.id, s.first_user_preview, s.last_user_preview,
-              (SELECT jsonb_build_object('text',fe.text) FROM items fe
-                WHERE fe.tenant_id = ${TENANT} AND fe.session_id = s.id AND ${userTurn("fe")} ORDER BY fe.seq ASC LIMIT 1) AS first_user,
-              (SELECT jsonb_build_object('text',le.text) FROM items le
-                WHERE le.tenant_id = ${TENANT} AND le.session_id = s.id AND ${userTurn("le")} ORDER BY le.seq DESC LIMIT 1) AS last_user
-         FROM sessions s WHERE s.id = ANY($1)`,
-      [missing],
-      options,
-    ).catch((error: unknown) => {
-      if (options.signal?.aborted) throw error;
-      return reportFailureAs("sessions: derive legacy user previews", [] as Rows)(error);
-    });
-    for (const r of derived) {
-      out.set(r.id as string, {
-        first: (r.first_user_preview as string | null) ?? storedPreview(r.first_user ?? null, FIRST_PREVIEW_LEN),
-        last: (r.last_user_preview as string | null) ?? storedPreview(r.last_user ?? null, LAST_PREVIEW_LEN),
-      });
-    }
-    return out;
-  };
-
   return {
     leaseTtlMs,
     async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools): Promise<Session> {
@@ -1743,7 +1702,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       params.push(page.limit);
       const rows = await q(
         `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.origin, s.created_at, s.messages, s.turns,
-                ${lastActivityExpr("s")} AS last_activity, s.first_user_preview, s.last_user_preview
+                ${lastActivityExpr("s")} AS last_activity, s.first_user_preview, s.last_user_preview, s.title
            FROM sessions s
           WHERE ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${cronClause}${keysetClause}
           ORDER BY ${lastActivityExpr("s")} DESC, s.id DESC
@@ -1751,7 +1710,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         params,
         options,
       );
-      const previews = await userPreviews(rows, options);
       return rows.map((r) => ({
         id: r.id as string,
         type: r.type as Session["type"],
@@ -1762,130 +1720,37 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         messages: Number(r.messages ?? 0),
         lastActivity: Number(r.last_activity),
         createdAt: Number(r.created_at),
-        firstMessage: previews.get(r.id as string)!.first,
-        lastMessage: previews.get(r.id as string)!.last,
+        firstMessage: ((r.first_user_preview ?? r.title ?? "") as string).trim(),
+        lastMessage: (r.last_user_preview as string | null) ?? "",
       }));
     },
 
-    async lastUserMessages(sessionIds): Promise<Map<string, string>> {
-      const out = new Map<string, string>();
-      if (sessionIds.length === 0) return out;
-      const rows = await q(
-        `SELECT DISTINCT ON (le.session_id) le.session_id, left(le.text, ${LAST_PREVIEW_LEN}) AS last_user
-           FROM items le
-          WHERE le.tenant_id = ${TENANT} AND le.session_id = ANY($1) AND ${userTurn("le")}
-          ORDER BY le.session_id, le.seq DESC`,
-        [sessionIds],
-      );
-      for (const r of rows) out.set(r.session_id as string, userMessagePreview(r.last_user ?? null, 100));
-      return out;
+    async scopeConversationCount(scope): Promise<number> {
+      const rows = await q("SELECT COUNT(*) AS n FROM sessions WHERE scope_id = $1 AND origin = 'conversation'", [
+        scope,
+      ]);
+      return Number(rows[0]?.n ?? 0);
     },
 
-    async scopeCronGroups(scope, orgWide): Promise<CronGroupSummary[]> {
+    async scopeActivity(): Promise<ScopeActivity[]> {
       const rows = await q(
-        `SELECT t.cron_id,
-                MIN(t.scope_id) AS scope_id,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(t.messages), 0) AS messages,
-                COALESCE(SUM(t.turns), 0) AS turns,
-                MAX(t.activity) AS last_activity,
-                MIN(t.created_at) AS created_at
-           FROM (SELECT s.origin_id AS cron_id, s.scope_id, s.messages, s.turns, s.created_at,
-                        ${lastActivityExpr("s")} AS activity
-                   FROM sessions s
-                  WHERE ($1::boolean OR s.scope_id = $2)) t
-          WHERE t.cron_id IS NOT NULL
-          GROUP BY t.cron_id
-          ORDER BY last_activity DESC, t.cron_id DESC`,
-        [orgWide, scope],
-      );
-      return rows.map((r) => ({
-        cronId: r.cron_id as string,
-        scopeId: r.scope_id as ScopeId,
-        sessions: Number(r.sessions),
-        turns: Number(r.turns),
-        messages: Number(r.messages),
-        lastActivity: Number(r.last_activity),
-        createdAt: Number(r.created_at),
-      }));
-    },
-
-    async scopeSessionRollups(scope, orgWide): Promise<ScopeSessionRollup[]> {
-      const rows = await q(
-        `SELECT r.scope_id, r.sessions, r.background_sessions, r.last_activity, r.last_conversation_activity,
-                (
-                  SELECT s.id FROM sessions s
-                   WHERE s.scope_id = r.scope_id AND ${lastActivityExpr("s")} <= r.preview_activity
-                     AND NOT (${isBackground("s")}) AND s.turns > 0
-                   ORDER BY ${lastActivityExpr("s")} DESC, s.id DESC LIMIT 1
-                ) AS preview_session_id
-           FROM (SELECT scope_id,
-                        COUNT(*) FILTER (WHERE NOT background) AS sessions,
-                        COUNT(*) FILTER (WHERE background) AS background_sessions,
-                        MAX(last_activity) AS last_activity,
-                        COALESCE(MAX(last_activity) FILTER (WHERE NOT background), 0) AS last_conversation_activity,
-                        MAX(last_activity) FILTER (WHERE NOT background AND turns > 0) AS preview_activity
-                   FROM (SELECT s.scope_id, s.turns, ${lastActivityExpr("s")} AS last_activity,
-                                ${isBackground("s")} AS background
-                           FROM sessions s
-                          WHERE ($1::boolean OR s.scope_id = $2)) t
-                  GROUP BY scope_id) r`,
-        [orgWide, scope],
-      );
-      return rows.map((r) => ({
-        scopeId: r.scope_id as ScopeId,
-        sessions: Number(r.sessions),
-        backgroundSessions: Number(r.background_sessions),
-        lastActivity: Number(r.last_activity),
-        lastConversationActivity: Number(r.last_conversation_activity),
-        previewSessionId: (r.preview_session_id as string | null) ?? null,
-      }));
-    },
-
-    async scopeSessionStats(scope, orgWide, category, originFilter, cronId): Promise<ScopeSessionStats> {
-      const params: unknown[] = [orgWide, scope];
-      const matchedClauses: string[] = [];
-      if (category) {
-        matchedClauses.push(category === "background" ? isBackground("s") : `NOT ${isBackground("s")}`);
-      }
-      if (originFilter) matchedClauses.push(originFilterClause("s", originFilter));
-      if (cronId) {
-        params.push(cronId);
-        matchedClauses.push(`s.origin_id = $${params.length}`);
-      }
-      const rows = await q(
-        `SELECT origin, CASE WHEN origin = 'conversation' THEN type ELSE origin END AS bucket,
-                matched, COUNT(*) AS sessions, COALESCE(SUM(turns), 0) AS turns,
-                COUNT(DISTINCT cron_id) AS crons
-           FROM (SELECT s.type, s.origin AS origin,
-                        s.origin_id AS cron_id,
-                        (${matchedClauses.join(" AND ") || "TRUE"}) AS matched,
-                        COALESCE(s.turns, 0) AS turns
-                   FROM sessions s
-                  WHERE ($1::boolean OR s.scope_id = $2)) t
-          GROUP BY origin, bucket, matched`,
-        params,
+        `SELECT scope_id,
+                COUNT(*) FILTER (WHERE origin = 'conversation') AS conversations,
+                COUNT(*) FILTER (WHERE origin = 'cron') AS crons,
+                COUNT(*) FILTER (WHERE origin NOT IN ('conversation', 'cron')) AS background,
+                MAX(${lastActivityExpr("sessions")}) AS last_activity
+           FROM sessions
+          GROUP BY scope_id`,
+        [],
         { timeoutMs: ADMIN_READ_TIMEOUT_MS },
       );
-      const byType: Record<string, number> = {};
-      const byTypeAll: Record<string, number> = {};
-      const totalByCategory = { conversation: 0, background: 0, all: 0 };
-      let total = 0;
-      let turns = 0;
-      let crons = 0;
-      for (const r of rows) {
-        const n = Number(r.sessions);
-        const bucket = r.bucket as string;
-        totalByCategory[r.origin === "conversation" ? "conversation" : "background"] += n;
-        totalByCategory.all += n;
-        byTypeAll[bucket] = (byTypeAll[bucket] ?? 0) + n;
-        if (r.origin === "cron") crons += Number(r.crons);
-        if (!r.matched) continue;
-        total += n;
-        turns += Number(r.turns);
-        byType[bucket] = (byType[bucket] ?? 0) + n;
-      }
-      return { total, turns, byType, byTypeAll, totalByCategory, crons };
+      return rows.map((r) => ({
+        scopeId: r.scope_id as ScopeId,
+        conversations: Number(r.conversations),
+        crons: Number(r.crons),
+        background: Number(r.background),
+        lastActivity: Number(r.last_activity),
+      }));
     },
 
     async attributedTurns(): Promise<AttributedTurn[]> {

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
-import { cronIdOf } from "../sessions/session-store.ts";
 
 export const DELIVERY_MAX_AGE_MS = 6 * 3_600_000;
 
@@ -54,8 +53,6 @@ export interface DeliveryStore {
   recordRecipientThread(id: string, recipientThreadRef: string, at: number): Promise<void>;
   listByRecipientThread(recipientThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
   listBySourceSession(sourceSessionId: string, sourceThreadRef: string, opts?: { limit?: number }): Promise<Delivery[]>;
-  sentCountsBySourceSessions(sources: Array<{ sessionId: string; threadRef: string }>): Promise<Map<string, number>>;
-  sentRunCountsByCron(cronIds: string[]): Promise<Map<string, number>>;
   onEnqueue(listener: () => void): () => void;
 }
 
@@ -210,35 +207,6 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         )
         .sort((a, b) => a.createdAt - b.createdAt)
         .slice(-limit);
-    },
-    async sentCountsBySourceSessions(sources) {
-      const counts = new Map<string, number>();
-      const byId = new Set(sources.map((s) => s.sessionId));
-      const byThreadRef = new Map(sources.map((s) => [s.threadRef, s.sessionId]));
-      for (const d of deliveries.values()) {
-        if (d.shadow || d.expiredAt !== undefined || !d.provenance) continue;
-        let id: string | undefined;
-        if (d.provenance.sourceSessionId) {
-          if (byId.has(d.provenance.sourceSessionId)) id = d.provenance.sourceSessionId;
-        } else if (d.provenance.sourceThreadRef) {
-          id = byThreadRef.get(d.provenance.sourceThreadRef);
-        }
-        if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
-      }
-      return counts;
-    },
-    async sentRunCountsByCron(cronIds) {
-      const wanted = new Set(cronIds);
-      const runs = new Map<string, Set<string>>();
-      for (const d of deliveries.values()) {
-        if (d.shadow || d.expiredAt !== undefined || !d.provenance?.sourceThreadRef) continue;
-        const cronId = cronIdOf(d.provenance.sourceThreadRef);
-        if (!cronId || !wanted.has(cronId)) continue;
-        let set = runs.get(cronId);
-        if (!set) runs.set(cronId, (set = new Set()));
-        set.add(d.provenance.sourceSessionId ?? d.provenance.sourceThreadRef);
-      }
-      return new Map([...runs].map(([k, v]) => [k, v.size]));
     },
     onEnqueue(listener) {
       enqueueListeners.add(listener);

@@ -45,12 +45,10 @@ test("the scope directory starts independent resource reads together", async () 
   app.listDeployments = hold("deployments", app.listDeployments.bind(app));
   app.listSkills = hold("skills", app.listSkills.bind(app));
   app.listEnvironments = hold("environments", app.listEnvironments.bind(app));
-  const rollups = s.built.sessions.scopeSessionRollups.bind(s.built.sessions);
-  s.built.sessions.scopeSessionRollups = hold("rollups", () => rollups("org:default-org", true));
   const request = fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
   try {
     await ready.promise;
-    assert.deepEqual([...started].sort(), ["crons", "deployments", "environments", "rollups", "skills"]);
+    assert.deepEqual([...started].sort(), ["crons", "deployments", "environments", "skills"]);
   } finally {
     gate.resolve();
     await request;
@@ -80,7 +78,15 @@ test("the admin scope directory lists every known scope with labels and counts (
 
     const r = await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN });
     assert.equal(r.status, 200);
-    const d = await json(r);
+    const first = await json(r);
+    assert.equal(first.activityAsOf, undefined, "the first read does not wait for session counts");
+    assert.equal(first.scopes.find((row: any) => row.scopeId === "channel:C9").sessions, undefined);
+    let d = first;
+    for (let i = 0; i < 50 && d.activityAsOf === undefined; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      d = await json(await fetch(`${s.base}/v1/admin/scopes`, { headers: ALICE_ADMIN }));
+    }
+    assert.equal(typeof d.activityAsOf, "number", "a later read serves the counts the background refresh computed");
     const byId = new Map(d.scopes.map((row: any) => [row.scopeId, row]));
 
     assert.ok(byId.has("org:default-org"), "the org scope is always listed");
@@ -92,7 +98,7 @@ test("the admin scope directory lists every known scope with labels and counts (
     const c9: any = byId.get("channel:C9");
     assert.equal(c9.label, "#eng", "channel rows carry the human channel name");
     assert.equal(c9.sessions, 1);
-    assert.equal(c9.lastMessage, "ship the board deck", "rows carry the newest conversation's last-message preview");
+    assert.equal(c9.lastMessage, undefined, "the directory carries no message previews");
     const gone: any = byId.get("channel:GONE");
     assert.equal(gone.crons, 1, "rows carry artifact counts");
     assert.equal(gone.sessions, 0);

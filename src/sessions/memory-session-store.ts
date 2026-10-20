@@ -5,7 +5,7 @@ import type { GoalRecord } from "../harness/goal.ts";
 import type {
   AttributedTurn,
   EntrySearchHit,
-  CronGroupSummary,
+  ScopeActivity,
   GetEntriesOptions,
   LeaseAttempt,
   LeaseHolder,
@@ -16,8 +16,6 @@ import type {
   NewSearchEntry,
   NewSessionPin,
   ParticipantWindow,
-  ScopeSessionRollup,
-  ScopeSessionStats,
   SessionPage,
   SessionStore,
   SessionSummary,
@@ -39,7 +37,6 @@ import {
   isOverheardEntry,
   DuplicateCallError,
   promptEnvelopeBody,
-  sessionBucket,
   sessionCategory,
   sessionOrigin,
   userMessagePreview,
@@ -664,7 +661,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           messages: log.length,
           lastActivity: log.length ? log[log.length - 1]!.createdAt : s.createdAt,
           createdAt: s.createdAt,
-          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : "",
+          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : (s.title ?? ""),
           lastMessage: userEntries.length ? userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100) : "",
         });
       }
@@ -680,114 +677,31 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       ).slice(0, page.limit);
     },
 
-    async lastUserMessages(sessionIds): Promise<Map<string, string>> {
-      const out = new Map<string, string>();
-      for (const id of sessionIds) {
-        const log = entries.get(id) ?? [];
-        const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
-        if (userEntries.length) out.set(id, userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100));
-      }
-      return out;
+    async scopeConversationCount(scope): Promise<number> {
+      let n = 0;
+      for (const s of sessions.values()) if (s.scopeId === scope && sessionOrigin(s.threadRef) === "conversation") n++;
+      return n;
     },
 
-    async scopeCronGroups(scope, orgWide): Promise<CronGroupSummary[]> {
-      const groups = new Map<string, CronGroupSummary>();
+    async scopeActivity(): Promise<ScopeActivity[]> {
+      const byScope = new Map<string, ScopeActivity>();
       for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
-        const cronId = cronIdOf(s.threadRef);
-        if (!cronId) continue;
-        const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
-        const g = groups.get(cronId) ?? {
-          cronId,
+        const r = byScope.get(s.scopeId) ?? {
           scopeId: s.scopeId,
-          sessions: 0,
-          turns: 0,
-          messages: 0,
+          conversations: 0,
+          crons: 0,
+          background: 0,
           lastActivity: 0,
-          createdAt: s.createdAt,
         };
-        g.sessions += 1;
-        g.turns += turns;
-        g.messages += log.length;
-        g.lastActivity = Math.max(g.lastActivity, lastActivity);
-        g.createdAt = Math.min(g.createdAt, s.createdAt);
-        groups.set(cronId, g);
-      }
-      return [...groups.values()].sort((a, b) => {
-        if (b.lastActivity !== a.lastActivity) return b.lastActivity - a.lastActivity;
-        if (a.cronId < b.cronId) return 1;
-        if (a.cronId > b.cronId) return -1;
-        return 0;
-      });
-    },
-
-    async scopeSessionRollups(scope, orgWide): Promise<ScopeSessionRollup[]> {
-      const rollups = new Map<string, ScopeSessionRollup>();
-      const winners = new Map<string, { at: number; id: string }>();
-      for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
+        byScope.set(s.scopeId, r);
         const log = entries.get(s.id) ?? [];
-        const turns = log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        const lastActivity = log.length ? log[log.length - 1]!.createdAt : s.createdAt;
-        const r = rollups.get(s.scopeId) ?? {
-          scopeId: s.scopeId,
-          sessions: 0,
-          backgroundSessions: 0,
-          lastActivity: 0,
-          lastConversationActivity: 0,
-          previewSessionId: null,
-        };
-        rollups.set(s.scopeId, r);
-        r.lastActivity = Math.max(r.lastActivity, lastActivity);
-        if (sessionCategory(sessionOrigin(s.threadRef)) === "background") {
-          r.backgroundSessions += 1;
-          continue;
-        }
-        r.sessions += 1;
-        r.lastConversationActivity = Math.max(r.lastConversationActivity, lastActivity);
-        if (turns === 0) continue;
-        const prev = winners.get(s.scopeId);
-        if (!prev || lastActivity > prev.at || (lastActivity === prev.at && idDesc(s.id, prev.id) < 0)) {
-          winners.set(s.scopeId, { at: lastActivity, id: s.id });
-          r.previewSessionId = s.id;
-        }
-      }
-      return [...rollups.values()];
-    },
-
-    async scopeSessionStats(scope, orgWide, category, originFilter, cronId): Promise<ScopeSessionStats> {
-      const byType: Record<string, number> = {};
-      const byTypeAll: Record<string, number> = {};
-      const totalByCategory = { conversation: 0, background: 0, all: 0 };
-      const cronIds = new Set<string>();
-      let total = 0;
-      let turns = 0;
-      for (const s of sessions.values()) {
-        if (!orgWide && s.scopeId !== scope) continue;
+        r.lastActivity = Math.max(r.lastActivity, log.length ? log[log.length - 1]!.createdAt : s.createdAt);
         const origin = sessionOrigin(s.threadRef);
-        const cat = sessionCategory(origin);
-        totalByCategory[cat]++;
-        totalByCategory.all++;
-        const bucket = sessionBucket(origin, s.type);
-        byTypeAll[bucket] = (byTypeAll[bucket] ?? 0) + 1;
-        const sessionCronId = cronIdOf(s.threadRef);
-        if (sessionCronId != null) cronIds.add(sessionCronId);
-        if (category && cat !== category) continue;
-        if (
-          originFilter === "other_background"
-            ? origin === "conversation" || origin === "cron"
-            : originFilter && origin !== originFilter
-        )
-          continue;
-        if (cronId && sessionCronId !== cronId) continue;
-        total++;
-        const log = entries.get(s.id) ?? [];
-        turns += log.filter((e) => e.type === "user" && !isOverheardEntry(e)).length;
-        byType[bucket] = (byType[bucket] ?? 0) + 1;
+        if (origin === "conversation") r.conversations++;
+        else if (origin === "cron") r.crons++;
+        else r.background++;
       }
-      return { total, turns, byType, byTypeAll, totalByCategory, crons: cronIds.size };
+      return [...byScope.values()];
     },
 
     async attributedTurns(): Promise<AttributedTurn[]> {

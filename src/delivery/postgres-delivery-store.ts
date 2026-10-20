@@ -259,43 +259,6 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery).reverse();
     },
-    async sentCountsBySourceSessions(sources) {
-      const counts = new Map<string, number>();
-      if (!sources.length) return counts;
-      const byThreadRef = new Map(sources.map((s) => [s.threadRef, s.sessionId]));
-      const rows = await q(
-        `SELECT provenance->>'sourceSessionId' AS session_id,
-                provenance->>'sourceThreadRef' AS thread_ref,
-                COUNT(*)::int AS sent
-           FROM deliveries
-          WHERE NOT shadow AND expired_at IS NULL
-            AND (provenance->>'sourceSessionId' = ANY($1)
-              OR (provenance->>'sourceSessionId' IS NULL AND provenance->>'sourceThreadRef' = ANY($2)))
-          GROUP BY 1, 2`,
-        [sources.map((s) => s.sessionId), sources.map((s) => s.threadRef)],
-      );
-      for (const r of rows as Array<{ session_id: string | null; thread_ref: string | null; sent: number }>) {
-        const id = r.session_id ?? (r.thread_ref ? byThreadRef.get(r.thread_ref) : undefined);
-        if (id) counts.set(id, (counts.get(id) ?? 0) + Number(r.sent));
-      }
-      return counts;
-    },
-    async sentRunCountsByCron(cronIds) {
-      const counts = new Map<string, number>();
-      if (!cronIds.length) return counts;
-      const rows = await q(
-        `SELECT d.cron_id, COUNT(DISTINCT d.run)::int AS runs
-           FROM (SELECT COALESCE(source_cron_id, ${SOURCE_CRON_ID_EXPR}) AS cron_id,
-                        COALESCE(provenance->>'sourceSessionId', provenance->>'sourceThreadRef') AS run
-                   FROM deliveries
-                  WHERE NOT shadow AND expired_at IS NULL AND provenance->>'sourceThreadRef' IS NOT NULL) d
-          WHERE d.cron_id = ANY($1)
-          GROUP BY d.cron_id`,
-        [cronIds],
-      );
-      for (const r of rows as Array<{ cron_id: string; runs: number }>) counts.set(r.cron_id, Number(r.runs));
-      return counts;
-    },
     onEnqueue(listener) {
       enqueueListeners.add(listener);
       return () => enqueueListeners.delete(listener);
