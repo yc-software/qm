@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const CSV_HEADER =
-  "principal_id,scope_id,kind,display_name,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio";
+  "principal_id,scope_id,kind,display_name,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio";
 const CSV_BODY =
   CSV_HEADER +
   "\r\n" +

@@ -91,9 +91,13 @@ test("spend: live and cron dollars land on the owning person, shared scopes on t
     const alice = body.people.find((p: any) => p.principalId === "alice");
     const bob = body.people.find((p: any) => p.principalId === "bob");
     assert.ok(alice && bob, "both principals appear with the ids the Users page shows");
-    assert.ok(alice.live.costUsd > 0 && alice.cron.costUsd > 0, "alice carries both live and cron dollars");
-    assert.equal(bob.cron.costUsd, 0, "bob never ran a cron");
-    assert.equal(alice.cron.costUsd, 0.5, "the cron is billed to its scope owner, not to a speaker");
+    assert.ok(
+      alice.live.costUsd > 0 && alice.background.sources.cron.costUsd > 0,
+      "alice carries both live and cron dollars",
+    );
+    assert.equal(bob.background.sources.cron.costUsd, 0, "bob never ran a cron");
+    assert.equal(alice.background.sources.cron.costUsd, 0.5, "the cron is billed to its scope owner, not to a speaker");
+    assert.equal(alice.background.costUsd, 0.5, "crons count toward background");
 
     assert.deepEqual(
       body.scopes.map((e: any) => [e.principalId, e.scopeId, e.kind, e.costUsd]),
@@ -229,11 +233,11 @@ test("spend: ?format=csv exports the same numbers for the same window", async ()
     const lines = body.trimEnd().split("\r\n");
     assert.equal(
       lines[0],
-      "principal_id,scope_id,kind,display_name,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+      "principal_id,scope_id,kind,display_name,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
     );
     assert.equal(lines.length, json.people.length + json.scopes.length + 1);
     const alice = lines.find((l) => l.startsWith("alice,"))!.split(",");
-    assert.equal(Number(alice[7]), json.people.find((p: any) => p.principalId === "alice").costUsd);
+    assert.equal(Number(alice[11]), json.people.find((p: any) => p.principalId === "alice").costUsd);
   } finally {
     await s.close();
   }
@@ -340,8 +344,24 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
       /^attachment; filename="qm-spend-crons-2026-01-05-2026-01-06\.csv"/,
     );
     const [header, line, ...rest] = (await r.text()).trimEnd().split("\r\n");
-    assert.match(header!, /^cron_id,title,owner,scope_id,live_usd,cron_usd,background_usd,total_usd,/);
-    assert.deepEqual(line!.split(",").slice(0, 8), [cron.id, "", "alice", "personal:alice", "0", "3", "0", "3"]);
+    assert.match(
+      header!,
+      /^cron_id,title,owner,scope_id,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,/,
+    );
+    assert.deepEqual(line!.split(",").slice(0, 12), [
+      cron.id,
+      "",
+      "alice",
+      "personal:alice",
+      "0",
+      "3",
+      "3",
+      "0",
+      "0",
+      "0",
+      "0",
+      "3",
+    ]);
     assert.deepEqual(rest, []);
   } finally {
     await s.close();
@@ -377,8 +397,8 @@ test("spend: model CSV selects the model breakdown with its own filename", async
     for (const [i, model] of json.models.entries()) {
       const cells = lines[i + 1]!.split(",");
       assert.equal(cells[0], model.model);
-      assert.equal(Number(cells[4]), model.costUsd);
-      assert.equal(Number(cells[5]), model.calls);
+      assert.equal(Number(cells[8]), model.costUsd);
+      assert.equal(Number(cells[9]), model.calls);
     }
     assert.equal(
       json.models.reduce((sum: number, m: any) => sum + m.costUsd, 0),

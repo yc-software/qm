@@ -1910,7 +1910,10 @@ dialog.credential-dialog {
 .spend-chart {
   --spend-live: var(--text);
   --spend-cron: var(--trigger);
-  --spend-background: var(--muted);
+  --spend-loop: color-mix(in srgb, var(--trigger) 65%, var(--bg));
+  --spend-swarm: color-mix(in srgb, var(--trigger) 35%, var(--bg));
+  --spend-webhook: var(--muted);
+  --spend-monitor: color-mix(in srgb, var(--muted) 55%, var(--bg));
   padding-top: 4px;
 }
 .spend-chart-summary {
@@ -1956,8 +1959,17 @@ dialog.credential-dialog {
 .spend-cron {
   background: var(--spend-cron);
 }
-.spend-background {
-  background: var(--spend-background);
+.spend-loop {
+  background: var(--spend-loop);
+}
+.spend-swarm {
+  background: var(--spend-swarm);
+}
+.spend-webhook {
+  background: var(--spend-webhook);
+}
+.spend-monitor {
+  background: var(--spend-monitor);
 }
 .spend-chart-plot {
   display: grid;

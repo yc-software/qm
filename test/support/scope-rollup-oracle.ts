@@ -1,5 +1,4 @@
-import type { ScopeSessionRollup, SessionSummary } from "../../src/sessions/session-store.ts";
-import { parseSessionWakeRef } from "../../src/api/routes/admin/origins.ts";
+import { sessionCategory, type ScopeSessionRollup, type SessionSummary } from "../../src/sessions/session-store.ts";
 
 export function rollupsFromSummaries(summaries: SessionSummary[]): ScopeSessionRollup[] {
   const out = new Map<string, ScopeSessionRollup>();
@@ -15,7 +14,7 @@ export function rollupsFromSummaries(summaries: SessionSummary[]): ScopeSessionR
     };
     out.set(s.scopeId, r);
     r.lastActivity = Math.max(r.lastActivity, s.lastActivity);
-    if (parseSessionWakeRef(s.threadRef)) {
+    if (sessionCategory(s.origin) === "background") {
       r.backgroundSessions += 1;
       continue;
     }

@@ -1193,6 +1193,8 @@ test(
       "cron:oc2:slot": { origin: "cron", cronId: "oc2" },
       "agent:main:webhook:ocw": { origin: "webhook", cronId: null },
       "monitor:ocm:extra": { origin: "monitor", cronId: null },
+      "loop:ocl:fire:aaa": { origin: "loop", cronId: null },
+      "swarm:ocs:member": { origin: "swarm", cronId: null },
       "ch:C1:oc-thread": { origin: "conversation", cronId: null },
     };
     const ids: string[] = [];
@@ -1232,7 +1234,12 @@ test(
       assert.deepEqual(await columns(), shapes, "insert derives origin and origin_id from the thread ref");
       const stored = await classify();
       assert.deepEqual(stored.groups, ["oc1", "oc2"]);
-      assert.deepEqual(stored.other, ["agent:main:webhook:ocw", "monitor:ocm:extra"]);
+      assert.deepEqual(stored.other, [
+        "agent:main:webhook:ocw",
+        "loop:ocl:fire:aaa",
+        "monitor:ocm:extra",
+        "swarm:ocs:member",
+      ]);
       assert.deepEqual(stored.conversation, ["ch:C1:oc-thread"]);
       assert.deepEqual(stored.cron, ["agent:main:cron:oc1", "cron:oc2:slot"]);
       assert.deepEqual(stored.oc2, ["cron:oc2:slot"]);
@@ -1240,6 +1247,9 @@ test(
       assert.equal(stored.cronStats.total, 1);
 
       await q("UPDATE sessions SET origin = NULL, origin_id = NULL WHERE id = ANY($1)", [ids]);
+      await q("UPDATE sessions SET origin = 'conversation' WHERE id = ANY($1) AND thread_ref ~ '^(loop|swarm):'", [
+        ids,
+      ]);
       await q("DELETE FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]);
       const unrelated = randomUUID();
       await q("INSERT INTO session_spend_dirty(session_id) VALUES ($1)", [unrelated]);

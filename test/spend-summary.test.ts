@@ -125,13 +125,40 @@ test("summarizeSpend: people plus non-person scopes conserve the org totals", ()
   }
   const alice = report.people.find((p) => p.principalId === "alice")!;
   assert.equal(alice.live.costUsd, 1.75);
-  assert.equal(alice.cron.costUsd, 0.75);
-  assert.equal(alice.cron.calls, 3);
-  assert.equal(alice.background.costUsd, 0);
+  assert.equal(alice.background.sources.cron.costUsd, 0.75);
+  assert.equal(alice.background.sources.cron.calls, 3);
+  assert.equal(alice.background.costUsd, 0.75, "crons are background");
   const bob = report.people.find((p) => p.principalId === "bob")!;
-  assert.equal(bob.cron.costUsd, 0, "no cron rows means a zero cron bucket, not a missing one");
+  assert.equal(bob.background.sources.cron.costUsd, 0, "no cron rows means a zero cron source, not a missing one");
+  assert.equal(bob.background.sources.monitor.costUsd, 4);
   assert.equal(bob.background.costUsd, 4, "monitor origin rolls up as background");
+  assert.equal(report.scopes[0]!.background.sources.webhook.costUsd, 2);
   assert.equal(report.scopes[0]!.background.costUsd, 2, "webhook origin rolls up as background");
+});
+
+test("summarizeSpend: background holds every non-live source, split by where it came from", () => {
+  const report = summarize([
+    row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "cron", costUsd: 2 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "loop", costUsd: 4 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "swarm", costUsd: 8 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "webhook", costUsd: 16 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "monitor", costUsd: 32 }),
+  ]);
+  const alice = report.people[0]!;
+  assert.equal(alice.live.costUsd, 1);
+  assert.equal(alice.background.costUsd, 62);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(alice.background.sources).map(([source, t]) => [source, t.costUsd])),
+    { cron: 2, loop: 4, swarm: 8, webhook: 16, monitor: 32 },
+  );
+  assert.equal(alice.costUsd, alice.live.costUsd + alice.background.costUsd);
+  const day = report.series[0]!;
+  assert.equal(day.background.costUsd, 62);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(day.background.sources).map(([source, t]) => [source, t.costUsd])),
+    { cron: 2, loop: 4, swarm: 8, webhook: 16, monitor: 32 },
+  );
 });
 
 test("summarizeSpend: cache hit ratio comes from the shared helper and is null without cache data", () => {
@@ -210,14 +237,15 @@ test("spendCsv: one row per entity, people first, matching the report's numbers"
   const lines = spendCsv(report).trimEnd().split("\r\n");
   assert.equal(
     lines[0],
-    "principal_id,scope_id,kind,display_name,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+    "principal_id,scope_id,kind,display_name,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
   );
   assert.equal(lines.length, report.people.length + report.scopes.length + 1);
   const bob = lines.find((l) => l.startsWith("bob,"))!.split(",");
   const bobRow = report.people.find((p) => p.principalId === "bob")!;
-  assert.equal(Number(bob[7]), bobRow.costUsd);
+  assert.equal(Number(bob[11]), bobRow.costUsd);
   assert.equal(Number(bob[4]), bobRow.live.costUsd);
-  assert.equal(Number(bob[6]), bobRow.background.costUsd);
+  assert.equal(Number(bob[5]), bobRow.background.costUsd);
+  assert.equal(Number(bob[10]), bobRow.background.sources.monitor.costUsd);
   assert.equal(lines.at(-1)!.split(",")[1], "channel:C1", "non-person rows come last");
 });
 
@@ -247,7 +275,7 @@ test("summarizeSpend: models conserve org totals and category totals across scop
       column,
     );
   }
-  for (const origin of ["live", "cron", "background"] as const) {
+  for (const origin of ["live", "background"] as const) {
     for (const column of ["costUsd", "calls", "tokens"] as const) {
       assert.equal(
         report.models.reduce((sum, m) => sum + m[origin][column], 0),
@@ -265,7 +293,7 @@ test("summarizeSpend: models conserve org totals and category totals across scop
       }),
     );
   }
-  assert.equal(report.models.find((m) => m.model === null)!.cron.costUsd, 0.75);
+  assert.equal(report.models.find((m) => m.model === null)!.background.sources.cron.costUsd, 0.75);
   assert.deepEqual(summarize([]).models, []);
 });
 
@@ -305,13 +333,13 @@ test("spendCsv: model export retains totals, unknown models, and safe escaping",
   const csv = spendCsv(report, "model");
   assert.ok(
     csv.startsWith(
-      "model,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio\r\n",
+      "model,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio\r\n",
     ),
   );
-  assert.ok(csv.includes('"Model ""quoted"", name",0,1,0,1,1,100,0,100,0,0.5\r\n'));
+  assert.ok(csv.includes('"Model ""quoted"", name",0,1,1,0,0,0,0,1,1,100,0,100,0,0.5\r\n'));
   assert.ok(csv.includes('"line one\r\nline two"'));
   for (const model of ["=formula", "+formula", "-formula", "@formula"]) assert.ok(csv.includes(`'${model},`));
-  assert.ok(csv.includes("Unknown model,0,1,0,1,1,100,0,100,0,0.5\r\n"));
+  assert.ok(csv.includes("Unknown model,0,1,1,0,0,0,0,1,1,100,0,100,0,0.5\r\n"));
   assert.equal(spendCsv(report), spendCsv(report, "entity"));
 });
 
@@ -427,16 +455,33 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
     row({ day: MON, scopeId: "personal:alice", origin: "monitor", model: "m1", costUsd: 4 }),
     row({ day: MON, scopeId: "personal:alice", origin: "webhook", model: "m1", costUsd: 16 }),
     row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: null, costUsd: 32 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "loop", model: "m1", costUsd: 64 }),
+    row({ day: MON, scopeId: "personal:alice", origin: "swarm", model: "m1", costUsd: 128 }),
   ];
   const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "");
   assert.deepEqual(
-    rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.origin, r.model, r.costUsd, r.calls]),
+    rows.map((r) => [
+      r.day,
+      r.scopeId,
+      r.kind,
+      r.principalId,
+      r.displayName,
+      r.origin,
+      r.source,
+      r.model,
+      r.costUsd,
+      r.calls,
+    ]),
     [
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "m1", 20, 2],
-      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "m1", 8, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "live", null, 32, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "live", "m1", 3, 2],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "loop", "m1", 64, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "monitor", "m1", 4, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "swarm", "m1", 128, 1],
+      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "background", "webhook", "m1", 16, 1],
+      ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "cron", "m1", 8, 2],
     ],
+    "origin keeps its live/cron/background values; source names the exact background kind",
   );
   assert.equal(rows[1]!.input, 8);
   const report = summarize(ledger, { bucket: "day", to: (TUE + 1) * DAY, label: (id) => labels.get(id) ?? "" });
@@ -503,7 +548,7 @@ test("summarizeSpend: crons group each cron's spend under the scope it ran in, a
   assert.deepEqual(report.crons[0]!.info, nightly);
   assert.equal(
     report.crons.reduce((sum, c) => sum + c.costUsd, 0),
-    report.org.cron.costUsd,
+    report.org.background.sources.cron.costUsd,
   );
 });
 
@@ -521,11 +566,11 @@ test("spendCsv: cron export names each cron by id, title, owner and spend scope,
   const lines = spendCsv(report, "cron").trimEnd().split("\r\n");
   assert.equal(
     lines[0],
-    "cron_id,title,owner,scope_id,live_usd,cron_usd,background_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
+    "cron_id,title,owner,scope_id,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
   );
   assert.deepEqual(lines.slice(1), [
-    "c1,'=HYPERLINK(),alice,personal:alice,0,2,0,2,1,0,0,0,0,",
-    "gone,,,channel:C1,0,1,0,1,1,0,0,0,0,",
+    "c1,'=HYPERLINK(),alice,personal:alice,0,2,2,0,0,0,0,2,1,0,0,0,0,",
+    "gone,,,channel:C1,0,1,1,0,0,0,0,1,1,0,0,0,0,",
   ]);
 });
 

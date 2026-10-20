@@ -155,8 +155,16 @@ export async function assertSpendRollupParity(
     await store.setParentSession(session.id, parentId);
     return session;
   };
-  for (const origin of ["cron", "webhook", "monitor", "conversation"] as const) {
-    const parent = await store.getOrCreateByThread(`agent:main:${origin}:${prefix}-parent`, "dm", bob);
+  const parents = {
+    cron: `agent:main:cron:${prefix}-parent`,
+    webhook: `agent:main:webhook:${prefix}-parent`,
+    monitor: `agent:main:monitor:${prefix}-parent`,
+    loop: `loop:${prefix}-parent:fire:aaa`,
+    swarm: `swarm:${prefix}-parent:member`,
+    conversation: `agent:main:conversation:${prefix}-parent`,
+  };
+  for (const [origin, threadRef] of Object.entries(parents)) {
+    const parent = await store.getOrCreateByThread(threadRef, "dm", bob);
     const first = await child(`${origin}-child`, parent.id);
     await child(`${origin}-grandchild`, first.id);
   }
@@ -174,7 +182,7 @@ export async function assertSpendRollupParity(
     r.model?.startsWith(`${prefix}-`),
   );
   const origins = new Map<string, string>([
-    ...["cron", "webhook", "monitor", "conversation"].flatMap((origin) =>
+    ...Object.keys(parents).flatMap((origin) =>
       ["child", "grandchild"].map((kind) => [`${prefix}-${origin}-${kind}`, origin] as const),
     ),
     ...["missing-parent", "deleted-parent", "cycle-a", "cycle-b", "self-cycle"].map(

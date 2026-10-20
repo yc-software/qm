@@ -340,11 +340,11 @@ export interface AttributedTurn {
   lastAt: number;
 }
 
-export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor";
+export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
 export const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
 export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
-export const ORIGIN_ALTERNATION = "(cron|webhook|monitor)";
+export const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
 const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
 const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
 export const threadRefCronIdExpr = (threadRef: string): string =>

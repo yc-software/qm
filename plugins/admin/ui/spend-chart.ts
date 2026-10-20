@@ -4,8 +4,12 @@ const DAY = 86400000;
 const PARTS = [
   ["live", "Live"],
   ["cron", "Crons"],
-  ["background", "Background"],
+  ["loop", "Loops"],
+  ["swarm", "Swarms"],
+  ["webhook", "Webhooks"],
+  ["monitor", "Monitors"],
 ] as const;
+const categoryCost = (p: any, key: string) => (key === "live" ? p?.live : p?.background?.sources?.[key])?.costUsd;
 const usd = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const date = (ms: number) =>
   new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -51,7 +55,7 @@ export function spendChart(data: any, breakdown: "category" | "model" | "person"
     points.push({
       t,
       values: parts.map(({ key }) =>
-        Math.max(0, Number(breakdown !== "category" ? costs.get(key) : p?.[key!]?.costUsd) || 0),
+        Math.max(0, Number(breakdown !== "category" ? costs.get(key) : categoryCost(p, key!)) || 0),
       ),
     });
   }

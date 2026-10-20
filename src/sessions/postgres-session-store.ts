@@ -67,7 +67,10 @@ DECLARE
 BEGIN
   LOOP
     UPDATE sessions SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")}
-     WHERE id IN (SELECT id FROM sessions WHERE origin IS NULL LIMIT 5000);
+     WHERE id IN (SELECT id FROM sessions
+                   WHERE origin IS NULL
+                      OR (origin = 'conversation' AND thread_ref ~ '${legacyOriginPattern("(loop|swarm)")}')
+                   LIMIT 5000);
     GET DIAGNOSTICS updated = ROW_COUNT;
     EXIT WHEN updated = 0;
     DELETE FROM session_spend_dirty WHERE writer = pg_current_xact_id();

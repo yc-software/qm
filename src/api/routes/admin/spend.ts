@@ -19,8 +19,12 @@ const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
 const CSV_NEEDS_QUOTES = /["\r\n,]/;
 const CSV_TOTALS_HEADER = [
   "live_usd",
-  "cron_usd",
   "background_usd",
+  "cron_usd",
+  "loop_usd",
+  "swarm_usd",
+  "webhook_usd",
+  "monitor_usd",
   "total_usd",
   "calls",
   "input_tokens",
@@ -33,8 +37,11 @@ const CSV_TOTALS_HEADER = [
 const SPEND_BREAKDOWNS = ["entity", "model", "cron"] as const;
 type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
-type OriginBucket = "live" | "cron" | "background";
-const ORIGIN_BUCKETS: readonly OriginBucket[] = ["live", "cron", "background"];
+const BACKGROUND_SOURCES = ["cron", "loop", "swarm", "webhook", "monitor"] as const;
+type BackgroundSource = (typeof BACKGROUND_SOURCES)[number];
+type SpendSource = "live" | BackgroundSource;
+type ExportOrigin = "live" | "cron" | "background";
+const EXPORT_ORIGINS: readonly ExportOrigin[] = ["live", "cron", "background"];
 
 interface SpendBucketTotals {
   costUsd: number;
@@ -52,8 +59,7 @@ interface SpendTotals {
   cacheWrite: number;
   cacheHitRatio: number | null;
   live: SpendBucketTotals;
-  cron: SpendBucketTotals;
-  background: SpendBucketTotals;
+  background: SpendBucketTotals & { sources: Record<BackgroundSource, SpendBucketTotals> };
 }
 
 interface SpendEntity extends SpendTotals {
@@ -80,8 +86,7 @@ interface SpendSeriesPoint {
   models: { model: string | null; costUsd: number }[];
   people: { principalId: string | null; costUsd: number }[];
   live: { costUsd: number };
-  cron: { costUsd: number };
-  background: { costUsd: number };
+  background: { costUsd: number; sources: Record<BackgroundSource, { costUsd: number }> };
 }
 
 export interface SpendReport {
@@ -100,7 +105,8 @@ export interface SpendExportRow extends Tally {
   kind: string;
   principalId: string | null;
   displayName: string;
-  origin: OriginBucket;
+  origin: ExportOrigin;
+  source: SpendSource;
   cronId: string | null;
   model: string | null;
 }
@@ -127,15 +133,32 @@ interface EntityAccumulator {
   scopeId: ScopeId;
   kind: string;
   sources: ScopeId[];
-  byOrigin: Record<OriginBucket, Tally>;
+  bySource: Record<SpendSource, Tally>;
 }
 
 function emptyTally(): Tally {
   return { costUsd: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
-function emptyOrigins(): Record<OriginBucket, Tally> {
-  return { live: emptyTally(), cron: emptyTally(), background: emptyTally() };
+function emptySources(): Record<SpendSource, Tally> {
+  return {
+    live: emptyTally(),
+    cron: emptyTally(),
+    loop: emptyTally(),
+    swarm: emptyTally(),
+    webhook: emptyTally(),
+    monitor: emptyTally(),
+  };
+}
+
+function backgroundSources<T>(value: (source: BackgroundSource) => T): Record<BackgroundSource, T> {
+  return Object.fromEntries(BACKGROUND_SOURCES.map((source) => [source, value(source)])) as Record<BackgroundSource, T>;
+}
+
+function backgroundTally(bySource: Record<SpendSource, Tally>): Tally {
+  const total = emptyTally();
+  for (const source of BACKGROUND_SOURCES) addTally(total, bySource[source]);
+  return total;
 }
 
 function addRow(t: Tally, r: SpendRow): void {
@@ -164,10 +187,12 @@ function bucketTotals(t: Tally): SpendBucketTotals {
   return { costUsd: t.costUsd, calls: t.calls, tokens: tokensOf(t) };
 }
 
-function originBucket(origin: SessionOrigin): OriginBucket {
-  if (origin === "conversation") return "live";
-  if (origin === "cron") return "cron";
-  return "background";
+function spendSource(origin: SessionOrigin): SpendSource {
+  return origin === "conversation" ? "live" : origin;
+}
+
+function exportOrigin(source: SpendSource): ExportOrigin {
+  return source === "live" || source === "cron" ? source : "background";
 }
 
 function isoDay(day: number): string {
@@ -178,9 +203,11 @@ function weekStart(day: number): number {
   return day - ((day + 3) % 7);
 }
 
-function totalsOf(byOrigin: Record<OriginBucket, Tally>): SpendTotals {
+function totalsOf(bySource: Record<SpendSource, Tally>): SpendTotals {
+  const background = backgroundTally(bySource);
   const total = emptyTally();
-  for (const bucket of ORIGIN_BUCKETS) addTally(total, byOrigin[bucket]);
+  addTally(total, bySource.live);
+  addTally(total, background);
   return {
     costUsd: total.costUsd,
     calls: total.calls,
@@ -194,9 +221,11 @@ function totalsOf(byOrigin: Record<OriginBucket, Tally>): SpendTotals {
       cacheWrite: total.cacheWrite,
       uncachedInput: total.input,
     }),
-    live: bucketTotals(byOrigin.live),
-    cron: bucketTotals(byOrigin.cron),
-    background: bucketTotals(byOrigin.background),
+    live: bucketTotals(bySource.live),
+    background: {
+      ...bucketTotals(background),
+      sources: backgroundSources((source) => bucketTotals(bySource[source])),
+    },
   };
 }
 
@@ -220,7 +249,7 @@ function entityOf(acc: EntityAccumulator, label: (scopeId: ScopeId) => string): 
     scopeId: acc.scopeId,
     kind: acc.kind,
     displayName: displayNameOf(acc.sources, label),
-    ...totalsOf(acc.byOrigin),
+    ...totalsOf(acc.bySource),
   };
 }
 
@@ -243,44 +272,44 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const accumulators = new Map<string, EntityAccumulator>();
   const buckets = new Map<
     number,
-    { byOrigin: Record<OriginBucket, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
+    { bySource: Record<SpendSource, Tally>; models: Map<string | null, number>; people: Map<string | null, number> }
   >();
-  const modelBuckets = new Map<string | null, Record<OriginBucket, Tally>>();
-  const cronBuckets = new Map<string, { scopeId: ScopeId; byOrigin: Record<OriginBucket, Tally> }>();
-  const orgOrigins = emptyOrigins();
+  const modelBuckets = new Map<string | null, Record<SpendSource, Tally>>();
+  const cronBuckets = new Map<string, { scopeId: ScopeId; bySource: Record<SpendSource, Tally> }>();
+  const orgSources = emptySources();
   for (const row of rows) {
     const { key, person, kind } = resolveScope(row.scopeId);
     let acc = accumulators.get(key);
     if (!acc) {
-      acc = { principalId: person, scopeId: key, kind, sources: [], byOrigin: emptyOrigins() };
+      acc = { principalId: person, scopeId: key, kind, sources: [], bySource: emptySources() };
       accumulators.set(key, acc);
     }
     if (!acc.sources.includes(row.scopeId)) acc.sources.push(row.scopeId);
-    const origin = originBucket(row.origin);
-    addRow(acc.byOrigin[origin], row);
-    addRow(orgOrigins[origin], row);
+    const source = spendSource(row.origin);
+    addRow(acc.bySource[source], row);
+    addRow(orgSources[source], row);
     if (row.cronId !== null) {
       let cron = cronBuckets.get(row.cronId);
       if (!cron) {
-        cron = { scopeId: row.scopeId, byOrigin: emptyOrigins() };
+        cron = { scopeId: row.scopeId, bySource: emptySources() };
         cronBuckets.set(row.cronId, cron);
       }
-      addRow(cron.byOrigin[origin], row);
+      addRow(cron.bySource[source], row);
     }
     let model = modelBuckets.get(row.model);
     if (!model) {
-      model = emptyOrigins();
+      model = emptySources();
       modelBuckets.set(row.model, model);
     }
-    addRow(model[origin], row);
+    addRow(model[source], row);
 
     const bucketKey = opts.bucket === "week" ? weekStart(row.day) : row.day;
     let bucket = buckets.get(bucketKey);
     if (!bucket) {
-      bucket = { byOrigin: emptyOrigins(), models: new Map(), people: new Map() };
+      bucket = { bySource: emptySources(), models: new Map(), people: new Map() };
       buckets.set(bucketKey, bucket);
     }
-    addRow(bucket.byOrigin[origin], row);
+    addRow(bucket.bySource[source], row);
     bucket.models.set(row.model, (bucket.models.get(row.model) ?? 0) + row.costUsd);
     bucket.people.set(person, (bucket.people.get(person) ?? 0) + row.costUsd);
   }
@@ -290,24 +319,26 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
   const scopes = entities.filter((e) => e.principalId === null).sort(byCostThenId);
 
   const crons = [...cronBuckets.entries()]
-    .map(([cronId, { scopeId, byOrigin }]) => ({
+    .map(([cronId, { scopeId, bySource }]) => ({
       cronId,
       scopeId,
       scopeName: opts.label(scopeId),
       info: opts.cron(cronId),
-      ...totalsOf(byOrigin),
+      ...totalsOf(bySource),
     }))
     .sort(byCostThenCron);
 
   const models = [...modelBuckets.entries()]
-    .map(([model, byOrigin]) => ({ model, ...totalsOf(byOrigin) }))
+    .map(([model, bySource]) => ({ model, ...totalsOf(bySource) }))
     .sort(byCostThenModel);
 
   const series = [...buckets.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([day, { byOrigin, models, people }]) => {
+    .map(([day, { bySource, models, people }]) => {
+      const background = backgroundTally(bySource);
       const total = emptyTally();
-      for (const bucket of ORIGIN_BUCKETS) addTally(total, byOrigin[bucket]);
+      addTally(total, bySource.live);
+      addTally(total, background);
       return {
         day: isoDay(day),
         costUsd: total.costUsd,
@@ -316,9 +347,11 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
         people: [...people]
           .sort(([a], [b]) => byCodePoint(a, b))
           .map(([principalId, costUsd]) => ({ principalId, costUsd })),
-        live: { costUsd: byOrigin.live.costUsd },
-        cron: { costUsd: byOrigin.cron.costUsd },
-        background: { costUsd: byOrigin.background.costUsd },
+        live: { costUsd: bySource.live.costUsd },
+        background: {
+          costUsd: background.costUsd,
+          sources: backgroundSources((source) => ({ costUsd: bySource[source].costUsd })),
+        },
       };
     });
 
@@ -328,7 +361,7 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
       to: isoDay(Math.floor(opts.to / DAY_MS)),
       bucket: opts.bucket,
     },
-    org: totalsOf(orgOrigins),
+    org: totalsOf(orgSources),
     series,
     people,
     scopes,
@@ -345,8 +378,8 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
     const seen = sources.get(scopeId);
     if (!seen) sources.set(scopeId, [row.scopeId]);
     else if (!seen.includes(row.scopeId)) seen.push(row.scopeId);
-    const origin = originBucket(row.origin);
-    const key = JSON.stringify([row.day, scopeId, origin, row.cronId, row.model]);
+    const source = spendSource(row.origin);
+    const key = JSON.stringify([row.day, scopeId, source, row.cronId, row.model]);
     let out = merged.get(key);
     if (!out) {
       out = {
@@ -355,7 +388,8 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
         kind,
         principalId: person,
         displayName: "",
-        origin,
+        origin: exportOrigin(source),
+        source,
         cronId: row.cronId,
         model: row.model,
         ...emptyTally(),
@@ -370,7 +404,8 @@ export function spendExportRows(rows: readonly SpendRow[], label: (scopeId: Scop
       (a, b) =>
         byCodePoint(a.day, b.day) ||
         byCodePoint(a.scopeId, b.scopeId) ||
-        ORIGIN_BUCKETS.indexOf(a.origin) - ORIGIN_BUCKETS.indexOf(b.origin) ||
+        EXPORT_ORIGINS.indexOf(a.origin) - EXPORT_ORIGINS.indexOf(b.origin) ||
+        byCodePoint(a.source, b.source) ||
         byCodePoint(a.cronId ?? "", b.cronId ?? "") ||
         byCodePoint(a.model ?? "", b.model ?? ""),
     );
@@ -417,8 +452,8 @@ export function spendCsv(report: SpendReport, breakdown: SpendBreakdown = "entit
       [
         ...labels,
         row.live.costUsd,
-        row.cron.costUsd,
         row.background.costUsd,
+        ...BACKGROUND_SOURCES.map((source) => row.background.sources[source].costUsd),
         row.costUsd,
         row.calls,
         row.input,
