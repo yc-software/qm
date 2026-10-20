@@ -414,14 +414,24 @@ pub fn path_locator<T: PartialEq + Clone>(
     element: &T,
     roots: &[(T, Locator)],
     max_depth: usize,
+    expected_path: Option<&[T]>,
     mut read: impl FnMut(&T) -> Option<(Props, Option<T>)>,
 ) -> Option<Locator> {
     let mut current = element.clone();
     let mut path = vec![];
+    let mut expected = expected_path.map(|path| path.iter().rev());
     for _ in 0..=max_depth {
+        if expected.as_mut().is_some_and(|expected| expected.next() != Some(&current)) {
+            return None;
+        }
         let (props, parent) = read(&current)?;
         path.push(props);
         if let Some((_, root)) = roots.iter().find(|(element, _)| *element == current) {
+            if let Some(expected) = expected.as_mut() {
+                if expected.next() != parent.as_ref() || expected.next().is_some() {
+                    return None;
+                }
+            }
             return Some(path.iter().rev().fold(*root, |at, props| at.child(props)));
         }
         current = parent?;
@@ -991,17 +1001,36 @@ mod tests {
         let mut nodes = HashMap::from([(1, (group.clone(), None)), (2, (button.clone(), Some(1)))]);
         let roots = [(1, Locator::ROOT)];
         let expected = Locator::ROOT.child(&group).child(&button);
-        assert_eq!(path_locator(&2, &roots, 10, |id| nodes.get(id).cloned()), Some(expected));
+        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
         nodes.get_mut(&2).unwrap().0.title = Some("Delete".into());
-        assert_ne!(path_locator(&2, &roots, 10, |id| nodes.get(id).cloned()), Some(expected));
+        assert_ne!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
         nodes.get_mut(&2).unwrap().0 = button;
         nodes.insert(3, (Props { role: "AXToolbar".into(), ..Default::default() }, Some(1)));
         nodes.get_mut(&2).unwrap().1 = Some(3);
-        assert_ne!(path_locator(&2, &roots, 10, |id| nodes.get(id).cloned()), Some(expected));
+        assert_ne!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
         nodes.get_mut(&2).unwrap().1 = None;
-        assert_eq!(path_locator(&2, &roots, 10, |id| nodes.get(id).cloned()), None);
+        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), None);
         nodes.get_mut(&2).unwrap().1 = Some(2);
-        assert_eq!(path_locator(&2, &roots, 10, |id| nodes.get(id).cloned()), None);
+        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), None);
+    }
+
+    #[test]
+    fn live_locator_rejects_identical_container_reparenting() {
+        let group = Props { role: "AXGroup".into(), ..Default::default() };
+        let button = Props { role: "AXButton".into(), title: Some("Delete".into()), ..Default::default() };
+        let mut nodes = HashMap::from([(1, (group.clone(), Some(0))), (2, (group.clone(), Some(0))), (3, (button.clone(), Some(1)))]);
+        let roots = [(1, Locator::ROOT), (2, Locator::ROOT)];
+        let expected = Locator::ROOT.child(&group).child(&button);
+        let ancestry = [0, 1, 3];
+        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), Some(expected));
+        nodes.get_mut(&3).unwrap().1 = Some(2);
+        assert_eq!(path_locator(&3, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
+        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&3).unwrap().1 = Some(1);
+        nodes.get_mut(&1).unwrap().1 = Some(9);
+        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&1).unwrap().1 = Some(0);
+        assert_eq!(path_locator(&3, &roots, 10, Some(&[0, 2, 1, 3]), |id| nodes.get(id).cloned()), None);
     }
 
     #[test]

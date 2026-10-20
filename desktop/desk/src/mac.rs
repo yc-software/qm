@@ -259,6 +259,7 @@ struct Snapshot {
     elements: Vec<(u32, El)>,
     text: HashMap<u32, text::ObservedText>,
     markers: HashMap<u32, (El, String)>,
+    ancestry: HashMap<u32, Vec<El>>,
     lines: HashMap<Key, String>,
     ids: tree::Ids<El>,
 }
@@ -1060,10 +1061,12 @@ struct Walk {
     elements: Vec<(u32, El)>,
     text: HashMap<u32, text::ObservedText>,
     markers: HashMap<u32, (El, String)>,
+    ancestry: HashMap<u32, Vec<El>>,
     text_budget: usize,
     notes: HashMap<u32, u32>,
     truncated: bool,
     visited: usize,
+    ancestors: Vec<El>,
     window: Rect,
     cache: Option<Cache>,
 }
@@ -1072,6 +1075,9 @@ impl Walk {
     fn id(&mut self, e: &El, locator: Locator) -> u32 {
         let id = self.ids.assign(e, unsafe { CFHash(e.as_CFTypeRef()) }, locator);
         self.elements.push((id, e.clone()));
+        let mut path = self.ancestors.clone();
+        path.push(e.clone());
+        self.ancestry.insert(id, path);
         id
     }
 
@@ -1152,7 +1158,9 @@ impl Walk {
         let clip = narrow(clip, &n.props.role, n.frame);
         let drawn = n.props.role == "AXWebArea" || n.children.is_empty();
         let (anchor, mut kids) = if keep { (self.id(e, locator), vec![]) } else { (anchor, vec![]) };
+        self.ancestors.push(e.clone());
         self.children(&n.children, prefetched, WalkAt { depth: depth + 1, anchor, clip, at: locator }, n.props.content_list(), &mut kids);
+        self.ancestors.pop();
         if kids.is_empty()
             && drawn
             && !self.truncated
@@ -1486,10 +1494,12 @@ impl Desk {
             elements: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
+            ancestry: HashMap::new(),
             text_budget: 1024 * 1024,
             notes: HashMap::new(),
             truncated: false,
             visited: 0,
+            ancestors: vec![],
             window: f,
             cache: self.observers.get_mut(&app.pid).map(Observer::take_cache),
         };
@@ -1500,12 +1510,14 @@ impl Desk {
             items.push(Item::leaf(Key::Section(0), "Open menus and other windows of this app:".into()));
             for o in &others {
                 let n = complete(o, fetch(o), walk.cache.as_mut());
+                walk.ancestors = attr(o, "AXParent").into_iter().collect();
                 walk.visit(o, n, WalkAt { depth: 0, anchor: ROOT, clip: everywhere, at: Locator::ROOT }, true, &mut items);
             }
             let title = str_attr(&w, "AXTitle").unwrap_or_default();
             items.push(Item::leaf(Key::Section(1), format!("Window \"{}\":", tree::clip(&title, 80))));
         }
         let kids = attr(&w, "AXChildren").map(list).unwrap_or_default();
+        walk.ancestors = vec![w.clone()];
         walk.children(
             &kids,
             None,
@@ -1519,6 +1531,7 @@ impl Desk {
         let moved = walk.ids.rebind(dead);
         items.iter_mut().for_each(|i| i.renumber(&moved));
         walk.text = rebind_text(walk.text, &moved);
+        walk.ancestry = walk.ancestry.into_iter().map(|(id, path)| (*moved.get(&id).unwrap_or(&id), path)).collect();
         walk.markers = walk.markers.into_iter().map(|(id, source)| (*moved.get(&id).unwrap_or(&id), source)).collect();
         for (id, _) in walk.elements.iter_mut() {
             *id = *moved.get(id).unwrap_or(id);
@@ -1566,6 +1579,7 @@ impl Desk {
                 elements: walk.elements,
                 text: walk.text.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 markers: walk.markers.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
+                ancestry: walk.ancestry.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 lines,
                 ids: walk.ids.carry(),
             },
@@ -1684,7 +1698,8 @@ impl Desk {
             attr(&s.window_element, "AXChildren").map(list).unwrap_or_default().into_iter().map(|c| (c, Locator::ROOT)).collect();
         roots.extend(extras(&app_element(pid), &s.window_element).into_iter().map(|o| (o, Locator::ROOT)));
         if !dead(&e) {
-            let current = tree::path_locator(&e, &roots, MAX_DEPTH, |element| {
+            let ancestry = s.ancestry.get(&index).ok_or_else(gone)?;
+            let current = tree::path_locator(&e, &roots, MAX_DEPTH, Some(ancestry), |element| {
                 if cancellation::cancelled() {
                     return None;
                 }
@@ -2047,6 +2062,7 @@ mod tests {
             elements: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
+            ancestry: HashMap::new(),
             lines: HashMap::new(),
             ids: tree::Ids::default(),
         };
@@ -2063,10 +2079,12 @@ mod tests {
             elements: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
+            ancestry: HashMap::new(),
             text_budget: 1024 * 1024,
             notes: HashMap::new(),
             truncated: false,
             visited: MAX_VISITS,
+            ancestors: vec![],
             window,
             cache: None,
         };
