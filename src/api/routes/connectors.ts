@@ -22,7 +22,7 @@ import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "..
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
@@ -171,7 +171,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       scopeLabel: state.principalId,
     });
     if (state.consentLinkId && deps.consentLinks) {
-      await deps.consentLinks.redeem(state.consentLinkId).catch(() => null);
+      await deps.consentLinks.redeem(state.consentLinkId).catch(swallowAs("connectors: redeem consent link", null));
     }
     if (state.returnTo) {
       const dest = new URL(state.returnTo, "http://localhost");
@@ -192,7 +192,7 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
     for (const at of ACCOUNT_TYPES) {
       const st = await deps.connectorTokens
         .connectorTokenStatus(host, principalId, at)
-        .catch(() => ({ connected: false }) as OAuthTokenStatus);
+        .catch(swallowAs("connectors: token status", { connected: false } as OAuthTokenStatus));
       if (st.connected && !st.needsReconnect) return true;
     }
   }

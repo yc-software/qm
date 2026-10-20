@@ -2385,7 +2385,10 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) => void loopFire.fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`).catch(() => {}),
+    requestFire: (loopId) =>
+      void loopFire
+        .fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`)
+        .catch(swallowAs("inbox loop: slack event fire", undefined)),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({

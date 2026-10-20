@@ -37,7 +37,7 @@ import {
 } from "../attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
@@ -197,7 +197,9 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     const container = currentDestination.target ?? conversation.channelRef ?? conversation.threadRef;
     if (!deps.surfaceCache || !container) return coverageSince;
     const cacheContainer = currentDestination.type === "slack" ? container.split(":")[0]! : container;
-    const st = await deps.surfaceCache.containerState(cacheContainer).catch(() => null);
+    const st = await deps.surfaceCache
+      .containerState(cacheContainer)
+      .catch(swallowAs("surface cache: container coverage", null));
     coverageSince = st?.oldestTs ? isoFromTs(st.oldestTs) || undefined : undefined;
     return coverageSince;
   };

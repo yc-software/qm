@@ -16,7 +16,7 @@ import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type Ic
 import { icon } from "./icons";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
 type ThemeChoice = "light" | "dark" | "system" | "custom";
@@ -269,7 +269,9 @@ function setOpenNewChat(value: boolean): void {
   openNewChatTouched = true;
   openNewChat = value;
   drawSettings();
-  void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(() => void 0);
+  void putUiState(OPEN_NEW_CHAT_KEY, value, Date.now()).catch(
+    swallowAs("web-ui: save open-new-chat setting", undefined),
+  );
 }
 
 const OPEN_OPTIONS: Array<{ newChat: boolean; label: string }> = [

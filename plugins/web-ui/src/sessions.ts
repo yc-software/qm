@@ -71,7 +71,7 @@ import {
   type ChatBrowseStatus,
 } from "./session-list";
 import { tip } from "./tooltip";
-import { errMessage } from "../../chassis/src/errors";
+import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
@@ -1581,8 +1581,8 @@ async function refreshSessionTitle(s: CoreSession): Promise<void> {
       );
     }
     renderList();
-  } catch {
-    void 0;
+  } catch (e) {
+    swallow("web-ui: regenerate session title", e);
   } finally {
     await refreshSessions({ silent: true });
     refreshingTitleIds.delete(s.id);
@@ -1598,7 +1598,8 @@ async function persistSessionPatch(id: string, patch: SessionPatch): Promise<voi
   try {
     await request;
     renderList();
-  } catch {
+  } catch (e) {
+    swallow("web-ui: save session change", e);
     if (sessionPatchGeneration === generation) await refreshSessions({ silent: true, patchEpoch: sessionPatchEpoch });
   }
 }
@@ -1802,7 +1803,7 @@ export async function openSessionInto(
   const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
-    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
+    fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   // Approvals load alongside the transcript but never hold up the first draw:
   // the chat mounts as soon as entries arrive, and cards attach when this settles.

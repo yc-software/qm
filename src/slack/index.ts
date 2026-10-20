@@ -394,7 +394,8 @@ export async function startSlackPlugin(
         try {
           const actor = await directory.classifyActor(client, msg.senderSlackId);
           if (actor.externalId.includes("@")) senderEmail = actor.externalId;
-        } catch {
+        } catch (e) {
+          swallow("slack: classify inbox message sender", e);
           senderEmail = undefined;
         }
       }
@@ -406,7 +407,7 @@ export async function startSlackPlugin(
         ...(msg.text ? { text: msg.text } : {}),
         ...(senderEmail ? { senderEmail } : {}),
       });
-    })().catch(() => {});
+    })().catch((e) => swallow("slack: forward message to inbox", e));
   };
   registerSlackEvents(app, {
     handler,

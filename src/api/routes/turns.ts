@@ -3,6 +3,7 @@ import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
+import { swallowAs } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -302,7 +303,7 @@ async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
       ...(deliverMs !== undefined ? { deliverMs } : {}),
       ...(slackInflightMs !== undefined ? { slackInflightMs } : {}),
     })
-    .catch(() => undefined);
+    .catch(swallowAs("turn metrics: record delivery timing", undefined));
   return sendJson(res, 200, { ok: true });
 }
 

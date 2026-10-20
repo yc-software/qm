@@ -18,6 +18,7 @@ import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { swallowAs } from "../util/errors.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -643,7 +644,9 @@ export function createSessionMethods(
         if (e instanceof ProcessSessionGoneError) return { chunk: "", cursor: sinceCursor, state: "exited" };
         throw e;
       } finally {
-        await sandbox.teardown(handle, { keepWarm: true }).catch(() => {});
+        await sandbox
+          .teardown(handle, { keepWarm: true })
+          .catch(swallowAs("app sessions: release process sandbox", undefined));
       }
     },
 

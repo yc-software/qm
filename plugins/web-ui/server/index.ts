@@ -2,6 +2,7 @@ import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -512,6 +513,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
 const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
 const WEB_DELIVERY_GIVEUP_MS = 60_000;
 let deliveriesPollInFlight = false;
+let deliveriesPollFailing = false;
 
 interface PendingWebDelivery {
   id: string;
@@ -519,34 +521,51 @@ interface PendingWebDelivery {
   destination?: { target?: string };
 }
 
-async function drainWebDeliveries(): Promise<void> {
+export async function drainWebDeliveries(): Promise<void> {
   if (deliveriesPollInFlight) return;
   deliveriesPollInFlight = true;
   try {
-    const r = await coreFetch("GET", "/v1/deliveries?type=web");
-    if (r.status !== 200) return;
-    let pending: PendingWebDelivery[] = [];
-    try {
-      pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-    } catch {
-      return;
-    }
-    const now = Date.now();
-    for (const d of pending) {
-      const target = d.destination?.target ?? "";
-      const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-      if (conns && conns.size) {
-        for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-      } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-        continue;
-      }
-      await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`).catch(() => {});
-    }
-  } catch {
-    void 0;
+    noteDeliveriesPoll(await pollWebDeliveries());
+  } catch (e) {
+    noteDeliveriesPoll(e);
   } finally {
     deliveriesPollInFlight = false;
   }
+}
+
+function noteDeliveriesPoll(failure: unknown): void {
+  if (failure === undefined) {
+    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
+    deliveriesPollFailing = false;
+    return;
+  }
+  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
+  deliveriesPollFailing = true;
+}
+
+async function pollWebDeliveries(): Promise<unknown> {
+  const r = await coreFetch("GET", "/v1/deliveries?type=web");
+  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
+  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
+  const now = Date.now();
+  let failure: unknown;
+  for (const d of pending) {
+    const target = d.destination?.target ?? "";
+    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
+    if (conns && conns.size) {
+      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
+    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
+      continue;
+    }
+    try {
+      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
+      if (ack.status !== 200)
+        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
+    } catch (e) {
+      failure ??= e;
+    }
+  }
+  return failure;
 }
 
 const SSE_HEARTBEAT_MS = 15_000;
