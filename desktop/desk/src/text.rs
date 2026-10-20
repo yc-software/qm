@@ -85,13 +85,17 @@ fn norm(s: &[u16]) -> String {
     String::from_utf16_lossy(s).replace("\r\n", "\n").replace(['\r', '\u{2028}', '\u{2029}'], "\n").replace('\u{a0}', " ")
 }
 
-fn insertion(before: &[char], pasted: &[char], after: &[char]) -> bool {
+fn insertion(before: &str, pasted: &str, after: &str) -> bool {
     if after.len() != before.len() + pasted.len() {
         return false;
     }
-    let common = before.iter().zip(after).take_while(|(x, y)| x == y).count();
-    (common.saturating_sub(pasted.len())..=common)
-        .any(|i| after[..i] == before[..i] && after[i..i + pasted.len()] == *pasted && after[i + pasted.len()..] == before[i..])
+    let prefix = before.bytes().zip(after.bytes()).take_while(|(x, y)| x == y).count();
+    let suffix = before.bytes().rev().zip(after.bytes().rev()).take_while(|(x, y)| x == y).count();
+    let mut start = before.len() - suffix;
+    while start <= prefix && !after.is_char_boundary(start) {
+        start += 1;
+    }
+    start <= prefix && after[start..].find(pasted).is_some_and(|offset| start + offset <= prefix)
 }
 
 pub fn inserted(before: &str, selection: Option<(usize, usize)>, after: &str, pasted: &str) -> bool {
@@ -104,10 +108,7 @@ pub fn inserted(before: &str, selection: Option<(usize, usize)>, after: &str, pa
     match selection {
         Some((start, len)) if start + len <= b.len() => format!("{}{pasted}{}", norm(&b[..start]), norm(&b[start + len..])) == after,
         Some(_) => false,
-        None => {
-            let chars = |s: &str| s.chars().collect::<Vec<_>>();
-            insertion(&chars(&norm(&b)), &chars(&pasted), &chars(&after))
-        }
+        None => insertion(&norm(&b), &pasted, &after),
     }
 }
 
@@ -569,8 +570,22 @@ mod tests {
         assert!(!inserted("ab", Some((5, 0)), "aXYb", "XY"), "stale selection");
         assert!(!inserted("ab", Some((1, 0)), "ab", ""), "nothing expected");
         assert!(inserted("é", Some((1, 0)), "é😀", "😀"), "UTF-16 offsets");
+        assert!(inserted("aba", None, "ababa", "ab"));
+        assert!(inserted("éé", None, "é😀é", "😀"));
+        assert!(inserted("é", None, "éXĩ", "Xĩ"));
+        assert!(!inserted("éé", None, "éêé", "😀"));
         assert_eq!(expected("**hi** there", PasteFormat::Markdown), vec!["**hi** there".to_string(), "hi there".to_string()]);
         assert_eq!(expected("plain", PasteFormat::Text), vec!["plain".to_string()]);
+    }
+
+    #[test]
+    fn long_paste_confirmation_without_selection_finishes_promptly() {
+        let before = "a".repeat(2_097_152);
+        let pasted = "b".repeat(262_144);
+        let after = format!("{before}{pasted}");
+        let started = std::time::Instant::now();
+        assert!(inserted(&before, None, &after, &pasted));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
