@@ -147,12 +147,21 @@ export const GoalCreateParams = Type.Object({
 
 export type GoalCreateInput = Static<typeof GoalCreateParams>;
 
-export function goalFromParams(params: GoalCreateInput): GoalRecord {
+export function goalFromParams(params: GoalCreateInput, now?: number): GoalRecord {
   return createGoalRecord({
     objective: params.objective,
     ...(params.floor ? { floor: params.floor } : {}),
     ...(params.token_cap !== undefined ? { capTokens: params.token_cap } : {}),
+    ...(now !== undefined ? { now } : {}),
   });
+}
+
+export function assignedGoal(
+  stored: GoalRecord | undefined,
+  assigned: GoalCreateInput & { assignedAt: number },
+): GoalRecord | null {
+  if (stored && stored.createdAt >= assigned.assignedAt) return null;
+  return goalFromParams(assigned, assigned.assignedAt);
 }
 
 export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null): void {

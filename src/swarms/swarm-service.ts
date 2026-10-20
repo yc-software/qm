@@ -93,7 +93,8 @@ function boundedText(value: string, max: number, name: string): void {
 
 function swarmGoal(input: unknown): GoalCreateInput | undefined {
   if (input === undefined) return undefined;
-  if (!Check(GoalCreateParams, input)) throw new Error("invalid goal");
+  if (!Check(GoalCreateParams, input) || Object.keys(input).some((key) => !(key in GoalCreateParams.properties)))
+    throw new Error("invalid goal");
   if (input.token_cap === undefined) throw new Error("swarm goals require token_cap");
   goalFromParams(input);
   return { objective: input.objective, ...(input.floor ? { floor: input.floor } : {}), token_cap: input.token_cap };

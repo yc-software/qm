@@ -21,7 +21,7 @@ import {
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
-import { goalFromParams, openGoal } from "../harness/goal.ts";
+import { assignedGoal, openGoal } from "../harness/goal.ts";
 import type {
   CommandApprovalGrant,
   DeliveryProvenance,
@@ -3320,9 +3320,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const initialDocuments = [...documentInputs.documents];
           const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
           let sessionGoal = openGoal(storedGoal);
-          if (input.swarmGoal && swarmBinding && !(storedGoal && storedGoal.createdAt >= input.swarmGoal.assignedAt)) {
-            sessionGoal = goalFromParams(input.swarmGoal);
-            await deps.sessions.setGoal(lease, sessionGoal);
+          const installGoal = input.swarmGoal && swarmBinding ? assignedGoal(storedGoal, input.swarmGoal) : null;
+          if (installGoal) {
+            sessionGoal = installGoal;
+            await deps.sessions.setGoal(lease, installGoal);
           }
           return deps.harness.turns.runTurn({
             session,

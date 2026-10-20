@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { assignedGoal } from "../src/harness/goal.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 const goal = { objective: "Survey every archive for the lane", floor: { minMs: 3_600_000 }, token_cap: 2_000_000 };
@@ -44,4 +45,23 @@ test("goals are validated and only a parent may assign them to its own workers",
   );
   const sent = await f.service.send(f.caller, { requestId: "assign", audience: [second!.id], text: "go", goal });
   assert.deepEqual(sent.goal, goal);
+});
+
+test("each goal message installs once, and a later goal message wins", () => {
+  const a = { objective: "A", token_cap: 100, assignedAt: 1_000 };
+  const b = { objective: "B", token_cap: 100, assignedAt: 2_000 };
+  const installedA = assignedGoal(undefined, a)!;
+  assert.equal(installedA.objective, "A");
+  assert.equal(assignedGoal({ ...installedA, status: "complete", tokensUsed: 100 }, a), null);
+  const installedB = assignedGoal(installedA, b)!;
+  assert.equal(installedB.objective, "B");
+  assert.equal(assignedGoal(installedB, a), null);
+});
+
+test("goal fields outside the goal schema are rejected", async () => {
+  const f = await swarmFixture();
+  await assert.rejects(
+    f.service.spawn(f.caller, { requestId: "extra", text: "work", goal: { ...goal, surprise: 1 } }),
+    /invalid goal/,
+  );
 });
