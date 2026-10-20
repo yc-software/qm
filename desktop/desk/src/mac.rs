@@ -462,10 +462,7 @@ struct Press {
 }
 
 fn validate_input_window(at: &Press) -> Result<(), Failure> {
-    if window_id(&at.window) != at.win
-        || !input::within(&at.window, &at.host)
-        || input::window_geometry(at.win) != Some((at.owner, at.frame))
-    {
+    if input::resolved_window(&at.host, &at.window).ok() != Some((at.owner, at.win, at.frame)) {
         return Err(fail(ErrorCode::ActionFailed, "The input window moved, resized or closed; observe again before sending input"));
     }
     Ok(())
@@ -755,8 +752,10 @@ fn window_of(app: &El) -> Option<El> {
 
 fn window_id(w: &El) -> u32 {
     let mut id = 0;
-    unsafe { _AXUIElementGetWindow(w.as_CFTypeRef(), &mut id) };
-    id
+    match unsafe { _AXUIElementGetWindow(w.as_CFTypeRef(), &mut id) } {
+        0 => id,
+        _ => 0,
+    }
 }
 
 fn on_current_space(win: u32) -> bool {

@@ -75,11 +75,35 @@ pub(super) fn window_geometry(id: u32) -> Option<(i32, Rect)> {
     Some((owner, Rect { x: bounds.origin.x, y: bounds.origin.y, w: bounds.size.width, h: bounds.size.height }))
 }
 
-pub(super) fn resolved_window(host: &El, element: &El) -> Result<(i32, u32, Rect), Failure> {
-    if !within(element, host) {
-        return Err(fail(ErrorCode::ActionFailed, "The input target is no longer linked to this app; observe again"));
+fn ancestor_window<T: Clone + PartialEq>(
+    host: &T,
+    element: &T,
+    mut parent: impl FnMut(&T) -> Option<T>,
+    mut native_window: impl FnMut(&T) -> u32,
+) -> Option<u32> {
+    let mut seen = Vec::new();
+    let mut current = element.clone();
+    let mut id = 0;
+    for _ in 0..MAX_DEPTH {
+        if seen.contains(&current) {
+            return None;
+        }
+        if id == 0 {
+            id = native_window(&current);
+        }
+        if current == *host {
+            return Some(id);
+        }
+        let next = parent(&current)?;
+        seen.push(current);
+        current = next;
     }
-    let id = window_id(element);
+    None
+}
+
+pub(super) fn resolved_window(host: &El, element: &El) -> Result<(i32, u32, Rect), Failure> {
+    let id = ancestor_window(host, element, |element| attr(element, "AXParent"), window_id)
+        .ok_or_else(|| fail(ErrorCode::ActionFailed, "The input target is no longer linked to this app; observe again"))?;
     let (owner, bounds) =
         window_geometry(id).ok_or_else(|| fail(ErrorCode::NoWindow, "Input window ownership is unavailable; observe again"))?;
     Ok((owner, id, bounds))
@@ -472,6 +496,49 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn input_window_uses_nearest_ancestor_only_after_proving_host_link() {
+        let parent = |node: &u32| (*node > 0).then(|| node - 1);
+        assert_eq!(ancestor_window(&0, &3, parent, |node| if *node == 1 { 81 } else { 0 }), Some(81));
+        assert_eq!(ancestor_window(&0, &3, parent, |node| if *node == 3 { 92 } else { 81 }), Some(92));
+        assert_eq!(ancestor_window(&0, &3, parent, |_| 0), Some(0));
+        assert_eq!(ancestor_window(&0, &3, |_| None, |_| 92), None);
+        assert_eq!(ancestor_window(&0, &3, |_| Some(3), |_| 92), None);
+        assert_eq!(ancestor_window(&0, &(MAX_DEPTH as u32), parent, |_| 92), None);
+        let mut window_reads = Vec::new();
+        assert_eq!(
+            ancestor_window(&0, &3, parent, |node| {
+                window_reads.push(*node);
+                92
+            }),
+            Some(92)
+        );
+        assert_eq!(window_reads, vec![3]);
+    }
+
+    #[test]
+    fn input_window_revalidation_tracks_original_anchor_reparenting() {
+        let resolve = |ancestor| {
+            ancestor_window(
+                &0,
+                &3,
+                |node| match *node {
+                    3 => ancestor,
+                    1 | 2 => Some(0),
+                    _ => None,
+                },
+                |node| match *node {
+                    1 => 81,
+                    2 => 92,
+                    _ => 0,
+                },
+            )
+        };
+        assert_eq!(resolve(Some(1)), Some(81));
+        assert_eq!(resolve(Some(2)), Some(92));
+        assert_eq!(resolve(None), None);
+    }
+
     #[test]
     fn menu_preflight_covers_press_aliases_and_pointer_variants() {
         let click = Action::Click { target: Target::Index(3), button: Button::Left, count: 1, modifiers: vec![], hold_ms: 0 };
