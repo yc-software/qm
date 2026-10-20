@@ -35,7 +35,7 @@ export function forceThroughProxyEnv(
   const u = new URL(egressProxyUrl);
   const url = `${u.protocol}//x:${token}@${u.host}`;
   const noProxy = "localhost,127.0.0.1,::1";
-  const env: Record<string, string> = {
+  return {
     ...base,
     HTTPS_PROXY: url,
     HTTP_PROXY: url,
@@ -43,13 +43,8 @@ export function forceThroughProxyEnv(
     https_proxy: url,
     http_proxy: url,
     no_proxy: noProxy,
+    GIT_HTTP_PROXY_AUTHMETHOD: "basic",
   };
-  const count = Number(base.GIT_CONFIG_COUNT);
-  const index = Number.isSafeInteger(count) && count > 0 ? count : 0;
-  env[`GIT_CONFIG_KEY_${index}`] = "http.proxyAuthMethod";
-  env[`GIT_CONFIG_VALUE_${index}`] = "basic";
-  env.GIT_CONFIG_COUNT = String(index + 1);
-  return env;
 }
 
 export function proxyExportPrefix(handle: SandboxHandle): string {

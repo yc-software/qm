@@ -113,7 +113,7 @@ test("force-through proxy env is set when a proxy url and token are present", as
     "secret",
   );
   const h = await s.provision(layers, { egressToken: token });
-  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY; git config --get http.proxyAuthMethod");
+  const r = await s.run(h, "echo PROXY=$HTTPS_PROXY; echo $GIT_HTTP_PROXY_AUTHMETHOD");
   assert.match(r.stdout, /PROXY=https?:\/\/[^ ]*proxy\.example\.com/);
   assert.match(r.stdout, /^basic$/m);
 });

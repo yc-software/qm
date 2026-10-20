@@ -270,17 +270,18 @@ test("force-through makes git send proxy credentials up front, keeping turn git 
     egressToken: await proxyToken(),
     env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Turn User" },
   });
-  const r = await s.run(h, "git config --get http.proxyAuthMethod; git config --get user.name");
+  const r = await s.run(h, "echo $GIT_HTTP_PROXY_AUTHMETHOD; git config --get user.name");
   assert.equal(r.code, 0, r.stderr);
   assert.deepEqual(r.stdout.trim().split("\n"), ["basic", "Turn User"]);
+  assert.deepEqual(
+    [h.env?.GIT_CONFIG_COUNT, h.env?.GIT_CONFIG_KEY_0, h.env?.GIT_CONFIG_VALUE_0],
+    ["1", "user.name", "Turn User"],
+  );
 });
 
-test("git config from the proxy env stays off when egress is not forced", async () => {
+test("git proxy auth from the proxy env stays off when egress is not forced", async () => {
   const h = await sandbox.provision(layers, { egressToken: "ignored" });
-  const r = await sandbox.run(
-    h,
-    "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git config --get http.proxyAuthMethod || echo unset",
-  );
+  const r = await sandbox.run(h, 'echo "${GIT_HTTP_PROXY_AUTHMETHOD:-unset}"');
   assert.equal(r.stdout.trim(), "unset");
 });
 
