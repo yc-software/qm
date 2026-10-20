@@ -1,6 +1,5 @@
 import { createServer as createNetServer } from "node:net";
-import { parseEnv } from "node:util";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -11,15 +10,11 @@ import { loadConfig } from "../src/config.ts";
 import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
+import { readEnvFile } from "../cli/src/util.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 
 type Json = Record<string, unknown>;
-
-function parseEnvFile(path: string): NodeJS.Dict<string> {
-  if (!existsSync(path)) return {};
-  return parseEnv(readFileSync(path, "utf8"));
-}
 
 function loadEnvFallbacks(): string[] {
   const loaded: string[] = [];
@@ -29,9 +24,9 @@ function loadEnvFallbacks(): string[] {
     process.env.GOOGLE_OAUTH_ENV_FILE ? resolve(process.env.GOOGLE_OAUTH_ENV_FILE) : "",
   ].filter(Boolean);
   for (const path of paths) {
-    const parsed = parseEnvFile(path);
-    if (Object.keys(parsed).length === 0) continue;
-    for (const [key, value] of Object.entries(parsed)) {
+    const parsed = readEnvFile(path);
+    if (parsed.size === 0) continue;
+    for (const [key, value] of parsed) {
       if (process.env[key] === undefined) process.env[key] = value;
     }
     loaded.push(path);
