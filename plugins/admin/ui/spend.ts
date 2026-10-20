@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { spendChart } from "./spend-chart.ts";
+import { BACKGROUND_SOURCES, spendChart } from "./spend-chart.ts";
 import { table, card, renderer } from "./shared.ts";
 
 type Services = Record<string, any>;
@@ -22,13 +22,6 @@ const COLUMNS: Array<[string, string]> = [
 ];
 const SCOPE_COLUMNS: Array<[string, string]> = [["person", "Scope"], ...COLUMNS.slice(1)];
 const MODEL_COLUMNS: Array<[string, string]> = [["person", "Model"], ...COLUMNS.slice(1)];
-const BACKGROUND_SOURCES: Array<[string, string]> = [
-  ["cron", "Crons"],
-  ["loop", "Loops"],
-  ["swarm", "Swarms"],
-  ["webhook", "Webhooks"],
-  ["monitor", "Monitors"],
-];
 const SOURCE_COLUMNS: Array<[string, string]> = [
   ["person", "Source"],
   ["costUsd", "Total"],

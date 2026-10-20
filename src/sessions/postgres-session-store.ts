@@ -61,22 +61,29 @@ import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/sec
 const threadRefOriginExpr = (threadRef: string): string =>
   `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
 
-const SESSION_ORIGIN_BACKFILL_SQL = `DO $session_origin_backfill$
-DECLARE
-  updated integer;
-BEGIN
+const LOOP_OR_SWARM_REF = legacyOriginPattern("(loop|swarm)");
+
+const sessionOriginBackfillLoop = (candidates: string, keepSpendMarkers: boolean): string => `
+  after := '';
   LOOP
+    SELECT array_agg(id ORDER BY id) INTO batch
+      FROM (SELECT id FROM sessions WHERE id > after AND ${candidates} ORDER BY id LIMIT 5000) candidates;
+    EXIT WHEN batch IS NULL;
     UPDATE sessions SET origin = ${threadRefOriginExpr("thread_ref")}, origin_id = ${threadRefCronIdExpr("thread_ref")}
-     WHERE id IN (SELECT id FROM sessions
-                   WHERE origin IS NULL
-                      OR (origin = 'conversation' AND thread_ref ~ '${legacyOriginPattern("(loop|swarm)")}')
-                   LIMIT 5000);
-    GET DIAGNOSTICS updated = ROW_COUNT;
-    EXIT WHEN updated = 0;
-    DELETE FROM session_spend_dirty WHERE writer = pg_current_xact_id();
+     WHERE id = ANY(batch);${keepSpendMarkers ? "" : "\n    DELETE FROM session_spend_dirty WHERE writer = pg_current_xact_id();"}
+    after := batch[cardinality(batch)];
     COMMIT;
     PERFORM pg_sleep(0.25);
-  END LOOP;
+  END LOOP;`;
+
+const SESSION_ORIGIN_BACKFILL_SQL = `DO $session_origin_backfill$
+DECLARE
+  batch text[];
+  after text;
+BEGIN${sessionOriginBackfillLoop(`origin IS NULL AND thread_ref !~ '${LOOP_OR_SWARM_REF}'`, false)}${sessionOriginBackfillLoop(
+  `(origin IS NULL OR origin = 'conversation') AND thread_ref ~ '${LOOP_OR_SWARM_REF}'`,
+  true,
+)}
 END $session_origin_backfill$`;
 
 function rowToGoal(r: Record<string, unknown>): GoalRecord {

@@ -1258,10 +1258,18 @@ test(
       assert.deepEqual(await columns(), shapes, "the migration derives the same values the insert path wrote");
       assert.deepEqual(await classify(), stored, "migrated rows classify identically");
       assert.deepEqual(
-        await q("SELECT session_id FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]),
-        [],
-        "filling in the columns leaves no spend to recompute",
+        (
+          await q(
+            "SELECT s.thread_ref FROM session_spend_dirty d JOIN sessions s ON s.id = d.session_id WHERE d.session_id = ANY($1)",
+            [ids],
+          )
+        )
+          .map((r) => r.thread_ref)
+          .sort(),
+        ["loop:ocl:fire:aaa", "swarm:ocs:member"],
+        "filling in the columns leaves no spend to recompute, but reclassified loops and swarms recompute theirs",
       );
+      await q("DELETE FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]);
       assert.deepEqual(
         await q("DELETE FROM session_spend_dirty WHERE session_id = $1 RETURNING session_id", [unrelated]),
         [{ session_id: unrelated }],

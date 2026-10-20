@@ -1,14 +1,14 @@
 import { html } from "lit";
 
 const DAY = 86400000;
-const PARTS = [
-  ["live", "Live"],
+export const BACKGROUND_SOURCES = [
   ["cron", "Crons"],
   ["loop", "Loops"],
   ["swarm", "Swarms"],
   ["webhook", "Webhooks"],
   ["monitor", "Monitors"],
 ] as const;
+const PARTS = [["live", "Live"], ...BACKGROUND_SOURCES] as const;
 const categoryCost = (p: any, key: string) => (key === "live" ? p?.live : p?.background?.sources?.[key])?.costUsd;
 const usd = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const date = (ms: number) =>
