@@ -15,13 +15,13 @@ use core_foundation::number::CFNumber;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource};
 use core_foundation::string::{CFString, CFStringRef};
 use core_foundation::url::CFURL;
-use core_graphics::access::ScreenCaptureAccess;
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton, EventField, ScrollEventUnit};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::{CGPoint, CGSize};
 use core_graphics::window::{copy_window_info, kCGWindowListOptionOnScreenOnly, kCGWindowNumber};
 use foreign_types::ForeignType;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbolicTraits, NSRunningApplication, NSWorkspace};
+use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 use objc2_foundation::NSString;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -1395,7 +1395,7 @@ fn permissions(prompt: bool) -> Reply {
     } else {
         unsafe { AXIsProcessTrusted() }
     };
-    let screen_recording = if prompt { ScreenCaptureAccess.request() } else { ScreenCaptureAccess.preflight() };
+    let screen_recording = if prompt { CGRequestScreenCaptureAccess() } else { CGPreflightScreenCaptureAccess() };
     let binary = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
     let help = "System Settings > Privacy & Security > Accessibility and > Screen Recording: add the app that launches desk \
 (QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
@@ -2021,7 +2021,7 @@ fn window(app: &App) -> Result<(El, El), Failure> {
 }
 
 fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
-    if !ScreenCaptureAccess.preflight() {
+    if !CGPreflightScreenCaptureAccess() {
         return Err(fail(ErrorCode::PermissionMissing, "Screen Recording not granted; run `desk permissions --prompt`"));
     }
     crate::capture::window(window_id(w), panels, f).map_err(|m| fail(ErrorCode::ActionFailed, m))
