@@ -37,7 +37,7 @@ for (const count of [1, 2]) {
 
 test("a subagent header includes its parent title in the breadcrumb", async () => {
   const parent = { ...SESSION, id: "parent", threadRef: "web:tester:parent", title: "Build report" };
-  const child = { ...SESSION, parentSessionId: parent.id };
+  const child = { ...SESSION, type: "dm" as const, createdAt: 1, parentSessionId: parent.id };
   const h = await harness({ path: `/s/${SESSION.id}`, session: child, listSessions: [parent, child] });
   try {
     h.releaseSessions();

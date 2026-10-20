@@ -175,7 +175,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
     if (path.startsWith("/api/sessions/") && path.endsWith("/children")) {
-      const all = opts.listSessions ?? [];
+      const all = (opts.listSessions ?? []) as CoreSession[];
       const below = new Set([decodeURIComponent(path.split("/")[3] ?? "")]);
       for (let grew = true; grew;) {
         grew = false;
@@ -189,7 +189,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     }
     if (path.startsWith("/api/sessions/row?")) {
       const params = new URL(path, "http://test").searchParams;
-      const row = (opts.listSessions ?? []).find(
+      const row = ((opts.listSessions ?? []) as CoreSession[]).find(
         (candidate) => candidate.id === params.get("id") || candidate.threadRef === params.get("threadRef"),
       );
       return row ? Response.json({ session: row }) : Response.json({ error: "not_found" }, { status: 404 });
@@ -218,7 +218,9 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     }
     if (path.startsWith("/api/sessions?")) {
       await sessionsHeld;
-      return Response.json(sessionPage(opts.listSessions ?? [], new URL(path, "http://test").searchParams));
+      return Response.json(
+        sessionPage((opts.listSessions ?? []) as CoreSession[], new URL(path, "http://test").searchParams),
+      );
     }
     return Response.json({ contexts: opts.contexts ?? [], items: [], crons: [] });
   };

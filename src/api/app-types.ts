@@ -797,7 +797,7 @@ export const CONTEXT_REQUEST_EXPIRY_MS = 2 * 60_000;
 
 export const STALE_LEASE_GRACE_MS = 30_000;
 
-export interface SessionPageQuery {
+interface SessionPageQuery {
   limit: number;
   before?: { activity: number; id: string };
   status?: SessionPageStatus;
@@ -808,7 +808,7 @@ export interface SessionPageQuery {
 
 export type SessionPageStatus = "active" | "archived" | "waiting";
 
-export interface SessionPageResult {
+interface SessionPageResult {
   sessions: Session[];
   pinned?: Session[];
   next: { activity: number; id: string } | null;
