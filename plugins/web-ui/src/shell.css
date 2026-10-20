@@ -10825,8 +10825,8 @@ h3.ambient-field-label {
     background 140ms ease;
 }
 .mc-provider.connected {
-  border-color: color-mix(in srgb, #1a7f37 40%, var(--border));
-  background: color-mix(in srgb, #1a7f37 8%, var(--secondary));
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--secondary));
 }
 .mc-provider.open {
   background: var(--background);
@@ -10885,7 +10885,7 @@ h3.ambient-field-label {
   color: var(--muted-foreground);
 }
 .mc-provider.connected .mc-provider-text small {
-  color: color-mix(in srgb, #1a7f37 75%, var(--foreground));
+  color: color-mix(in srgb, var(--success) 75%, var(--foreground));
 }
 .mc-quiet-danger {
   color: var(--destructive);
@@ -11069,7 +11069,7 @@ h3.ambient-field-label {
   border-color: var(--muted-foreground);
 }
 .mc-code-btn.copied {
-  border-color: #1a7f37;
+  border-color: var(--success);
   border-style: solid;
 }
 .mc-copy-hint {
@@ -11078,7 +11078,7 @@ h3.ambient-field-label {
   white-space: nowrap;
 }
 .mc-code-btn.copied .mc-copy-hint {
-  color: #1a7f37;
+  color: var(--success);
 }
 .mc-error {
   font-size: var(--font-13);
