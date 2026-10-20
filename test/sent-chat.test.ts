@@ -129,6 +129,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
   const originalFetch = globalThis.fetch;
   let sent = 0;
   globalThis.fetch = async (_url, init) => {
+    if (init?.method !== "POST") return Response.json({});
     sent++;
     const message = JSON.parse(String(init!.body));
     assert.equal(message.threadId, "thread-1");
