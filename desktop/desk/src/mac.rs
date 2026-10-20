@@ -1597,6 +1597,7 @@ impl Desk {
         if !on_current_space(win) {
             return Err(fail(ErrorCode::NoWindow, "Window is not visible on the current Space; switch Spaces and observe again"));
         }
+        self.validate_window(&app)?;
         let mut focus = if actions.iter().any(|a| !matches!(a, Action::Wait { .. } | Action::Raise)) {
             Some(crate::focus::Focus::begin(app.pid, win)?)
         } else {
