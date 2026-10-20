@@ -170,6 +170,28 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
   assert.ok(performance.now() - started < 500);
 });
 
+test("a configured base model the cold catalog cannot resolve stays listed without a guessed provider", async (t) => {
+  const pending = Promise.withResolvers<Response>();
+  const srv = start({ modelCredentialFetch: () => pending.promise });
+  t.after(srv.close);
+  t.after(() => pending.resolve(Response.json({ data: [] })));
+  t.mock.method(srv.built.modelCredentials, "availability", async () => ({
+    anthropic: true,
+    openai: true,
+    openrouter: true,
+  }));
+  for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
+    await srv.built.config.setBaseModel("org:default-org", modelId);
+    const response = await fetch(srv.base + scopePath + "?view=models", { headers: ADMIN });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };
+    assert.deepEqual(
+      body.baseModelOptions.find((model) => model.id === modelId),
+      { id: modelId, name: `${modelId} (configured)`, provider: "" },
+    );
+  }
+});
+
 test("cached model catalogs refresh in the background and retain dynamic entries after expiry", async (t) => {
   let requests = 0;
   let release = Promise.withResolvers<Response>();

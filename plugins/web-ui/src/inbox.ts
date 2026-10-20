@@ -157,8 +157,6 @@ export interface InboxSyncCron {
   id: string;
   enabled: boolean;
   lastFiredAt?: number;
-  taskVersion: number | null;
-  currentTaskVersion: number;
 }
 
 const DEFAULT_VIEWS: InboxView[] = [

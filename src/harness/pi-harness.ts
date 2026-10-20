@@ -1944,7 +1944,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
+              meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
               callStats.push({

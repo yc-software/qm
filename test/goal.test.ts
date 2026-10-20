@@ -196,11 +196,23 @@ test("enforceGoal respects external blockers (approval pause, abort)", async () 
 
 test("grindState floor math still works for goal floors", () => {
   const meter = createGrindMeter(Date.now() - 61_000);
-  meterGrindCall(meter, { input: 500, output: 500 } as never, "gpt-5");
+  meterGrindCall(meter, { input: 500, output: 500 } as never);
   const state = grindState({ minMs: 60_000, minTokens: 900 }, meter);
   assert.equal(state.met, true);
   const unmet = grindState({ minTurns: 5 }, meter);
   assert.equal(unmet.met, false);
+});
+
+test("the goal spend floor counts the cost each call's usage record reports, whatever the model", () => {
+  const meter = createGrindMeter();
+  meterGrindCall(meter, { input: 1_000_000, output: 0, costUsd: 0.25 } as never);
+  meterGrindCall(meter, { input: 10, output: 10, costUsd: 0.5 } as never);
+  meterGrindCall(meter, null);
+  assert.equal(meter.turns, 3);
+  assert.equal(meter.tokens, 1_000_020);
+  assert.equal(meter.usd, 0.75);
+  assert.equal(grindState({ minUsd: 0.75 }, meter).met, true);
+  assert.equal(grindState({ minUsd: 0.76 }, meter).met, false);
 });
 
 test("openGoal revives only open goals — a completed goal must not resurface on later turns", () => {
@@ -232,7 +244,7 @@ test("goalFloorUnmet applies only to active goals and counts only active time", 
 
 test("goalFloorMeter counts the goal's own cumulative tokens, not the turn's", () => {
   const meter = createGrindMeter();
-  meterGrindCall(meter, { input: 500, output: 500 } as never, "gpt-5");
+  meterGrindCall(meter, { input: 500, output: 500 } as never);
   const goal = createGoalRecord({ objective: "work", floor: { minTokens: 800 } });
   assert.equal(goalFloorUnmet(goal, meter), true, "turn tokens from before the goal do not count");
   goal.tokensUsed = 900;

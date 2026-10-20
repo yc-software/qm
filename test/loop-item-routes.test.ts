@@ -669,8 +669,7 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   assert.equal((before.body as { loop: Loop | null }).loop, null);
   const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
   assert.equal(created.status, 200);
-  const body = created.body as { loop: Loop; syncCron: { id: string; taskVersion: number } };
-  assert.equal(body.syncCron.taskVersion, INBOX_SYNC_TASK_VERSION);
+  const body = created.body as { loop: Loop; syncCron: { id: string } };
   assert.equal(body.loop.surface, "inbox:gmail");
   const stored = w.crons.get(body.syncCron.id)!;
   assert.equal(stored.ownerScopeId, "personal:josh");
@@ -686,11 +685,20 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
   const syncCron = (created.body as { syncCron: { id: string } }).syncCron;
   const stored = w.crons.get(syncCron.id)!;
-  w.crons.set(syncCron.id, { ...stored, action: "Inbox sync v0. old", enabled: false });
+  const loopId = (created.body as { loop: Loop }).loop.id;
+  const current = renderSourceInboxTask(loopId, "gmail");
+  w.crons.set(syncCron.id, {
+    ...stored,
+    action: current.replace(
+      `Inbox sync v${INBOX_SYNC_TASK_VERSION}.`,
+      `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Older wording.`,
+    ),
+    enabled: false,
+  });
   const refreshed = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
-  const after = (refreshed.body as { syncCron: { id: string; taskVersion: number; enabled: boolean } }).syncCron;
+  const after = (refreshed.body as { syncCron: { id: string; enabled: boolean } }).syncCron;
   assert.equal(after.id, syncCron.id);
-  assert.equal(after.taskVersion, INBOX_SYNC_TASK_VERSION);
+  assert.equal(w.crons.get(syncCron.id)!.action, current);
   assert.equal(after.enabled, true);
   assert.equal(w.crons.size, 2);
   const disabled = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: { enabled: false } });

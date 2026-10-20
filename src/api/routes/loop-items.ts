@@ -27,7 +27,6 @@ import {
   INBOX_LEDGER_MAX_ITEMS,
   INBOX_LEDGER_RETENTION_MS,
   INBOX_SYNC_DEFAULT_EVERY_MS,
-  INBOX_SYNC_TASK_VERSION,
 } from "../../loops/inbox-loop.ts";
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
@@ -499,18 +498,11 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   }
 }
 
-function syncTaskVersionOf(cron: Cron | null): number | null {
-  const m = /Inbox sync v(\d+)\./.exec(cron?.action ?? "");
-  return m ? Number(m[1]) : null;
-}
-
 export function cronSummary(cron: Cron | null): {
   id: string;
   enabled: boolean;
   schedule: Cron["schedule"];
   lastFiredAt?: number;
-  taskVersion: number | null;
-  currentTaskVersion: number;
 } | null {
   if (!cron) return null;
   return {
@@ -518,8 +510,6 @@ export function cronSummary(cron: Cron | null): {
     enabled: cron.enabled,
     schedule: cron.schedule,
     ...(cron.lastFiredAt !== undefined ? { lastFiredAt: cron.lastFiredAt } : {}),
-    taskVersion: syncTaskVersionOf(cron),
-    currentTaskVersion: INBOX_SYNC_TASK_VERSION,
   };
 }
 
@@ -623,6 +613,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
       const sync = async () => {
         const current = (await deps.store.get(loop.id)) ?? loop;
         const source = current.sources![0]!;
+        const task = renderSourceInboxTask(loop.id, source);
         let cron = current.cronId ? await ctx.app.getCron(current.cronId) : null;
         if (!cron && enable) {
           cron = await ctx.app.createCron({
@@ -633,14 +624,14 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
             destination: principalDestination(owner, owner),
             schedule: { everyMs },
             title: `${loop.name} sync`,
-            action: renderSourceInboxTask(loop.id, source),
+            action: task,
           });
           await deps.store.update(loop.id, { cronId: cron.id });
         }
         if (cron) {
-          if (enable && syncTaskVersionOf(cron) !== INBOX_SYNC_TASK_VERSION)
+          if (enable && cron.action !== task)
             await ctx.app.updateCron(cron.id, {
-              action: renderSourceInboxTask(loop.id, source),
+              action: task,
               title: `${loop.name} sync`,
             });
           await ctx.app.setCronEnabled(cron.id, enable);

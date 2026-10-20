@@ -369,12 +369,11 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
   const currentHarness = typeof runtime?.harnessId === "string" ? runtime.harnessId : (deps.harnessId ?? "pi");
   const resolvedCurrent = resolveModel(currentId);
-  const preserveCurrent =
-    typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent && currentId.includes("/"));
+  const preserveCurrent = typeof runtime?.modelId === "string" || (nonblocking && !resolvedCurrent);
   const currentModel: ModelCatalogEntry = {
     id: currentId,
     name: resolvedCurrent?.name ?? currentId + " (configured)",
-    provider: resolvedCurrent?.provider ?? (currentId.includes("/") ? "openrouter" : ""),
+    provider: resolvedCurrent?.provider ?? "",
   };
   const purposeRuntimes = [values.cronRuntime, values.subagentRuntime, values.fallbackRuntime].filter(
     (value): value is { harnessId: string; modelId: string } =>
