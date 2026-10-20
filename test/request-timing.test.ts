@@ -104,7 +104,7 @@ test("a queued run continues the producer's trace and records time to first toke
   assert.equal(stored?.request.trace?.sentryTrace.split("-")[0], producerTrace);
 });
 
-test("a run stores only a sampled trace from the request that queued it, and never a swarm's", async () => {
+test("a run stores the request's trace context, and never a swarm's", async () => {
   const request = {
     actor: { id: "U1", type: "internal" as const },
     conversation: { kind: "dm" as const, threadRef: "dm:U1:carrier", audience: [] },
