@@ -92,6 +92,7 @@ export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
  */
 export interface CustomRuntimeModel {
   id: string;
+  upstreamId: string;
   name: string;
   provider: string;
   api: "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -112,13 +113,10 @@ function customProviderApi(protocol: CustomProviderProtocol): CustomRuntimeModel
   return "openai-completions";
 }
 
-function customModelId(providerId: string, modelId: string): string {
-  return `custom/${providerId}/${modelId}`;
-}
-
 function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): CustomRuntimeModel {
   return {
-    id: customModelId(provider.id, m.id),
+    id: `custom/${provider.id}/${m.id}`,
+    upstreamId: m.id,
     name: m.name?.trim() || m.id,
     provider: provider.id,
     api: customProviderApi(provider.protocol),
@@ -132,7 +130,6 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
 }
 
 let registry = new Map<string, CustomRuntimeModel>();
-let providerModelIds = new Map<string, string>();
 let providers: CustomProviderSpec[] = [];
 let version = 0;
 
@@ -146,16 +143,13 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
   const snapshot = JSON.stringify(specs);
   if (snapshot === JSON.stringify(providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
-  const nextProviderModelIds = new Map<string, string>();
   for (const spec of specs) {
     for (const m of spec.models) {
       const model = toRuntimeModel(spec, m);
       next.set(model.id, model);
-      nextProviderModelIds.set(model.id, m.id);
     }
   }
   registry = next;
-  providerModelIds = nextProviderModelIds;
   providers = specs.map((s) => ({ ...s, models: [...s.models] }));
   version += 1;
 }
@@ -167,10 +161,6 @@ export function customProvidersVersion(): number {
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
   return registry.get(id);
-}
-
-export function customProviderModelId(id: string): string | undefined {
-  return providerModelIds.get(id);
 }
 
 export function isCustomModelId(id: string): boolean {
@@ -198,14 +188,16 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
           name: spec.name,
           baseUrl: spec.baseUrl,
           api: customProviderApi(spec.protocol),
-          models: spec.models.map((m) => ({
-            id: customModelId(spec.id, m.id),
-            name: m.name ?? m.id,
-            reasoning: m.reasoning ?? false,
-            contextWindow: m.contextWindow ?? 128_000,
-            maxTokens: m.maxTokens ?? 8_192,
-            cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
-          })),
+          models: [...registry.values()]
+            .filter((m) => m.provider === spec.id)
+            .map(({ id, name, reasoning, contextWindow, maxTokens, cost }) => ({
+              id,
+              name,
+              reasoning,
+              contextWindow,
+              maxTokens,
+              cost,
+            })),
         },
       ]),
     ),

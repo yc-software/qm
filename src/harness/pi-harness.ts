@@ -74,7 +74,7 @@ import {
   CODEX_SUBSCRIPTION_PROVIDER,
   codexProviderModelId,
 } from "../model/pi-models.ts";
-import { customModelsJson, customProviderModelId, customProvidersVersion } from "../model/custom-providers.ts";
+import { customModelsJson, customProvidersVersion, resolveCustomModel } from "../model/custom-providers.ts";
 import {
   GatewayModelUnavailableError,
   modelGatewayRequest,
@@ -1203,7 +1203,7 @@ export async function buildModelRuntime(
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER
           ? codexProviderModelId(model.id)
-          : (modelRequestOverrides(model.id)?.model ?? customProviderModelId(model.id) ?? model.id);
+          : (modelRequestOverrides(model.id)?.model ?? resolveCustomModel(model.id)?.upstreamId ?? model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),
