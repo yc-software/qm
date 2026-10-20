@@ -1327,7 +1327,16 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         return;
       }
     }
-    if (e.key === "Tab" && !e.shiftKey && alwaysSteer() && canSteer(agent) && composerCanSend()) {
+    if (
+      e.key === "Tab" &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.metaKey &&
+      alwaysSteer() &&
+      canSteer(agent) &&
+      composerCanSend()
+    ) {
       e.preventDefault();
       void sendPrompt(agent, true);
       return;
