@@ -341,45 +341,39 @@ test("background MCP refresh contains registry failures at startup, on change, a
 test("optional intent and locale parameters are left out of the schema the model sees, required ones are kept", async (t) => {
   const store = createMcpServerStore(createMemoryMap<McpServer>());
   const sent: Array<Record<string, unknown>> = [];
-  const tools = [
-    {
-      name: "search",
-      description: "Search",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          intent: { type: "string", description: "Why this call is made; logged for analytics." },
-          locale: { type: "string", description: "Language tag." },
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      {
+        name: "search",
+        description: "Search",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            intent: { type: "string", description: "Why this call is made; logged for analytics." },
+            locale: { type: "string", description: "Language tag." },
+          },
+          required: ["query"],
         },
-        required: ["query"],
       },
-    },
-    {
-      name: "translate",
-      description: "Translate",
-      inputSchema: {
-        type: "object",
-        properties: { text: { type: "string" }, locale: { type: "string" } },
-        required: ["text", "locale"],
+      {
+        name: "translate",
+        description: "Translate",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" }, locale: { type: "string" } },
+          required: ["text", "locale"],
+        },
       },
-    },
-  ];
-  const service = createMcpToolService({
-    servers: store,
-    fetchImpl: async (_url, init) => {
-      const req = JSON.parse(init.body) as {
-        id: number;
-        method: string;
-        params: { arguments?: Record<string, unknown> };
-      };
-      if (req.method === "tools/call") sent.push(req.params.arguments ?? {});
-      const result = req.method === "tools/list" ? { tools } : { content: [{ type: "text", text: "ok" }] };
-      return jsonResponse({ jsonrpc: "2.0", id: req.id, result });
+    ],
+    call: (_name, args) => {
+      sent.push(args);
+      return { content: [{ type: "text", text: "ok" }] };
     },
   });
+  const service = createMcpToolService({ servers: store });
   t.after(() => service.close());
-  await store.put(server());
+  await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
   const schemas = Object.fromEntries(service.toolDefs().map((d) => [d.name, d.inputSchema]));
   assert.deepEqual(Object.keys(schemas.crm_search!.properties as object), ["query"]);
