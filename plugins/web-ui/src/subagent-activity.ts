@@ -12,8 +12,6 @@ export interface SubagentRow {
 
 type SessionLink = Pick<CoreSession, "id" | "parentSessionId" | "working" | "awaitingInput">;
 
-// Children grouped by parent id, as positions in the list. Built once per list array (the list is
-// replaced, never mutated), so each sidebar row's subagent lookup no longer scans every session.
 const childIndexes = new WeakMap<readonly SessionLink[], Map<string, number[]>>();
 
 function childPositions(list: readonly SessionLink[]): Map<string, number[]> {

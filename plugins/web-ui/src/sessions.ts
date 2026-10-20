@@ -195,6 +195,7 @@ export function resetSessionsState(): void {
   sessionPatchVersions.clear();
   sessionsState.list = [];
   sessionsState.loaded = false;
+  listCurrent = false;
   listRequestedAt = 0;
   sessionsRefreshRunning = false;
   queuedSessionsRefresh = null;
@@ -1681,12 +1682,11 @@ let queuedSessionsRefresh: SessionsRefreshOptions | null = null;
 let sessionsRefreshRunning = false;
 let listRequestedAt = 0;
 let listDiscards = 0;
+let listCurrent = false;
 const LIST_STALL_MS = 10_000;
 
 export function refreshSessionsOnOpen(): void {
-  // Once the list has loaded, the delivery stream keeps it current; refetching every session on each
-  // open only competes with the transcript being drawn. Opens still retry a list that never loaded.
-  if (sessionsState.loaded) return;
+  if (listCurrent) return;
   const joinable =
     sessionsRefreshRunning && Date.now() - listRequestedAt < LIST_STALL_MS ? latestSessionsRefresh : null;
   if (!joinable) {
@@ -1756,10 +1756,12 @@ async function runSessionsRefresh(
     }
     sessionsState.list = reconcileSessions(r.sessions ?? [], sessionsState.list, openConversationIds());
     sessionsState.loaded = true;
+    listCurrent = true;
     sessionsNotice = "";
     return true;
   } catch (e) {
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
+    listCurrent = false;
     if (!opts.silent) sessionsNotice = errMessage(e, "Failed to load conversations.");
     return false;
   } finally {
