@@ -65,7 +65,7 @@ export interface AwsMicrovmApiOptions {
 }
 
 export interface AwsMicrovmApi {
-  listImages(): Promise<MicrovmImageSummary[]>;
+  listImages(nameFilter?: string): Promise<MicrovmImageSummary[]>;
   findImage(name: string): Promise<MicrovmImageSummary | null>;
   createImage(input: {
     name: string;
@@ -102,8 +102,14 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
   const credentials = opts.credentials ?? defaultProvider(opts.profile ? { profile: opts.profile } : {});
   const signer = new SignatureV4({ service: "lambda", region, sha256: Sha256, credentials });
 
-  async function call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T }> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query: Record<string, string> = {},
+  ): Promise<{ status: number; json: T }> {
     const payload = body === undefined ? "" : JSON.stringify(body);
+    const search = new URLSearchParams(query).toString();
     const signed = await signer.sign({
       method,
       protocol: "https:",
@@ -111,11 +117,11 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       path,
       headers: { host, "content-type": "application/json" },
       body: payload,
-      query: {},
+      query,
     });
     const res = await fetchWithRetry(
       (signal) =>
-        doFetch(`https://${host}${path}`, {
+        doFetch(`https://${host}${path}${search ? `?${search}` : ""}`, {
           method,
           headers: signed.headers as Record<string, string>,
           signal,
@@ -145,14 +151,15 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
   }
 
   const api: AwsMicrovmApi = {
-    async listImages() {
+    async listImages(nameFilter?: string) {
       const items: MicrovmImageSummary[] = [];
       let next: string | undefined;
       do {
-        const query = next ? `?nextToken=${encodeURIComponent(next)}` : "";
         const { json } = await call<{ items?: MicrovmImageSummary[]; nextToken?: string }>(
           "GET",
-          `${API}/microvm-images${query}`,
+          `${API}/microvm-images`,
+          undefined,
+          { ...(nameFilter ? { nameFilter } : {}), ...(next ? { nextToken: next } : {}) },
         );
         items.push(...(json.items ?? []));
         next = json.nextToken;
@@ -160,7 +167,7 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       return items;
     },
     async findImage(name) {
-      return (await api.listImages()).find((i) => i.name === name) ?? null;
+      return (await api.listImages(name)).find((i) => i.name === name) ?? null;
     },
     async createImage({ name, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
       const { json } = await call<MicrovmImageSummary>("POST", `${API}/microvm-images`, {

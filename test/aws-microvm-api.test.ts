@@ -7,6 +7,8 @@ import {
   AwsApiError,
   type AwsMicrovmApi,
 } from "../src/sandbox/aws-microvm-api.ts";
+import { SignatureV4 } from "@smithy/signature-v4";
+import { Sha256 } from "@aws-crypto/sha256-js";
 
 interface Recorded {
   url: string;
@@ -274,16 +276,36 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
   assert.deepEqual(execs, [`rm -f '${other}'.part-* '${other}'.joined`]);
 });
 
-test("findImage follows nextToken past the first page of images", async () => {
+test("findImage filters by name, follows nextToken, and signs the query string it sends", async () => {
   const { fetchImpl, calls } = fakeFetch((rec) =>
     rec.url.includes("nextToken=")
       ? { status: 200, body: { items: [{ name: "b-qm-sandbox", imageArn: "arn:b" }] } }
-      : { status: 200, body: { items: [{ name: "a-qm-sandbox", imageArn: "arn:a" }], nextToken: "p/2" } },
+      : { status: 200, body: { items: [{ name: "b-qm-sandbox-old", imageArn: "arn:old" }], nextToken: "p/2" } },
   );
   const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
   assert.equal((await api.findImage("b-qm-sandbox"))?.imageArn, "arn:b");
   assert.deepEqual(
     calls.map((c) => new URL(c.url).search),
-    ["", "?nextToken=p%2F2"],
+    ["?nameFilter=b-qm-sandbox", "?nameFilter=b-qm-sandbox&nextToken=p%2F2"],
   );
+  const signer = new SignatureV4({ service: "lambda", region: "us-west-2", credentials: creds, sha256: Sha256 });
+  const { url, headers } = calls[1]!;
+  const u = new URL(url);
+  const expected = await signer.sign(
+    {
+      method: "GET",
+      protocol: "https:",
+      hostname: u.hostname,
+      path: u.pathname,
+      headers: { host: u.hostname, "content-type": "application/json" },
+      body: "",
+      query: Object.fromEntries(u.searchParams),
+    },
+    {
+      signingDate: new Date(
+        headers["x-amz-date"]!.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z"),
+      ),
+    },
+  );
+  assert.equal(headers.authorization, (expected.headers as Record<string, string>).authorization);
 });
