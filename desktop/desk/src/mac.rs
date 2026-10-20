@@ -2017,6 +2017,7 @@ mod tests {
             ids: tree::Ids::default(),
             elements: vec![],
             text: HashMap::new(),
+            markers: HashMap::new(),
             text_budget: 1024 * 1024,
             notes: HashMap::new(),
             truncated: false,
