@@ -65,7 +65,7 @@ ErrorCode   = bad_request | unsupported_platform | permission_missing | app_not_
 
 ## Observation semantics
 
-- The tree covers the visible part of the app's focused window (else main, else first). One line per kept element:
+- The tree covers the visible part of the app's focused window (else main, else the last entry in its accessibility window list). A minimized selected window is refused rather than replaced by another document. One line per kept element:
   `[id] Role:Subrole "name" (description) = "value" placeholder "…" url "…" [focused disabled selected checked|unchecked|mixed expanded|collapsed settable] <Actions>`.
   The name is `AXTitle`, else the text of the element's `AXTitleUIElement` label. Checkbox, radio and switch values are
   shown as `checked`/`unchecked`/`mixed`, not `= "1"`. Text roles keep values up to 1,000 characters, others 120.

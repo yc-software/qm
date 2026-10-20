@@ -732,22 +732,24 @@ fn center(w: &El) -> CGPoint {
     frame(w).map(|f| pt(f.x + f.w / 2.0, f.y + f.h / 2.0)).unwrap_or(pt(0.0, 0.0))
 }
 
+fn primary_window<T>(focused: Option<T>, main: impl FnOnce() -> Option<T>, windows: impl FnOnce() -> Vec<T>) -> Option<T> {
+    focused.or_else(main).or_else(|| windows().pop())
+}
+
 fn window_of(app: &El) -> Option<El> {
-    let candidates = [attr(app, "AXFocusedWindow"), attr(app, "AXMainWindow")]
-        .into_iter()
-        .flatten()
-        .chain(attr(app, "AXWindows").into_iter().flat_map(list));
-    for window in candidates {
-        if bool_attr(&window, "AXMinimized") == Some(true) || window_id(&window) == 0 {
-            continue;
-        }
-        let sheet = attr(&window, "AXSheets").into_iter().flat_map(list).next();
-        if let Some(sheet) = sheet.filter(|sheet| window_id(sheet) != 0) {
-            return Some(sheet);
-        }
+    let window = primary_window(
+        attr(app, "AXFocusedWindow"),
+        || attr(app, "AXMainWindow"),
+        || attr(app, "AXWindows").map(list).unwrap_or_default(),
+    )?;
+    if window_id(&window) == 0 {
+        return None;
+    }
+    if bool_attr(&window, "AXMinimized") == Some(true) {
         return Some(window);
     }
-    None
+    let sheet = attr(&window, "AXSheets").into_iter().flat_map(list).next();
+    Some(sheet.filter(|sheet| window_id(sheet) != 0).unwrap_or(window))
 }
 
 fn window_id(w: &El) -> u32 {
@@ -2106,6 +2108,15 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn primary_window_preserves_authoritative_choice_and_uses_last_fallback() {
+        use super::primary_window;
+        assert_eq!(primary_window(Some((1, true)), || panic!("focused window is authoritative"), || vec![(2, false)]), Some((1, true)));
+        assert_eq!(primary_window(None, || Some(2), || panic!("main window is authoritative")), Some(2));
+        assert_eq!(primary_window(None, || None, || vec![1, 2, 3]), Some(3));
+        assert_eq!(primary_window::<u32>(None, || None, Vec::new), None);
+    }
+
     #[test]
     fn copied_ax_results_release_owned_values_on_error_and_success() {
         let value = CFArray::from_CFTypes(&[cfs("owned AX result")]);
