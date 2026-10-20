@@ -1639,8 +1639,12 @@ impl Desk {
                     }
                 }
             }
-            let paced =
-                focus.as_ref().map_or(Ok(()), |f| f.check()).and_then(|_| self.validate_window(&app)).and_then(|_| match pace.as_mut() {
+            let paced = focus
+                .as_ref()
+                .map_or(Ok(()), |f| f.check())
+                .and_then(|_| self.validate_window(&app))
+                .and_then(|_| self.check_menu(app.pid, &ax, a))
+                .and_then(|_| match pace.as_mut() {
                     Some(p) => match self.aim(app.pid, &w, a) {
                         Ok(Some(at)) => p(i as u32, Point { x: at.x, y: at.y }),
                         Ok(None) => Ok(()),
@@ -1754,32 +1758,39 @@ impl Desk {
         }
     }
 
-    fn menu_open(&self, pid: i32, ax: &El) -> Result<bool, Failure> {
-        let snapshot = self.cache.get(&pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
-        input::menu_open(ax, &snapshot.popups)
+    fn check_menu(&self, pid: i32, ax: &El, action: &Action) -> Result<(), Failure> {
+        input::check_menu_action(
+            action,
+            |index| {
+                let element = self.element(pid, index)?;
+                Ok(input::is_menu_item(&element) && actions(&element).iter().any(|action| action == "AXPress"))
+            },
+            || {
+                let snapshot = self.cache.get(&pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
+                input::menu_open(ax, &snapshot.popups)
+            },
+        )
     }
 
-    fn pointer(&self, pid: i32, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
-        if self.menu_open(pid, ax)? {
-            return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
-        }
+    fn pointer(&self, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
         let (owner, anchor, win, _) = input::service_at(ax, p)?;
         Ok((owner, prepare_window(owner, ax, anchor, win, p)?))
     }
 
-    fn pressed(&self, pid: i32, ax: &El, index: u32) -> Result<Option<El>, Failure> {
+    fn pressed(&self, pid: i32, index: u32) -> Result<Option<El>, Failure> {
         let e = self.element(pid, index)?;
-        if !input::is_menu_item(&e) && self.menu_open(pid, ax)? {
-            return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
-        }
         let can_press = actions(&e).iter().any(|a| a == "AXPress");
-        Ok((can_press && (input::is_menu_item(&e) || !input::simulate(&e) || frame(&e).is_none())).then_some(e))
+        let menu_item = input::is_menu_item(&e);
+        if menu_item && !can_press {
+            return Err(fail(ErrorCode::ActionFailed, "Menu item no longer supports AXPress; observe again"));
+        }
+        Ok((can_press && (menu_item || !input::simulate(&e) || frame(&e).is_none())).then_some(e))
     }
 
     fn aim(&self, pid: i32, w: &El, a: &Action) -> Result<Option<CGPoint>, Failure> {
         match a {
             Action::Click { target: Target::Index(i), button: Button::Left, count: 1, modifiers, hold_ms: 0 }
-                if modifiers.is_empty() && self.pressed(pid, &app_element(pid), *i)?.is_some() =>
+                if modifiers.is_empty() && self.pressed(pid, *i)?.is_some() =>
             {
                 Ok(None)
             }
@@ -1794,12 +1805,12 @@ impl Desk {
         let pid = app.pid;
         match a {
             Action::Click { target: Target::Index(i), button: Button::Left, count: 1, modifiers, hold_ms: 0 } if modifiers.is_empty() => {
-                if let Some(e) = self.pressed(pid, ax, *i)? {
+                if let Some(e) = self.pressed(pid, *i)? {
                     return perform(ax, &e, "AXPress");
                 }
                 match self.point(pid, Target::Index(*i)) {
                     Ok(p) => {
-                        let (to, press) = self.pointer(pid, ax, p)?;
+                        let (to, press) = self.pointer(ax, p)?;
                         click_at(to, press, p, Button::Left, 1, &[], 0)
                     }
                     Err(e) => Err(e),
@@ -1807,7 +1818,7 @@ impl Desk {
             }
             Action::Click { target, button, count, modifiers, hold_ms } => {
                 let p = self.point(pid, *target)?;
-                let (to, press) = self.pointer(pid, ax, p)?;
+                let (to, press) = self.pointer(ax, p)?;
                 click_at(to, press, p, *button, *count, modifiers, *hold_ms)
             }
             Action::TypeText { text } => type_text(input::keyboard_target(ax)?.0, text),
@@ -1847,9 +1858,6 @@ impl Desk {
                 )
             }
             Action::Scroll { target, direction, amount } => {
-                if self.menu_open(pid, ax)? {
-                    return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
-                }
                 let mut viewport = None;
                 if let Amount::Pages(n) = amount {
                     let area = match target {
@@ -1873,7 +1881,7 @@ impl Desk {
                     _ => frame(w),
                 }
                 .unwrap_or(Rect { x: 0.0, y: 0.0, w: 600.0, h: 600.0 });
-                let (to, press) = self.pointer(pid, ax, p)?;
+                let (to, press) = self.pointer(ax, p)?;
                 let mut left = input::scroll_pixels(*amount, *direction, viewport, view);
                 while left > 0 {
                     active()?;
@@ -1898,7 +1906,7 @@ impl Desk {
             Action::Drag { from, to } => {
                 let (a, b) = (self.point(pid, Target::Point(*from))?, self.point(pid, Target::Point(*to))?);
                 let none = CGEventFlags::empty();
-                let (pid, press) = self.pointer(pid, ax, a)?;
+                let (pid, press) = self.pointer(ax, a)?;
                 mouse(pid, &press, CGEventType::LeftMouseDown, a, CGMouseButton::Left, 1, none)?;
                 let mut last = a;
                 let dragged = (|| {

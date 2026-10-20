@@ -151,6 +151,25 @@ pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
     Ok((register_target(ax, &focused)?, ax.clone()))
 }
 
+pub(super) fn check_menu_action(
+    action: &Action,
+    mut menu_press: impl FnMut(u32) -> Result<bool, Failure>,
+    menu_open: impl FnOnce() -> Result<bool, Failure>,
+) -> Result<(), Failure> {
+    let guarded = match action {
+        Action::Click { target: Target::Index(index), button: Button::Left, count: 1, modifiers, hold_ms: 0 } if modifiers.is_empty() => {
+            !menu_press(*index)?
+        }
+        Action::Perform { index, action } if matches!(action.as_str(), "AXPress" | "Press") => !menu_press(*index)?,
+        Action::Click { .. } | Action::Scroll { .. } | Action::Drag { .. } => true,
+        _ => false,
+    };
+    if guarded && menu_open()? {
+        return Err(fail(ErrorCode::ActionFailed, MENU_OPEN));
+    }
+    Ok(())
+}
+
 const MAX_MENU_CHECKS: usize = 128;
 
 fn popup_menu_open<T>(
@@ -180,7 +199,10 @@ fn popup_menu_open<T>(
 }
 
 fn menu_unavailable() -> Failure {
-    fail(ErrorCode::ActionFailed, "Popup menu state is unavailable or exceeds the inspection limit; observe again before pointer input")
+    fail(
+        ErrorCode::ActionFailed,
+        "Popup menu state is unavailable or exceeds the 128-check inspection limit; pointer input cannot be verified",
+    )
 }
 
 pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
@@ -437,6 +459,31 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn menu_preflight_covers_press_aliases_and_pointer_variants() {
+        let click = Action::Click { target: Target::Index(3), button: Button::Left, count: 1, modifiers: vec![], hold_ms: 0 };
+        assert!(check_menu_action(&click, |_| Ok(true), || panic!("safe menu press")).is_ok());
+        assert!(check_menu_action(&click, |_| Ok(false), || Ok(true)).is_err());
+        for name in ["Press", "AXPress"] {
+            let action = Action::Perform { index: 3, action: name.into() };
+            assert!(check_menu_action(&action, |_| Ok(false), || Ok(true)).is_err());
+            assert!(check_menu_action(&action, |_| Ok(true), || panic!("safe menu press")).is_ok());
+        }
+        for action in [
+            Action::Click { button: Button::Right, target: Target::Index(3), count: 1, modifiers: vec![], hold_ms: 0 },
+            Action::Click { button: Button::Left, target: Target::Index(3), count: 2, modifiers: vec![], hold_ms: 0 },
+            Action::Scroll { target: Some(Target::Index(3)), direction: Direction::Down, amount: Amount::Pixels(10) },
+            Action::Drag { from: Point { x: 1.0, y: 1.0 }, to: Point { x: 2.0, y: 2.0 } },
+        ] {
+            assert!(check_menu_action(&action, |_| panic!("pointer route"), || Ok(true)).is_err());
+            assert!(check_menu_action(&action, |_| panic!("pointer route"), || Ok(false)).is_ok());
+        }
+        for action in [Action::Perform { index: 3, action: "AXCancel".into() }, Action::PressKey { key: "ESC".into(), hold_ms: 0 }] {
+            assert!(check_menu_action(&action, |_| panic!("nonpointer action"), || panic!("nonpointer action")).is_ok());
+        }
+        assert!(check_menu_action(&click, |_| Ok(false), || Err(menu_unavailable())).is_err());
+    }
+
     #[test]
     fn popup_candidates_use_current_children_and_refuse_unknown_state() {
         assert!(super::popup_menu_open(&[1], |_| Ok(vec![2]), |child| Ok(*child == 2)).unwrap());
