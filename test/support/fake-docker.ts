@@ -59,6 +59,14 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
     return c;
   }
 
+  const positional = (args: string[]) => args.filter((a) => !a.startsWith("-"));
+  const networksOf = (container: string) =>
+    [...connections].flatMap((key) => {
+      const [net, attached] = key.split("|");
+      return attached === container ? [net!] : [];
+    });
+  const exists = (container: string) => containers.has(container) || networksOf(container).length > 0;
+
   function exec(args: string[]): { code: number; stdout: string; stderr: string } {
     const [cmd, ...rest] = args;
     if (self.daemonDown) return fail("Cannot connect to the Docker daemon");
@@ -74,31 +82,43 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
       case "inspect": {
         const name = rest[rest.length - 1]!;
         const c = containers.get(name);
+        if (rest.includes("{{json .NetworkSettings.Networks}}")) {
+          if (!exists(name)) return fail(`Error: No such object: ${name}`);
+          return ok(JSON.stringify(Object.fromEntries(networksOf(name).map((net) => [net, {}]))));
+        }
         if (!c) return fail(`Error: No such object: ${name}`);
         return ok(`${c.running} ${c.imageId}`);
       }
+      case "ps": {
+        const name = rest.find((a) => a.startsWith("name=^/"))!.slice("name=^/".length, -1);
+        return ok(exists(name) ? `${name}-id\n` : "");
+      }
       case "network": {
-        const [sub, name] = rest as [string, string];
-        if (sub === "inspect") return networks.has(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        const [sub, name, container] = positional(rest);
+        if (sub === "inspect") return networks.has(name!) ? ok(name) : fail(`Error: No such network: ${name}`);
         if (sub === "create") {
-          if (networks.has(name)) return fail(`network with name ${name} already exists`);
-          networks.add(name);
+          if (networks.has(name!)) return fail(`network with name ${name} already exists`);
+          networks.add(name!);
           return ok(name);
         }
-        if (sub === "rm") return networks.delete(name) ? ok(name) : fail(`Error: No such network: ${name}`);
+        if (sub === "rm") {
+          if (networks.delete(name!) || rest.includes("-f")) return ok(name);
+          return fail(`Error: No such network: ${name}`);
+        }
         if (sub === "connect" || sub === "disconnect") {
-          const container = rest[2]!;
           const key = `${name}|${container}`;
           if (sub === "connect") {
             if (connections.has(key)) return fail("endpoint already exists");
             connections.add(key);
-          } else connections.delete(key);
+            return ok(key);
+          }
+          if (!connections.delete(key)) return fail(`container ${container} is not connected to network ${name}`);
           return ok(key);
         }
         return fail(`unknown network subcommand ${sub}`);
       }
       case "volume": {
-        const [sub, name] = rest as [string, string];
+        const [sub, name] = positional(rest) as [string, string];
         if (sub === "inspect") return volumes.has(name) ? ok(name) : fail(`Error: no such volume: ${name}`);
         if (sub === "create") {
           volumes.add(name);
@@ -107,7 +127,7 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         if (sub === "rm") {
           const attached = [...containers.values()].some((c) => c.volume === name);
           if (attached) return fail(`volume is in use`);
-          return volumes.delete(name) ? ok(name) : fail(`Error: no such volume: ${name}`);
+          return volumes.delete(name) || rest.includes("-f") ? ok(name) : fail(`Error: no such volume: ${name}`);
         }
         return fail(`unknown volume subcommand ${sub}`);
       }

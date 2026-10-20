@@ -38,6 +38,7 @@ interface FakeFlyOptions {
   createAppStatus?: number;
   createAppBody?: string;
   existingApp?: { name: string; network: string; organization: { slug: string } };
+  racingApp?: { name: string; network: string; organization: { slug: string } };
   ips?: string[];
   ingressNetwork?: string;
   networkPolicies?: unknown[];
@@ -85,6 +86,7 @@ function fakeFly(opts: FakeFlyOptions = {}) {
       if ((opts.createAppStatus ?? 201) < 300) {
         app = { name: body.app_name, network: body.network, organization: { slug: body.org_slug } };
       }
+      if (opts.racingApp) app = opts.racingApp;
       return new Response(opts.createAppBody ?? "{}", { status: opts.createAppStatus ?? 201 });
     }
     if (method === "GET" && segments.length === 3) return app ? json(200, app) : json(404, { error: "not found" });
@@ -293,23 +295,25 @@ test("apply: refuses a pre-existing public IP before creating a machine", async 
   assert.ok(!unsafe.calls.some((c) => c.path.endsWith("/machines")), "an unsafe app never gets a machine");
 });
 
-test("apply: an app that already exists is not an error", async () => {
+test("apply: an app created concurrently is reused whatever the create failure says", async () => {
   for (const over of [
-    { createAppStatus: 409, existingApp: OWNED_APP },
-    { createAppStatus: 422, createAppBody: '{"error":"Name has already been taken"}', existingApp: OWNED_APP },
+    { createAppStatus: 409 },
+    { createAppStatus: 422, createAppBody: '{"error":"Name has already been taken"}' },
+    { createAppStatus: 500, createAppBody: '{"error":"internal"}' },
   ]) {
-    const { fetchImpl } = fakeFly(over);
+    const { fetchImpl, calls } = fakeFly({ ...over, racingApp: OWNED_APP });
     const endpoint = await provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
     assert.deepEqual(endpoint, { host: `${APP}.flycast`, port: 8080 });
+    assert.ok(calls.some((c) => c.method === "POST" && c.path === "/v1/apps"));
   }
 });
 
 test("apply: a name conflict is reused only when its organization and isolated network match", async () => {
-  for (const existingApp of [
+  for (const racingApp of [
     { ...OWNED_APP, network: "default" },
     { ...OWNED_APP, organization: { slug: "someone-else" } },
   ]) {
-    const { fetchImpl, calls } = fakeFly({ createAppStatus: 422, existingApp });
+    const { fetchImpl, calls } = fakeFly({ createAppStatus: 422, racingApp });
     await assert.rejects(
       provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
       /not the isolated app owned by this deployment/,
@@ -319,11 +323,16 @@ test("apply: a name conflict is reused only when its organization and isolated n
 });
 
 test("apply: a rejected app creation still surfaces", async () => {
-  const { fetchImpl } = fakeFly({ createAppStatus: 401, createAppBody: '{"error":"unauthorized"}' });
-  await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
-    /create app .*http 401.*unauthorized/,
-  );
+  for (const [status, body] of [
+    [401, '{"error":"unauthorized"}'],
+    [422, '{"error":"Name has already been taken"}'],
+  ] as const) {
+    const { fetchImpl } = fakeFly({ createAppStatus: status, createAppBody: body });
+    await assert.rejects(
+      provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      new RegExp(`create app .*http ${status}`),
+    );
+  }
 });
 
 test("apply: the previous version stays up until its healthy replacement is ready", async () => {

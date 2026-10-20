@@ -1,6 +1,11 @@
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
+import {
+  dockerContainerNetworks,
+  ensureDockerNetwork,
+  spawnDockerExec,
+  type DockerExec,
+} from "../sandbox/docker-exec.ts";
 import { errMessage } from "../util/errors.ts";
 import {
   appBoot,
@@ -75,30 +80,11 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       dexec(["exec", name(d), "sh", "-c", script], timeoutSec * 1000);
   const checked = recentAppChecks();
   const network = (d: Deployment) => `${name(d)}-net`;
-  const ensureNetwork = async (net: string): Promise<string> => {
-    if ((await dexec(["network", "inspect", net])).code !== 0) {
-      const r = await dexec(["network", "create", net]);
-      if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
-        throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
-      }
-    }
-    return net;
-  };
-
   const migrateContainer = async (container: string): Promise<boolean> => {
-    const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
-    if (inspected.code !== 0) {
-      if (/no such (?:object|container)|not found/i.test(inspected.stderr)) return false;
-      throw new Error(`docker inspect ${container} failed: ${inspected.stderr.trim()}`);
-    }
-    let attached: Record<string, unknown>;
-    try {
-      attached = JSON.parse(inspected.stdout) as Record<string, unknown>;
-    } catch {
-      throw new Error(`docker inspect ${container} returned invalid network state`);
-    }
+    const attached = await dockerContainerNetworks(dexec, container);
+    if (!attached) return false;
     const target = `${container}-net`;
-    await ensureNetwork(target);
+    await ensureDockerNetwork(dexec, target);
     if (!(target in attached)) {
       const connected = await dexec(["network", "connect", target, container]);
       if (connected.code !== 0) throw new Error(`docker network connect ${target} failed: ${connected.stderr.trim()}`);
@@ -122,7 +108,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     profile: { managedScaleToZero: false },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
-      const net = await ensureNetwork(network(d));
+      const net = await ensureDockerNetwork(dexec, network(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);

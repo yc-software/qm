@@ -54,6 +54,7 @@ test("Docker provider migrates running deployments off the legacy shared network
     if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
       return { code: 0, stdout: legacyAttached ? `${containerName}\n` : "", stderr: "" };
     }
+    if (args[0] === "ps") return { code: 0, stdout: "abc123\n", stderr: "" };
     if (args[0] === "network" && args[1] === "inspect") return { code: 1, stdout: "", stderr: "missing" };
     if (args[0] === "network" && args[1] === "connect" && ++connectAttempts === 1) {
       return { code: 1, stdout: "", stderr: "transient" };
@@ -128,6 +129,7 @@ test("a transient target inspection failure does not report the deployment missi
     if (args.join(" ") === "network inspect --format {{range .Containers}}{{println .Name}}{{end}} agent-deploynet") {
       return { code: 1, stdout: "", stderr: "No such network" };
     }
+    if (args[0] === "ps") return { code: 0, stdout: "abc123\n", stderr: "" };
     if (args[0] === "inspect") return { code: 1, stdout: "", stderr: "daemon unavailable" };
     return { code: 0, stdout: "", stderr: "" };
   };
@@ -143,6 +145,59 @@ test("a transient target inspection failure does not report the deployment missi
   const provider = createDockerDeployProvider({ dockerExec });
 
   await assert.rejects(provider.resolveEndpoint!(running, running.versions[0]!), /daemon unavailable/);
+});
+
+test("a deployment whose container docker does not list is missing, whatever inspect would say", async () => {
+  const calls: string[][] = [];
+  const dockerExec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args[0] === "ps") return { code: 0, stdout: "", stderr: "" };
+    return { code: 1, stdout: "", stderr: "daemon unavailable" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/gone",
+  });
+  await store.setEndpoint(deployment.id, { host: "127.0.0.1", port: 9200 });
+  const running = (await store.get(deployment.id))!;
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  assert.equal(await provider.resolveEndpoint!(running, running.versions[0]!), null);
+  assert.equal(await provider.logs!(running, { tailLines: 10 }), null);
+  const name = `agent-deploy-${deployment.id.slice(0, 12)}`;
+  assert.ok(calls.every((args) => args.join(" ") === `ps -aq --filter name=^/${name}$`));
+});
+
+test("a deployment network created concurrently is reused, and a create that leaves none fails", async () => {
+  let networkExists = false;
+  let createLeavesNetwork = true;
+  const dockerExec: DockerExec = async (args) => {
+    if (args[0] === "network" && args[1] === "inspect") return { code: networkExists ? 0 : 1, stdout: "", stderr: "" };
+    if (args[0] === "network" && args[1] === "create") {
+      networkExists = createLeavesNetwork;
+      return { code: 1, stdout: "", stderr: "network with name x already exists" };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const store = createDeployStore();
+  const deployment = await store.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    createdBy: "U1",
+    entrypoint: "node server.js",
+    snapshotDir: "/snap/race",
+  });
+  const provider = createDockerDeployProvider({ dockerExec });
+
+  await assert.doesNotReject(provider.apply(deployment, deployment.versions[0]!));
+  networkExists = false;
+  createLeavesNetwork = false;
+  await assert.rejects(
+    provider.apply(deployment, deployment.versions[0]!),
+    /network create .* failed: .*already exists/,
+  );
 });
 
 test("the daemon probe reports nothing when Docker answers", async () => {

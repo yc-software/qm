@@ -31,7 +31,6 @@ const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
 const API_TIMEOUT_MS = 30_000;
-const APP_ALREADY_TAKEN = /already\s+(exists|been\s+taken)|name\s+is\s+taken/i;
 
 interface FlyApp {
   name: string;
@@ -208,9 +207,6 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       }
       const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug, network: appName });
       if (r.ok) return;
-      if (r.status !== 409 && r.status !== 422 && !APP_ALREADY_TAKEN.test(r.text)) {
-        throw failure(`create app ${appName}`, r);
-      }
       const found = await getApp(appName);
       if (!found) throw failure(`create app ${appName}`, r);
       assertOwned(appName, orgSlug, found);

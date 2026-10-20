@@ -314,3 +314,41 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
 });
+
+test("core attachment trusts the core's actual networks, not docker's connect error", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const layers = rw(scopeId("personal", "U42"));
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const first = await sb.provision(layers);
+  const again = await sb.provision(layers);
+  assert.equal(again.id, first.id);
+  fake.connections.delete(`${localNetworkName(first.id)}|qm-test-core`);
+  const refusing = makeSandbox(fake, {
+    coreContainer: "qm-test-core",
+    fetchImpl,
+    dockerExec: async (args: string[]) =>
+      args[1] === "connect" ? { code: 1, stdout: "", stderr: "endpoint already exists" } : fake.dockerExec(args),
+  });
+  await assert.rejects(refusing.provision(layers), /network connect .* failed: endpoint already exists/);
+});
+
+test("a sandbox network created concurrently is reused, and a create that leaves none fails", async () => {
+  const fake = installFakeDocker(daemonPort);
+  let createLeavesNetwork = true;
+  const sb = makeSandbox(fake, {
+    dockerExec: async (args: string[]) => {
+      if (args[0] !== "network" || args[1] !== "create") return fake.dockerExec(args);
+      if (createLeavesNetwork) fake.networks.add(args[2]!);
+      return { code: 1, stdout: "", stderr: `network with name ${args[2]} already exists` };
+    },
+  });
+  const h = await sb.provision(rw(scopeId("personal", "U43")));
+  assert.equal(fake.networks.has(localNetworkName(h.id)), true);
+  createLeavesNetwork = false;
+  await assert.rejects(sb.provision(rw(scopeId("personal", "U44"))), /network create .* failed: .*already exists/);
+});

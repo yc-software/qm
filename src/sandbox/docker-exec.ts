@@ -24,3 +24,28 @@ export function spawnDockerExec(dockerBin: string): DockerExec {
       child.on("close", (code) => done({ code: code ?? -1, stdout, stderr }));
     });
 }
+
+export async function ensureDockerNetwork(dexec: DockerExec, net: string): Promise<string> {
+  if ((await dexec(["network", "inspect", net])).code === 0) return net;
+  const created = await dexec(["network", "create", net]);
+  if (created.code !== 0 && (await dexec(["network", "inspect", net])).code !== 0) {
+    throw new Error(`docker network create ${net} failed: ${created.stderr.trim()}`);
+  }
+  return net;
+}
+
+export async function dockerContainerNetworks(
+  dexec: DockerExec,
+  container: string,
+): Promise<Record<string, unknown> | null> {
+  const listed = await dexec(["ps", "-aq", "--filter", `name=^/${container}$`]);
+  if (listed.code !== 0) throw new Error(`docker ps ${container} failed: ${listed.stderr.trim()}`);
+  if (!listed.stdout.trim()) return null;
+  const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
+  if (inspected.code !== 0) throw new Error(`docker inspect ${container} failed: ${inspected.stderr.trim()}`);
+  try {
+    return JSON.parse(inspected.stdout) as Record<string, unknown>;
+  } catch {
+    throw new Error(`docker inspect ${container} returned invalid network state`);
+  }
+}
