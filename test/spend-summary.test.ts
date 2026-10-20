@@ -460,17 +460,7 @@ test("spendExportRows keeps the ledger grain, merging principal aliases into one
   ];
   const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "");
   assert.deepEqual(
-    rows.map((r) => [
-      r.day,
-      r.scopeId,
-      r.kind,
-      r.principalId,
-      r.displayName,
-      r.source,
-      r.model,
-      r.costUsd,
-      r.calls,
-    ]),
+    rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.source, r.model, r.costUsd, r.calls]),
     [
       ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
       ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],

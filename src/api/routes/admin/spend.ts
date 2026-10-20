@@ -17,14 +17,17 @@ const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_MS = /^\d+$/;
 const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/;
 const CSV_NEEDS_QUOTES = /["\r\n,]/;
+const BACKGROUND_SOURCES = ["cron", "loop", "swarm", "webhook", "monitor"] as const satisfies readonly Exclude<
+  SessionOrigin,
+  "conversation"
+>[];
+type BackgroundSource = (typeof BACKGROUND_SOURCES)[number];
+type SpendSource = "live" | BackgroundSource;
+const SPEND_SOURCES: readonly SpendSource[] = ["live", ...BACKGROUND_SOURCES];
 const CSV_TOTALS_HEADER = [
   "live_usd",
   "background_usd",
-  "cron_usd",
-  "loop_usd",
-  "swarm_usd",
-  "webhook_usd",
-  "monitor_usd",
+  ...BACKGROUND_SOURCES.map((source) => `${source}_usd`),
   "total_usd",
   "calls",
   "input_tokens",
@@ -37,10 +40,6 @@ const CSV_TOTALS_HEADER = [
 const SPEND_BREAKDOWNS = ["entity", "model", "cron"] as const;
 type SpendBreakdown = (typeof SPEND_BREAKDOWNS)[number];
 type SpendBucket = "day" | "week";
-const BACKGROUND_SOURCES = ["cron", "loop", "swarm", "webhook", "monitor"] as const;
-type BackgroundSource = (typeof BACKGROUND_SOURCES)[number];
-type SpendSource = "live" | BackgroundSource;
-const SPEND_SOURCES: readonly SpendSource[] = ["live", ...BACKGROUND_SOURCES];
 
 interface SpendBucketTotals {
   costUsd: number;
@@ -139,14 +138,7 @@ function emptyTally(): Tally {
 }
 
 function emptySources(): Record<SpendSource, Tally> {
-  return {
-    live: emptyTally(),
-    cron: emptyTally(),
-    loop: emptyTally(),
-    swarm: emptyTally(),
-    webhook: emptyTally(),
-    monitor: emptyTally(),
-  };
+  return Object.fromEntries(SPEND_SOURCES.map((source) => [source, emptyTally()])) as Record<SpendSource, Tally>;
 }
 
 function backgroundSources<T>(value: (source: BackgroundSource) => T): Record<BackgroundSource, T> {
@@ -485,7 +477,7 @@ async function loadSpendRows(
 async function cronInfoLookup(
   app: BaseCtx["app"],
   rows: readonly { cronId: string | null }[],
-): Promise<(cronId: string) => SpendCronInfo | null> {
+): Promise<Map<string, SpendCronInfo>> {
   const ids = [...new Set(rows.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))];
   const crons = new Map<string, SpendCronInfo>();
   for (let start = 0; start < ids.length; start += CRON_LOOKUP_CONCURRENCY) {
@@ -496,7 +488,7 @@ async function cronInfoLookup(
       crons.set(id, { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived });
     }
   }
-  return (cronId) => crons.get(cronId) ?? null;
+  return crons;
 }
 
 export async function spendExport(ctx: BaseCtx): Promise<void> {
@@ -525,15 +517,17 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const scope = orgScope(deps);
   const window = { from: isoDay(from / DAY_MS), to: isoDay(to / DAY_MS) };
   const exported = spendExportRows(rows, (id) => labels.get(id) ?? "");
-  const cronInfo = await cronInfoLookup(app, exported);
-  const crons: SpendExportCron[] = [...new Set(exported.flatMap((row) => (row.cronId === null ? [] : [row.cronId])))]
-    .sort(byCodePoint)
-    .flatMap((cronId) => {
-      const info = cronInfo(cronId);
-      if (!info) return [];
-      const { id, title, owner, ownerScopeId, schedule, enabled, archived } = info;
-      return [{ id, title, owner, ownerScopeId, schedule, enabled, archived }];
-    });
+  const crons: SpendExportCron[] = [...(await cronInfoLookup(app, exported)).values()]
+    .sort((a, b) => byCodePoint(a.id, b.id))
+    .map(({ id, title, owner, ownerScopeId, schedule, enabled, archived }) => ({
+      id,
+      title,
+      owner,
+      ownerScopeId,
+      schedule,
+      enabled,
+      archived,
+    }));
   audit(deps, {
     principalId: SPEND_EXPORT_PRINCIPAL,
     action: "spend.export",
@@ -576,12 +570,14 @@ export async function spend(ctx: ApiCtx): Promise<void> {
     deps,
     rows.map((r) => r.scopeId),
   );
+  const crons =
+    format === "csv" && breakdown !== "cron" ? new Map<string, SpendCronInfo>() : await cronInfoLookup(app, rows);
   const report = summarizeSpend(rows, {
     from,
     to,
     bucket,
     label: (id) => labels.get(id) ?? "",
-    cron: format === "csv" && breakdown !== "cron" ? () => null : await cronInfoLookup(app, rows),
+    cron: (cronId) => crons.get(cronId) ?? null,
   });
   if (format === "json")
     return sendJson(res, 200, { scopeId: scope, ...report, ...(asOf === undefined ? {} : { asOf }) });
