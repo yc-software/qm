@@ -1565,6 +1565,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
+      ...(turn.stageOutput ? { stageOutput: turn.stageOutput } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
       ...(opts?.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: opts.execTimeoutCeilingMs } : {}),

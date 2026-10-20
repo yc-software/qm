@@ -5,6 +5,7 @@ import type { RuntimeControl, HarnessHandoff } from "./runtime-types.ts";
 import type {
   AttachmentMeta,
   ClientToolDeclaration,
+  StageOutputDeclaration,
   ConversationTurn,
   ScopeId,
   Session,
@@ -113,6 +114,7 @@ export interface HarnessTurnInput {
   delegateWork?: boolean;
   surfaceName?: string;
   clientTools?: readonly ClientToolDeclaration[];
+  stageOutput?: StageOutputDeclaration;
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;

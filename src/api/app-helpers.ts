@@ -665,6 +665,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         if (signal.sessionRequest) {
           const {
             clientTools: _clientTools,
+            stageOutput: _stageOutput,
             desktopClientId: _desktopClientId,
             ...sessionRequest
           } = signal.sessionRequest;
@@ -680,6 +681,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             approval: _ap,
             redeliveryKey: _redeliveryKey,
             clientTools: _clientTools,
+            stageOutput: _stageOutput,
             desktopClientId: _desktopClientId,
             ...base
           } = signal.request;
@@ -705,6 +707,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             attachments: _attachments,
             displayText: _display,
             clientTools: _clientTools,
+            stageOutput: _stageOutput,
             desktopClientId: _desktopClientId,
             ...request
           } = completed.request;
@@ -731,6 +734,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
             approval: _ap,
             redeliveryKey: _redeliveryKey,
             clientTools: _clientTools,
+            stageOutput: _stageOutput,
             desktopClientId: _desktopClientId,
             ...base
           } = signal.request;
@@ -760,6 +764,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
               attachments: _a,
               approval: _ap,
               clientTools: _clientTools,
+              stageOutput: _stageOutput,
               desktopClientId: _desktopClientId,
               ...base
             } = orphanRun.request;

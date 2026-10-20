@@ -107,6 +107,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     spawned: _spawned,
     unattendedGrants: _unattendedGrants,
     redeliveryKey: _redeliveryKey,
+    stageOutput: _stageOutput,
     ...safeBody
   } = body;
   if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))

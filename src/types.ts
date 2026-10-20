@@ -646,6 +646,12 @@ export interface ClientToolDeclaration {
   timeoutMs?: number;
 }
 
+export interface StageOutputDeclaration {
+  description: string;
+  schema: Record<string, unknown>;
+  accept?: Record<string, unknown>;
+}
+
 export interface ClientToolResult {
   images?: Array<{ data: string; mimeType: "image/png" | "image/jpeg" }>;
   content: string;
@@ -725,6 +731,7 @@ export interface TurnRequest {
   redeliveryKey?: string;
   async?: boolean;
   clientTools?: ClientToolDeclaration[];
+  stageOutput?: StageOutputDeclaration;
 }
 
 export interface ActorAssertion {
@@ -805,4 +812,5 @@ export interface TurnResult {
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
+  stageOutput?: Record<string, unknown>;
 }

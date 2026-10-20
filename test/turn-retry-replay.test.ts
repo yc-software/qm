@@ -50,7 +50,11 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(interruptAfterToolResult = false) {
+function buildScenario(
+  interruptAfterToolResult = false,
+  submission?: Record<string, unknown>,
+  answer = "it runs on this conversation's computer",
+) {
   const turns: string[] = [];
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
@@ -74,6 +78,18 @@ function buildScenario(interruptAfterToolResult = false) {
             payload: { text: turn.input },
             scopeLabel: turn.scopeLabel,
           });
+        if (submission && turns.length === 1) {
+          await turn.emit({
+            type: "tool_call",
+            payload: { ...submission, tool: "submit_stage_output", callId: "s1" },
+            scopeLabel: turn.scopeLabel,
+          });
+          await turn.emit({
+            type: "tool_result",
+            payload: { tool: "submit_stage_output", callId: "s1", submitted: true, output: submission },
+            scopeLabel: turn.scopeLabel,
+          });
+        }
         if (interruptAfterToolResult && turns.length === 1) {
           await turn.emit({
             type: "tool_call",
@@ -87,7 +103,7 @@ function buildScenario(interruptAfterToolResult = false) {
           });
           throw new Error("interrupted after recording a tool result");
         }
-        const reply = "it runs on this conversation's computer";
+        const reply = answer;
         await turn.emit({
           type: "assistant",
           payload: { text: reply },
@@ -374,4 +390,33 @@ test("a retry does not resume another run's interrupted turn that asked the same
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, undefined]);
   assert.equal((await asks()).length, 2);
+});
+
+const STAGE_OUTPUT = { description: "Submit the verdict.", schema: { type: "object" } };
+
+for (const interrupted of [false, true]) {
+  test(`a retried stage turn returns the output submitted before ${interrupted ? "the interruption" : "the answer was recorded"}`, async () => {
+    const verdict = { outcome: "met", reason: "done" };
+    const { orchestrator, runs, turns, input } = buildScenario(interrupted, verdict);
+    const ask = input(ASK, { stageOutput: STAGE_OUTPUT });
+    const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: ask })).run;
+    const first = await orchestrator.handleTurn({ ...ask, runId: run.id, attempt: 1 }).catch(() => null);
+    if (!interrupted) assert.deepEqual(first?.stageOutput, verdict);
+    const retry = await orchestrator.handleTurn({ ...ask, runId: run.id, attempt: 2 });
+    assert.equal(retry.status, "ok");
+    assert.deepEqual(retry.stageOutput, verdict);
+    assert.equal(turns.length, interrupted ? 2 : 1);
+  });
+}
+
+test("a retried stage turn whose recorded answer is empty still returns its submission", async () => {
+  const verdict = { outcome: "met", reason: "done" };
+  const { orchestrator, runs, turns, input } = buildScenario(false, verdict, "");
+  const ask = input(ASK, { stageOutput: STAGE_OUTPUT });
+  const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: ask })).run;
+  await orchestrator.handleTurn({ ...ask, runId: run.id, attempt: 1 });
+  const retry = await orchestrator.handleTurn({ ...ask, runId: run.id, attempt: 2 });
+  assert.equal(retry.status, "ok");
+  assert.deepEqual(retry.stageOutput, verdict);
+  assert.equal(turns.length, 1);
 });

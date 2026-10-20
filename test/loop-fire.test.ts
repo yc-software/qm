@@ -35,7 +35,9 @@ function fakeDeliveries() {
   };
 }
 
-type Responder = (req: TurnRequest) => string | Promise<string>;
+type StageReply = { reply?: string; stageOutput?: Record<string, unknown> };
+
+type Responder = (req: TurnRequest) => string | StageReply | Promise<string | StageReply>;
 
 function service(
   respond: Responder,
@@ -76,7 +78,12 @@ function service(
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
           if (overrides?.turnResult) return overrides.turnResult;
-          return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
+          const answer = await respond(req);
+          return {
+            status: "ok",
+            ...(typeof answer === "string" ? { reply: answer } : answer),
+            sessionId: `s${turns.length}`,
+          };
         };
         return overrides?.admittedWork ? overrides.admittedWork.run(run) : run();
       },
@@ -112,11 +119,23 @@ function stage(req: TurnRequest): string {
 const HAPPY: Responder = (req) => {
   switch (stage(req)) {
     case "intake":
-      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError in checkout"}]\n```';
+      return { stageOutput: { items: [{ sourceKey: "SENTRY-1", sourceSummary: "TypeError in checkout" }] } };
     case "work":
-      return 'Prepared a draft PR.\n```json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix TypeError", "externalRef": "https://github.com/x/pull/1", "label": "checkout"}]}\n```';
+      return {
+        reply: "Prepared a draft PR.",
+        stageOutput: {
+          outputs: [
+            {
+              shipAction: "open_pr",
+              title: "Fix TypeError",
+              externalRef: "https://github.com/x/pull/1",
+              label: "checkout",
+            },
+          ],
+        },
+      };
     case "judge":
-      return '```json\n{"outcome": "met", "reason": "draft PR linked"}\n```';
+      return { stageOutput: { outcome: "met", reason: "draft PR linked" } };
     default:
       return "done";
   }
@@ -237,7 +256,14 @@ test("a replayed ship operation becomes unconfirmed and a person can resolve it 
 test("returning one output supersedes active siblings before requeueing the item", async () => {
   const two: Responder = (req) =>
     stage(req) === "work"
-      ? '```json\n{"outputs": [{"shipAction": "open_pr", "title": "one", "externalRef": "1"}, {"shipAction": "open_pr", "title": "two", "externalRef": "2"}]}\n```'
+      ? {
+          stageOutput: {
+            outputs: [
+              { shipAction: "open_pr", title: "one", externalRef: "1" },
+              { shipAction: "open_pr", title: "two", externalRef: "2" },
+            ],
+          },
+        }
       : HAPPY(req);
   const s = service(two);
   const loop = await makeLoop(s.loops);
@@ -288,7 +314,14 @@ test("confirming an unconfirmed output requires its ready parent to publish it",
 test("returning an output fails while a sibling is shipping", async () => {
   const two: Responder = (req) =>
     stage(req) === "work"
-      ? '```json\n{"outputs": [{"shipAction": "open_pr", "title": "one", "externalRef": "1"}, {"shipAction": "open_pr", "title": "two", "externalRef": "2"}]}\n```'
+      ? {
+          stageOutput: {
+            outputs: [
+              { shipAction: "open_pr", title: "one", externalRef: "1" },
+              { shipAction: "open_pr", title: "two", externalRef: "2" },
+            ],
+          },
+        }
       : HAPPY(req);
   const s = service(two);
   const loop = await makeLoop(s.loops);
@@ -401,11 +434,13 @@ test("prompt fences cannot be escaped by loop, item, output, or reviewer text", 
   const malicious: Responder = (req) => {
     switch (stage(req)) {
       case "intake":
-        return `[{"sourceKey":"${poison}","sourceSummary":"${poison}"}]`;
+        return { stageOutput: { items: [{ sourceKey: poison, sourceSummary: poison }] } };
       case "work":
-        return `\`\`\`json\n${JSON.stringify({ outputs: [{ shipAction: "open_pr", title: poison, externalRef: poison }] })}\n\`\`\``;
+        return { stageOutput: { outputs: [{ shipAction: "open_pr", title: poison, externalRef: poison }] } };
       case "judge":
-        return `\`\`\`json\n${JSON.stringify({ outcome: "met", reason: "done", checks: [{ command: poison, passed: true, detail: "ok" }] })}\n\`\`\``;
+        return {
+          stageOutput: { outcome: "met", reason: "done", checks: [{ command: poison, passed: true, detail: "ok" }] },
+        };
       default:
         return "done";
     }
@@ -525,11 +560,11 @@ test("an undeclared ship action parks the item and quarantines through the gover
   const rogue: Responder = (req) => {
     switch (stage(req)) {
       case "intake":
-        return '[{"sourceKey": "SENTRY-9"}]';
+        return { stageOutput: { items: [{ sourceKey: "SENTRY-9" }] } };
       case "work":
-        return '```json\n{"outputs": [{"shipAction": "send_email", "title": "Emailed the customer"}]}\n```';
+        return { stageOutput: { outputs: [{ shipAction: "send_email", title: "Emailed the customer" }] } };
       default:
-        return '```json\n{"outcome": "met", "reason": "n/a"}\n```';
+        return { stageOutput: { outcome: "met", reason: "n/a" } };
     }
   };
   const s = service(rogue);
@@ -559,7 +594,7 @@ test("a failed intake records the failure and repeated failures degrade health",
 });
 
 test("a quiet fire with nothing to review reports silent", async () => {
-  const quiet: Responder = (req) => (stage(req) === "intake" ? "```json\n[]\n```" : "done");
+  const quiet: Responder = (req) => (stage(req) === "intake" ? { stageOutput: { items: [] } } : "done");
   const s = service(quiet);
   const loop = await makeLoop(s.loops);
   const result = await s.fire.fire(loop.id, "f1");
@@ -570,11 +605,11 @@ test("an unmet judgment continues the item; the attempt cap parks it", async () 
   const never: Responder = (req) => {
     switch (stage(req)) {
       case "intake":
-        return '[{"sourceKey": "SENTRY-2"}]';
+        return { stageOutput: { items: [{ sourceKey: "SENTRY-2" }] } };
       case "work":
-        return '```json\n{"outputs": []}\n```';
+        return { stageOutput: { outputs: [] } };
       case "judge":
-        return '```json\n{"outcome": "continue", "reason": "no PR yet"}\n```';
+        return { stageOutput: { outcome: "continue", reason: "no PR yet" } };
       default:
         return "done";
     }
@@ -888,9 +923,11 @@ test("event-only Email work skips scanning and holds its draft instead of markin
     if (stage(req) === "work") {
       assert.match(req.text ?? "", /sourcePayload/);
       assert.match(req.text ?? "", /Hello from email/);
-      return '```json\n{"proposal":{"to":["sender@example.com"],"body":"Thanks, I will review it."},"outputs":[]}\n```';
+      return {
+        stageOutput: { proposal: { to: ["sender@example.com"], body: "Thanks, I will review it." }, outputs: [] },
+      };
     }
-    return '```json\n{"outcome":"met","reason":"Draft ready for review"}\n```';
+    return { stageOutput: { outcome: "met", reason: "Draft ready for review" } };
   });
   const loop = await makeLoop(w.loops, { sources: ["gmail"], shipActions: [{ action: "send", gate: "hold" }] });
   await w.items.ingest([
@@ -1017,17 +1054,27 @@ test("triage groups a flood read-only so only the representative is worked, with
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
       const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
-      return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: index === 0 ? "urgent" : "low",
-          reason: "checkout is down",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
-        })),
-      })}\n\`\`\``;
+      return {
+        stageOutput: {
+          items: ids.map((id, index) => ({
+            id,
+            priority: index === 0 ? "urgent" : "low",
+            reason: "checkout is down",
+            ...(index > 0 ? { groupWith: ids[0] } : {}),
+          })),
+        },
+      };
     }
     if (stage(req) === "intake")
-      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-3", "sourceSummary": "TypeError"}]\n```';
+      return {
+        stageOutput: {
+          items: [
+            { sourceKey: "SENTRY-1", sourceSummary: "TypeError" },
+            { sourceKey: "SENTRY-2", sourceSummary: "TypeError" },
+            { sourceKey: "SENTRY-3", sourceSummary: "TypeError" },
+          ],
+        },
+      };
     return HAPPY(req);
   });
   const loop = await makeLoop(s.loops);
@@ -1040,6 +1087,7 @@ test("triage groups a flood read-only so only the representative is worked, with
   await s.fire.fire(loop.id, "f1");
   const triageTurn = s.turns.find((turn) => turn.text?.startsWith("[Loop triage]"));
   assert.equal(triageTurn?.readOnly, true);
+  assert.deepEqual(Object.keys((triageTurn?.stageOutput?.schema.properties as object) ?? {}), ["items"]);
   assert.match(triageTurn?.text ?? "", /production incidents first/);
   const workTurns = s.turns.filter((turn) => stage(turn) === "work");
   assert.equal(workTurns.length, 1);
@@ -1072,17 +1120,26 @@ test("a triage dry run regroups every open item with draft instructions and writ
     const text = req.text ?? "";
     if (text.startsWith("[Loop triage]")) {
       const ids = [...text.matchAll(/"id":"([^"]+)"/g)].map((match) => match[1]!);
-      return `\`\`\`json\n${JSON.stringify({
-        items: ids.map((id, index) => ({
-          id,
-          priority: "high",
-          reason: "draft",
-          ...(index > 0 ? { groupWith: ids[0] } : {}),
-        })),
-      })}\n\`\`\``;
+      return {
+        stageOutput: {
+          items: ids.map((id, index) => ({
+            id,
+            priority: "high",
+            reason: "draft",
+            ...(index > 0 ? { groupWith: ids[0] } : {}),
+          })),
+        },
+      };
     }
     if (stage(req) === "intake")
-      return '```json\n[{"sourceKey": "SENTRY-1", "sourceSummary": "TypeError"}, {"sourceKey": "SENTRY-2", "sourceSummary": "TypeError"}]\n```';
+      return {
+        stageOutput: {
+          items: [
+            { sourceKey: "SENTRY-1", sourceSummary: "TypeError" },
+            { sourceKey: "SENTRY-2", sourceSummary: "TypeError" },
+          ],
+        },
+      };
     return HAPPY(req);
   });
   const loop = await makeLoop(s.loops);
@@ -1110,7 +1167,14 @@ test("parallel items stage work and judge on their own conversation, never colli
     await new Promise((resolve) => setTimeout(resolve, 5));
     active.delete(ref);
     if (stage(req) === "intake")
-      return '```json\n[{"sourceKey": "A", "sourceSummary": "a"}, {"sourceKey": "B", "sourceSummary": "b"}]\n```';
+      return {
+        stageOutput: {
+          items: [
+            { sourceKey: "A", sourceSummary: "a" },
+            { sourceKey: "B", sourceSummary: "b" },
+          ],
+        },
+      };
     return HAPPY(req);
   });
   const loop = await makeLoop(s.loops, { caps: { maxConcurrentItems: 2 } });
@@ -1125,8 +1189,8 @@ test("parallel items stage work and judge on their own conversation, never colli
 
 test("Slack work and follow-up prompts preserve message images without repeating profile cosmetics", async () => {
   const s = service((req) => {
-    if (stage(req) === "work") return '```json\n{"proposal":{"body":"Draft reply"},"outputs":[]}\n```';
-    return '```json\n{"outcome":"met","reason":"Ready"}\n```';
+    if (stage(req) === "work") return { stageOutput: { proposal: { body: "Draft reply" }, outputs: [] } };
+    return { stageOutput: { outcome: "met", reason: "Ready" } };
   });
   const loop = await makeLoop(s.loops, { sources: ["slack"], shipActions: [{ action: "send", gate: "hold" }] });
   await s.items.ingest([
@@ -1158,4 +1222,58 @@ test("Slack work and follow-up prompts preserve message images without repeating
     assert.match(req.text ?? "", /Alex/);
   }
   assert.match(JSON.stringify((await s.items.get(item!.id))!.sourcePayload), /avatar.png/);
+});
+
+test("stage turns without a submitted output fail intake and leave the judge unjudged", async () => {
+  const prose = service((req) => (stage(req) === "intake" ? "Found SENTRY-1 in checkout." : "done"));
+  const loop = await makeLoop(prose.loops);
+  const failed = await prose.fire.fire(loop.id, "no-intake");
+  assert.equal(failed.status, "failed");
+  assert.match(failed.note ?? "", /intake: nothing submitted — Found SENTRY-1 in checkout\./);
+  assert.deepEqual(await prose.items.byLoop(loop.id), []);
+
+  const unjudged = service((req) => (stage(req) === "judge" ? "Looks good to me." : HAPPY(req)));
+  const judged = await makeLoop(unjudged.loops);
+  const result = await unjudged.fire.fire(judged.id, "no-verdict");
+  assert.equal(result.summary?.continued.length, 1);
+  const [item] = await unjudged.items.byLoop(judged.id);
+  assert.equal(item?.status, "queued");
+  assert.equal(item?.guidance, "judge: nothing submitted — Looks good to me.");
+  assert.deepEqual(await unjudged.outputs.awaitingReview(judged.id), []);
+});
+
+test("work and judge turns in one item conversation advertise the same tool definition", async () => {
+  const s = service(HAPPY);
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "declared");
+  const declared = (name: string) => s.turns.find((turn) => stage(turn) === name)?.stageOutput;
+  const work = declared("work");
+  const judge = declared("judge");
+  assert.deepEqual(
+    { description: work?.description, schema: work?.schema },
+    { description: judge?.description, schema: judge?.schema },
+  );
+});
+
+test("a follow-up keeps the whole reply as chat and applies only a submitted proposal", async () => {
+  for (const source of ["gmail", undefined]) {
+    const s = service(() => ({
+      reply: 'Shortened it.\n```json\n{"proposal": {"body": "ignored"}}\n```',
+      stageOutput: { proposal: { body: "Short reply" } },
+    }));
+    const loop = await makeLoop(s.loops);
+    await s.items.ingest([
+      {
+        loopId: loop.id,
+        dedupeKey: `followup-${source}`,
+        ...(source ? { source } : {}),
+        sourcePayload: { snippet: "Long thread" },
+        proposal: { data: { body: "Long reply" }, by: "agent" },
+      },
+    ]);
+    const [item] = await s.items.byLoop(loop.id);
+    const next = await s.fire.followUp(loop, item!, "Make it shorter", "josh");
+    assert.equal(next?.proposal?.data.body, "Short reply");
+    assert.match(next?.thread?.at(-1)?.text ?? "", /^Shortened it\.\n```json/);
+  }
 });

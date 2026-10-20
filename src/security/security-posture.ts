@@ -1,3 +1,4 @@
+import { STAGE_OUTPUT_TOOL } from "../harness/stage-output-tool.ts";
 import type { OverheardMessage, ScopeId } from "../types.ts";
 
 export const SECURITY_POSTURES = ["dangerous", "auto", "strict"] as const;
@@ -105,6 +106,7 @@ const INTERNAL_RESULT_TOOLS = new Set([
   "get_goal",
   "update_goal",
   "finish_silently",
+  STAGE_OUTPUT_TOOL,
   "guidance",
   "webhook",
   "share",

@@ -12,7 +12,7 @@ import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core
 import { NeedsApproval } from "../tools/primitives.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
 import { countTokens } from "../util/tokens.ts";
-import { recordStoppedTurn } from "./harness-shared.ts";
+import { bridgedToolContent, bridgedTools, harnessToolContext, recordStoppedTurn } from "./harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
@@ -393,6 +393,20 @@ export function createMockHarness(): Harness {
             scopeLabel: turn.scopeLabel,
           });
           reply = "thought about it";
+        } else if (command0.startsWith("!submit-stage ")) {
+          const submit = bridgedTools(harnessToolContext(turn), {
+            ...(turn.readOnly ? { readOnly: true } : {}),
+            ...(turn.stageOutput ? { stageOutput: turn.stageOutput } : {}),
+          }).find((tool) => tool.name === "submit_stage_output");
+          const result = submit
+            ? await submit.execute(randomUUID(), JSON.parse(cmd.slice(cmd.indexOf("!submit-stage ") + 14)))
+            : undefined;
+          usedTool = true;
+          reply = result
+            ? bridgedToolContent(result)
+                .map((part) => (part.type === "text" ? part.text : ""))
+                .join("")
+            : "[no stage tool]";
         } else if (command0.startsWith("!execute ")) {
           const params = JSON.parse(cmd.slice(cmd.indexOf("!execute ") + 9)) as {
             command: string;

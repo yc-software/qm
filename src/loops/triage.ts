@@ -81,22 +81,18 @@ export function previewWork(items: LoopItem[]): { open: LoopItem[]; pending: Loo
   return { open, pending: open, context: open };
 }
 
-export function parseTriageDecisions(list: unknown[]): TriageDecision[] {
-  const decisions: TriageDecision[] = [];
-  for (const entry of list) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as Record<string, unknown>;
-    if (typeof record.id !== "string" || !record.id) continue;
-    const priority = LOOP_ITEM_PRIORITIES.find((value) => value === record.priority);
-    const reason = typeof record.reason === "string" ? record.reason.trim().slice(0, REASON_MAX) : "";
-    decisions.push({
-      id: record.id,
+export function parseTriageDecisions(
+  items: Array<{ id: string; priority?: LoopItemPriority; reason?: string; groupWith?: string }>,
+): TriageDecision[] {
+  return items.map(({ id, priority, reason, groupWith }) => {
+    const clipped = reason?.trim().slice(0, REASON_MAX);
+    return {
+      id,
       ...(priority ? { priority } : {}),
-      ...(priority && reason ? { reason } : {}),
-      ...(typeof record.groupWith === "string" && record.groupWith ? { groupWith: record.groupWith } : {}),
-    });
-  }
-  return decisions;
+      ...(priority && clipped ? { reason: clipped } : {}),
+      ...(groupWith ? { groupWith } : {}),
+    };
+  });
 }
 
 function pinned(item: LoopItem, field: "priority" | "group"): boolean {

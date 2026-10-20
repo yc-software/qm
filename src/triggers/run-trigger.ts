@@ -33,7 +33,10 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
+export interface TriggerSpec extends Pick<
+  TurnRequest,
+  "model" | "harness" | "fastMode" | "attachments" | "stageOutput"
+> {
   runtime?: import("../harness/harness.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -64,6 +67,7 @@ export interface TriggerOutcome {
   note?: string;
   userNote?: string;
   reply?: string;
+  stageOutput?: Record<string, unknown>;
   sessionId?: string;
 }
 
@@ -261,6 +265,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let note: string | undefined;
   let userNote: string | undefined;
   let reply: string | undefined;
+  let stageOutput: Record<string, unknown> | undefined;
   let sessionId: string | undefined;
   let deferred = false;
   const ran = await deps.idempotency
@@ -309,6 +314,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.harness ? { harness: spec.harness } : {}),
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
+        ...(spec.stageOutput ? { stageOutput: spec.stageOutput } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
@@ -318,6 +324,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       reply = res.reply;
+      stageOutput = res.stageOutput;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
       if (res.status === "pending_approval") {
@@ -364,6 +371,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(note ? { note } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
+    ...(stageOutput ? { stageOutput } : {}),
     ...(sessionId ? { sessionId } : {}),
   };
 

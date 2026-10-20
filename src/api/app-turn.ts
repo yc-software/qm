@@ -420,6 +420,7 @@ export function createTurnMethods(
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
+        ...(req.stageOutput ? { stageOutput: req.stageOutput } : {}),
         desktopClientId: desktopClientForTurn({ ...req, origin }),
         ...(req.envelopeWrapped ? { envelopeWrapped: true } : {}),
         ...(typeof req.displayText === "string" && req.displayText ? { displayText: req.displayText } : {}),

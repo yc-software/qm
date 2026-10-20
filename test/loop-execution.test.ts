@@ -63,24 +63,24 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
           assert.equal(result.status, "ok");
           if (stage === "intake") {
             assert.equal(result.reply, "source-readable");
-            return { ...result, reply: JSON.stringify([{ sourceKey: "ERROR-1", sourceSummary: "Synthetic error" }]) };
+            return { ...result, stageOutput: { items: [{ sourceKey: "ERROR-1", sourceSummary: "Synthetic error" }] } };
           }
           if (stage === "work") {
             assert.equal(result.reply, "prepared");
             return {
               ...result,
-              reply: JSON.stringify({ outputs: [{ shipAction: "open_pr", title: "Proposed fix" }] }),
+              stageOutput: { outputs: [{ shipAction: "open_pr", title: "Proposed fix" }] },
             };
           }
           if (stage === "judge") {
             assert.equal(result.reply, checkResult === "failed" ? "(exit 1)" : "verified");
             return {
               ...result,
-              reply: JSON.stringify({
+              stageOutput: {
                 outcome: "met",
                 reason: "RCA and fix prepared",
                 checks: checkResult === "missing" ? [] : [{ command: check, passed: result.reply === "verified" }],
-              }),
+              },
             };
           }
           return result;
