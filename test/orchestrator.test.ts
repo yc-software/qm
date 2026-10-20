@@ -166,6 +166,18 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
+test("the assistant reply carries the connector links minted during its run", async () => {
+  const built = freshApp();
+  const link = { provider: "google", url: "https://qm.example/connect/redeem/a?p=google" };
+  built.runActivity.list = async (_runId, type) =>
+    [link, link].map((payload) => ({ seq: 0, parentSeq: null, type: type ?? "connector_link", payload, createdAt: 1 }));
+  const res = await built.app.turn(dm("hello links"));
+  assert.equal(res.status, "ok");
+  const found = await built.app.getSession(res.sessionId!);
+  const assistant = found!.entries.find((e) => e.type === "assistant");
+  assert.deepEqual((assistant!.payload as { connectorLinks?: unknown }).connectorLinks, [link]);
+});
+
 test("the deployment turn wall-clock reaches the harness and a per-turn cap replaces it", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp({ turnWallClockMs: 120_000 });

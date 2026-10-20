@@ -17,6 +17,7 @@ import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabili
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 import { messageEntrySeqs } from "./message-link.ts";
 import type { GoalStripState } from "./goal-strip.ts";
+import { connectorLinksOf, type ConnectorLink } from "./connector-link.ts";
 
 const BASE_URL = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
 
@@ -503,6 +504,7 @@ export type AssistantWork = AssistantMessage & {
   streamingBaseline?: string;
   work?: WorkBlock;
   deliveredFiles?: DeliveredFile[];
+  connectorLinks?: ConnectorLink[];
   retryableSend?: boolean;
   interruptedRunId?: string;
   sendBlocked?: "pending_approval";
@@ -2315,6 +2317,11 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
         }
       }
       posted = false;
+      const links = connectorLinksOf(e.payload);
+      const reply = out.findLast((m) => m.role === "assistant") as AssistantWork | undefined;
+      const known = new Set(reply?.connectorLinks?.map((link) => link.url));
+      const fresh = links.filter((link) => !known.has(link.url));
+      if (fresh.length && reply) reply.connectorLinks = [...(reply.connectorLinks ?? []), ...fresh];
     } else if (e.type === "delivery") {
       appendDeliveryFiles(deliveredFilesFromAttachments(payload?.files));
     } else if (e.type === "system") {

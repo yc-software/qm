@@ -156,6 +156,7 @@ import {
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
+import { replyConnectorLinks } from "../connectors/connector-links.ts";
 import { isObj } from "../util/objects.ts";
 import { absoluteAppLinks, jsonbSafeStringify } from "../util/text.ts";
 import {
@@ -1714,6 +1715,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           {
             ...scopeAttestation,
             aud: OAUTH_CONSENT_AUD,
+            ...(input.runId ? { runId: input.runId } : {}),
             exp: sandboxTokenExpiry,
           },
           deps.capabilitySecret ?? deps.signingSecret,
@@ -3259,10 +3261,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
+          const nextConnectorLinks =
+            input.runId && deps.runActivity ? replyConnectorLinks(deps.runActivity, input.runId) : undefined;
           const emit: HarnessTurnInput["emit"] = async (entry) => {
             turnProgress++;
             const persistStart = Date.now();
             try {
+              const connectorLinks = entry.type === "assistant" && nextConnectorLinks ? await nextConnectorLinks() : [];
               const stored = (() => {
                 if (
                   entry.type === "assistant" ||
@@ -3275,6 +3280,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   if (typeof payload.workStartedAt !== "number")
                     payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
                   if (typeof payload.workFinishedAt !== "number") payload.workFinishedAt = Date.now();
+                  if (connectorLinks.length) payload.connectorLinks = connectorLinks;
                   return { ...entry, payload };
                 }
                 if (entry.type !== "user") return entry;

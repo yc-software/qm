@@ -34,6 +34,11 @@ test("pg store: activity written by one instance is readable by another, in arri
     );
     assert.deepEqual(got[1]!.payload, { text: "Step 1" }, "jsonb payload round-trips decoded");
     assert.equal(got[2]!.parentSeq, 1, "parent_seq round-trips");
+    assert.deepEqual(
+      (await reader.list(runId, "tool_result")).map((e) => e.seq),
+      [2],
+      "a type filter returns only that type",
+    );
     assert.deepEqual(await reader.list("no-such-run"), [], "unknown run is empty");
   } finally {
     await writer.close?.();

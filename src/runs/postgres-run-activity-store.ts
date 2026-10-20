@@ -36,10 +36,11 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
       );
     },
 
-    async list(runId) {
+    async list(runId, type) {
       const { rows } = await q(
-        `SELECT seq, parent_seq, type, payload, created_at FROM run_activity WHERE run_id=$1 ORDER BY id`,
-        [runId],
+        `SELECT seq, parent_seq, type, payload, created_at FROM run_activity
+         WHERE run_id=$1 AND ($2::text IS NULL OR type=$2) ORDER BY id`,
+        [runId, type ?? null],
       );
       return rows.map((r): RunActivityEntry => ({
         seq: Number(r.seq),

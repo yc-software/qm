@@ -8,7 +8,7 @@ export interface RunActivityEntry {
 
 export interface RunActivityStore {
   append(runId: string, entry: RunActivityEntry): Promise<void>;
-  list(runId: string): Promise<RunActivityEntry[]>;
+  list(runId: string, type?: string): Promise<RunActivityEntry[]>;
   close?(): Promise<void>;
 }
 
@@ -35,8 +35,8 @@ export function createMemoryRunActivityStore(now: () => number = Date.now): RunA
       if (list.length < MAX_PER_RUN) list.push(entry);
       runs.set(runId, list);
     },
-    async list(runId) {
-      return (runs.get(runId) ?? []).slice();
+    async list(runId, type) {
+      return (runs.get(runId) ?? []).filter((entry) => type === undefined || entry.type === type);
     },
   };
 }

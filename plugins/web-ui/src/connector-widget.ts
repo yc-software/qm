@@ -2,7 +2,7 @@ import { html, type TemplateResult } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
-import { CONNECTOR_LABELS, connectorService, type ConnectorLink } from "./connector-link";
+import { CONNECTOR_LABELS, type ConnectorLink } from "./connector-link";
 
 export function connectorCard(
   link: ConnectorLink,
@@ -11,10 +11,10 @@ export function connectorCard(
 ): TemplateResult {
   const composio = link.provider === "composio";
   const name = CONNECTOR_LABELS[link.provider]?.name ?? "your account";
-  const service = connectorService(link);
+  const logo = connectorLogo(link.toolkit ?? link.provider, link.logoUrl);
   if (!composio && connected) {
     return html`<div class="connector-widget connected" role="status">
-      ${connectorLogo(service)}
+      ${logo}
       <span class="connector-widget-text"><strong>Connected ${name}</strong><small>Ready to use in chat</small></span>
       <span class="connector-widget-status" aria-hidden="true">${icon(Check, 16)}</span>
     </div>`;
@@ -26,7 +26,7 @@ export function connectorCard(
     rel="noreferrer"
     title="Opens in a new tab"
   >
-    ${connectorLogo(service)}
+    ${logo}
     <span class="connector-widget-text"
       ><strong>${(composio && link.label) || `Connect ${name}`}</strong> <small>Authorize access · New tab</small></span
     >

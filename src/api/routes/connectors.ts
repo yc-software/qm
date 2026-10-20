@@ -17,6 +17,7 @@ import {
   ACCOUNT_TYPES,
   isAccountType,
 } from "../../connectors/oauth.ts";
+import { recordConnectorLink } from "../../connectors/connector-links.ts";
 import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
@@ -338,12 +339,9 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     scopeLabel: capability.actorId,
   });
   const connectPath = `/connect/redeem/${linkId}?p=${encodeURIComponent(provider)}`;
-  return sendJson(res, 200, {
-    provider,
-    accountType,
-    connectPath,
-    connectUrl: base ? `${base}${connectPath}` : connectPath,
-  });
+  const connectUrl = base ? `${base}${connectPath}` : connectPath;
+  await recordConnectorLink(deps.runActivity, capability.runId, { provider, url: connectUrl });
+  return sendJson(res, 200, { provider, accountType, connectPath, connectUrl });
 }
 
 async function oauthStart(ctx: ApiCtx): Promise<void> {

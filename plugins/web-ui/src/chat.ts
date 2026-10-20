@@ -140,7 +140,7 @@ import {
   type ToolRowModel,
 } from "./timeline";
 import "./slack-setup";
-import { connectorLinksIn, stripConnectorLinks, type ConnectorLink } from "./connector-link";
+import { slackSetupUrl, takeLinks, type ConnectorLink } from "./connector-link";
 import { deepLinkPath, sessionLink, UI_BASE } from "./deep-link";
 import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
@@ -2201,7 +2201,6 @@ export function createChatSurface(
   }
 
   function connectorWidget(link: ConnectorLink): TemplateResult {
-    if (link.provider === "slack-bot") return html`<qm-slack-setup></qm-slack-setup>`;
     return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo);
   }
 
@@ -2254,6 +2253,10 @@ export function createChatSurface(
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
     const animating = isStreaming && runSlot.stopGeneration !== runSlot.generation;
     const parts: TemplateResult[] = [];
+    const connectorLinks = (message as AssistantWork).connectorLinks ?? [];
+    const slackSetup = slackSetupUrl(location.origin);
+    const linkUrls = [...connectorLinks.map((link) => link.url), slackSetup];
+    const linkLabels = new Map<string, string>();
     for (const [chunkIndex, chunk] of message.content.entries()) {
       if (chunk.type === "text") {
         const work = (message as AssistantWork).work;
@@ -2283,15 +2286,14 @@ export function createChatSurface(
             continue;
           }
           const shown = part.text;
-          const links = shown.trim() ? connectorLinksIn(shown, location.origin) : [];
-          const body = links.length ? stripConnectorLinks(shown, links) : shown;
+          const { body, labels } = shown.trim() ? takeLinks(shown, linkUrls) : { body: shown, labels: null };
+          labels?.forEach((label, url) => linkLabels.set(url, label));
           if (body.trim())
             parts.push(
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
                 ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
               </div>`,
             );
-          for (const link of links) parts.push(connectorWidget(link));
         }
       }
       if (chunk.type === "thinking" && chunk.thinking.trim()) {
@@ -2303,6 +2305,8 @@ export function createChatSurface(
         );
       }
     }
+    for (const link of connectorLinks) parts.push(connectorWidget({ ...link, label: linkLabels.get(link.url) || "" }));
+    if (linkLabels.has(slackSetup)) parts.push(html`<qm-slack-setup></qm-slack-setup>`);
     for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
       parts.push(playgroundCard(playground));
     }

@@ -501,6 +501,7 @@ export interface BuiltApp {
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
+  runActivity: RunActivityStore;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
   ledgerEventBus: LedgerEventBus;
@@ -3000,6 +3001,7 @@ export function buildApp(
     deploymentLayerRefresh,
     sessions,
     runs,
+    runActivity,
     signals: runSignals,
     sessionStateBus,
     ledgerEventBus,
@@ -3194,6 +3196,7 @@ export function serverDeps(
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,
+    runActivity: built.runActivity,
     signals: built.signals,
     sessionStateBus: built.sessionStateBus,
     workspace: built.workspace,

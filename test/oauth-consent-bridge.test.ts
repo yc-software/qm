@@ -17,6 +17,7 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { replyConnectorLinks } from "../src/connectors/connector-links.ts";
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
@@ -42,6 +43,7 @@ function start(
     connectorTokens: built.connectorTokens,
     keychain: built.keychain,
     consentLinks: built.consentLinks,
+    runActivity: built.runActivity,
     auditLog: built.auditLog,
     oauthEnv,
     oauthFetch: fetchImpl,
@@ -53,11 +55,12 @@ function start(
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const consentTok = async (actorId: string, opts: { scopeId?: string } = {}) => {
+const consentTok = async (actorId: string, opts: { scopeId?: string; runId?: string } = {}) => {
   return await mintCapabilityToken(
     {
       actorId,
       scopeId: opts.scopeId ?? `personal:${actorId}`,
+      ...(opts.runId ? { runId: opts.runId } : {}),
       aud: OAUTH_CONSENT_AUD,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
@@ -90,6 +93,20 @@ async function mint(base: string, cap: string, body: Record<string, unknown>): P
     body: JSON.stringify(body),
   });
 }
+
+test("a link minted from a turn is recorded on that run for the reply to carry", async () => {
+  const srv = start(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+  try {
+    const onTurn = await mint(srv.base, await consentTok("U1", { runId: "run-1" }), { provider: "google" });
+    const { connectUrl } = (await onTurn.json()) as { connectUrl: string };
+    await mint(srv.base, await consentTok("U1"), { provider: "google" });
+    assert.deepEqual(await replyConnectorLinks(srv.built.runActivity, "run-1")(), [
+      { provider: "google", url: connectUrl },
+    ]);
+  } finally {
+    await srv.close();
+  }
+});
 
 test("mint → intended teammate redeems → callback connects them; the link is then single-use", async () => {
   let exchanged = 0;

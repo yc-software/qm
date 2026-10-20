@@ -12,6 +12,8 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { orgId } from "../src/config.ts";
+import { createMemoryRunActivityStore } from "../src/runs/run-activity-store.ts";
+import { replyConnectorLinks } from "../src/connectors/connector-links.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -31,6 +33,7 @@ function fixture() {
     serviceCreds: keychain,
     acl,
     composioReturns: createMemoryMap(),
+    runActivity: createMemoryRunActivityStore(),
     auditLog: {
       record: (e: { action: string; resource?: string }) => audits.push(e),
     } as unknown as ServerDeps["auditLog"],
@@ -411,6 +414,24 @@ const execution = {
   version: "20260901_00",
   arguments: { max_results: 1 },
 };
+test("a consent link minted on a turn is recorded on that run with its toolkit", async () => {
+  const f = fixture();
+  await f.own();
+  f.replies.push(
+    { session_id: "trs_test" },
+    { redirect_url: "https://connect.composio.dev/link/lk_test", connected_account_id: "ca_test" },
+  );
+  assert.equal((await f.invoke("/v1/composio/authorize", { toolkit: "gmail" }, null, privateCap)).status, 200);
+  assert.deepEqual(await replyConnectorLinks(f.deps.runActivity!, "test-run")(), [
+    {
+      provider: "composio",
+      url: "https://connect.composio.dev/link/lk_test",
+      toolkit: "gmail",
+      logoUrl: "https://logos.composio.dev/api/gmail",
+    },
+  ]);
+});
+
 const aliceAccount = {
   id: "ca_alice",
   user_id: composioUserId(orgId(), "alice"),

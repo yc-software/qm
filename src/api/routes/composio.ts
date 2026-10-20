@@ -1,3 +1,4 @@
+import { recordConnectorLink } from "../../connectors/connector-links.ts";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
@@ -17,6 +18,10 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
+
+function composioLogoUrl(toolkit: string): string {
+  return `https://logos.composio.dev/api/${toolkit}`;
+}
 
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
@@ -189,7 +194,7 @@ async function catalog(ctx: ApiCtx): Promise<void> {
       return [
         {
           id: item.slug,
-          logoUrl: `https://logos.composio.dev/api/${item.slug}`,
+          logoUrl: composioLogoUrl(item.slug),
           name: item.name,
           description: typeof item.meta?.description === "string" ? item.meta.description : "",
         },
@@ -270,6 +275,13 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       resource: toolkit,
       scopeLabel: scopeId("personal", access.principal),
     });
+    if (!linkSlack)
+      await recordConnectorLink(ctx.deps.runActivity, ctx.capability?.runId, {
+        provider: "composio",
+        url: url.href,
+        toolkit,
+        logoUrl: composioLogoUrl(toolkit),
+      });
     const ticket = linkSlack
       ? await mintSignedPayload(
           {

@@ -1,4 +1,5 @@
 import { html, LitElement, nothing } from "lit";
+import { slackSetupUrl } from "./connector-link.ts";
 
 // This is a bot installation, not a personal Slack account connection.
 class SlackSetup extends LitElement {
@@ -54,7 +55,7 @@ class SlackSetup extends LitElement {
       const { tokenUrl, submitUrl, installUrl } = data.setup;
       if (
         tokenUrl !== "https://api.slack.com/apps" ||
-        submitUrl !== `${location.origin}/admin?slack=setup` ||
+        submitUrl !== slackSetupUrl(location.origin) ||
         installUrl !== `${location.origin}/admin?slack=install`
       )
         throw new Error("Invalid setup links");

@@ -1,4 +1,4 @@
-const LINK_RE = /https?:\/\/[^\s<>()[\]]+/gi;
+import { marked } from "marked";
 
 export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> = {
   google: {
@@ -34,81 +34,51 @@ export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> =
 export interface ConnectorLink {
   provider: string;
   url: string;
+  toolkit?: string;
+  logoUrl?: string;
   label?: string;
 }
 
-export function connectorLinksIn(text: string, trustedOrigin?: string): ConnectorLink[] {
+export function connectorLinksOf(payload: unknown): ConnectorLink[] {
+  const raw = (payload as { connectorLinks?: unknown } | null)?.connectorLinks;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const { provider, url, toolkit, logoUrl } = (item ?? {}) as Record<string, unknown>;
+    if (typeof provider !== "string" || !provider || typeof url !== "string" || !url) return [];
+    return [
+      {
+        provider,
+        url,
+        ...(typeof toolkit === "string" && toolkit ? { toolkit } : {}),
+        ...(typeof logoUrl === "string" && logoUrl ? { logoUrl } : {}),
+      },
+    ];
+  });
+}
+
+export function slackSetupUrl(origin: string): string {
+  return `${origin}/admin?slack=setup`;
+}
+
+export function takeLinks(text: string, urls: readonly string[]): { body: string; labels: Map<string, string> } {
+  const wanted = new Set(urls.filter((url) => text.includes(url)));
   const labels = new Map<string, string>();
-  for (const m of text.matchAll(/\[([^\]\n]*)\]\(\s*<?(https?:\/\/[^\s)>]+)>?\s*\)/gi)) {
-    const label = m[1]!.trim();
-    if (label && !labels.has(m[2]!)) labels.set(m[2]!, label);
-  }
-  const out: ConnectorLink[] = [];
-  for (const m of text.matchAll(LINK_RE)) {
-    const url = m[0].replace(/[*_]+$/, "");
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      continue;
+  if (!wanted.size) return { body: text, labels };
+  const spans: string[] = [];
+  marked.walkTokens(marked.lexer(text), (token) => {
+    if ((token.type === "strong" || token.type === "em") && token.tokens?.length === 1) {
+      const only = token.tokens[0]!;
+      if (only.type === "link" && wanted.has(only.href)) spans.push(token.raw);
     }
-    if (parsed.username || parsed.password) continue;
-    if (parsed.origin === "https://connect.composio.dev" && /^\/link\/lk_[A-Za-z0-9_-]+$/.test(parsed.pathname)) {
-      const label = labels.get(url);
-      if (!out.some((l) => l.url === url)) out.push({ provider: "composio", url, ...(label ? { label } : {}) });
-      continue;
-    }
-    if (
-      trustedOrigin &&
-      parsed.origin === trustedOrigin &&
-      parsed.pathname === "/admin" &&
-      parsed.search === "?slack=setup"
-    ) {
-      if (!out.some((l) => l.provider === "slack-bot")) out.push({ provider: "slack-bot", url });
-      continue;
-    }
-    if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
-    if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
-    const provider = parsed.searchParams.get("p") ?? "";
-    if (!CONNECTOR_LABELS[provider]) continue;
-    if (!out.some((l) => l.url === url)) out.push({ provider, url });
-  }
-  return out;
-}
-
-const EMPH = String.raw`(?:\*\*|\*|__|_)`;
-
-export function stripConnectorLinks(text: string, links = connectorLinksIn(text)): string {
-  for (const { url } of links) {
-    const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    text = text
-      .replace(new RegExp(`${EMPH}?\\[[^\\]]*\\]\\(\\s*<?${escaped}>?\\s*\\)${EMPH}?`, "g"), "")
-      .replace(new RegExp(`${EMPH}?<?${escaped}(?=$|[\\s<>()[\\]*_])>?${EMPH}?`, "g"), "");
-  }
-  return text.replace(/[ \t]+$/gm, "").trim();
-}
-
-export function connectorService(link: ConnectorLink): string {
-  if (link.provider !== "composio") return link.provider;
-  const label = (link.label ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    if (token.type !== "link" || !wanted.has(token.href)) return;
+    spans.push(token.raw);
+    if (!labels.has(token.href)) labels.set(token.href, token.text === token.href ? "" : token.text.trim());
+  });
+  for (const span of spans.sort((a, b) => b.length - a.length)) text = text.split(span).join("");
+  const body = text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
     .trim();
-  const services: Array<[string, RegExp]> = [
-    ["gmail", /\bgmail\b/],
-    ["googlecalendar", /\b(?:google calendar|gcalendar)\b|^(?:connect |authorize )?calendar$/],
-    ["googledrive", /\b(?:google drive|gdrive)\b/],
-    ["googlesheets", /\b(?:google sheets|gsheets)\b/],
-    ["google", /\b(?:google|google workspace)\b/],
-    ["slack", /\bslack\b/],
-    ["notion", /\bnotion\b/],
-    ["linear", /\blinear\b/],
-    ["github", /\bgithub\b/],
-    ["dropbox", /\bdropbox\b/],
-    ["x", /\b(?:twitter|x)\b/],
-  ];
-  const matches = services.filter(([, pattern]) => pattern.test(label));
-  const hasGoogleProduct = matches.some(([id]) => id.startsWith("google") && id !== "google");
-  const specific = matches.filter(([id]) => id !== "google" || !hasGoogleProduct);
-  return specific.length === 1 ? specific[0]![0] : "";
+  return { body, labels };
 }

@@ -27,6 +27,11 @@ test("append/list preserves arrival order and isolates runs", async () => {
     "arrival order preserved",
   );
   assert.equal((await s.list("r2")).length, 1, "runs are isolated");
+  assert.deepEqual(
+    (await s.list("r1", "browser_status")).map((e) => e.seq),
+    [2],
+    "a type filter returns only that type",
+  );
 });
 
 test("list returns a copy — mutating it can't corrupt the store", async () => {
