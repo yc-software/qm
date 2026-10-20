@@ -24,7 +24,10 @@ const TOOLS = [
   { name: "update", description: "Write a record", inputSchema: { type: "object", properties: {} } },
 ];
 
-function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): { fetch: McpFetch; calls: string[] } {
+function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean; toolResult?: unknown }): {
+  fetch: McpFetch;
+  calls: string[];
+} {
   const calls: string[] = [];
   const fetch: McpFetch = async (url, init) => {
     calls.push(url);
@@ -33,7 +36,9 @@ function fakeServerFetch(opts?: { requireBearer?: string; sse?: boolean }): { fe
     }
     const req = JSON.parse(init.body) as { id: number; method: string; params: { name?: string } };
     const result =
-      req.method === "tools/list" ? { tools: TOOLS } : { content: [{ type: "text", text: `ran ${req.params.name}` }] };
+      req.method === "tools/list"
+        ? { tools: TOOLS }
+        : (opts?.toolResult ?? { content: [{ type: "text", text: `ran ${req.params.name}` }] });
     const envelope = { jsonrpc: "2.0", id: req.id, result };
     if (opts?.sse) {
       return jsonResponse(`event: message\ndata: ${JSON.stringify(envelope)}\n\n`, 200, "text/event-stream");
@@ -334,4 +339,49 @@ test("background MCP refresh contains registry failures at startup, on change, a
     ["crm_query", "crm_update"],
   );
   assert.equal(await service.call("crm_query", {}), "ran query");
+});
+
+test("tool service preserves structured read completeness and text without duplicating identical JSON", async () => {
+  const structuredContent = { complete: false, nextCursor: "line:2", linesRead: 2, totalLines: 4 };
+  const serialized = JSON.stringify(structuredContent);
+  const text = "First two lines: A, B";
+  const capped = `${serialized}\n\n${"A".repeat(60_001)}`;
+  for (const [toolResult, expected] of [
+    [{ content: [{ type: "text", text }], structuredContent }, `${serialized}\n\n${text}`],
+    [{ structuredContent }, serialized],
+    [{ content: [{ type: "text", text: serialized }], structuredContent }, serialized],
+    [{ content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }], structuredContent }, serialized],
+    [
+      {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ totalLines: 4, linesRead: 2, nextCursor: "line:2", complete: false }),
+          },
+        ],
+        structuredContent,
+      },
+      serialized,
+    ],
+    [{}, JSON.stringify("")],
+    [
+      {
+        content: [{ type: "text", text: "A".repeat(60_001) }],
+        structuredContent,
+        _meta: { privateToken: "not-model-visible" },
+      },
+      `${capped.slice(0, 60_000)}\n[truncated]`,
+    ],
+  ] as const) {
+    const store = createMcpServerStore(createMemoryMap<McpServer>());
+    const { fetch } = fakeServerFetch({ toolResult });
+    const service = createMcpToolService({ servers: store, fetchImpl: fetch, refreshIntervalMs: 3600_000 });
+    try {
+      await store.put(server());
+      await service.refresh();
+      assert.equal(await service.call("crm_query", {}, "internal:U1"), expected);
+    } finally {
+      service.close();
+    }
+  }
 });

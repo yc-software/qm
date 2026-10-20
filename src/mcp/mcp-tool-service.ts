@@ -6,6 +6,7 @@
 // namespaced `<serverId>_<toolName>` so two servers can't collide with each
 // other or with built-in tools.
 
+import { isDeepStrictEqual } from "node:util";
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
@@ -206,7 +207,20 @@ export function createMcpToolService(opts: {
         }
         const result = await client.callTool(def.remoteName, args);
         record("call", `${def.serverId}/${def.remoteName}`, "ok", principalId);
-        const text = mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
+        let text = mcpResultText(result);
+        if (result.structuredContent !== undefined) {
+          const structured = JSON.stringify(result.structuredContent);
+          let duplicate = text === structured;
+          if (text && !duplicate) {
+            try {
+              duplicate = isDeepStrictEqual(JSON.parse(text), result.structuredContent);
+            } catch {
+              duplicate = false;
+            }
+          }
+          text = duplicate ? structured : [structured, text].filter(Boolean).join("\n\n");
+        }
+        text ||= JSON.stringify("");
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;
       } catch (e) {
         if (e instanceof SignInRequired) {
