@@ -9,7 +9,13 @@ import {
   type SurfaceHeaderClient,
   shouldProcessMessage,
 } from "./lib.ts";
-import { parseEventId, parseLifecycleEvent, parseMessageEvent, parseReactionEvent } from "./payloads.ts";
+import {
+  isDirectChannelType,
+  parseEventId,
+  parseLifecycleEvent,
+  parseMessageEvent,
+  parseReactionEvent,
+} from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
@@ -201,7 +207,7 @@ export function registerSlackEvents(
         deps.inboxMessage?.(client, {
           channel: m.channel,
           ts: m.ts,
-          isDirectMessage: m.channel_type === "im" || m.channel_type === "mpim",
+          isDirectMessage: isDirectChannelType(m.channel_type),
           ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
           ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
           ...(m.user ? { senderSlackId: m.user } : {}),

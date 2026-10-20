@@ -74,3 +74,18 @@ test("probablyResolved and image URLs survive parsing", () => {
   const context = payload.context as Array<Record<string, unknown>>;
   assert.deepEqual(context[0]!.images, ["https://files.slack.com/b.png"]);
 });
+
+test("a known channel item never matches a bare-channel DM ref; DM and legacy items match either form", () => {
+  const stored = (isDirectMessage?: boolean) =>
+    ({
+      sourcePayload: {
+        slack: { channelId: "G555", ts: "1.1", ...(isDirectMessage === undefined ? {} : { isDirectMessage }) },
+      },
+    }) as never;
+  assert.equal(slackAdapter.matchesEvent(stored(false), "G555"), false);
+  assert.equal(slackAdapter.matchesEvent(stored(false), "G555:1.1"), true);
+  for (const isDirectMessage of [true, undefined]) {
+    assert.equal(slackAdapter.matchesEvent(stored(isDirectMessage), "G555"), true);
+    assert.equal(slackAdapter.matchesEvent(stored(isDirectMessage), "G555:1.1"), true);
+  }
+});

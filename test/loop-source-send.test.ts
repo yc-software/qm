@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { LoopItem, LoopSourcePayload } from "../src/types.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/sources/gmail.ts";
-import { renderSlackSendText, slackAdapter } from "../src/loops/sources/slack.ts";
+import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/loops/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
 import { adapterForItem } from "../src/loops/sources/index.ts";
 
@@ -29,7 +29,7 @@ const gmailItem = item("gmail", {
   gmail: { threadId: "t1", rfcMessageId: "<msg-1@mail>", subject: "Quarterly numbers", to: ["ada@example.com"] },
 });
 
-const slackItem = item("slack", { slack: { channelId: "C1", ts: "111.222", isDirectMessage: false } });
+const slackItem = item("slack", { slack: { channelId: "C1", ts: "111.222" } });
 
 function tokens(map: Record<string, string | null>): ConnectorTokenSource {
   return {
@@ -39,15 +39,12 @@ function tokens(map: Record<string, string | null>): ConnectorTokenSource {
 }
 
 interface SlackCall {
-  api: "chat.postMessage" | "reactions.add" | "conversations.info";
+  api: "chat.postMessage" | "reactions.add";
   args: Record<string, unknown>;
   token: string;
 }
 
-function slackSpy(
-  fail?: string,
-  conversation: { is_im?: boolean; is_mpim?: boolean } = {},
-): { calls: SlackCall[]; factory: (token: string) => SlackUserClient } {
+function slackSpy(fail?: string): { calls: SlackCall[]; factory: (token: string) => SlackUserClient } {
   const calls: SlackCall[] = [];
   const record = (api: SlackCall["api"], token: string) => async (args: Record<string, unknown>) => {
     calls.push({ api, args, token });
@@ -59,12 +56,6 @@ function slackSpy(
     factory: (token) => ({
       chat: { postMessage: record("chat.postMessage", token) },
       reactions: { add: record("reactions.add", token) },
-      conversations: {
-        info: async (args) => {
-          calls.push({ api: "conversations.info", args, token });
-          return { channel: conversation };
-        },
-      },
     }),
   };
 }
@@ -155,45 +146,22 @@ test("a missing connector reads as not_connected, not an exception", async () =>
   if (!slackResult.ok) assert.equal(slackResult.reason, "not_connected");
 });
 
-async function sentThreadTs(slack: Record<string, unknown>, conversation?: { is_im?: boolean; is_mpim?: boolean }) {
-  const spy = slackSpy(undefined, conversation);
-  const result = await slackAdapter.act(
-    { owner: "josh", tokens: tokens({ "slack.com": "x" }), slackClient: spy.factory },
-    item("slack", { slack }),
-    "send",
-    { body: "hi" },
+test("slack replies thread on channel messages and stay inline in DMs and group DMs", () => {
+  assert.equal(slackReplyThreadTs(slackItem), "111.222");
+  assert.equal(
+    slackReplyThreadTs(item("slack", { slack: { channelId: "G9", ts: "3.4", isDirectMessage: true } })),
+    undefined,
   );
-  assert.equal(result.ok, true);
-  return {
-    threadTs: spy.calls.find((c) => c.api === "chat.postMessage")?.args.thread_ts,
-    looked: spy.calls.some((c) => c.api === "conversations.info"),
-  };
-}
-
-test("slack replies thread on channel messages and stay inline in DMs and group DMs", async () => {
-  assert.deepEqual(await sentThreadTs({ channelId: "C1", ts: "111.222", isDirectMessage: false }), {
-    threadTs: "111.222",
-    looked: false,
-  });
-  assert.deepEqual(await sentThreadTs({ channelId: "G9", ts: "3.4", isDirectMessage: true }), {
-    threadTs: undefined,
-    looked: false,
-  });
-  assert.deepEqual(await sentThreadTs({ channelId: "D9", ts: "3.4", threadTs: "1.2", isDirectMessage: true }), {
-    threadTs: "1.2",
-    looked: false,
-  });
-});
-
-test("slack items saved without isDirectMessage ask Slack what kind of conversation they are", async () => {
-  assert.deepEqual(await sentThreadTs({ channelId: "G9", ts: "3.4" }, { is_mpim: true }), {
-    threadTs: undefined,
-    looked: true,
-  });
-  assert.deepEqual(await sentThreadTs({ channelId: "D9", ts: "3.4" }, { is_im: false, is_mpim: false }), {
-    threadTs: "3.4",
-    looked: true,
-  });
+  assert.equal(
+    slackReplyThreadTs(item("slack", { slack: { channelId: "D9", ts: "3.4", isDirectMessage: false } })),
+    "3.4",
+  );
+  assert.equal(
+    slackReplyThreadTs(
+      item("slack", { slack: { channelId: "D9", ts: "3.4", threadTs: "1.2", isDirectMessage: true } }),
+    ),
+    "1.2",
+  );
 });
 
 test("slack send posts as the user through the slack client", async () => {
@@ -324,7 +292,7 @@ test("an item resolves to the adapter that owns its source", () => {
 });
 
 const agentDraft = "Hi <@U7|ada>, see <!here> and <!subteam^S1|@eng>: **done** — `x`";
-const slackMeta = { slack: { channelId: "C1", ts: "1.1", isDirectMessage: false } };
+const slackMeta = { slack: { channelId: "C1", ts: "1.1" } };
 
 test("an untouched agent draft goes out as written, with every mention disarmed", () => {
   const held = item("slack", slackMeta, { body: agentDraft });

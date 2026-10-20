@@ -11,6 +11,7 @@ import { hashId } from "../util/crypto.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import { isObj } from "./sources/adapter.ts";
 import { slackConversationRef } from "./sources/slack.ts";
+import { isDirectChannelType } from "../slack/payloads.ts";
 import { createGmailPushClient, verifyGmailPush, type GmailCursor, type GmailPushConfig } from "./gmail-push.ts";
 
 export interface LoopIngress {
@@ -320,7 +321,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         const at = Number(event.ts) * 1000;
         if (!Number.isFinite(at) || at <= 0) return { status: 400, body: "Invalid Slack timestamp" };
         const threadTs = typeof event.thread_ts === "string" ? event.thread_ts : undefined;
-        const isDirectMessage = event.channel_type === "im" || event.channel_type === "mpim";
+        const isDirectMessage = isDirectChannelType(event.channel_type);
         entry = {
           loopId: source.loopId,
           source: "slack",

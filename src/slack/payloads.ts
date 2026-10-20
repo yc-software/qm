@@ -205,6 +205,10 @@ export const SLACK_AUTH_ERRORS: ReadonlySet<string> = new Set([
   "account_inactive",
 ]);
 
+export function isDirectChannelType(channelType: unknown): boolean {
+  return channelType === "im" || channelType === "mpim";
+}
+
 export function slackErrorCode(err: unknown): string | undefined {
   return str(rec(rec(err)?.data)?.error);
 }

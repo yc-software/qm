@@ -66,6 +66,12 @@ export function slackConversationRef(
   return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
 
+export function slackReplyThreadTs(item: LoopItem): string | undefined {
+  const slack = metaOf(item);
+  if (!slack) return undefined;
+  return slack.threadTs ?? (slack.isDirectMessage ? undefined : slack.ts);
+}
+
 function itemReactions(item: LoopItem): string[] {
   const raw = item.sourcePayload?.reactions;
   return Array.isArray(raw) ? raw.filter((name): name is string => typeof name === "string") : [];
@@ -112,18 +118,12 @@ export function renderSlackSendText(item: LoopItem, body: string, actor: "human"
   return everWritten.size ? neutralizeMentions(body, everWritten) : body;
 }
 
-async function isDirectConversation(client: SlackUserClient, channel: string): Promise<boolean> {
-  const info = (await client.conversations.info({ channel })).channel;
-  return info?.is_im === true || info?.is_mpim === true;
-}
-
 async function sendSlack(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const slack = metaOf(item);
   if (!slack?.channelId) return { ok: false, reason: "bad_item", message: "item carries no Slack channel" };
   const client = await clientAsUser(deps);
   if (!client) return notConnected;
-  const dm = slack.isDirectMessage ?? (await isDirectConversation(client, slack.channelId));
-  const threadTs = slack.threadTs ?? (dm ? undefined : slack.ts);
+  const threadTs = slackReplyThreadTs(item);
   const parts = safeChunks(renderSlackSendText(item, draft.body, deps.actor ?? "human"), SLACK_POST_SPLIT_LIMIT);
   const posted: string[] = [];
   for (const text of parts) {
@@ -194,7 +194,7 @@ export const slackAdapter: LoopSourceAdapter = {
   matchesEvent(item, conversationRef) {
     const slack = metaOf(item);
     if (!slack) return false;
-    return [true, false].some(
+    return (slack.isDirectMessage === false ? [false] : [true, false]).some(
       (dm) => slackConversationRef(slack.channelId, slack.ts, slack.threadTs, dm) === conversationRef,
     );
   },

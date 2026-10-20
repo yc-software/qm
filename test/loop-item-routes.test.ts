@@ -95,11 +95,7 @@ function slackClientFor(w: World): (token: string) => SlackUserClient {
     }
     return { ok: true };
   };
-  return () => ({
-    chat: { postMessage: call("chat.postMessage") },
-    reactions: { add: call("reactions.add") },
-    conversations: { info: async () => ({ channel: {} }) },
-  });
+  return () => ({ chat: { postMessage: call("chat.postMessage") }, reactions: { add: call("reactions.add") } });
 }
 
 async function call(
