@@ -1,6 +1,6 @@
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { api } from "./core-bridge";
-import { swallowAs } from "../../chassis/src/errors";
+import { swallowAs } from "../../chassis/src/errors.ts";
 import type { Me } from "./shell-state";
 
 const requests = new WeakMap<Me, { until: number; pending: Promise<void> }>();

@@ -1,4 +1,4 @@
-import { swallowAs } from "../../chassis/src/errors";
+import { swallowAs } from "../../chassis/src/errors.ts";
 
 const MAX_ANNOTATION_TEXT = 20_000;
 const MAX_ANNOTATION_BYTES = 20 * 1024 * 1024;
