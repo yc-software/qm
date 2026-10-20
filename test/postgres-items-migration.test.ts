@@ -85,7 +85,9 @@ test(
       assert.equal((copied.find((entry) => entry.seq === 5)!.payload as { text: string }).text, "final answer");
       assert.equal((copied.find((entry) => entry.seq === 4)!.payload as { result: string }).result, "out\n");
       assert.deepEqual(
-        copied.filter((entry) => entry.type === "tool_call").map((entry) => (entry.payload as { callId: string }).callId),
+        copied
+          .filter((entry) => entry.type === "tool_call")
+          .map((entry) => (entry.payload as { callId: string }).callId),
         ["c1", longCallId, "c1"],
         "call ids too long or repeated for the call_id column stay in the copied body",
       );
