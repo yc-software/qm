@@ -392,11 +392,15 @@ fn perform(host: &El, e: &El, action: &str) -> Result<(), Failure> {
     }
 }
 
-fn running() -> Vec<App> {
+fn app_policy_allowed(policy: NSApplicationActivationPolicy, include_accessory: bool) -> bool {
+    policy == NSApplicationActivationPolicy::Regular || (include_accessory && policy == NSApplicationActivationPolicy::Accessory)
+}
+
+fn running(include_accessory: bool) -> Vec<App> {
     NSWorkspace::sharedWorkspace()
         .runningApplications()
         .iter()
-        .filter(|a| a.activationPolicy() == NSApplicationActivationPolicy::Regular)
+        .filter(|a| app_policy_allowed(a.activationPolicy(), include_accessory))
         .map(|a| App {
             name: a.localizedName().map(|s| s.to_string()).unwrap_or_default(),
             bundle: a.bundleIdentifier().map(|s| s.to_string()),
@@ -1913,7 +1917,7 @@ impl Desk {
 }
 
 fn apps() -> Result<Reply, Failure> {
-    let apps = running().into_iter().map(|a| AppInfo { name: a.name, bundle_id: a.bundle, pid: a.pid, active: a.active }).collect();
+    let apps = running(false).into_iter().map(|a| AppInfo { name: a.name, bundle_id: a.bundle, pid: a.pid, active: a.active }).collect();
     Ok(Reply::Apps { apps })
 }
 
@@ -1929,7 +1933,7 @@ fn resolve(query: &str) -> Result<App, Failure> {
     } else {
         None
     };
-    let find = || select_app(running(), query, path.as_deref());
+    let find = || select_app(running(true), query, path.as_deref());
     if find()?.is_none() {
         let flag = if path.is_none() && query.contains('.') && !query.contains(' ') { "-b" } else { "-a" };
         let opened = std::process::Command::new("/usr/bin/open").args(["-g", flag, query]).status().is_ok_and(|s| s.success());
@@ -2165,6 +2169,23 @@ mod tests {
         let child = Rect { x: 5.0, y: 5.0, w: 10.0, h: 10.0 };
         assert!(tree::visible(child, inner).is_none());
         assert!(tree::visible(child, narrow(inner, "AXScrollArea", Some(window))).is_none());
+    }
+
+    #[test]
+    fn app_identity_allows_accessory_only_for_explicit_resolution() {
+        use NSApplicationActivationPolicy as Policy;
+        let candidates = |explicit| {
+            [(Policy::Regular, "Editor", 11), (Policy::Accessory, "Panel", 22), (Policy::Prohibited, "Helper", 33)]
+                .into_iter()
+                .filter(|(policy, _, _)| app_policy_allowed(*policy, explicit))
+                .map(|(_, name, pid)| app(name, &format!("test.{name}"), &format!("/{name}.app"), pid))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(candidates(false).iter().map(|app| app.pid).collect::<Vec<_>>(), [11]);
+        assert_eq!(select_app(candidates(true), "/Panel.app", Some(std::path::Path::new("/Panel.app"))).unwrap().unwrap().pid, 22);
+        assert_eq!(select_app(candidates(true), "test.Panel", None).unwrap().unwrap().pid, 22);
+        assert!(select_app(candidates(true), "Helper", None).unwrap().is_none());
+        assert!(select_app(candidates(true), "Pane", None).unwrap().is_none());
     }
 
     #[test]

@@ -19,7 +19,7 @@ open -a Calculator
 
 Run alone, macOS grants permissions to the terminal that launches desk, so switch your terminal on under System Settings > Privacy & Security > Accessibility and Screen Recording, then restart it.
 
-All running apps can be observed and controlled, subject to macOS permissions.
+App listing shows regular Mac apps. Explicit names, bundle IDs, and full application paths can also target accessory apps with an accessible, visible window. Background-only processes are excluded; observation and control remain subject to macOS permissions and app support.
 
 ## Platform considerations
 
