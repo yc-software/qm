@@ -256,6 +256,7 @@ struct Snapshot {
     window_element: El,
     frame: Rect,
     elements: Vec<(u32, El)>,
+    popups: Vec<El>,
     text: HashMap<u32, text::ObservedText>,
     markers: HashMap<u32, (El, String)>,
     ancestry: HashMap<u32, Vec<El>>,
@@ -1067,6 +1068,7 @@ struct WalkAt {
 struct Walk {
     ids: tree::Ids<El>,
     elements: Vec<(u32, El)>,
+    popups: Vec<El>,
     text: HashMap<u32, text::ObservedText>,
     markers: HashMap<u32, (El, String)>,
     ancestry: HashMap<u32, Vec<El>>,
@@ -1125,6 +1127,9 @@ impl Walk {
         let hash = unsafe { CFHash(e.as_CFTypeRef()) };
         if self.ids.seen(e, hash) {
             return;
+        }
+        if n.props.role == "AXPopUpButton" {
+            self.popups.push(e.clone());
         }
         let locator = at.child(&n.props);
         let mut marker_source = None;
@@ -1494,6 +1499,7 @@ impl Desk {
         let mut walk = Walk {
             ids: prev.as_mut().map(|p| std::mem::take(&mut p.ids)).unwrap_or_default(),
             elements: vec![],
+            popups: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
             ancestry: HashMap::new(),
@@ -1579,6 +1585,7 @@ impl Desk {
                 window_element: w.clone(),
                 frame: f,
                 elements: walk.elements,
+                popups: walk.popups,
                 text: walk.text.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 markers: walk.markers.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 ancestry: walk.ancestry.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
@@ -1747,8 +1754,13 @@ impl Desk {
         }
     }
 
-    fn pointer(&self, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
-        if input::menu_open(ax) {
+    fn menu_open(&self, pid: i32, ax: &El) -> Result<bool, Failure> {
+        let snapshot = self.cache.get(&pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
+        input::menu_open(ax, &snapshot.popups)
+    }
+
+    fn pointer(&self, pid: i32, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
+        if self.menu_open(pid, ax)? {
             return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
         }
         let (owner, anchor, win, _) = input::service_at(ax, p)?;
@@ -1757,7 +1769,7 @@ impl Desk {
 
     fn pressed(&self, pid: i32, ax: &El, index: u32) -> Result<Option<El>, Failure> {
         let e = self.element(pid, index)?;
-        if input::menu_open(ax) && !input::is_menu_item(&e) {
+        if !input::is_menu_item(&e) && self.menu_open(pid, ax)? {
             return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
         }
         let can_press = actions(&e).iter().any(|a| a == "AXPress");
@@ -1787,7 +1799,7 @@ impl Desk {
                 }
                 match self.point(pid, Target::Index(*i)) {
                     Ok(p) => {
-                        let (to, press) = self.pointer(ax, p)?;
+                        let (to, press) = self.pointer(pid, ax, p)?;
                         click_at(to, press, p, Button::Left, 1, &[], 0)
                     }
                     Err(e) => Err(e),
@@ -1795,7 +1807,7 @@ impl Desk {
             }
             Action::Click { target, button, count, modifiers, hold_ms } => {
                 let p = self.point(pid, *target)?;
-                let (to, press) = self.pointer(ax, p)?;
+                let (to, press) = self.pointer(pid, ax, p)?;
                 click_at(to, press, p, *button, *count, modifiers, *hold_ms)
             }
             Action::TypeText { text } => type_text(input::keyboard_target(ax)?.0, text),
@@ -1835,7 +1847,7 @@ impl Desk {
                 )
             }
             Action::Scroll { target, direction, amount } => {
-                if input::menu_open(ax) {
+                if self.menu_open(pid, ax)? {
                     return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
                 }
                 let mut viewport = None;
@@ -1861,7 +1873,7 @@ impl Desk {
                     _ => frame(w),
                 }
                 .unwrap_or(Rect { x: 0.0, y: 0.0, w: 600.0, h: 600.0 });
-                let (to, press) = self.pointer(ax, p)?;
+                let (to, press) = self.pointer(pid, ax, p)?;
                 let mut left = input::scroll_pixels(*amount, *direction, viewport, view);
                 while left > 0 {
                     active()?;
@@ -1886,7 +1898,7 @@ impl Desk {
             Action::Drag { from, to } => {
                 let (a, b) = (self.point(pid, Target::Point(*from))?, self.point(pid, Target::Point(*to))?);
                 let none = CGEventFlags::empty();
-                let (pid, press) = self.pointer(ax, a)?;
+                let (pid, press) = self.pointer(pid, ax, a)?;
                 mouse(pid, &press, CGEventType::LeftMouseDown, a, CGMouseButton::Left, 1, none)?;
                 let mut last = a;
                 let dragged = (|| {
@@ -2060,6 +2072,7 @@ mod tests {
             window_element: element.clone(),
             frame,
             elements: vec![],
+            popups: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
             ancestry: HashMap::new(),
@@ -2077,6 +2090,7 @@ mod tests {
         let mut walk = Walk {
             ids: tree::Ids::default(),
             elements: vec![],
+            popups: vec![],
             text: HashMap::new(),
             markers: HashMap::new(),
             ancestry: HashMap::new(),

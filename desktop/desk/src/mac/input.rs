@@ -151,10 +151,61 @@ pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
     Ok((register_target(ax, &focused)?, ax.clone()))
 }
 
-pub(super) fn menu_open(ax: &El) -> bool {
+const MAX_MENU_CHECKS: usize = 128;
+
+fn popup_menu_open<T>(
+    popups: &[T],
+    mut children: impl FnMut(&T) -> Result<Vec<T>, Failure>,
+    mut visible_menu: impl FnMut(&T) -> Result<bool, Failure>,
+) -> Result<bool, Failure> {
+    let mut checked = 0;
+    for popup in popups {
+        active()?;
+        checked += 1;
+        if checked > MAX_MENU_CHECKS {
+            return Err(menu_unavailable());
+        }
+        for child in children(popup)? {
+            active()?;
+            checked += 1;
+            if checked > MAX_MENU_CHECKS {
+                return Err(menu_unavailable());
+            }
+            if visible_menu(&child)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn menu_unavailable() -> Failure {
+    fail(ErrorCode::ActionFailed, "Popup menu state is unavailable or exceeds the inspection limit; observe again before pointer input")
+}
+
+pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
+    active()?;
     let kids = |e: &El| attr(e, "AXChildren").map(list).unwrap_or_default();
-    kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
+    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
         || attr(ax, "AXMenuBar").is_some_and(|bar| kids(&bar).iter().any(|item| bool_attr(item, "AXSelected") == Some(true)))
+    {
+        return Ok(true);
+    }
+    popup_menu_open(
+        popups,
+        |popup| {
+            let value = attr(popup, "AXChildren").ok_or_else(menu_unavailable)?;
+            if value.downcast::<CFArray>().is_none() {
+                return Err(menu_unavailable());
+            }
+            Ok(list(value))
+        },
+        |child| match str_attr(child, "AXRole").as_deref() {
+            Some("AXMenu") => bool_attr(child, "AXHidden").map(|hidden| !hidden).ok_or_else(menu_unavailable),
+            Some(_) => Ok(false),
+            None => Err(menu_unavailable()),
+        },
+    )
 }
 
 pub(super) const MENU_OPEN: &str =
@@ -386,6 +437,16 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn popup_candidates_use_current_children_and_refuse_unknown_state() {
+        assert!(super::popup_menu_open(&[1], |_| Ok(vec![2]), |child| Ok(*child == 2)).unwrap());
+        assert!(!super::popup_menu_open(&[1], |_| Ok(vec![]), |_| panic!("no children")).unwrap());
+        assert!(!super::popup_menu_open(&[1], |_| Ok(vec![2]), |_| Ok(false)).unwrap());
+        assert!(super::popup_menu_open(&[1], |_| Err(super::menu_unavailable()), |_| Ok(false)).is_err());
+        assert!(super::popup_menu_open(&[1], |_| Ok(vec![2]), |_| Err(super::menu_unavailable())).is_err());
+        assert!(super::popup_menu_open(&[1], |_| Ok(vec![2; super::MAX_MENU_CHECKS]), |_| Ok(false)).is_err());
+    }
+
     use super::*;
 
     #[test]
