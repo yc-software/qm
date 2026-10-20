@@ -2572,7 +2572,10 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution({ deliveries, idempotency, identity, run: (req) => app.turn(req), directory }, drop)
+        fireDropResolution(
+          { deliveries, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
+          drop,
+        )
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
@@ -2717,6 +2720,7 @@ export function buildApp(
           directory,
           currentScopeMembers,
           sessions,
+          resolveRecipient,
           leaderLease,
           onProcessExit: finishCredentials,
           heartbeatMs: config.monitorHeartbeatMs,

@@ -40,6 +40,7 @@ export interface MonitorPollerDeps {
   directory?: TriggerDeps["directory"];
   currentScopeMembers?: CurrentScopeMembers;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
@@ -140,6 +141,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.sessions ? { sessions: deps.sessions } : {}),
+    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
   async function fire(

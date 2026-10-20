@@ -300,6 +300,10 @@ test("a silent cron source run stays out of normal human chat history", async ()
 
 test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async () => {
   const built = freshApp();
+  await built.app.upsertDirectory([
+    { principalId: "U-carol", displayName: "Carol", type: "internal" },
+    { principalId: "U-alice", displayName: "Alice", type: "internal" },
+  ]);
   const cron = await built.app.createCron({
     schedule: { firstFireAt: Date.now() },
     action: "deploy digest ready",

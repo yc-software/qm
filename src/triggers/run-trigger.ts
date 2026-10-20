@@ -164,7 +164,8 @@ export async function destinationVisible(
     return isVisible(deps.directory, actorId, { kind: "channel", channelId: id });
   }
   if (destination.type === "group") return isVisible(deps.directory, actorId, { kind: "group", groupId: id });
-  if (samePerson(destination.target, actorId) || !deps.resolveRecipient) return true;
+  if (destination.type !== "principal" || samePerson(destination.target, actorId) || !deps.resolveRecipient)
+    return true;
   const recipient = await deps.resolveRecipient(destination.target);
   return (
     recipient.kind === "one" &&
