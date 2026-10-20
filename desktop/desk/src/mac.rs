@@ -748,6 +748,7 @@ fn on_current_space(win: u32) -> bool {
 
 struct Node {
     props: Props,
+    has_value: bool,
     raw: Option<String>,
     rendered: Option<text::RenderedText>,
     frame: Option<Rect>,
@@ -826,10 +827,17 @@ fn fetch(e: &El) -> Node {
     };
     let children = get("AXChildren").cloned().map(list).unwrap_or_default();
     let raw = get("AXValue").or(get("AXTitle")).and_then(text_of);
-    Node { props, raw, rendered: None, frame, children }
+    Node { props, has_value, raw, rendered: None, frame, children }
 }
 
 impl Node {
+    fn marker_candidate(&self, clip: Rect) -> bool {
+        !self.has_value
+            && self.children.is_empty()
+            && matches!(self.props.role.as_str(), "AXStaticText" | "AXTextArea" | "AXTextField")
+            && self.frame.is_some_and(|frame| frame.w > 0.0 && frame.h > 0.0 && tree::intersect(frame, clip) == Some(frame))
+    }
+
     fn limit_text(&mut self, budget: &mut usize) {
         if let Some(rendered) = &self.rendered {
             if let Some(remaining) = budget.checked_sub(rendered.retained_bytes()) {
@@ -1078,7 +1086,7 @@ impl Walk {
         }
         self.visited += n.children.len();
         let kids: Vec<Node> = n.children.iter().map(|c| complete(c, fetch(c), self.cache.as_mut())).collect();
-        if kids.iter().all(|k| k.props.plain_text() && k.children.is_empty()) {
+        if kids.iter().all(|k| k.has_value && k.props.plain_text() && k.children.is_empty()) {
             let parts: Vec<(String, Option<Rect>)> = kids.iter().filter_map(|k| Some((k.raw.clone()?, k.frame))).collect();
             n.props.title = Some(tree::joined_text(&parts)).filter(|t| !t.is_empty());
             n.children.clear();
@@ -1101,11 +1109,7 @@ impl Walk {
         let locator = at.child(&n.props);
         let mut marker_source = None;
         let mut marker_note = None;
-        if n.props.value.is_none()
-            && n.children.is_empty()
-            && matches!(n.props.role.as_str(), "AXStaticText" | "AXTextArea" | "AXTextField")
-            && n.frame.is_some_and(|frame| frame.w > 0.0 && frame.h > 0.0 && tree::intersect(frame, clip) == Some(frame))
-        {
+        if n.marker_candidate(clip) {
             match markers::read(e) {
                 Some(markers::Read::Text { range, raw, attributed }) => {
                     let retained = raw.capacity() * 3 + std::mem::size_of::<(El, String)>();
@@ -1210,7 +1214,7 @@ impl Walk {
             }
             let mut n = if loaded { n } else { complete(c, n, self.cache.as_mut()) };
             n.props.list_item = list;
-            if n.props.plain_text() && n.props.value.is_some() && n.children.is_empty() {
+            if n.props.plain_text() && n.has_value && n.children.is_empty() {
                 run.push((c.clone(), n));
                 continue;
             }
@@ -2026,6 +2030,7 @@ mod tests {
             cache: None,
         };
         let node = |title: &str, x| Node {
+            has_value: false,
             props: Props { role: "AXButton".into(), title: Some(title.into()), ..Default::default() },
             raw: None,
             rendered: None,
@@ -2055,6 +2060,26 @@ mod tests {
     }
 
     #[test]
+    fn marker_candidates_require_absent_native_value() {
+        let clip = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        for value in [None, Some(""), Some("   "), Some("text")] {
+            let node = Node {
+                has_value: value.is_some(),
+                props: Props {
+                    role: "AXTextField".into(),
+                    value: value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+                    ..Default::default()
+                },
+                raw: value.map(str::to_string),
+                rendered: None,
+                frame: Some(clip),
+                children: vec![],
+            };
+            assert_eq!(node.marker_candidate(clip), value.is_none());
+        }
+    }
+
+    #[test]
     fn observed_selection_follows_rebound_element_ids() {
         let locator = Locator::ROOT.child(&Props { role: "AXTextArea".into(), identifier: Some("editor".into()), ..Default::default() });
         let mut ids = tree::Ids::default();
@@ -2072,6 +2097,7 @@ mod tests {
         let rendered = text::attributed_text(&[("hello".into(), text::TextStyle { bold: true, ..Default::default() })], true).unwrap();
         let mut budget = rendered.retained_bytes();
         let mut node = Node {
+            has_value: true,
             props: Props {
                 role: "AXTextArea".into(),
                 value: Some("hello".into()),
