@@ -6,12 +6,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import {
-  DROPPED_PROXY_ENV,
-  forceThroughProxyEnv,
-  nonInteractiveShellPrefix,
-  provisionPrepScript,
-} from "./sandbox-env.ts";
+import { DROPPED_PROXY_ENV, forceThroughProxyEnv, nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import type { LayerToolInstaller } from "./layer-tool-install.ts";
 import { posixJoin } from "./exec-file-ops.ts";
@@ -194,8 +189,8 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       );
       const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? null : ephemeralCredLinkScript(homeDir, deps.credentialPaths);
-      const prepare = provisionPrepScript(workspaceDir, credLinks);
+      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
+      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
       const toolIo = {
         exec: (script: string, t: number) => deps.exec(name, script, t),
         writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),

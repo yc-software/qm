@@ -94,7 +94,6 @@ export function installFakeAgent37(): FakeAgent37 {
       script
         .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
         .replace(/\/home\/node/g, m.home)
-        .replaceAll("/etc/sudoers.d", `${m.home}/.etc-sudoers.d`)
         .replace(remapPath, (mm) => (mm.startsWith(m.home) ? mm : `${m.home}/tmp/`))
     );
   };

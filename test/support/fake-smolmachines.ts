@@ -105,7 +105,6 @@ export function installFakeSmolmachines(): FakeSmolmachines {
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(/\/root/g, m.home)
-        .replaceAll("/etc/sudoers.d", `${m.home}/.etc-sudoers.d`)
         .replace(remapPath, (mm) => (mm.startsWith(m.home) ? mm : `${m.home}/tmp/`))
     );
   };

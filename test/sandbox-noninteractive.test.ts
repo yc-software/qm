@@ -1,6 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
@@ -62,26 +62,4 @@ test("an explicit per-turn env value wins over the non-interactive default", asy
   const handle = await sandbox.provision(layers, env ? { env } : undefined);
   const r = await sandbox.run(handle, 'printf "%s" "$PAGER"');
   assert.equal(r.stdout, "less");
-});
-
-test("provisioning installs a sudoers env_keep entry so sudo keeps the proxy and non-interactive env", async () => {
-  const bin = mkdtempSync(join(tmpdir(), "nopass-sudo-"));
-  writeFileSync(join(bin, "sudo"), '#!/bin/sh\nwhile [ "${1#-}" != "$1" ]; do shift; done\nexec "$@"\n');
-  chmodSync(join(bin, "sudo"), 0o755);
-  const path = process.env.PATH;
-  process.env.PATH = `${bin}:${path}`;
-  try {
-    const { sandbox, layers } = spritesHandle();
-    const first = await sandbox.provision(layers);
-    const sudoersDir = join(ff.homeDir(first.id), ".etc-sudoers.d");
-    assert.equal(existsSync(sudoersDir), false);
-    mkdirSync(sudoersDir);
-    await sandbox.provision(layers);
-    assert.equal(
-      readFileSync(join(sudoersDir, "qm-env"), "utf8"),
-      'Defaults env_keep += "DEBIAN_FRONTEND GIT_TERMINAL_PROMPT http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy no_proxy NO_PROXY GIT_HTTP_PROXY_AUTHMETHOD"\n',
-    );
-  } finally {
-    process.env.PATH = path;
-  }
 });

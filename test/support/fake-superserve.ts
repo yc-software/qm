@@ -81,7 +81,6 @@ export function installFakeSuperserve(): FakeSuperserve {
   const remap = (r: FakeRecord, script: string): string =>
     script
       .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
-      .replaceAll("/etc/sudoers.d", `${r.home}/.etc-sudoers.d`)
       .replace(/(^|[^A-Za-z0-9._/-])\/tmp\//g, `$1${r.home}/tmp/`)
       .replace(/(^|[^A-Za-z0-9._/-])\/root(?=\/|$|[^A-Za-z0-9._/-])/g, `$1${r.home}`);
 

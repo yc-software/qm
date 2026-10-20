@@ -6,7 +6,7 @@ import { createKeyedQueue, fetchWithRetry, sleep } from "../util/async.ts";
 import { withRequestId, swallowAs, errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, provisionPrepScript } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
@@ -528,8 +528,8 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       };
 
       try {
-        const credLinks = scratch ? null : ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? []);
-        const prep = await execRaw(name, provisionPrepScript(workspaceDir, credLinks), 60);
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`agent37 provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

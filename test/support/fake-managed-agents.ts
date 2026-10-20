@@ -100,7 +100,6 @@ export function installFakeManagedAgents(): FakeManagedAgents {
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(GUEST_ROOT_PREFIX, r.guestRoot)
-        .replaceAll("/etc/sudoers.d", `${r.guestRoot}/.etc-sudoers.d`)
         .replace(remapPath, (mm) => (mm.startsWith(r.guestRoot) ? mm : `${r.guestRoot}/tmp/`))
     );
   };

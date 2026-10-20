@@ -1,7 +1,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,21 +32,10 @@ async function freePort(): Promise<number> {
   });
 }
 
-function refusingSudoDir(): string {
-  const bin = mkdtempSync(join(tmpdir(), "refusing-sudo-"));
-  writeFileSync(join(bin, "sudo"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-  return bin;
-}
-
 before(async () => {
   daemonPort = await freePort();
   daemon = spawn(process.execPath, [join(process.cwd(), "cli/templates/aws/microvm-agent/agent.mjs")], {
-    env: {
-      ...process.env,
-      AGENT_PORT: String(daemonPort),
-      HOME: guestHome,
-      PATH: `${refusingSudoDir()}:${process.env.PATH}`,
-    },
+    env: { ...process.env, AGENT_PORT: String(daemonPort), HOME: guestHome },
     stdio: "ignore",
   });
   const deadline = Date.now() + 10_000;

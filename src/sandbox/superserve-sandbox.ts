@@ -8,7 +8,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, provisionPrepScript } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
@@ -587,8 +587,8 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           const prepare = async (): Promise<SandboxHandle> => {
             assertCurrent(handle);
             if (!(await ownsGuest(name))) return handle;
-            const credLinks = scratch ? null : ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? []);
-            const prep = await execRaw(name, provisionPrepScript(workspaceDir, credLinks), PREP_TIMEOUT_SEC);
+            const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
+            const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, PREP_TIMEOUT_SEC);
             if (prep.code !== 0)
               throw new Error(`superserve provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
             await materializeRoLayers(

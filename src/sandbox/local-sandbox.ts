@@ -9,7 +9,7 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, provisionPrepScript } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
@@ -404,7 +404,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       try {
         const prep = await execRaw(
           name,
-          provisionPrepScript(workspaceDir, ephemeralCredLinkScript(homeDir)),
+          `mkdir -p ${shq(workspaceDir)} && ${ephemeralCredLinkScript(homeDir)}`,
           PREP_TIMEOUT_SEC,
         );
         if (prep.code !== 0)

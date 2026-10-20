@@ -7,12 +7,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import {
-  nonInteractiveShellPrefix,
-  DROPPED_PROXY_ENV,
-  forceThroughProxyEnv,
-  provisionPrepScript,
-} from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
@@ -436,8 +431,8 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       };
 
       try {
-        const credLinks = scratch ? null : ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? []);
-        const prep = await execRaw(name, provisionPrepScript(workspaceDir, credLinks), 60);
+        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
         if (prep.code !== 0)
           throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 
