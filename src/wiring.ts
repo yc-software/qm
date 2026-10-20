@@ -869,9 +869,9 @@ export function buildApp(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionEntries: (sessionId) => {
+      sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
     (scope) => memoryTidy.ensure(scope),

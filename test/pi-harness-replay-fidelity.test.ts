@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createPiHarness, EMPTY_ENDING_NOTE } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
+import type { ScopeId } from "../src/types.ts";
 import { createMemoryRunSignalStore, type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
@@ -102,14 +102,14 @@ function withoutCacheControl(value: unknown): unknown {
 
 async function runTurn(
   input: string,
-  history: SessionEntry[],
+  history: Item[],
   replies: Array<(body: Body) => Response>,
   overrides: Partial<HarnessTurnInput> = {},
   signals?: RunSignalStore,
   onHistory?: () => Promise<void>,
 ) {
   const harness = createPiHarness({ apiKey: "sk-test", ...(signals ? { signals } : {}) });
-  const emitted: SessionEntry[] = [];
+  const emitted: Item[] = [];
   const bodies: Body[] = [];
   let seq = (history.at(-1)?.seq ?? 0) + 1;
   const realFetch = globalThis.fetch;
@@ -134,16 +134,9 @@ async function runTurn(
       } as unknown as ToolContext,
       scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
       orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
-      emit: async (e: NewEntry) => {
-        const appended: SessionEntry = {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: jsonb(e.payload),
-          scopeLabel: e.scopeLabel,
-          createdAt: Date.now(),
-        };
+      emit: async (e: NewItem) => {
+        const stored = storedItem(e, { sessionId: "fidelity", seq: seq++, createdAt: Date.now() });
+        const appended = { ...stored, body: jsonb(stored.body) } as Item;
         emitted.push(appended);
         return appended;
       },
@@ -176,12 +169,12 @@ test("the next turn's anthropic request replays the previous turn byte-for-byte:
   );
   assert.equal(first.result.reply, "It is in shared/q2.md.");
   assert.equal(first.bodies.length, 2);
-  const invalid = first.emitted.filter((e) => (e.payload as { callId?: string }).callId === "toolu_4");
+  const invalid = first.emitted.filter((e) => e.callId === "toolu_4");
   assert.deepEqual(
-    invalid.map((e) => [e.type, (e.payload as { isError?: boolean }).isError]),
+    invalid.map((e) => [e.kind, e.isError]),
     [
-      ["tool_call", undefined],
-      ["tool_result", true],
+      ["ToolCall", null],
+      ["ToolResult", true],
     ],
   );
 
@@ -309,12 +302,8 @@ test("a steer and an empty-ending re-prompt replay as the exact user messages th
   );
   assert.equal(first.result.reply, "Q2 is in shared/q2.md; no Q3 doc.");
   assert.equal(first.bodies.length, 3);
-  const steered = first.emitted.find((e) => (e.payload as { steered?: boolean }).steered)!;
-  assert.equal(
-    (steered.payload as { text?: string }).text,
-    "also check Q3",
-    "the transcript keeps what the person typed",
-  );
+  const steered = first.emitted.find((e) => e.kind === "SteeringMessage")!;
+  assert.equal(steered.text, "also check Q3", "the transcript keeps what the person typed");
 
   const second = await runTurn("thanks", forModelContext(first.emitted), [
     () => anthropicSse([{ type: "text", text: "Anytime." }], "end_turn"),
@@ -409,17 +398,9 @@ test("a tool result that cannot be recorded stops the turn with that error befor
         },
       ],
       {
-        emit: async (e: NewEntry) => {
-          if (e.type === "tool_result") throw failing;
-          return {
-            sessionId: "fidelity",
-            seq: 1,
-            parentSeq: null,
-            type: e.type,
-            payload: e.payload,
-            scopeLabel: e.scopeLabel,
-            createdAt: 0,
-          };
+        emit: async (e: NewItem) => {
+          if (e.kind === "ToolResult") throw failing;
+          return storedItem(e, { sessionId: "fidelity", seq: 1, createdAt: 0 });
         },
       },
     ),
@@ -429,7 +410,7 @@ test("a tool result that cannot be recorded stops the turn with that error befor
 });
 
 test("a parallel call's result is recorded as soon as its tool returns, while a sibling is still running", async () => {
-  const recorded: Array<{ type: string; callId?: unknown }> = [];
+  const recorded: Array<{ kind: string; callId?: unknown }> = [];
   let seenBeforeSlowFinished: string[] = [];
   let seq = 1;
   const result = await runTurn(
@@ -451,22 +432,14 @@ test("a parallel call's result is recorded as soon as its tool returns, while a 
         async history(query: string) {
           if (query === "slow") {
             await new Promise((resolve) => setTimeout(resolve, 100));
-            seenBeforeSlowFinished = recorded.filter((e) => e.type === "tool_result").map((e) => String(e.callId));
+            seenBeforeSlowFinished = recorded.filter((e) => e.kind === "ToolResult").map((e) => String(e.callId));
           }
           return [`result for ${query}`];
         },
       } as unknown as ToolContext,
-      emit: async (e: NewEntry) => {
-        recorded.push({ type: e.type, callId: (e.payload as { callId?: unknown }).callId });
-        return {
-          sessionId: "fidelity",
-          seq: seq++,
-          parentSeq: null,
-          type: e.type,
-          payload: e.payload,
-          scopeLabel: e.scopeLabel,
-          createdAt: 0,
-        };
+      emit: async (e: NewItem) => {
+        recorded.push({ kind: e.kind, callId: e.callId });
+        return storedItem(e, { sessionId: "fidelity", seq: seq++, createdAt: 0 });
       },
     },
   );
@@ -504,7 +477,7 @@ const PG_URL = process.env.DATABASE_URL;
 async function withPgSession(
   fn: (ctx: {
     emit: HarnessTurnInput["emit"];
-    history: () => Promise<SessionEntry[]>;
+    history: () => Promise<Item[]>;
     toolOutput: ToolOutputStore;
   }) => Promise<void>,
 ): Promise<void> {
@@ -519,11 +492,7 @@ async function withPgSession(
   const store = createPostgresSessionStore(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
-    const session = await store.getOrCreateByThread(
-      "web:replay",
-      "dm",
-      "personal:tester" as SessionEntry["scopeLabel"],
-    );
+    const session = await store.getOrCreateByThread("web:replay", "dm", "personal:tester" as ScopeId);
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
     await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
@@ -533,7 +502,7 @@ async function withPgSession(
         bytesFor: () => createMemoryDurableByteStore(),
       }),
       emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
-      history: async () => forModelContext(await store.getEntries(session.id)),
+      history: async () => forModelContext(await store.getItems(session.id)),
     });
     await store.releaseLease(lease);
   } finally {
@@ -577,8 +546,7 @@ test(
         [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
         { emit, tools },
       );
-      const scopeLabel = "personal:tester" as SessionEntry["scopeLabel"];
-      await emit({ type: "assistant", payload: { text: "Daily digest", via: "cron" }, scopeLabel });
+      await emit({ kind: "AgentMessage", text: "Daily digest", body: { via: "cron" } });
       const second = await runTurn(
         "and Q3?",
         await history(),

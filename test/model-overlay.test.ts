@@ -318,6 +318,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 import { createServer } from "node:http";
 import { oneShot, createPiHarness, wantsFastMode } from "../src/harness/pi-harness.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { storedItem } from "../src/sessions/items.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
 test("Pi serves an overlay via the inherited provider endpoint and metadata drives request limits and pricing", async () => {
@@ -379,13 +380,8 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       tools: {} as import("../src/harness/harness.ts").HarnessTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
       orgScopeId: "org:default-org" as const,
-      emit: async (entry: Parameters<import("../src/harness/harness.ts").HarnessTurnInput["emit"]>[0]) => ({
-        ...entry,
-        seq: 1,
-        sessionId: "overlay-runtime",
-        parentSeq: null,
-        createdAt: Date.now(),
-      }),
+      emit: async (item: Parameters<import("../src/harness/harness.ts").HarnessTurnInput["emit"]>[0]) =>
+        storedItem(item, { sessionId: "overlay-runtime", seq: 1, createdAt: Date.now() }),
     };
     await harness.turns.runTurn(turn);
     assert.equal(received?.model, MODEL_ID);

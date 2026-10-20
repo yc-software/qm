@@ -1,9 +1,10 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CoreSession } from "../src/core-bridge.ts";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
-const entries = [{ seq: 1, type: "user", createdAt: Date.now(), payload: { text: "please run the deploy" } }];
+const items = [item("UserMessage", { seq: 1, createdAt: Date.now(), text: "please run the deploy" })];
 const approval = { requestId: "a1", command: "deploy --prod", reason: "requires approval" };
 const OTHER = { ...SESSION, id: "sess-other", threadRef: "web:tester:other", title: "Other chat" } as CoreSession;
 
@@ -24,7 +25,7 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 test("a chat draws its transcript before its approvals arrive, then shows the card", async () => {
-  const h = await harness({ path: "/s/sess-deep", entries, holdApprovals: true, approvals: () => [approval] });
+  const h = await harness({ path: "/s/sess-deep", items, holdApprovals: true, approvals: () => [approval] });
   try {
     await promptly(h.boot());
     const conv = h.visibleConversation();
@@ -71,14 +72,14 @@ test("a transcript refresh that fails while approvals load doesn't lose the card
 test("approvals arriving mid-refresh wait for it instead of discarding its transcript", async () => {
   let refreshHeld: Promise<void> | null = null;
   let releaseRefresh = (): void => {};
-  const reply = { seq: 2, type: "assistant", createdAt: Date.now(), payload: { text: "deployed to prod" } };
+  const reply = item("AgentMessage", { seq: 2, createdAt: Date.now(), text: "deployed to prod" });
   const h = await harness({
     path: "/s/sess-deep",
     holdApprovals: true,
     approvals: () => [approval],
     api: (path) =>
       refreshHeld && path === `/api/sessions/${SESSION.id}`
-        ? refreshHeld.then(() => Response.json({ session: SESSION, entries: [reply] }))
+        ? refreshHeld.then(() => Response.json({ session: SESSION, items: [reply] }))
         : undefined,
   });
   try {
@@ -112,7 +113,7 @@ test("approvals that land after switching chats stay out of the new chat", async
     listSessions: [SESSION, OTHER],
     approvals: (id) => (id === SESSION.id ? [approval] : []),
     api: (path) =>
-      path.startsWith(`/api/sessions/${OTHER.id}?`) ? Response.json({ session: OTHER, entries: [] }) : undefined,
+      path.startsWith(`/api/sessions/${OTHER.id}?`) ? Response.json({ session: OTHER, items: [] }) : undefined,
   });
   try {
     const booted = h.boot();

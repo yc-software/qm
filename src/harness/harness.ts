@@ -8,12 +8,12 @@ import type {
   ConversationTurn,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
 import type { HarnessId } from "../model/pi-models.ts";
-import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
+import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
@@ -123,7 +123,7 @@ export interface HarnessTurnInput {
   pollFire?: boolean;
   turnWallClockMs?: number;
   systemPrompt: string;
-  history: SessionEntry[];
+  history: Item[];
   goal?: GoalRecord | null;
   goalContinuation?: boolean;
   goalMeter?: GrindMeter;
@@ -131,7 +131,7 @@ export interface HarnessTurnInput {
   tools: ToolContext;
   commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string): boolean;
-  emit(entry: NewEntry): Promise<SessionEntry>;
+  emit(item: NewItem): Promise<Item>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
   orgScopeId: ScopeId;
@@ -179,7 +179,7 @@ export interface HarnessDetectInput {
   threadOpener?: string;
   systemPrompt: string;
   reactionGuidance?: string;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 
@@ -191,7 +191,7 @@ export interface HarnessDetectResult {
 
 export interface HarnessCompactInput {
   session: Session;
-  history: SessionEntry[];
+  history: Item[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
 }
 

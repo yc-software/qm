@@ -14,7 +14,8 @@ import {
 } from "../src/core/document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
-import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
+import type { AttachmentMeta } from "../src/types.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
@@ -203,12 +204,14 @@ function storeFor(data = Buffer.from("QUARTZ-731")) {
   return { artifact, store, meta, opens: () => opens };
 }
 
+const items = (list: NewItem[]) => list.map((item, seq) => storedItem(item, { sessionId: "s", seq, createdAt: seq }));
+
 test("restores stopped/restarted turns from durable document metadata and deduplicates retries", async () => {
   const { store, meta, opens } = storeFor();
-  const history = [
-    { type: "user", payload: { attachments: [meta] } },
-    { type: "assistant", payload: { text: "stopped" } },
-  ] as SessionEntry[];
+  const history = items([
+    { kind: "UserMessage", body: { attachments: [meta] } },
+    { kind: "AgentMessage", text: "stopped" },
+  ]);
   const inputs = await loadDocumentInputs(store, [...historicalDocumentMetas(history), meta], () => true);
   assert.equal(inputs.documents.length, 1);
   assert.equal(opens(), 1);
@@ -266,13 +269,13 @@ test("steered reuploads already in the turn do not consume another document slot
 test("document replay follows compaction boundaries", () => {
   const { meta } = storeFor();
   const recent = { ...meta, artifactId: "recent" };
-  const history = [
-    { seq: 0, type: "user", payload: { attachments: [meta] } },
-    { seq: 1, type: "user", payload: { attachments: [recent] } },
-    { seq: 2, type: "system", payload: { kind: "context_summary", text: "Prior upload", throughSeq: 0 } },
-  ] as SessionEntry[];
+  const history = items([
+    { kind: "UserMessage", body: { attachments: [meta] } },
+    { kind: "UserMessage", body: { attachments: [recent] } },
+    { kind: "ContextCompaction", text: "Prior upload", throughSeq: 0 },
+  ]);
   assert.deepEqual(historicalDocumentMetas(history), [recent]);
-  assert.deepEqual((history[0]!.payload as { attachments: AttachmentMeta[] }).attachments, [meta]);
+  assert.deepEqual(history[0]!.body.attachments, [meta]);
 });
 
 test("document restoration checks current access and budgets before opening bytes", async () => {

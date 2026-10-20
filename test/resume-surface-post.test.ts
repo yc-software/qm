@@ -27,6 +27,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 
 const ORG = "default-org";
+const RUN_ID = "7f3c2a1e-5b4d-4c6e-8f9a-0b1c2d3e4f50";
 const actor: Principal = { id: "U1", type: "internal" };
 
 function fakeSandbox(): Sandbox {
@@ -95,7 +96,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
     turns: {
       ...base.turns,
       runTurn: async (turn) => {
-        await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: "Done, it printed ok." });
         return { reply: "Done, it printed ok." };
       },
     },
@@ -104,12 +105,18 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   const session = await sessions.getOrCreateByThread(threadRef, "channel", "channel:C1");
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
-  for (const [type, payload] of [
-    ["user", { text: "run it and tell me the output", runId: "run-1" }],
-    ["tool_call", { tool: "slack", action: "post", callId: "p1", text: "Output: ok" }],
-    ["tool_result", { tool: "slack", action: "post", callId: "p1", ok: true, result: "[sent]" }],
-  ] as const)
-    await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
+  await sessions.appendMany(lease, [
+    { kind: "UserMessage", text: "run it and tell me the output", turnId: RUN_ID },
+    { kind: "ToolCall", tool: "slack", callId: "p1", turnId: RUN_ID, body: { action: "post", text: "Output: ok" } },
+    {
+      kind: "ToolResult",
+      tool: "slack",
+      callId: "p1",
+      text: "[sent]",
+      turnId: RUN_ID,
+      body: { action: "post", ok: true },
+    },
+  ]);
   await sessions.releaseLease(lease);
   const orch = buildOrchestrator(harness, sessions, deliveries);
   const result = await orch.handleTurn({
@@ -122,7 +129,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
     surfaceTools: true,
     addressed: true,
     attempt: 2,
-    runId: "run-1",
+    runId: RUN_ID,
   } as OrchestratorInput);
   assert.notEqual(result.status, "error");
   assert.deepEqual(await deliveries.pending("slack"), []);

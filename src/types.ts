@@ -129,29 +129,6 @@ export interface Session {
   goal?: { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> };
 }
 
-export type EntryType =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "text_start"
-  | "text"
-  | "tool_call"
-  | "tool_result"
-  | "system"
-  | "delivery"
-  | "approval_request"
-  | "approval_resolved";
-
-export interface SessionEntry {
-  sessionId: string;
-  seq: number;
-  parentSeq: number | null;
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  createdAt: number;
-}
-
 type LayerMode = "ro" | "rw";
 
 export interface WorkspaceLayer {

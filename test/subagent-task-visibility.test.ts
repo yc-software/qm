@@ -8,6 +8,7 @@ import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { isUserMessage } from "../src/sessions/items.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -48,11 +49,10 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   };
   const userEntry = async (run: Run) => {
     const session = (await built.sessions.getByThread(run.sessionId))!;
-    const entries = await built.sessions.getEntries(session.id);
-    const { payload } = entries.find((entry) => entry.type === "user" && entry.seq === run.turnUserSeq)!;
-    const { hidden, display, speakerId } = payload as { hidden?: boolean; display?: string; speakerId?: string };
-    assert.equal(speakerId, undefined, "delegated input is not a new human message");
-    return { hidden: hidden === true, display };
+    const items = await built.sessions.getItems(session.id);
+    const item = items.find((entry) => isUserMessage(entry) && entry.seq === run.turnUserSeq)!;
+    assert.equal(item.body.speakerId, undefined, "delegated input is not a new human message");
+    return { hidden: item.hidden === true, display: item.body.display as string | undefined };
   };
 
   const opened = await syscalls.open({ task: "Summarize the repo", name: "repo summary" });
@@ -156,10 +156,9 @@ for (const fork of [false, true]) {
     await settle(async () => (await built.runs.get(queued.id))!.status === "done");
     const run = (await built.runs.get(queued.id))!;
     assert.equal(run.result?.status, "ok");
-    const entry = (await built.sessions.getEntries(out.session.id)).find((entry) => entry.seq === run.turnUserSeq)!;
-    const payload = entry.payload as { hidden?: boolean; speakerId?: string; text?: string };
-    assert.equal(payload.hidden === true, false);
-    assert.equal(payload.speakerId, undefined);
-    assert.equal(payload.text, "work on the seed");
+    const entry = (await built.sessions.getItems(out.session.id)).find((entry) => entry.seq === run.turnUserSeq)!;
+    assert.equal(entry.hidden === true, false);
+    assert.equal(entry.body.speakerId, undefined);
+    assert.equal(entry.text, "work on the seed");
   });
 }

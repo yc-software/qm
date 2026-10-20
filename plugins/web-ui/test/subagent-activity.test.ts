@@ -1,6 +1,7 @@
+import { item } from "./item-fixture.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { CoreSession, SessionEntry } from "../src/core-bridge.ts";
+import type { CoreSession } from "../src/core-bridge.ts";
 import {
   ackKey,
   descendantsOf,
@@ -107,14 +108,13 @@ test("rows derive working, waiting, done and failed; done folds away, failed sta
 });
 
 test("peek shows the latest tool steps and message", () => {
-  const entry = (type: SessionEntry["type"], payload: unknown): SessionEntry => ({ type, payload, createdAt: 0 });
   const lines = peekLines(
     [
-      entry("user", { text: "go" }),
-      entry("tool_call", { tool: "sandbox", action: "exec", command: "npm test" }),
-      entry("tool_result", { tool: "sandbox", ok: true }),
-      entry("text", { text: "Tests  pass.\nOpening PR" }),
-      entry("tool_call", { tool: "github" }),
+      item("UserMessage", { text: "go" }),
+      item("ToolCall", { tool: "sandbox", body: { action: "exec", command: "npm test" } }),
+      item("ToolResult", { tool: "sandbox", body: { ok: true } }),
+      item("AgentMessage", { variant: "narration", text: "Tests  pass.\nOpening PR" }),
+      item("ToolCall", { tool: "github" }),
     ],
     3,
   );

@@ -1,4 +1,5 @@
-import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
+import type { ReplayImageRef } from "./replay.ts";
+import type { StepFields } from "./pi-step-recorder.ts";
 import { randomBytes } from "node:crypto";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import {
@@ -6,9 +7,10 @@ import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { ScopeId } from "../types.ts";
+import { storedItem, type Item } from "../sessions/items.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromEntries } from "./goal.ts";
+import { goalWorkFromItems } from "./goal.ts";
 import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
@@ -63,17 +65,15 @@ export function imageRefs(images: HarnessTurnInput["images"]): { images?: Replay
 
 export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerIntake): Promise<void> {
   await turn.emit({
-    type: "user",
-    payload: {
-      text: steer.text,
-      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
+    kind: "SteeringMessage",
+    text: steer.text,
+    author: steer.author ?? null,
+    body: {
       ...(steer.ts ? { ts: steer.ts } : {}),
-      steered: true,
+      ...(steer.prompt !== undefined && steer.prompt !== steer.text ? { prompt: steer.prompt } : {}),
       ...(steer.attachments?.length ? { attachments: steer.attachments } : {}),
       ...imageRefs(steer.images),
     },
-    scopeLabel: turn.scopeLabel,
-    ...(steer.author ? { author: steer.author } : {}),
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }
@@ -84,28 +84,24 @@ export async function recordStoppedTurn(
   turn: HarnessTurnInput,
   partial: string,
   reason: string = STOPPED_FALLBACK_REASON,
-  replay: Record<string, unknown> = {},
-): Promise<SessionEntry | null> {
+  replay: StepFields | null = null,
+): Promise<Item | null> {
   if (turn.shutdown?.aborted) return null;
   const answer = partial.trim()
     ? await turn.emit({
-        type: "assistant",
-        payload: { text: partial, stopped: true, ...replay },
-        scopeLabel: turn.scopeLabel,
+        kind: "AgentMessage",
+        text: partial,
+        step: replay?.step ?? null,
+        body: { stopped: true, ...replay?.body },
       })
     : null;
-  const note = await turn.emit({
-    type: "system",
-    payload: { kind: TURN_STOPPED_KIND, reason },
-    scopeLabel: turn.scopeLabel,
-  });
+  const note = await turn.emit({ kind: "Stop", body: { reason } });
   return note ?? answer;
 }
 
 export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
   return {
     current: turn.tools,
-    runtimeRunId: turn.runId,
     runtimeActorId: turn.runtimeActorId,
     pendingApprovals: [],
     pausedOnApproval: false,
@@ -120,7 +116,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     orgScopeId: turn.orgScopeId,
     screenToolResult: turn.screenToolResult,
     governGoal: turn.governGoal,
-    goalRecentWork: () => goalWorkFromEntries(turn.history.slice(-40)),
+    goalRecentWork: () => goalWorkFromItems(turn.history.slice(-40)),
     toolApprovalGate: turn.toolApprovalGate,
     shutdown: turn.shutdown,
   };
@@ -166,7 +162,7 @@ export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): B
 }
 
 export interface ResumedToolResult {
-  history: SessionEntry[];
+  history: Item[];
   message: {
     role: "toolResult";
     toolCallId: string;
@@ -196,11 +192,11 @@ export async function resumeInterruptedToolCall(
   const tool = tools.find((candidate) => candidate.name === call.tool);
   const emit = ref.emit;
   const abortSignal = ref.abortSignal;
-  let recorded: SessionEntry | undefined;
-  ref.emit = async (entry) => {
-    if (entry.type === "tool_call") return;
-    const appended = await emit?.(entry);
-    if (entry.type === "tool_result" && !recorded) recorded = appended as SessionEntry;
+  let recorded: Item | undefined;
+  ref.emit = async (item) => {
+    if (item.kind === "ToolCall") return;
+    const appended = await emit?.(item);
+    if (item.kind === "ToolResult" && !recorded) recorded = appended as Item;
     return appended;
   };
   ref.abortSignal = turn.cancel;
@@ -217,21 +213,19 @@ export async function resumeInterruptedToolCall(
     }
     if (!recorded) {
       await ref.emit({
-        type: "tool_result",
-        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]?.text ?? "", interrupted: true },
-        scopeLabel: turn.scopeLabel,
+        kind: "ToolResult",
+        tool: call.tool,
+        callId: call.callId,
+        isError,
+        text: content[0]?.text ?? "",
+        body: { interrupted: true },
       });
     }
   } catch (error) {
-    const payload = recorded?.payload as { result?: unknown; isError?: unknown } | undefined;
-    isError = payload ? payload.isError === true : true;
-    content = [{ type: "text", text: payload ? String(payload.result ?? "") : `[error] ${errMessage(error)}` }];
+    isError = recorded ? recorded.isError === true : true;
+    content = [{ type: "text", text: recorded ? (recorded.text ?? "") : `[error] ${errMessage(error)}` }];
     if (!recorded)
-      await ref.emit({
-        type: "tool_result",
-        payload: { tool: call.tool, callId: call.callId, isError, result: content[0]!.text },
-        scopeLabel: turn.scopeLabel,
-      });
+      await ref.emit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
   } finally {
     ref.emit = emit;
     ref.abortSignal = abortSignal;
@@ -274,7 +268,7 @@ export function oneShotRunner(runPrompt: (turn: HarnessTurnInput) => Promise<Har
   return async (systemPrompt, prompt, signal, observe, modelOverride) => {
     const session = { id: `oneshot-${randomBytes(8).toString("hex")}` } as HarnessTurnInput["session"];
     const scope = { kind: "org", id: "oneshot" } as unknown as ScopeId;
-    const emitted: SessionEntry[] = [];
+    const emitted: Item[] = [];
     const result = await runPrompt({
       session,
       input: prompt,
@@ -286,13 +280,8 @@ export function oneShotRunner(runPrompt: (turn: HarnessTurnInput) => Promise<Har
       ...(signal ? { cancel: signal } : {}),
       ...(modelOverride ? { runtime: { modelId: modelOverride } } : {}),
       readOnly: true,
-      emit: async (entry) => {
-        const saved = {
-          ...entry,
-          sessionId: session.id,
-          seq: emitted.length + 1,
-          createdAt: Date.now(),
-        } as SessionEntry;
+      emit: async (item) => {
+        const saved = storedItem(item, { sessionId: session.id, seq: emitted.length + 1, createdAt: Date.now() });
         emitted.push(saved);
         return saved;
       },

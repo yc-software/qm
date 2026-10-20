@@ -1,4 +1,12 @@
-import { toolCategory, toolRowKind, type TimelineItem, type ToolPayload, type ToolRowModel } from "./timeline.ts";
+import {
+  rowArgs,
+  rowTool,
+  toolBody,
+  toolCategory,
+  toolRowKind,
+  type TimelineItem,
+  type ToolRowModel,
+} from "./timeline.ts";
 import type { WorkBlock } from "./core-bridge.ts";
 
 export type ActivityCategory = "read" | "search" | "execute" | "other";
@@ -22,14 +30,13 @@ function shellWords(command: string): string[] | null {
   return words;
 }
 
-export function activityDescription(
-  call: ToolPayload,
-  result: ToolPayload = {},
-): {
+export function activityDescription(row: Pick<ToolRowModel, "call" | "result">): {
   category: ActivityCategory;
   target: string;
 } {
-  const tool = toolCategory({ ...result, ...call });
+  const call = toolBody(row.call);
+  const result = toolBody(row.result);
+  const tool = toolCategory(rowTool(row), rowArgs(row));
   if (tool === "read") return { category: "read", target: compactPath(call.path ?? result.path ?? "") };
   if (tool === "skill") {
     const name = call.name ?? result.name ?? "";
@@ -78,14 +85,14 @@ export function activityDescription(
 }
 
 export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): string | null {
-  const call = (row.call?.payload ?? {}) as ToolPayload;
-  const result = (row.result?.payload ?? {}) as ToolPayload;
-  const { category, target } = activityDescription(call, result);
+  const call = toolBody(row.call);
+  const result = toolBody(row.result);
+  const { category, target } = activityDescription(row);
   const state = toolRowKind(row, status);
   if (state === "approval") return null;
   const exit =
     state === "ok" &&
-    toolCategory({ ...result, ...call }) === "execute" &&
+    toolCategory(rowTool(row), rowArgs(row)) === "execute" &&
     typeof result.code === "number" &&
     result.code !== 0
       ? ` · exit ${result.code}`
@@ -132,12 +139,7 @@ export function activityGroupSummary(
     if (state === "running") running++;
     if (item.row.pending) approvals++;
     if (state === "attempted") attempted++;
-    categories.add(
-      activityDescription(
-        (item.row.call?.payload ?? {}) as ToolPayload,
-        (item.row.result?.payload ?? {}) as ToolPayload,
-      ).category,
-    );
+    categories.add(activityDescription(item.row).category);
   }
   const active = running > 0;
   const phrases = [];
@@ -171,14 +173,9 @@ export function sessionPresentation(
   row: ToolRowModel,
   status: WorkBlock["status"],
 ): { label: string; target: string; preview: string } | null {
-  const call = (row.call?.payload ?? {}) as ToolPayload & {
-    target?: string;
-    text?: string;
-    task?: string;
-    interrupt?: boolean;
-  };
-  const result = (row.result?.payload ?? {}) as ToolPayload & { title?: string; sessionId?: string };
-  if (toolCategory({ ...result, ...call }) !== "session") return null;
+  const call = toolBody(row.call) as ReturnType<typeof toolBody> & { text?: string };
+  const result = toolBody(row.result);
+  if (toolCategory(rowTool(row), rowArgs(row)) !== "session") return null;
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
   const actions: Record<string, [string, string, string]> = {
     open: ["Created", "Creating", "create"],

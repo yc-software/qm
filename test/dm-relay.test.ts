@@ -431,9 +431,9 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
     const session = await sessions.getByThread("dm:D-alice");
     assert.ok(session, "recipient DM session created");
     assert.equal(session!.surface, "slack");
-    const entries = await sessions.getEntries(session!.id);
+    const entries = await sessions.getItems(session!.id);
     assert.equal(
-      entries.some((e) => e.type === "assistant"),
+      entries.some((e) => e.kind === "AgentMessage"),
       false,
       "principal delivery is not fake chat history",
     );

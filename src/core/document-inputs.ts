@@ -1,7 +1,8 @@
 import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import type { AttachmentMeta, SessionEntry } from "../types.ts";
+import type { AttachmentMeta } from "../types.ts";
+import { isUserMessage, type Item } from "../sessions/items.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
@@ -63,12 +64,12 @@ export function isTextDocument(file: Pick<DocumentInput, "name" | "mimeType">): 
   return TEXT_EXTENSIONS.has(ext) || ["csv", "tsv", "iif"].includes(ext);
 }
 
-export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
+export function historicalDocumentMetas(history: readonly Item[]): AttachmentMeta[] {
   return forModelContext([...history]).flatMap((entry) => {
-    if (entry.type !== "user") return [];
-    const attachments = (entry.payload as { attachments?: AttachmentMeta[] } | null)?.attachments;
+    if (!isUserMessage(entry)) return [];
+    const attachments = entry.body.attachments;
     return Array.isArray(attachments)
-      ? attachments.filter(
+      ? (attachments as AttachmentMeta[]).filter(
           (file) => file.direction === "in" && typeof file.name === "string" && isDocumentAttachment(file),
         )
       : [];

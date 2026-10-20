@@ -24,7 +24,7 @@ mock.module("../src/harness/mock-harness.ts", {
           command: string;
           credentials?: string[];
         };
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         let reply: string;
         try {
           const out = await turn.tools.execute(command.command, {
@@ -36,7 +36,7 @@ mock.module("../src/harness/mock-harness.ts", {
         } catch (e) {
           reply = `DENIED: ${String(e)}`;
         }
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply };
       };
       return h;

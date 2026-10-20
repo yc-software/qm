@@ -367,17 +367,14 @@ test("a parked run's failure lands as a turn_failure entry in the run's own sess
   const { sessions, session } = await failureSessions();
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), true);
-  const entries = await sessions.getEntries(session.id);
+  const entries = await sessions.getItems(session.id);
   assert.equal(entries.length, 1);
-  assert.equal(entries[0]!.type, "system");
-  assert.deepEqual(entries[0]!.payload, {
-    kind: "turn_failure",
-    message: "I couldn't finish that turn: something went wrong on my end",
-    runId: "r-1",
-  });
+  assert.equal(entries[0]!.kind, "Error");
+  assert.equal(entries[0]!.errorCode, "turn_failure");
+  assert.equal(entries[0]!.text, "I couldn't finish that turn: something went wrong on my end");
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false, "recording is idempotent");
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
 test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry", async () => {
@@ -385,14 +382,15 @@ test("an orchestrator-recorded in-turn failure suppresses the onTerminal entry",
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
   await sessions.append(lease!, {
-    type: "system",
-    payload: { kind: "turn_failure", message: "already recorded by the turn", runId: "r-1" },
-    scopeLabel: session.scopeId,
+    kind: "Error",
+    errorCode: "turn_failure",
+    text: "already recorded by the turn",
+    turnId: "r-1",
   });
   await sessions.releaseLease(lease!);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 1, "no duplicate entry");
+  assert.equal((await sessions.getItems(session.id)).length, 1, "no duplicate entry");
 });
 
 test("a web-drain-recorded failure delivery suppresses the onTerminal entry by its key", async () => {
@@ -400,21 +398,22 @@ test("a web-drain-recorded failure delivery suppresses the onTerminal entry by i
   const { sessions, session } = await failureSessions();
   const { lease } = await sessions.acquireLease(session.id);
   await sessions.append(lease!, {
-    type: "system",
-    payload: { kind: "turn_failure", message: "recorded at the web drain", deliveryKey: "run:r-1" },
-    scopeLabel: session.scopeId,
+    kind: "Error",
+    errorCode: "turn_failure",
+    text: "recorded at the web drain",
+    body: { deliveryKey: "run:r-1" },
   });
   await sessions.releaseLease(lease!);
 
   assert.equal(await recordRunFailureEntry(sessions, failedRun()), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 1);
+  assert.equal((await sessions.getItems(session.id)).length, 1);
 });
 
 test("a done run records nothing", async () => {
   const { recordRunFailureEntry } = await import("../src/delivery/run-result-delivery.ts");
   const { sessions, session } = await failureSessions();
   assert.equal(await recordRunFailureEntry(sessions, run({ sessionId: "slack:D1" })), false);
-  assert.equal((await sessions.getEntries(session.id)).length, 0);
+  assert.equal((await sessions.getItems(session.id)).length, 0);
 });
 
 test("wired stores: a parked Slack run gets both the durable session entry and the recovery note", async () => {
@@ -427,16 +426,14 @@ test("wired stores: a parked Slack run gets both the durable session entry and t
   const claimed = await runs.claim("w1", 5_000);
   await runs.fail(parked.id, claimed?.leaseToken ?? "", "lease expired (reaped)", { retry: true });
 
-  for (let i = 0; i < 50 && (await sessions.getEntries(session.id)).length === 0; i++) {
+  for (let i = 0; i < 50 && (await sessions.getItems(session.id)).length === 0; i++) {
     await new Promise((r) => setTimeout(r, 10));
   }
-  const entries = await sessions.getEntries(session.id);
+  const entries = await sessions.getItems(session.id);
   assert.equal(entries.length, 1, "the run's own session carries the failure durably");
-  assert.deepEqual(entries[0]!.payload, {
-    kind: "turn_failure",
-    message: "I couldn't finish that turn: something went wrong on my end",
-    runId: parked.id,
-  });
+  assert.equal(entries[0]!.kind, "Error");
+  assert.equal(entries[0]!.text, "I couldn't finish that turn: something went wrong on my end");
+  assert.equal(entries[0]!.turnId, parked.id);
 
   const pending = await deliveries.pending("slack");
   assert.equal(pending.length, 1, "the Slack note still goes out alongside the entry");

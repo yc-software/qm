@@ -39,7 +39,7 @@ const env = await browserEnv({
     if (path.startsWith("/api/runtime-config")) return Promise.resolve(Response.json(runtimeConfig));
     if (path.endsWith("/approvals")) return Promise.resolve(Response.json({ approvals: [] }));
     if (path === "/api/sessions") return Promise.resolve(Response.json({ sessions }));
-    if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), entries: [] }));
+    if (id) return Promise.resolve(Response.json({ session: sessions.find((s) => s.id === id), items: [] }));
     return Promise.resolve(Response.json({}));
   },
 });

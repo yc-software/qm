@@ -24,6 +24,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { HarnessTurnResult } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { isOverheard } from "../src/sessions/items.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -64,8 +65,8 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     },
     {
       async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
+        await turn.emit({ kind: "AgentMessage", text: "done" });
         return { reply: "done", modelCalls: 1, ...turnResult };
       },
       async screenSecurity() {
@@ -132,10 +133,9 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const appendMany = sessions.appendMany.bind(sessions);
   sessions.appendMany = async (lease, entries) => {
     if (
-      entries.some((entry) => {
-        const payload = entry.payload as { overheard?: unknown; ts?: unknown } | null;
-        return payload?.overheard === true && payload.ts === "200.2";
-      })
+      entries.some(
+        (entry) => entry.kind === "UserMessage" && entry.body?.overheard === true && entry.externalId === "200.2",
+      )
     )
       throw new Error("append refused");
     return appendMany(lease, entries);
@@ -150,16 +150,12 @@ test("an overheard import failure aborts the batch instead of skipping one messa
   const result = await orchestrator.handleTurn(request);
   assert.equal(result.status, "ok");
   const session = (await sessions.getByThread(conversation.threadRef))!;
-  const overheardTexts = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const overheardTexts = (await sessions.getItems(session.id)).filter(isOverheard).map((e) => e.text);
   assert.deepEqual(overheardTexts, [], "the atomic batch leaves no partial history on failure");
   sessions.appendMany = appendMany;
   await orchestrator.handleTurn(request);
   await orchestrator.handleTurn(request);
-  const recovered = (await sessions.getEntries(session.id))
-    .filter((e) => (e.payload as { overheard?: unknown } | null)?.overheard === true)
-    .map((e) => (e.payload as { text?: string }).text);
+  const recovered = (await sessions.getItems(session.id)).filter(isOverheard).map((e) => e.text);
   assert.deepEqual(
     recovered,
     ["first overheard", "second overheard", "third overheard"],

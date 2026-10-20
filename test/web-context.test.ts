@@ -1,34 +1,40 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { answerWebContextRequest, webConversationWindow } from "../src/api/web-context.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
 const ROOT = "fb7eddc8";
 const TARGET = `web:carol@acme.com:${ROOT}`;
 
-function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return {
-    sessionId: "s",
-    seq,
-    parentSeq: null,
-    type,
-    payload,
-    scopeLabel: "org:default-org",
-    createdAt: 1_700_000_000_000 + seq * 1000,
-  };
+function ent(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s", seq, createdAt: 1_700_000_000_000 + seq * 1000 });
 }
 
-const entries: SessionEntry[] = [
-  ent("user", { text: "<wake…>", display: "any policies?", name: "carol" }, 0),
-  ent("thinking", { thinking: "…" }, 1),
-  ent("tool_call", { tool: "web", action: "post", text: "Yes — the main ones are…", callId: "c1" }, 2),
-  ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1" }, 3),
-  ent("assistant", { text: "Replied in thread." }, 4),
-  ent("user", { text: "hidden seed", hidden: true }, 5),
-  ent("tool_call", { tool: "web", action: "post", bytes: 873, callId: "c2" }, 6),
-  ent("tool_call", { tool: "web", action: "post", text: "this delivery failed", callId: "c3" }, 7),
-  ent("tool_result", { tool: "web", action: "post", error: "delivery failed", callId: "c3", isError: true }, 8),
-  ent("tool_call", { tool: "web", action: "post", text: "this one was interrupted", callId: "c4" }, 9),
+const post = (callId: string, body: Record<string, unknown>): NewItem => ({
+  kind: "ToolCall",
+  tool: "web",
+  callId,
+  body: { action: "post", ...body },
+});
+const posted = (callId: string, body: Record<string, unknown> = { ok: true }, isError?: boolean): NewItem => ({
+  kind: "ToolResult",
+  tool: "web",
+  callId,
+  ...(isError ? { isError } : {}),
+  body: { action: "post", ...body },
+});
+
+const entries: Item[] = [
+  ent({ kind: "UserMessage", text: "<wake…>", body: { display: "any policies?", name: "carol" } }, 0),
+  ent({ kind: "Reasoning", text: "…" }, 1),
+  ent(post("c1", { text: "Yes — the main ones are…" }), 2),
+  ent(posted("c1"), 3),
+  ent({ kind: "AgentMessage", text: "Replied in thread." }, 4),
+  ent({ kind: "UserMessage", text: "hidden seed", hidden: true }, 5),
+  ent(post("c2", { bytes: 873 }), 6),
+  ent(post("c3", { text: "this delivery failed" }), 7),
+  ent(posted("c3", { error: "delivery failed" }, true), 8),
+  ent(post("c4", { text: "this one was interrupted" }), 9),
 ];
 
 test("the window carries the person's display text and the agent's DELIVERED posts as `you` — never envelopes, logs, hidden seeds, or failed/interrupted posts", () => {
@@ -49,10 +55,7 @@ test("the window carries the person's display text and the agent's DELIVERED pos
 });
 
 test("long posts are clipped so a deep read can't flood the turn's context", () => {
-  const long = [
-    ent("tool_call", { tool: "web", action: "post", text: "x".repeat(5_000), callId: "c1" }, 0),
-    ent("tool_result", { tool: "web", action: "post", ok: true, callId: "c1" }, 1),
-  ];
+  const long = [ent(post("c1", { text: "x".repeat(5_000) }), 0), ent(posted("c1"), 1)];
   const out = webConversationWindow(long, "carol@acme.com", ROOT, {});
   assert.ok(
     (out.messages[0] as { text: string }).text.length <= 601,
@@ -61,7 +64,9 @@ test("long posts are clipped so a deep read can't flood the turn's context", () 
 });
 
 test("match, count, and before shape the window like the Slack fulfiller", () => {
-  const many = Array.from({ length: 6 }, (_, i) => ent("user", { text: `message ${i}`, name: "carol" }, i));
+  const many = Array.from({ length: 6 }, (_, i) =>
+    ent({ kind: "UserMessage", text: `message ${i}`, body: { name: "carol" } }, i),
+  );
   const counted = webConversationWindow(many, "carol@acme.com", ROOT, { count: 2 });
   assert.deepEqual(
     counted.messages.map((m) => (m as { text: string }).text),
@@ -91,17 +96,17 @@ test("answerWebContextRequest reads the log as the asking viewer, refuses gracef
         ? [{ id: "sess-1", threadRef: TARGET, scopeId: "channel:C1" as const, type: "channel" as const }]
         : [];
     },
-    async visibleEntries(_id: string, viewer: string) {
+    async visibleItems(_id: string, viewer: string) {
       seen.push(viewer);
       return entries;
     },
-    async getEntries() {
+    async getItems() {
       return entries;
     },
-    async countEntriesBefore(_id: string, beforeSeq: number) {
+    async countItemsBefore(_id: string, beforeSeq: number) {
       return entries.filter((entry) => entry.seq < beforeSeq).length;
     },
-    async latestEntrySeq() {
+    async latestItemSeq() {
       return entries.length - 1;
     },
     async participantWindowsOf(sessionId: string) {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { TurnRequest } from "../src/types.ts";
+import type { Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -56,21 +57,16 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     await built.app.turn(req);
 
     const deadline = Date.now() + 5_000;
-    let entries: any[] = [];
+    let items: Item[] = [];
     while (Date.now() < deadline) {
       const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-      if (sub) entries = await built.sessions.getEntries(sub.id);
-      if (
-        entries.some(
-          (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("time constraints"),
-        )
-      )
-        break;
+      if (sub) items = await built.sessions.getItems(sub.id);
+      if (items.some((e) => e.kind === "UserMessage" && String(e.text ?? "").includes("time constraints"))) break;
       await sleep(50);
     }
-    const users = entries.filter((e: any) => e.type === "user").map((e: any) => e.payload as any);
+    const users = items.filter((e) => e.kind === "UserMessage");
     assert.ok(
-      users.some((p) => (p.text ?? "").includes("time constraints") && p.name === "alice"),
+      users.some((p) => (p.text ?? "").includes("time constraints") && p.body.name === "alice"),
       "the question is in its own thread session, attributed",
     );
 
@@ -82,7 +78,7 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
       );
     }
 
-    const allPayloads = entries.map((e: any) => JSON.stringify(e.payload ?? {}));
+    const allPayloads = items.map((e) => JSON.stringify(e));
     for (const f of ["vacation-photo.jpg", "gallery-poster.heic"]) {
       assert.ok(!allPayloads.some((s) => s.includes(f)), `backscroll file pushed into the turn: ${f}`);
     }
@@ -113,11 +109,8 @@ test("exemplar: a narrow question runs topic-scoped — no soup replay, no pushe
     while (Date.now() < d2 && !pulled) {
       const sub2 = await built.sessions.getByThread(`ch:${channel}:${root2}`);
       if (sub2) {
-        const e2 = await built.sessions.getEntries(sub2.id);
-        pulled = e2.some(
-          (e: any) =>
-            e.type === "tool_result" && (e.payload as any)?.tool === "whats_new" && (e.payload as any)?.ok === true,
-        );
+        const e2 = await built.sessions.getItems(sub2.id);
+        pulled = e2.some((e) => e.kind === "ToolResult" && e.tool === "whats_new" && e.body.ok === true);
       }
       if (!pulled) await sleep(50);
     }

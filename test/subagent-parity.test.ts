@@ -98,7 +98,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           current: turn.tools,
           scopeLabel: turn.scopeLabel,
           emit: async (entry: Parameters<typeof turn.emit>[0]) => {
-            if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+            if (entry.kind === "ToolResult") results.push({ isError: entry.isError ?? undefined });
             return turn.emit(entry);
           },
           screenToolResult: turn.screenToolResult,

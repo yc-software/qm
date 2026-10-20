@@ -163,9 +163,9 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
       assert.ok(view);
       assert.equal(view.session.scopeId, root.scopeId);
       assert.equal(view.session.surface, "swarm");
-      const input = view.entries.find((entry) => entry.type === "user");
-      assert.match(JSON.stringify(input?.payload), /Swarm human message/);
-      assert.match(JSON.stringify(input?.payload), /automation/);
+      const input = view.items.find((item) => item.kind === "UserMessage");
+      assert.match(JSON.stringify(input), /Swarm human message/);
+      assert.match(JSON.stringify(input), /automation/);
       assert.equal(await built.app.getSessionForViewer(view.session.id, "U2"), null);
       assert.equal(runResultDelivery(run), null);
       const requests = await built.sessions.listLlmRequests(view.session.id);
@@ -383,7 +383,7 @@ for (const storage of ["memory", "postgres"] as const) {
           assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
         }
         const view = await built.app.getSessionForViewer(rootId, "U1");
-        assert.ok(JSON.stringify(view?.entries).includes("http-worker-result"));
+        assert.ok(JSON.stringify(view?.items).includes("http-worker-result"));
         built.app.swarms!.stop();
         const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };
         const entered = Promise.withResolvers<string>();
@@ -557,8 +557,8 @@ test("disabled swarms park queued notifications once without running the model o
     assert.equal(completed.result?.reason, "swarm service unavailable");
     assert.equal(swarmModelCalls, 0);
     assert.equal(runResultDelivery(completed), null);
-    const entries = await built.sessions.getEntries(root.id);
-    assert.ok(!entries.some((entry) => JSON.stringify(entry.payload).includes("turn_failure")));
+    const items = await built.sessions.getItems(root.id);
+    assert.ok(!items.some((item) => item.kind === "Error"));
     for (const [surface, threadRef] of [
       ["swarm", "worker"],
       ["web", "swarm:root:worker"],

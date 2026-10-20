@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -47,14 +48,11 @@ test("project speaker photos follow authenticated identity, not duplicate or rea
         },
       },
     ],
-    entries: [
-      ...speakers.map((speaker, seq) => ({
-        seq,
-        type: "user",
-        createdAt: 1000 + seq,
-        payload: { text: `Message ${seq}`, ...speaker },
-      })),
-      { seq: speakers.length, type: "assistant", createdAt: 2000, payload: { text: "Here is the plan." } },
+    items: [
+      ...speakers.map((speaker, seq) =>
+        item("UserMessage", { seq, createdAt: 1000 + seq, text: `Message ${seq}`, body: { ...speaker } }),
+      ),
+      item("AgentMessage", { seq: speakers.length, createdAt: 2000, text: "Here is the plan." }),
     ],
   });
   try {

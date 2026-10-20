@@ -1,34 +1,32 @@
+import type { Item } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { postCallText, postResultOk } from "../src/surface-post.ts";
 import { postSpeechText, type ToolRowModel } from "../src/timeline.ts";
-import type { ToolActivity } from "../src/core-bridge.ts";
 
-const call: ToolActivity = {
+const call: Item = item("ToolCall", {
   seq: 1,
-  parentSeq: null,
-  type: "tool_call",
   createdAt: 1,
-  payload: { tool: "web", action: "post", text: "The answer", callId: "post" },
-};
+  tool: "web",
+  callId: "post",
+  body: { action: "post", text: "The answer" },
+});
 
-for (const [name, payload, ok] of [
-  ["successful", { ok: true, isError: false }, true],
-  ["legacy sent", { result: "[sent]", isError: false }, true],
-  ["unscreened success", { result: "untrusted wrapper: [sent]", isError: false, unscreened: true }, true],
-  ["failed", { ok: false }, false],
+for (const [name, fields, ok] of [
+  ["successful", { isError: false, body: { ok: true } }, true],
+  ["legacy sent", { text: "[sent]", isError: false }, true],
+  ["unscreened success", { text: "untrusted wrapper: [sent]", isError: false, body: { unscreened: true } }, true],
+  ["failed", { body: { ok: false } }, false],
   ["error flag", { isError: true }, false],
-  ["error detail", { error: "delivery failed" }, false],
-  ["denied", { denied: true }, false],
-  ["approval blocked", { blocked: "needs_approval" }, false],
-  ["missing payload", null, false],
+  ["error detail", { body: { error: "delivery failed" } }, false],
+  ["denied", { body: { denied: true } }, false],
+  ["approval blocked", { body: { blocked: "needs_approval" } }, false],
 ] as const) {
   test(`${name} post uses the same delivery decision in live and persisted views`, () => {
-    const row: ToolRowModel = {
-      call,
-      result: { seq: 2, parentSeq: 1, type: "tool_result", createdAt: 2, payload },
-    };
-    assert.equal(postResultOk(payload), ok);
+    const result = item("ToolResult", { seq: 2, createdAt: 2, tool: "web", callId: "post", ...fields });
+    const row: ToolRowModel = { call, result };
+    assert.equal(postResultOk(result), ok);
     assert.equal(postSpeechText(row), ok ? "The answer" : null);
     assert.equal(postSpeechText(row, true), ok ? "The answer" : null);
   });
@@ -38,23 +36,23 @@ test("an unconfirmed post can preview posting but cannot appear as delivered spe
   const row: ToolRowModel = { call, result: null };
   assert.equal(postSpeechText(row), null);
   assert.equal(postSpeechText(row, true), "The answer");
-  row.approval = { ...call, type: "approval_request" };
+  row.approval = item("Elicitation", { seq: 2, createdAt: 2, elicitId: "post" });
   assert.equal(postSpeechText(row, true), null);
 });
 
 test("file-only posts remain eligible for transcript attachments, not text bubbles", () => {
-  const payload = { action: "post", text: "", files: ["report.pdf"] };
-  assert.equal(postCallText(payload), "");
-  assert.equal(postSpeechText({ call: { ...call, payload }, result: null }, true), null);
+  const body = { action: "post", text: "", files: ["report.pdf"] };
+  assert.equal(postCallText({ body }), "");
+  assert.equal(postSpeechText({ call: { ...call, body }, result: null }, true), null);
 });
 
 test("non-post and legacy bytes-only calls remain tool activity", () => {
-  for (const payload of [
+  for (const body of [
     { action: "read", text: "not speech" },
     { action: "post", bytes: 100 },
     { action: "post", text: "  " },
   ]) {
-    assert.equal(postCallText(payload), null);
-    assert.equal(postSpeechText({ call: { ...call, payload }, result: null }, true), null);
+    assert.equal(postCallText({ body }), null);
+    assert.equal(postSpeechText({ call: { ...call, body }, result: null }, true), null);
   }
 });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SessionEntry } from "../../types.ts";
+import { isUserMessage, type Item } from "../../sessions/items.ts";
 import { clampChars, stripTerminalControl } from "./inject.ts";
 
 export interface MemorableToolCall {
@@ -63,23 +63,20 @@ export function worthOffering(workflow: MemorableWorkflow): boolean {
   return calls.some((call) => callKey(call) !== first);
 }
 
-export function captureSession(sessionId: string, entries: SessionEntry[]): MemorableCapture {
-  let scopeId = "";
+export function captureSession(sessionId: string, scopeId: string, entries: Item[]): MemorableCapture {
   const outcomes = new Map<string, Array<{ ok: boolean; exit_code?: number }>>();
   for (const entry of entries) {
-    if (entry.type !== "tool_result") continue;
-    const payload = entry.payload as Record<string, unknown> | null;
-    if (!payload || typeof payload.callId !== "string") continue;
-    const ok = payload.isError !== true;
+    if (entry.kind !== "ToolResult" || !entry.callId) continue;
+    const ok = entry.isError !== true;
     const code =
-      (payload.tool === "execute" || (payload.tool === "sandbox" && payload.action === "exec")) &&
-      typeof payload.code === "number"
-        ? payload.code
+      (entry.tool === "execute" || (entry.tool === "sandbox" && entry.body.action === "exec")) &&
+      typeof entry.body.code === "number"
+        ? entry.body.code
         : undefined;
     const outcome = { ok, ...(code !== undefined ? { exit_code: code } : {}) };
-    const queue = outcomes.get(payload.callId);
+    const queue = outcomes.get(entry.callId);
     if (queue) queue.push(outcome);
-    else outcomes.set(payload.callId, [outcome]);
+    else outcomes.set(entry.callId, [outcome]);
   }
   const workflows: MemorableWorkflow[] = [];
   let current: MemorableWorkflow = { workflow_id: workflowId(sessionId, 0), prompt: "", tool_calls: [] };
@@ -87,22 +84,18 @@ export function captureSession(sessionId: string, entries: SessionEntry[]): Memo
     if (current.tool_calls.length) workflows.push(current);
   };
   for (const entry of entries) {
-    if (!scopeId && entry.scopeLabel) scopeId = entry.scopeLabel;
-    if (entry.type === "user") {
-      const text = (entry.payload as { text?: unknown } | null)?.text;
-      if (typeof text !== "string") continue;
-      const prompt = cleanPrompt(text);
+    if (isUserMessage(entry)) {
+      if (entry.text === null) continue;
+      const prompt = cleanPrompt(entry.text);
       if (!prompt) continue;
       close();
       current = { workflow_id: workflowId(sessionId, entry.seq), prompt, tool_calls: [] };
       continue;
     }
-    if (entry.type !== "tool_call") continue;
-    const payload = entry.payload as Record<string, unknown> | null;
-    if (!payload || typeof payload.tool !== "string") continue;
-    const { tool, callId, ...input } = payload;
-    const outcome = typeof callId === "string" ? outcomes.get(callId)?.shift() : undefined;
-    current.tool_calls.push({ name: tool, input: capInput(input), ...(outcome ? { result: outcome } : {}) });
+    if (entry.kind !== "ToolCall" || !entry.tool) continue;
+    const { wire: _wire, ...input } = entry.body;
+    const outcome = entry.callId ? outcomes.get(entry.callId)?.shift() : undefined;
+    current.tool_calls.push({ name: entry.tool, input: capInput(input), ...(outcome ? { result: outcome } : {}) });
   }
   close();
   return { session_id: sessionId, scope_id: scopeId, workflows };

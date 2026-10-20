@@ -21,6 +21,7 @@ import {
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
 import { buildApp } from "../src/wiring.ts";
+import { isReply } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 
@@ -426,10 +427,7 @@ test("Project routes use ordinary group sessions with the durable roster as auth
     (await built.sessions.listByParticipant("member")).find((session) => session.id === first.id)?.title,
     (await built.sessions.get(first.id))?.title,
   );
-  assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.entries),
-    /secret-before-join/,
-  );
+  assert.match(JSON.stringify((await built.app.getSessionForViewer(first.id, "member"))?.items), /secret-before-join/);
   assert.equal(await built.app.managesScope("member", scope), true);
   assert.ok(await built.app.listScopeResources("member", scope));
   assert.deepEqual(await built.app.listSessionApprovals(pendingBeforeJoin.sessionId!, "member"), []);
@@ -525,8 +523,8 @@ test("Project routes use ordinary group sessions with the durable roster as auth
 
   const forked = await built.app.forkSession(first.id, "owner");
   assert.ok(forked);
-  assert.match(JSON.stringify(forked.entries), /secret-before-join/);
-  assert.match(JSON.stringify(forked.entries), /after joining/);
+  assert.match(JSON.stringify(forked.items), /secret-before-join/);
+  assert.match(JSON.stringify(forked.items), /after joining/);
   assert.equal((await built.sessions.get(forked.session.id))?.title ?? null, null);
 
   const appendForFork = built.sessions.appendMany.bind(built.sessions);
@@ -563,10 +561,10 @@ test("Project routes use ordinary group sessions with the durable roster as auth
   assert.equal(racingFork.session.id, copyingSessionId);
   const ownerForkView = await built.app.getSessionForViewer(racingFork.session.id, "owner");
   const memberForkView = await built.app.getSessionForViewer(racingFork.session.id, "member");
-  assert.match(JSON.stringify(ownerForkView?.entries), /after joining/);
-  assert.match(JSON.stringify(memberForkView?.entries), /after joining/);
+  assert.match(JSON.stringify(ownerForkView?.items), /after joining/);
+  assert.match(JSON.stringify(memberForkView?.items), /after joining/);
   assert.match(
-    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.entries),
+    JSON.stringify((await built.app.getSessionForViewer(racingFork.session.id, "outsider"))?.items),
     /after joining/,
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
@@ -758,7 +756,7 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     await turnPaused;
     const session = await built.sessions.getByThread(threadRef);
     assert.ok(session);
-    assert.match(JSON.stringify(await built.sessions.getEntries(session.id)), /old-roster-prompt/);
+    assert.match(JSON.stringify(await built.sessions.getItems(session.id)), /old-roster-prompt/);
 
     const added = await built.app.addProjectMember(project.id, "owner", "late-member");
     assert.equal(added.status, "ok");
@@ -769,15 +767,9 @@ test("a member added mid-turn sees the thread but never the prior roster's outpu
     assert.match(result.reason ?? "", /membership changed/);
     const lateView = await built.app.getSessionForViewer(session.id, "late-member");
     assert.ok(lateView);
-    assert.match(JSON.stringify(lateView.entries), /old-roster-prompt/);
-    assert.equal(
-      lateView.entries.some((entry) => entry.type === "assistant"),
-      false,
-    );
-    assert.equal(
-      (await built.sessions.getEntries(session.id)).some((entry) => entry.type === "assistant"),
-      false,
-    );
+    assert.match(JSON.stringify(lateView.items), /old-roster-prompt/);
+    assert.equal(lateView.items.some(isReply), false);
+    assert.equal((await built.sessions.getItems(session.id)).some(isReply), false);
   } finally {
     resumeTurn();
     built.sessions.recordLlmRequest = originalRecord;
@@ -872,7 +864,7 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
   const session = await built.sessions.getByThread(threadRef);
   assert.ok(session);
   assert.deepEqual(new Set(await built.sessions.participantsOf(session.id)), new Set(["owner", "member"]));
-  const entriesBeforeRace = await built.sessions.getEntries(session.id);
+  const entriesBeforeRace = await built.sessions.getItems(session.id);
   const llmRequestsBeforeRace = await built.sessions.listLlmRequests(session.id);
 
   const originalAcquireLease = built.sessions.acquireLease.bind(built.sessions);
@@ -892,9 +884,9 @@ test("Auto quarantine honors the current Project roster epoch", async () => {
     assert.equal(raced.status, "refused");
     assert.match(raced.reason ?? "", /membership changed/);
     assert.equal(changed, true);
-    assert.deepEqual(await built.sessions.getEntries(session.id), entriesBeforeRace);
+    assert.deepEqual(await built.sessions.getItems(session.id), entriesBeforeRace);
     assert.deepEqual(await built.sessions.listLlmRequests(session.id), llmRequestsBeforeRace);
-    assert.doesNotMatch(JSON.stringify(await built.sessions.visibleEntries(session.id, "late-member")), /race-marker/);
+    assert.doesNotMatch(JSON.stringify(await built.sessions.visibleItems(session.id, "late-member")), /race-marker/);
     assert.deepEqual(
       new Set(await built.sessions.participantsOf(session.id)),
       new Set(["owner", "member", "late-member"]),
@@ -930,7 +922,7 @@ test("a member added to a Project inherits the chats that predate them", async (
   assert.ok(row, "a chat that predates the member must appear in their conversation list");
   assert.equal(row.title, "Pre-join chat", "the joiner sees the chat's real title, not a blanked one");
   const view = await built.app.getSessionForViewer(session.id, "member");
-  assert.match(JSON.stringify(view?.entries), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
+  assert.match(JSON.stringify(view?.items), /BEFORE_JOIN_TOPIC/, "pre-join transcript must be readable");
 
   assert.equal(
     (

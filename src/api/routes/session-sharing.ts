@@ -41,7 +41,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     const ids = (delivery.attachments ?? []).flatMap((file) => (file.artifactId ? [file.artifactId] : []));
     deliveredAttachments.set(seq, [...(deliveredAttachments.get(seq) ?? []), ...ids]);
   }
-  const projected = sharedMessages(source.entries, deliveredAttachments);
+  const projected = sharedMessages(source.items, deliveredAttachments);
   if (!projected.length) return sendJson(res, 400, { error: "empty_conversation" });
   const ids = [...new Set(projected.flatMap((m) => m.attachmentIds ?? []))];
   if (ids.length > 100 || Buffer.byteLength(JSON.stringify(projected)) > 2_000_000)
@@ -88,7 +88,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     audience,
     createdBy: viewer,
     createdAt: Date.now(),
-    visibility: source.entries.reduce(
+    visibility: source.items.reduce(
       (bounds, entry) => ({
         minSeq: Math.min(bounds.minSeq, entry.seq),
         maxSeq: Math.max(bounds.maxSeq, entry.seq),

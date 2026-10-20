@@ -711,16 +711,12 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push((await sessions.getItems(session.id)).filter((i) => i.kind === "AgentMessage").length);
     texts.push(req.text);
     const { lease } = await sessions.acquireLease(session.id);
     assert.ok(lease, "fires are serial, so the lease is always free");
-    await sessions.append(lease, { type: "user", payload: { text: req.text }, scopeLabel: scope });
-    await sessions.append(lease, {
-      type: "assistant",
-      payload: { text: replies[sessionIds.length - 1] ?? "ok" },
-      scopeLabel: scope,
-    });
+    await sessions.append(lease, { kind: "UserMessage", text: req.text });
+    await sessions.append(lease, { kind: "AgentMessage", text: replies[sessionIds.length - 1] ?? "ok" });
     await sessions.releaseLease(lease);
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };

@@ -1086,7 +1086,7 @@ export async function boot(): Promise<void> {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
-  const entriesPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
+  const transcriptPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
@@ -1156,7 +1156,7 @@ export async function boot(): Promise<void> {
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
-    const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
+    const transcript = transcriptPrefetch ?? loadLinkedTranscript(wantedSession);
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();

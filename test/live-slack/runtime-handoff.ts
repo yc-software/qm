@@ -1,23 +1,22 @@
 import assert from "node:assert/strict";
 import { isObj } from "../../src/util/objects.ts";
+import type { Item } from "../../src/sessions/items.ts";
 
-export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; modelId: string } {
+export function assertRuntimeHandoff(items: readonly Item[]): { harnessId: string; modelId: string } {
   const calls = new Map<string, { action: string; index: number }>();
   const results: Array<{ index: number; action: string; value: Record<string, unknown> }> = [];
-  for (const [index, entry] of entries.entries()) {
-    if (!isObj(entry) || !isObj(entry.payload)) continue;
-    const payload = entry.payload;
-    if (payload.tool !== "runtime" || typeof payload.callId !== "string") continue;
-    if (entry.type === "tool_call" && typeof payload.action === "string") {
-      calls.set(payload.callId, { action: payload.action, index });
+  for (const [index, item] of items.entries()) {
+    if (item.tool !== "runtime" || !item.callId) continue;
+    if (item.kind === "ToolCall" && typeof item.body.action === "string") {
+      calls.set(item.callId, { action: item.body.action, index });
       continue;
     }
-    const call = calls.get(payload.callId);
-    if (entry.type !== "tool_result" || payload.isError !== false || !call || call.index >= index) continue;
-    if (typeof payload.result !== "string") continue;
+    const call = calls.get(item.callId);
+    if (item.kind !== "ToolResult" || item.isError !== false || !call || call.index >= index) continue;
+    if (typeof item.text !== "string") continue;
     let value: unknown;
     try {
-      value = JSON.parse(payload.result);
+      value = JSON.parse(item.text);
     } catch {
       continue;
     }

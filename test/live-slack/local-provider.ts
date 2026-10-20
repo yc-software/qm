@@ -49,11 +49,11 @@ async function main(): Promise<void> {
     });
     assert.equal(result.status, "ok", result.reason ?? result.reply);
     assert.ok(result.sessionId);
-    const entries = await built.sessions.getEntries(result.sessionId);
+    const items = await built.sessions.getItems(result.sessionId);
     try {
-      assertSandboxExecution(entries, sandbox.id, `${left}${right}\n`);
+      assertSandboxExecution(items, sandbox.id, `${left}${right}\n`);
     } catch (error) {
-      console.error(JSON.stringify({ reply: result.reply, entries }));
+      console.error(JSON.stringify({ reply: result.reply, items }));
       throw error;
     }
   } catch (error) {

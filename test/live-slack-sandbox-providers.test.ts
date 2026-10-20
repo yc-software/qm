@@ -7,22 +7,39 @@ import {
   selectSandboxProviderScenarios,
 } from "./live-slack/scenarios-sandbox-providers.ts";
 import type { Ctx } from "./live-slack/harness.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
-function evidence(sandboxId = "box", stdout = "nonce\n"): unknown[] {
+const item = (fields: NewItem, seq: number): Item => storedItem(fields, { sessionId: "s", seq, createdAt: seq });
+
+function evidence(sandboxId = "box", stdout = "nonce\n"): Item[] {
   return [
-    { type: "tool_call", payload: { tool: "execute", sandbox_id: sandboxId, callId: "call" } },
-    {
-      type: "tool_result",
-      payload: {
+    item({ kind: "ToolCall", tool: "execute", callId: "call", body: { sandbox_id: sandboxId } }, 1),
+    item(
+      {
+        kind: "ToolResult",
         tool: "execute",
         callId: "call",
         isError: false,
-        code: 0,
-        timedOut: false,
-        result: `${stdout}\n[exit 0]`,
+        text: `${stdout}\n[exit 0]`,
+        body: { code: 0, timedOut: false },
       },
-    },
+      2,
+    ),
   ];
+}
+
+type Patch = Partial<Pick<Item, "tool" | "callId" | "isError" | "text">> & Record<string, unknown>;
+
+function patched(result: Item, patch: Patch): Item {
+  const { tool, callId, isError, text, ...body } = patch;
+  return {
+    ...result,
+    ...(tool !== undefined ? { tool } : {}),
+    ...(callId !== undefined ? { callId } : {}),
+    ...(isError !== undefined ? { isError } : {}),
+    ...("text" in patch ? { text: text ?? null } : {}),
+    body: { ...result.body, ...body },
+  };
 }
 
 test("provider execution requires correlated success on the exact sandbox", () => {
@@ -34,47 +51,52 @@ test("provider execution requires correlated success on the exact sandbox", () =
     { isError: true },
     { code: 1 },
     { timedOut: true },
-    { result: "wrong\n\n[exit 0]" },
-    { result: "nonce\n" },
-    { result: undefined, stdout: "nonce\n" },
-  ]) {
-    const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
-    Object.assign(entries[1]!.payload, patch);
-    assert.throws(() => assertSandboxExecution(entries, "box", "nonce\n"));
+    { text: "wrong\n\n[exit 0]" },
+    { text: "nonce\n" },
+    { text: undefined, stdout: "nonce\n" },
+  ] as Patch[]) {
+    const [call, result] = evidence();
+    assert.throws(() => assertSandboxExecution([call!, patched(result!, patch)], "box", "nonce\n"));
   }
   assert.throws(() => assertSandboxExecution(evidence("other"), "box", "nonce\n"));
-  assert.throws(() => assertSandboxExecution([{ type: "assistant", payload: { text: "nonce" } }], "box", "nonce\n"));
+  assert.throws(() => assertSandboxExecution([item({ kind: "AgentMessage", text: "nonce" }, 1)], "box", "nonce\n"));
 });
 
 test("projected sandbox results require exact successful execution evidence", () => {
-  const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
-  entries[1]!.payload = { tool: "execute", callId: "call", isError: false, result: "nonce\n\n[exit 0]" };
+  const [call] = evidence();
+  const result = item(
+    { kind: "ToolResult", tool: "execute", callId: "call", isError: false, text: "nonce\n\n[exit 0]" },
+    2,
+  );
+  const entries = [call!, result];
   assert.doesNotThrow(() => assertSandboxExecution(entries, "box", "nonce\n"));
   for (const patch of [
-    { result: "nonce\n" },
-    { result: "nonce\n\n[exit 1]" },
-    { result: "nonce\n\n[exit 0 timed-out]" },
-    { result: "wrong\n\n[exit 0]" },
-    { result: "nonce\n\n[stderr]\nfailed\n[exit 0]" },
+    { text: "nonce\n" },
+    { text: "nonce\n\n[exit 1]" },
+    { text: "nonce\n\n[exit 0 timed-out]" },
+    { text: "wrong\n\n[exit 0]" },
+    { text: "nonce\n\n[stderr]\nfailed\n[exit 0]" },
     { isError: true },
     { callId: "unrelated" },
     { code: 1 },
     { timedOut: true },
     { background: true },
-  ]) {
-    const changed = [entries[0], { ...entries[1], payload: { ...entries[1]!.payload, ...patch } }];
-    assert.throws(() => assertSandboxExecution(changed, "box", "nonce\n"));
+  ] as Patch[]) {
+    assert.throws(() => assertSandboxExecution([call!, patched(result, patch)], "box", "nonce\n"));
   }
   assert.throws(() => assertSandboxExecution(entries.toReversed(), "box", "nonce\n"));
 });
 
 test("a failed provider execution reports what the execute call returned", () => {
   const token = "eyJhbGciOiJIUzI1NiIsImtpZCI6ImsxIn0.eyJvcmdJZCI6InFhIn0.c2lnbmF0dXJlMTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1u";
-  const entries = evidence() as Array<{ type: string; payload: Record<string, unknown> }>;
-  Object.assign(entries[1]!.payload, {
-    code: 1,
-    result: `${"x".repeat(500)}\n[stderr]\nproxy https://x:${token}@proxy.example.com refused\nProxy-Authorization: Basic eDpzZWNyZXQ=\n[exit 1]`,
-  });
+  const [call, result] = evidence();
+  const entries = [
+    call!,
+    patched(result!, {
+      code: 1,
+      text: `${"x".repeat(500)}\n[stderr]\nproxy https://x:${token}@proxy.example.com refused\nProxy-Authorization: Basic eDpzZWNyZXQ=\n[exit 1]`,
+    }),
+  ];
   assert.throws(
     () => assertSandboxExecution(entries, "box", "nonce\n"),
     (error: Error) =>
@@ -163,7 +185,7 @@ for (const failExecution of [false, true]) {
           actions.push(body);
           return { id: "box", backend: "sprites" };
         },
-        findSessionByThread: async () => ({ id: "session", entries: evidence("box", expected) }),
+        findSessionByThread: async () => ({ id: "session", items: evidence("box", expected) }),
       },
     } as unknown as Ctx;
     const run = sandboxProviderScenarios.find((s) => s.name === "sandbox-execute-sprites")!.run(ctx);

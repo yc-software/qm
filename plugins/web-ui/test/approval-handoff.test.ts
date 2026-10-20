@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import { metadata } from "./model-metadata.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -65,7 +66,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
 
   const approval: PendingApproval = { requestId: "a1", command: "echo test", reason: "requires approval" };
   const row = { id: "s1", threadRef: "web:owner:test", scopeId: "personal:owner", title: "Test" };
-  const entries = [{ seq: 1, type: "user", createdAt: Date.now(), payload: { text: "run the command" } }];
+  const items = [item("UserMessage", { seq: 1, createdAt: Date.now(), text: "run the command" })];
   let selectedModelId = "gpt-5.6-sol";
   let modelDeleted = false;
   let pending = [approval];
@@ -112,7 +113,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     if (path.startsWith("/api/sessions/s1")) {
       if (submitted) await handoff.promise;
       await refreshGate?.promise;
-      return Response.json({ session: row, entries, earlierEntries: 0 });
+      return Response.json({ session: row, items, earlierItems: 0 });
     }
     if (path === "/api/sessions") return Response.json({ sessions: [row] });
     if (path === "/api/contexts") return Response.json({ contexts: [] });
@@ -125,7 +126,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { sessionsState } = await vite.ssrLoadModule("/src/sessions.ts");
     const { createConversation } = await vite.ssrLoadModule("/src/conversations.ts");
-    const { entriesToMessages, attachPendingApprovals } = await vite.ssrLoadModule("/src/core-bridge.ts");
+    const { itemsToMessages, attachPendingApprovals } = await vite.ssrLoadModule("/src/core-bridge.ts");
     const { transcriptModel } = await vite.ssrLoadModule("/src/model-options.ts");
     const { seedRuntimeConfig } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     seedRuntimeConfig(row.scopeId, await (await fetch("/api/runtime-config")).json());
@@ -146,7 +147,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
     }) as Conversation;
     const chat = conv;
     function mount() {
-      const messages = entriesToMessages(entries, transcriptModel());
+      const messages = itemsToMessages(items, transcriptModel());
       attachPendingApprovals(messages, pending, transcriptModel());
       chat.mountContinuable(row.threadRef, row.id, row.scopeId, messages);
     }
@@ -205,13 +206,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       streaming.work = {
         status: "working",
         activity: [
-          {
-            seq: 1,
-            parentSeq: null,
-            type: "tool_call",
-            createdAt: Date.now(),
-            payload: { tool: "exec", command: "sleep 5" },
-          },
+          { item: item("ToolCall", { seq: 1, createdAt: Date.now(), tool: "exec", body: { command: "sleep 5" } }) },
         ],
       };
       chat.drawActiveChat();
@@ -229,11 +224,11 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       assert.equal(host.querySelector(".live-stream"), null);
       assert.match(host.querySelector(".work-head")?.textContent ?? "", /Stop requested/);
       streaming.work.activity.push({
+        marker: "text_start",
         seq: 2,
-        parentSeq: null,
-        type: "text_start",
         createdAt: Date.now(),
-        payload: { phase: "final_answer", streamOffset: 0 },
+        phase: "final_answer",
+        streamOffset: 0,
       });
       chat.drawActiveChat();
       assert.equal(

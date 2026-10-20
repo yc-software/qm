@@ -1,4 +1,4 @@
-import type { ToolActivity } from "./core-bridge";
+import { activityItems, type Item, type WorkActivity } from "./items.ts";
 
 const MAX_PLAYGROUNDS_PER_MESSAGE = 5;
 
@@ -8,14 +8,9 @@ export interface PlaygroundArtifact {
   title: string;
 }
 
-/** Only the two fields the scan needs, so a transcript entry and a live one both fit. */
-export type PlaygroundActivity = Pick<ToolActivity, "type" | "payload">;
-
-function playgroundFromPayload(payload: unknown): PlaygroundArtifact | null {
-  if (!payload || typeof payload !== "object") return null;
-  const value = payload as Record<string, unknown>;
-  const display = value.display;
-  if (value.tool !== "miniapp" || value.isError === true || !display || typeof display !== "object") return null;
+function playgroundFromResult(item: Item): PlaygroundArtifact | null {
+  const display = item.body.display;
+  if (item.tool !== "miniapp" || item.isError === true || !display || typeof display !== "object") return null;
   const artifact = (display as Record<string, unknown>).artifact;
   if (!artifact || typeof artifact !== "object") return null;
   const typed = artifact as Record<string, unknown>;
@@ -30,12 +25,12 @@ function playgroundFromPayload(payload: unknown): PlaygroundArtifact | null {
   return { kind: "playground", artifactId: typed.artifactId, title: typed.title };
 }
 
-export function playgroundsIn(activity: readonly PlaygroundActivity[] | undefined): PlaygroundArtifact[] {
+export function playgroundsIn(activity: readonly WorkActivity[] | undefined): PlaygroundArtifact[] {
   const seen = new Set<string>();
   const playgrounds: PlaygroundArtifact[] = [];
-  for (const entry of activity ?? []) {
-    if (entry.type !== "tool_result") continue;
-    const playground = playgroundFromPayload(entry.payload);
+  for (const item of activityItems(activity ?? [])) {
+    if (item.kind !== "ToolResult") continue;
+    const playground = playgroundFromResult(item);
     if (!playground || seen.has(playground.artifactId)) continue;
     seen.add(playground.artifactId);
     playgrounds.push(playground);

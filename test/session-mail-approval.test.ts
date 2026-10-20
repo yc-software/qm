@@ -79,7 +79,7 @@ async function scenario() {
     },
     {
       async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         const ref = {
           current: turn.tools,
           scopeLabel: turn.scopeLabel,
@@ -91,7 +91,7 @@ async function scenario() {
         const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
         const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
         const reply = JSON.stringify(result.content);
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply, modelCalls: 1 };
       },
       async screenSecurity() {

@@ -11,7 +11,8 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, CronFireLogEntry, ScopeId } from "../types.ts";
+import type { NewItem } from "../sessions/items.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
@@ -73,7 +74,6 @@ function describePublishAudience(a: PublishAudienceDescriptor | undefined): stri
 export interface ToolContextRef {
   documents?: DocumentInput[];
   runtimeHandoff?: HarnessHandoff;
-  runtimeRunId?: string;
   runtimeActorId?: string;
   runtimeMutationPending?: boolean;
   runtimeInFlight?: Set<Promise<unknown>>;
@@ -89,7 +89,7 @@ export interface ToolContextRef {
     grantModes?: { session: boolean; always: boolean };
   }>;
   pausedOnApproval?: boolean;
-  emit?: (entry: { type: EntryType; payload: unknown; scopeLabel: ScopeId }) => void | Promise<unknown>;
+  emit?: (item: NewItem) => void | Promise<unknown>;
   scopeLabel?: ScopeId;
   orgScopeId?: ScopeId;
   llmCapture?: Array<{
@@ -386,19 +386,37 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     capabilityTtlMs === 0
       ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
       : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
-  const log = async (type: EntryType, payload: unknown): Promise<void> => {
+  const log = async (kind: "ToolCall" | "ToolResult", summary: Record<string, unknown>): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
-    if (type === "tool_result" && isObj(payload)) {
-      if (ref.shutdown?.aborted) payload = { ...payload, interrupted: true, stop: handbackStop(ref.shutdown) };
-      else if (ref.abortSignal?.aborted) payload = { ...payload, stopped: true };
+    const { tool, callId, ...body } = summary;
+    const columns = {
+      tool: typeof tool === "string" ? tool : null,
+      callId: typeof callId === "string" ? callId : null,
+    };
+    if (kind === "ToolCall") return void (await ref.emit({ kind, ...columns, body }));
+    const { isError, result, output, ...rest } = body;
+    const text = typeof result === "string" ? result : null;
+    for (const key of ["stdout", "stderr"]) {
+      const stream = rest[key];
+      if (typeof stream === "string" && text?.includes(stream)) delete rest[key];
     }
-    await ref.emit({ type, payload, scopeLabel: ref.scopeLabel });
+    if (ref.shutdown?.aborted) Object.assign(rest, { interrupted: true, stop: handbackStop(ref.shutdown) });
+    else if (ref.abortSignal?.aborted) rest.stopped = true;
+    const { blob, ...kept } = isObj(output) ? output : {};
+    await ref.emit({
+      kind,
+      ...columns,
+      isError: typeof isError === "boolean" ? isError : null,
+      text,
+      blobSha: typeof blob === "string" ? blob : null,
+      body: { ...rest, ...(isObj(output) ? { output: kept } : {}) },
+    });
   };
 
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
     const mark = retryMarks.get(callId);
-    return log("tool_call", {
+    return log("ToolCall", {
       ...payload,
       callId,
       ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
@@ -531,7 +549,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         result += `\n\n${text}`;
         delivered.push(message.id);
       }
-      await log("tool_result", {
+      await log("ToolResult", {
         ...(capPayloadStrings(persistedSummary) as Record<string, unknown>),
         callId,
         isError,
@@ -714,7 +732,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
-      await log("tool_result", {
+      await log("ToolResult", {
         tool: "execute",
         ...scopeNote,
         callId,
@@ -1502,8 +1520,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       'week", "what did we decide"). Distinct from `memory` search, which searches remembered facts ' +
       "across conversations; `history` searches only this one, verbatim. With `query`, matching is " +
       "case-insensitive, all terms must match, and the newest matching entries return, each tagged " +
-      "type#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
-      "to follow a type#seq pointer from a search hit or an earlier-conversation summary.",
+      "kind#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
+      "to follow a kind#seq pointer from a search hit or an earlier-conversation summary.",
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({ description: "Words to look for in this conversation's transcript (all must match)." }),
@@ -1528,7 +1546,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordResult(
             callId,
             { tool: "history", error: "seq must be an integer" },
-            text("[error] history `seq` must be an integer entry number, like the 87 in tool_call#87."),
+            text("[error] history `seq` must be an integer entry number, like the 87 in ToolCall#87."),
             true,
           );
         }
@@ -4290,7 +4308,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           tool: "runtime",
           action: request.action,
           ok: result.ok,
-          ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
+          ...(handoff ? { runtimeHandoff: handoff, actorId: ref.runtimeActorId } : {}),
         },
         { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },
         !result.ok,

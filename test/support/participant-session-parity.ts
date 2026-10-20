@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import { scopeId } from "../../src/types.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
+import type { NewItem } from "../../src/sessions/items.ts";
 
-async function appendAll(
-  store: SessionStore,
-  sessionId: string,
-  scope: ReturnType<typeof scopeId>,
-  payloads: Array<{ type: "user" | "assistant"; payload: Record<string, unknown> }>,
-): Promise<void> {
+async function appendAll(store: SessionStore, sessionId: string, items: NewItem[]): Promise<void> {
   const { lease } = await store.acquireLease(sessionId);
   assert.ok(lease);
-  for (const { type, payload } of payloads) await store.append(lease, { type, payload, scopeLabel: scope });
+  for (const item of items) await store.append(lease, item);
   await store.releaseLease(lease);
 }
 
@@ -21,11 +17,11 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
 
   const owned = await store.getOrCreateByThread(`${prefix}:owned`, "dm", personal);
   await store.addParticipant(owned.id, owner);
-  await appendAll(store, owned.id, personal, [
-    { type: "user", payload: { text: "first" } },
-    { type: "assistant", payload: { text: "reply" } },
-    { type: "user", payload: { overheard: true, text: "chatter" } },
-    { type: "user", payload: { text: "second" } },
+  await appendAll(store, owned.id, [
+    { kind: "UserMessage", text: "first" },
+    { kind: "AgentMessage", text: "reply" },
+    { kind: "UserMessage", text: "chatter", body: { overheard: true } },
+    { kind: "UserMessage", text: "second" },
   ]);
   await store.updateParticipantView(owned.id, owner, {
     title: "Renamed by the viewer",
@@ -36,11 +32,11 @@ export async function assertParticipantSessionParity(store: SessionStore, prefix
 
   const shared = await store.getOrCreateByThread(`${prefix}:shared`, "channel", channel);
   await store.addParticipant(shared.id, owner);
-  await appendAll(store, shared.id, channel, [{ type: "user", payload: { text: "before the guest joined" } }]);
+  await appendAll(store, shared.id, [{ kind: "UserMessage", text: "before the guest joined" }]);
   await store.addParticipant(shared.id, guest);
-  await appendAll(store, shared.id, channel, [{ type: "user", payload: { text: "while the guest was here" } }]);
+  await appendAll(store, shared.id, [{ kind: "UserMessage", text: "while the guest was here" }]);
   await store.removeParticipant(shared.id, guest);
-  await appendAll(store, shared.id, channel, [{ type: "user", payload: { text: "after the guest left" } }]);
+  await appendAll(store, shared.id, [{ kind: "UserMessage", text: "after the guest left" }]);
 
   const foreign = await store.getOrCreateByThread(`${prefix}:foreign`, "dm", scopeId("personal", guest));
   await store.addParticipant(foreign.id, guest);

@@ -309,24 +309,16 @@ test("reachExec ON: the description advertises rooms and the 'other computers' p
   assert.doesNotMatch(desc, /"scratch":/, "scratch is not advertised when only reach is on");
 });
 
-test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope label, not the channel", async () => {
-  const emitted: Array<{ type: string; scopeLabel: string }> = [];
+test("Trap 1: a reach result prefixes provenance", async () => {
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
     current: tc,
-    emit: (e) => void emitted.push(e as never),
     scopeLabel: scopeId("personal", "U1"),
     orgScopeId: scopeId("org", "default-org"),
   };
   const [execute] = createAgentTools(ref, { reachExec: true });
   const r = await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });
   assert.match(textOf(r), /\[ran on #project-alpha's computer\]/);
-  const toolResult = emitted.find((e) => e.type === "tool_result")!;
-  assert.equal(
-    toolResult.scopeLabel,
-    scopeId("personal", "U1"),
-    "the channel label would be filtered from the DM's own history (Trap 1)",
-  );
 });
 
 function freshApp(extra: Partial<Config> = {}) {

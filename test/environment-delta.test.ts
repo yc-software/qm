@@ -4,29 +4,29 @@ import { environmentDelta, renderSandboxProfiles } from "../src/core/environment
 import { currentTimeBlock, renderStandingObligations } from "../src/core/orchestrator/prompt-blocks.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import type { Cron, SessionEntry } from "../src/types.ts";
+import type { Cron } from "../src/types.ts";
+import { storedItem, type Item } from "../src/sessions/items.ts";
 
-function entry(seq: number, blocks: Record<string, string>, history: SessionEntry[]): SessionEntry {
+function entry(seq: number, blocks: Record<string, string>, history: Item[]): Item {
   const snapshot = environmentDelta(blocks, history, "s");
-  return {
-    sessionId: "s",
-    seq,
-    parentSeq: seq - 1,
-    type: "user",
-    createdAt: seq,
-    scopeLabel: "personal:U1",
-    payload: { text: "hello", environment: snapshot.text, environmentSnapshot: snapshot.record },
-  };
+  return storedItem(
+    {
+      kind: "UserMessage",
+      text: "hello",
+      body: { environment: snapshot.text, environmentSnapshot: snapshot.record },
+    },
+    { sessionId: "s", seq, createdAt: seq },
+  );
 }
 
 test("snapshots survive serialized replay and emit only changed or removed inventories", () => {
   const original = { Credentials: "## Credentials\n- a\n- b", Sandboxes: "## Sandboxes\n- box" };
   const first = entry(1, original, []);
-  const history: SessionEntry[] = JSON.parse(JSON.stringify([first]));
+  const history: Item[] = JSON.parse(JSON.stringify([first]));
   assert.equal(environmentDelta(original, history, "s").text, "");
   const changed = { Credentials: "## Credentials\n- b\n- c" };
   const second = entry(2, changed, history);
-  const text = (second.payload as { environment: string }).environment;
+  const text = String(second.body.environment);
   assert.match(text, /replace their earlier versions/);
   assert.match(text, /- c/);
   assert.doesNotMatch(text, /- a|- box/);
@@ -125,8 +125,6 @@ test("forked entries cannot mistake a resequenced row for the original snapshot 
   ];
   assert.equal(environmentDelta(blocks, fork, "fork").text, blocks.Skills);
   assert.equal(environmentDelta(blocks, fork.slice(1), "fork").text, blocks.Skills);
-  assert.doesNotMatch(JSON.stringify(delta.payload), /## Skills.*## Skills/);
-  assert.ok(
-    !JSON.stringify((delta.payload as { environmentSnapshot: unknown }).environmentSnapshot).includes("browse"),
-  );
+  assert.doesNotMatch(JSON.stringify(delta.body), /## Skills.*## Skills/);
+  assert.ok(!JSON.stringify(delta.body.environmentSnapshot).includes("browse"));
 });

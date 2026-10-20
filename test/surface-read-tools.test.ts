@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
+import type { Item } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 
@@ -52,9 +53,9 @@ async function subToolResult(built: any, root: string, tool: string, deadlineMs 
   while (Date.now() < deadline) {
     const sub = await built.sessions.getByThread(`ch:${root}`);
     if (sub) {
-      const entries = await built.sessions.getEntries(sub.id);
-      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
-      if (hit) return hit.payload.text as string;
+      const items: Item[] = await built.sessions.getItems(sub.id);
+      const hit = items.find((e) => e.kind === "AgentMessage" && e.variant === null && e.text !== null);
+      if (hit) return hit.text!;
     }
     await sleep(50);
   }

@@ -17,6 +17,7 @@ import type { Principal } from "../src/types.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isReply } from "../src/sessions/items.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -258,7 +259,7 @@ test("shutdown cancels before handback and holds both leases until the turn unwi
       try {
         await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
         await cleanup;
-        await sessions.append(lease, { type: "system", payload: { kind: "checkpoint" }, scopeLabel: "personal:U1" });
+        await sessions.append(lease, { kind: "Stop", body: { reason: "shutdown" } });
         return { status: "silent" as const, stopped: true };
       } finally {
         await sessions.releaseLease(lease);
@@ -392,12 +393,12 @@ test("shutdown mid-turn through the harness leaves no stop marker, and the resum
   });
   const entriesNow = async () => {
     const session = await built.sessions.getByThread(threadRef);
-    return session ? built.sessions.getEntries(session.id) : [];
+    return session ? built.sessions.getItems(session.id) : [];
   };
   built.runtime.start();
   try {
     const deadline = Date.now() + 5_000;
-    while (!(await entriesNow()).some((entry) => entry.type === "tool_result")) {
+    while (!(await entriesNow()).some((entry) => entry.kind === "ToolResult")) {
       if (Date.now() > deadline) throw new Error("the first attempt never recorded its tool work");
       await sleep(10);
     }
@@ -408,19 +409,15 @@ test("shutdown mid-turn through the harness leaves no stop marker, and the resum
     assert.equal(handedBack.attempts, 1);
     assert.equal(handedBack.leaseToken, null);
     const interrupted = await entriesNow();
-    assert.deepEqual(
-      interrupted.filter((entry) => entry.type === "assistant"),
-      [],
-      "the shutdown-cancelled attempt must not close the turn",
-    );
+    assert.deepEqual(interrupted.filter(isReply), [], "the shutdown-cancelled attempt must not close the turn");
     built.runtime.start();
     const done = await built.runs.waitFor(queued.runId!, 5_000);
     assert.equal(done.status, "done");
     assert.equal(done.attempts, 2);
     assert.equal(done.result?.reply, "finished after resume");
-    const replies = (await entriesNow()).filter((entry) => entry.type === "assistant");
+    const replies = (await entriesNow()).filter(isReply);
     assert.deepEqual(
-      replies.map((entry) => (entry.payload as { text: string }).text),
+      replies.map((entry) => entry.text),
       ["finished after resume"],
     );
   } finally {
@@ -897,7 +894,7 @@ test("final shutdown holds an inline turn's lease until the step unwinds, then h
   const append = built.sessions.append.bind(built.sessions);
   let first = true;
   built.sessions.append = async (lease, entry) => {
-    if (first && entry.type === "user") {
+    if (first && entry.kind === "UserMessage") {
       first = false;
       blocked.resolve();
       await gate.promise;

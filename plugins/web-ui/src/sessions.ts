@@ -40,7 +40,7 @@ import {
   currentEarlierCount,
   detachSession,
   inheritedTranscript,
-  entriesToMessages,
+  itemsToMessages,
   regenerateTitle,
   sharedContextLabel,
   slackThreadUrl,
@@ -1753,7 +1753,7 @@ async function runSessionsRefresh(
 
 export async function openSession(
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
@@ -1770,13 +1770,13 @@ export async function openSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  return openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  return openSessionInto(pane ?? mainConversation(), s, transcriptPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
   conv: Conversation,
   s: CoreSession,
-  entriesPrefetch?: Promise<TranscriptPage | null>,
+  transcriptPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
 ): Promise<void> {
@@ -1789,7 +1789,7 @@ export async function openSessionInto(
     }
     return;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  if (s.id === conv.state.sessionId && !transcriptPrefetch) return;
 
   refreshSessionsOnOpen();
 
@@ -1801,44 +1801,44 @@ export async function openSessionInto(
   if (!isLiveConversation(conv)) return;
   const isCurrent = conv.mountLoadingPane();
 
-  const fetchEntries = (): Promise<TranscriptPage | null> =>
+  const fetchPage = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(() => null);
   const continuable = s.canContinue === true;
   // Approvals load alongside the transcript but never hold up the first draw:
   // the chat mounts as soon as entries arrive, and cards attach when this settles.
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
-  const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
+  const transcriptRes = await (transcriptPrefetch ? transcriptPrefetch.then((r) => r ?? fetchPage()) : fetchPage());
   if (!isLiveConversation(conv) || !isCurrent()) return;
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
     sessionsState.openingKey = null;
   }
-  if (!entriesPrefetch && conv.state.sessionId === s.id) {
+  if (!transcriptPrefetch && conv.state.sessionId === s.id) {
     renderList();
     return;
   }
 
-  if (!entriesRes) {
+  if (!transcriptRes) {
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     return;
   }
 
-  const split = inheritedTranscript(s, entriesRes.entries ?? []);
-  const messages = entriesToMessages(split.current, transcriptModel());
-  const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
-  const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
+  const split = inheritedTranscript(s, transcriptRes.items ?? []);
+  const messages = itemsToMessages(split.current, transcriptModel());
+  const inheritedMessages = itemsToMessages(split.inherited, transcriptModel());
+  const earlier = currentEarlierCount(s, transcriptRes.earlierItems ?? 0);
+  const anchorSeq = transcriptRes.items?.[0]?.seq ?? null;
   if (continuable) {
     conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
+    conv.setTranscriptWindow(anchorSeq, earlier, (transcriptRes.earlierItems ?? 0) > 0);
     if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
   } else {
     conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
   }
-  conv.setPins(entriesRes.pins ?? []);
-  conv.setGoal(entriesRes.goal ?? null);
-  conv.setTurnRuntime(entriesRes.runtime ?? null);
+  conv.setPins(transcriptRes.pins ?? []);
+  conv.setGoal(transcriptRes.goal ?? null);
+  conv.setTurnRuntime(transcriptRes.runtime ?? null);
   renderList();
 }

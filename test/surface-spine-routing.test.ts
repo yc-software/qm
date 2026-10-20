@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "../src/wiring.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isUserMessage } from "../src/sessions/items.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -117,9 +118,9 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
-    const subEntries = await built.sessions.getEntries(sub!.id);
+    const subEntries = await built.sessions.getItems(sub!.id);
     assert.ok(
-      subEntries.some((e) => e.type === "assistant"),
+      subEntries.some((e) => e.kind === "AgentMessage"),
       "the sub-conversation session did the work + reply",
     );
   } finally {
@@ -378,11 +379,8 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
     assert.equal(request.images?.[0]?.mimeType, "image/png");
     assert.equal(request.images?.[0]?.dataBase64, image.toString("base64"));
     assert.match(request.messages?.at(-1)?.content ?? "", /QA-IMAGE-ENVIRONMENT/);
-    const entries = await built.sessions.getEntries(session!.id);
-    assert.equal(
-      entries.filter((entry) => Array.isArray((entry.payload as { attachments?: unknown[] }).attachments)).length,
-      1,
-    );
+    const entries = await built.sessions.getItems(session!.id);
+    assert.equal(entries.filter((entry) => Array.isArray(entry.body.attachments)).length, 1);
   } finally {
     await built.runtime.stop();
   }
@@ -568,8 +566,8 @@ test('Door 2: an addressed @mention opens the sub-conversation with a <wake reas
     assert.equal(posted.text, "ahoy");
 
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
-    const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
+    const entries = await built.sessions.getItems(sub!.id);
+    const userText = entries.find(isUserMessage)?.text ?? "";
     assert.match(userText, /^<wake reason="addressed"/, "the addressed turn opens with a wake envelope");
     assert.match(
       userText,
@@ -603,8 +601,8 @@ test("Door 2: an unprompted thread-follow is NOT envelope-wrapped (its detection
     );
     assert.ok(posted, "the thread-follow still routes + posts");
     const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
-    const entries = await built.sessions.getEntries(sub!.id);
-    const userText = String((entries.find((e) => e.type === "user")?.payload as any)?.text ?? "");
+    const entries = await built.sessions.getItems(sub!.id);
+    const userText = entries.find(isUserMessage)?.text ?? "";
     assert.doesNotMatch(
       userText,
       /^<wake/,

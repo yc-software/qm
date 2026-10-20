@@ -40,6 +40,7 @@ const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { isUserMessage } from "../sessions/items.ts";
 
 const USER_STOP = "by user";
 
@@ -65,7 +66,7 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
-  | "getRunToolEntries"
+  | "getRunToolItems"
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
@@ -792,22 +793,19 @@ export function createTurnMethods(
       };
     },
 
-    async getRunToolEntries(runId, viewer, afterSeq) {
+    async getRunToolItems(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
       if (!run || run.turnUserSeq === null) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = await deps.sessions.getEntries(session.id, {
+      const items = await deps.sessions.getItems(session.id, {
         sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
       });
-      const nextRun = entries.findIndex((e) => {
-        const owner = (e.payload as { runId?: unknown } | null)?.runId;
-        return e.type === "user" && typeof owner === "string" && owner !== runId;
-      });
-      return entries
+      const nextRun = items.findIndex((e) => isUserMessage(e) && e.turnId !== null && e.turnId !== runId);
+      return items
         .slice(0, nextRun < 0 ? undefined : nextRun)
-        .filter((e) => e.type === "tool_call" || e.type === "tool_result");
+        .filter((e) => e.kind === "ToolCall" || e.kind === "ToolResult");
     },
 
     async stopConversation(threadRef, viewer) {

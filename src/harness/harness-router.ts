@@ -11,7 +11,8 @@ import {
   modelUnavailableReason,
   type HarnessId,
 } from "../model/pi-models.ts";
-import type { ScopeId, SessionEntry } from "../types.ts";
+import type { ScopeId } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult, RuntimeChoice } from "./harness.ts";
 import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
@@ -20,7 +21,7 @@ import {
   bankGoalTurn,
   enforceGoal,
   governGoal,
-  goalWorkFromEntries,
+  goalWorkFromItems,
   type GoalGovernorInput,
   type GoalRecord,
   type GovernorVerdict,
@@ -42,7 +43,7 @@ async function runTurnEnforcingGoal(
   input: HarnessTurnInput,
   harnessId: HarnessId,
 ): Promise<HarnessTurnResult> {
-  const emitted: SessionEntry[] = [];
+  const emitted: Item[] = [];
   let saved: GoalRecord | undefined;
   const startedAt = Date.now();
   const meter = createGrindMeter(startedAt);
@@ -95,7 +96,7 @@ async function runTurnEnforcingGoal(
             input.governGoal!({
               objective: goal.objective,
               trigger: "checkpoint",
-              recentWork: goalWorkFromEntries([...input.history.slice(-40), ...emitted]),
+              recentWork: goalWorkFromItems([...input.history.slice(-40), ...emitted]),
               ...(previous ? { previous } : {}),
             }),
         }

@@ -11,6 +11,7 @@ import {
   type GoalRecord,
 } from "../src/harness/goal.ts";
 import type { ScopeId } from "../src/types.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
   const ref: ToolContextRef = {
@@ -317,7 +318,7 @@ test("resume only applies to a paused goal", async () => {
 
 test("goal mutations save the session goal before returning, without writing goal log entries", async () => {
   const { ref, saved, create, update } = toolbox();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const entries: NewItem[] = [];
   ref.emit = async (entry) => {
     entries.push(structuredClone(entry));
   };
@@ -329,7 +330,7 @@ test("goal mutations save the session goal before returning, without writing goa
   await update.execute("u3", { status: "complete", note: "verified" });
   assert.equal(saved()?.status, "complete");
   assert.equal(openGoal(saved()), null);
-  assert.ok(entries.every((entry) => entry.type !== "system"));
+  assert.ok(entries.every((entry) => entry.kind === "ToolCall" || entry.kind === "ToolResult"));
 });
 
 test("agent cannot pause a goal or bypass its work floor", async () => {

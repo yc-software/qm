@@ -5,12 +5,11 @@ import type {
   EgressPolicy,
   Principal,
   ScopeId,
-  SessionEntry,
   TurnRequest,
   ActorAssertion,
 } from "../../types.ts";
 import { turnOriginRequestFields } from "../turn-origin.ts";
-import { isOverheardEntry } from "../../sessions/session-store.ts";
+import { isOverheard, isReply, isUserMessage, type Item } from "../../sessions/items.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
@@ -121,22 +120,22 @@ export function stripTurnBoilerplate(text: string): string {
   return kept || text.trim();
 }
 
-export function visibleTitleEntryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; display?: unknown } | null;
-  const value = entry.type === "user" && typeof payload?.display === "string" ? payload.display : payload?.text;
+export function visibleTitleItemText(item: Item): string | undefined {
+  const value = isUserMessage(item) && typeof item.body.display === "string" ? item.body.display : item.text;
   return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-export function renderTitleTranscript(entries: SessionEntry[]): string {
+export function renderTitleTranscript(entries: Item[]): string {
   const lines: string[] = [];
   for (const e of entries) {
-    if (e.type !== "user" && e.type !== "assistant") continue;
-    if (isOverheardEntry(e)) continue;
-    const raw = visibleTitleEntryText(e);
+    const user = isUserMessage(e);
+    if (!user && !isReply(e)) continue;
+    if (isOverheard(e)) continue;
+    const raw = visibleTitleItemText(e);
     if (!raw) continue;
-    const text = e.type === "user" ? stripTurnBoilerplate(raw) : raw;
+    const text = user ? stripTurnBoilerplate(raw) : raw;
     if (!text) continue;
-    lines.push(`${e.type === "user" ? "User" : "Assistant"}:\n${text}`);
+    lines.push(`${user ? "User" : "Assistant"}:\n${text}`);
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
@@ -239,31 +238,18 @@ function candidateKey(target: string, audienceScopeId: ScopeId): string {
 
 const SURFACE_ENQUEUE_ACTIONS = new Set(["post", "reach", "react", "edit", "delete"]);
 
-export function completedSurfaceEnqueues(
-  entries: readonly SessionEntry[],
-  sinceSeq: number,
-  surfaceTool: string,
-): number {
-  const calls: Array<{ enqueues: boolean; callId: string | undefined; done: boolean }> = [];
-  for (const e of entries) {
-    if (e.seq <= sinceSeq) continue;
-    if (e.type === "tool_call") {
-      const p = e.payload as { tool?: unknown; action?: unknown; callId?: unknown } | null;
-      calls.push({
-        enqueues: p?.tool === surfaceTool && SURFACE_ENQUEUE_ACTIONS.has(String(p?.action)),
-        callId: typeof p?.callId === "string" ? p.callId : undefined,
-        done: false,
-      });
-    } else if (e.type === "tool_result") {
-      const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
-      if (payload?.interrupted === true) continue;
-      const cid = payload?.callId;
-      const call =
-        typeof cid === "string" ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
-      if (call) call.done = true;
-    }
-  }
-  return calls.filter((c) => c.enqueues && c.done).length;
+export function completedSurfaceEnqueues(entries: readonly Item[], sinceSeq: number, surfaceTool: string): number {
+  const later = entries.filter((e) => e.seq > sinceSeq);
+  const answered = new Set(
+    later.flatMap((e) => (e.kind === "ToolResult" && e.body.interrupted !== true ? [e.callId] : [])),
+  );
+  return later.filter(
+    (e) =>
+      e.kind === "ToolCall" &&
+      e.tool === surfaceTool &&
+      SURFACE_ENQUEUE_ACTIONS.has(String(e.body.action)) &&
+      answered.has(e.callId),
+  ).length;
 }
 
 export interface TurnPostKeys {

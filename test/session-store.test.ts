@@ -30,17 +30,17 @@ test("attributedTurns applies each window's [validFrom,validTo) and excludes ove
   const { lease } = await store.acquireLease(s.id);
   assert.ok(lease);
   nowRef.v = t0 + 1000;
-  const early = await store.append(lease, { type: "user", payload: { text: "early, U1 only" }, scopeLabel: scope });
+  const early = await store.append(lease, { kind: "UserMessage", text: "early, U1 only" });
   nowRef.v = t0 + 2000;
   await store.addParticipant(s.id, "U2");
   nowRef.v = t0 + 3000;
-  await store.append(lease, { type: "user", payload: { overheard: true, text: "chatter" }, scopeLabel: scope });
+  await store.append(lease, { kind: "UserMessage", text: "chatter", body: { overheard: true } });
   nowRef.v = t0 + 4000;
-  const mid = await store.append(lease, { type: "user", payload: { text: "both here" }, scopeLabel: scope });
+  const mid = await store.append(lease, { kind: "UserMessage", text: "both here" });
   nowRef.v = t0 + 5000;
   await store.removeParticipant(s.id, "U2");
   nowRef.v = t0 + 6000;
-  const late = await store.append(lease, { type: "user", payload: { text: "U1 only again" }, scopeLabel: scope });
+  const late = await store.append(lease, { kind: "UserMessage", text: "U1 only again" });
   await store.releaseLease(lease);
 
   const rows = await store.attributedTurns();
@@ -94,7 +94,7 @@ test("a blocked acquire names, dates, and times out the holder it lost to", asyn
   assert.equal(blocked.heldSince, t0, "…when that work took the lock");
   assert.equal(blocked.heldUntil, t0 + 60_000, "…and when the lock lapses on its own");
 
-  await store.append(lease, { type: "user", payload: { text: "still working" }, scopeLabel: scope });
+  await store.append(lease, { kind: "UserMessage", text: "still working" });
   const later = await store.acquireLease(s.id, "turn");
   assert.equal(later.heldSince, t0, "the age still measures from the acquire");
   assert.equal(later.heldUntil, t0 + 75_000, "the expiry moved with the write");
@@ -195,14 +195,13 @@ for (const [name, make] of backends) {
     assert.ok(lease);
     assert.equal((await store.acquireLease(s.id)).lease, null);
 
-    const e0 = await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: s.scopeId });
-    const e1 = await store.append(lease, { type: "assistant", payload: { text: "yo" }, scopeLabel: s.scopeId });
+    const e0 = await store.append(lease, { kind: "UserMessage", text: "hi" });
+    const e1 = await store.append(lease, { kind: "AgentMessage", text: "yo" });
     assert.equal(e0.seq, 0);
     assert.equal(e1.seq, 1);
-    assert.equal(e1.parentSeq, 0);
 
     await store.releaseLease(lease);
-    await assert.rejects(store.append(lease, { type: "user", payload: {}, scopeLabel: s.scopeId }));
+    await assert.rejects(store.append(lease, { kind: "UserMessage" }));
   });
 
   test(`${name}: getByThread is a pure lookup (null on miss, never creates)`, async () => {
@@ -234,8 +233,8 @@ for (const [name, make] of backends) {
     await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
     const { lease } = await store.acquireLease(dm.id);
     assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    await store.append(lease, { type: "user", payload: { text: "again" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "hi" });
+    await store.append(lease, { kind: "UserMessage", text: "again" });
     await store.releaseLease(lease);
 
     const stats = await store.scopeSessionStats(scope, false);
@@ -261,16 +260,18 @@ for (const [name, make] of backends) {
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
     await store.append(lease, {
-      type: "user",
-      payload: { overheard: true, ts: "1", name: "Alice", text: "overheard chatter" },
-      scopeLabel: scope,
+      kind: "UserMessage",
+      externalId: "1",
+      text: "overheard chatter",
+      body: { overheard: true, name: "Alice" },
     });
-    await store.append(lease, { type: "user", payload: { text: "the real question" }, scopeLabel: scope });
-    await store.append(lease, { type: "assistant", payload: { text: "answer" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "the real question" });
+    await store.append(lease, { kind: "AgentMessage", text: "answer" });
     await store.append(lease, {
-      type: "user",
-      payload: { overheard: true, ts: "2", name: "Bob", text: "more chatter" },
-      scopeLabel: scope,
+      kind: "UserMessage",
+      externalId: "2",
+      text: "more chatter",
+      body: { overheard: true, name: "Bob" },
     });
     await store.releaseLease(lease);
 
@@ -308,10 +309,10 @@ for (const [name, make] of backends) {
     const b = await store.getOrCreateByThread("dm:B", "dm", scope);
     await store.getOrCreateByThread("dm:C", "dm", scope);
     const { lease: la } = await store.acquireLease(a.id);
-    await store.append(la!, { type: "user", payload: { text: "a" }, scopeLabel: scope });
+    await store.append(la!, { kind: "UserMessage", text: "a" });
     await store.releaseLease(la!);
     const { lease: lb } = await store.acquireLease(b.id);
-    await store.append(lb!, { type: "user", payload: { text: "b" }, scopeLabel: scope });
+    await store.append(lb!, { kind: "UserMessage", text: "b" });
     await store.releaseLease(lb!);
 
     const page1 = await store.scopeSessionSummaries(scope, false, { limit: 2 });
@@ -397,8 +398,8 @@ for (const [name, make] of backends) {
     await store.getOrCreateByThread("agent:main:webhook:wh1", "channel", scope);
     await store.getOrCreateByThread("dm:D9", "dm", scopeId("personal", "U9"));
     const { lease } = await store.acquireLease(c1a.id);
-    await store.append(lease!, { type: "user", payload: { text: "fire" }, scopeLabel: scope });
-    await store.append(lease!, { type: "assistant", payload: { text: "done" }, scopeLabel: scope });
+    await store.append(lease!, { kind: "UserMessage", text: "fire" });
+    await store.append(lease!, { kind: "AgentMessage", text: "done" });
 
     const groups = await store.scopeCronGroups(scope, false);
     assert.deepEqual(
@@ -450,7 +451,7 @@ for (const [name, make] of backends) {
     const c = scopeId("personal", "U9");
     const say = async (id: string, text: string) => {
       const { lease } = await store.acquireLease(id);
-      await store.append(lease!, { type: "user", payload: { text }, scopeLabel: a });
+      await store.append(lease!, { kind: "UserMessage", text });
       await store.releaseLease(lease!);
     };
     const conv1 = await store.getOrCreateByThread("ch:A:t1", "channel", a);
@@ -516,7 +517,7 @@ for (const [name, make] of backends) {
     await store.forceReleaseLease(s.id);
     const { lease: reacquired } = await store.acquireLease(s.id);
     assert.ok(reacquired, "lease was force-released, so a new writer can acquire");
-    await assert.rejects(store.append(lease, { type: "user", payload: {}, scopeLabel: s.scopeId }));
+    await assert.rejects(store.append(lease, { kind: "UserMessage" }));
   });
 
   test(`${name}: updateTitle sets the session's display title (absent until set)`, async () => {
@@ -636,7 +637,7 @@ for (const [name, make] of backends) {
       "transport (model id + headers) round-trips",
     );
 
-    assert.equal((await store.getEntries(s.id)).length, 0, "captured requests are not session entries");
+    assert.equal((await store.getItems(s.id)).length, 0, "captured requests are not session entries");
     assert.equal((await store.listLlmRequests("nope")).length, 0, "unknown session → empty");
   });
 
@@ -694,9 +695,9 @@ for (const [name, make] of backends) {
     await store.addParticipant(b.id, "U1");
     const { lease } = await store.acquireLease(a.id);
     assert.ok(lease);
-    const u0 = await store.append(lease, { type: "user", payload: { text: "1" }, scopeLabel: scope });
-    await store.append(lease, { type: "assistant", payload: { text: "ack" }, scopeLabel: scope });
-    const u1 = await store.append(lease, { type: "user", payload: { text: "2" }, scopeLabel: scope });
+    const u0 = await store.append(lease, { kind: "UserMessage", text: "1" });
+    await store.append(lease, { kind: "AgentMessage", text: "ack" });
+    const u1 = await store.append(lease, { kind: "UserMessage", text: "2" });
 
     const rows = await store.attributedTurns();
     const forA = rows.filter((r) => r.sessionId === a.id);
@@ -771,14 +772,14 @@ for (const [name, make] of backends) {
     await store.addParticipant(s.id, "U1");
     await store.addParticipant(keep.id, "U1");
     const { lease } = await store.acquireLease(s.id);
-    await store.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await store.append(lease!, { kind: "UserMessage", text: "hi" });
     await store.releaseLease(lease!);
 
     await store.deleteSession(s.id);
 
     assert.equal(await store.get(s.id), null, "session gone");
     assert.equal(await store.getByThread("t1"), null, "thread index cleared");
-    assert.equal((await store.getEntries(s.id)).length, 0, "entries gone");
+    assert.equal((await store.getItems(s.id)).length, 0, "entries gone");
     assert.equal(
       (await store.listByParticipant("U1")).some((x) => x.id === s.id),
       false,
@@ -803,10 +804,10 @@ for (const [name, make] of backends) {
     await store.addParticipant(s.id, "U1");
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    const lastUser = await store.append(lease, { type: "user", payload: { text: "still here" }, scopeLabel: scope });
-    await store.append(lease, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-    await store.append(lease, { type: "tool_call", payload: { tool: "execute", callId: "c1" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "hi" });
+    const lastUser = await store.append(lease, { kind: "UserMessage", text: "still here" });
+    await store.append(lease, { kind: "AgentMessage", text: "yo" });
+    await store.append(lease, { kind: "ToolCall", tool: "execute", callId: "c1" });
     await store.releaseLease(lease);
 
     const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
@@ -838,7 +839,7 @@ for (const [name, make] of backends) {
 
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
-    await store.append(lease, { type: "system", payload: { kind: "wake", text: "note" }, scopeLabel: scope });
+    await store.append(lease, { kind: "Wake", wakeCause: "system", body: { text: "note" } });
     await store.releaseLease(lease);
 
     assert.equal(
@@ -856,7 +857,7 @@ for (const [name, make] of backends) {
     await store.addParticipant(s.id, "U1");
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "hi" });
 
     await store.removeParticipant(s.id, "U1");
     await store.addParticipant(s.id, "U1");
@@ -866,7 +867,7 @@ for (const [name, make] of backends) {
       "old entries fall outside the new tenure",
     );
 
-    await store.append(lease, { type: "user", payload: { text: "welcome back" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "welcome back" });
     assert.equal(
       (await store.listByParticipant("U1")).find((x) => x.id === s.id)?.hasEntries,
       true,
@@ -954,9 +955,9 @@ for (const [name, make] of backends) {
 
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "visible" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "visible" });
     await store.addParticipant(session.id, "U1", "My project chat");
-    assert.equal((await store.visibleEntries(session.id, "U1")).length, 1);
+    assert.equal((await store.visibleItems(session.id, "U1")).length, 1);
     assert.equal((await store.listByParticipant("U1"))[0]?.title, "My project chat");
   });
 
@@ -994,7 +995,7 @@ for (const [name, make] of backends) {
     for (let i = 0; i < 5; i++) {
       const s = await store.getOrCreateByThread(`dm:K${i}`, "dm", scope);
       const { lease } = await store.acquireLease(s.id);
-      await store.append(lease!, { type: "user", payload: { text: `m${i}` }, scopeLabel: scope });
+      await store.append(lease!, { kind: "UserMessage", text: `m${i}` });
       await store.releaseLease(lease!);
     }
     const all = await store.scopeSessionSummaries(scope, false, { limit: 10 });
@@ -1018,18 +1019,18 @@ for (const [name, make] of backends) {
   });
 }
 
-test("getEntry returns exactly the requested seq and nothing else", async () => {
+test("getItem returns exactly the requested seq and nothing else", async () => {
   const store = createMemorySessionStore();
   const scope = scopeId("personal", "U1");
   const s = await store.getOrCreateByThread("dm:point-fetch", "dm", scope);
   const { lease } = await store.acquireLease(s.id);
   assert.ok(lease);
-  const first = await store.append(lease!, { type: "user", payload: { text: "one" }, scopeLabel: scope });
-  const second = await store.append(lease!, { type: "assistant", payload: { text: "two" }, scopeLabel: scope });
-  assert.deepEqual(await store.getEntry(s.id, first.seq), first);
-  assert.deepEqual(await store.getEntry(s.id, second.seq), second);
-  assert.equal(await store.getEntry(s.id, second.seq + 1), undefined);
-  assert.equal(await store.getEntry("missing", 0), undefined);
+  const first = await store.append(lease!, { kind: "UserMessage", text: "one" });
+  const second = await store.append(lease!, { kind: "AgentMessage", text: "two" });
+  assert.deepEqual(await store.getItem(s.id, first.seq), first);
+  assert.deepEqual(await store.getItem(s.id, second.seq), second);
+  assert.equal(await store.getItem(s.id, second.seq + 1), undefined);
+  assert.equal(await store.getItem("missing", 0), undefined);
 });
 
 test("cronIdOf and sessionOrigin agree on which threadRefs are crons", () => {
@@ -1092,7 +1093,7 @@ test("deleteSessionIfEmpty refuses while a lease is held and after entries land"
   const { lease } = await store.acquireLease(s.id);
   assert.ok(lease);
   assert.equal(await store.deleteSessionIfEmpty(s.id), false, "a held lease blocks the discard");
-  await store.append(lease, { type: "user", payload: { text: "seed" }, scopeLabel: scope });
+  await store.append(lease, { kind: "UserMessage", text: "seed" });
   await store.releaseLease(lease);
   assert.equal(await store.deleteSessionIfEmpty(s.id), false, "entries block the discard");
   const empty = await store.getOrCreateByThread("web:U1:seed2", "dm", scope);
@@ -1109,7 +1110,7 @@ test("deleteSessionIfEmpty refuses while a lease is held and after entries land"
   nowRef.v += 60;
   assert.equal(await store.deleteSessionIfEmpty(abandoned.id), true, "an expired lease does not block the discard");
   await assert.rejects(
-    store.append(stale.lease, { type: "user", payload: {}, scopeLabel: scope }),
+    store.append(stale.lease, { kind: "UserMessage" }),
     /valid session lease/,
     "the stale holder cannot append after the discard",
   );

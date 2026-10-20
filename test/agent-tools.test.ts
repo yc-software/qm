@@ -14,7 +14,8 @@ import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import { createMemoryToolOutputStore } from "../src/sessions/tool-output.ts";
-import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
+import type { ClientToolDeclaration } from "../src/types.ts";
+import { itemFields, storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
@@ -373,7 +374,8 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
   };
 }
 
-type Emitted = { type: EntryType; payload: any; scopeLabel: string };
+type Emitted = NewItem & { fields: any };
+const emittedItem = (e: NewItem): Emitted => ({ ...e, fields: itemFields(e as Item) });
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
@@ -393,7 +395,7 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -406,26 +408,22 @@ test("each agent tool emits a tool_call then a tool_result", async () => {
   await call(write, { action: "share", id: "file-id", toScope: "org" });
 
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.tool}`),
+    emitted.map((e) => `${e.kind}:${e.fields.tool}`),
     [
-      "tool_call:execute",
-      "tool_result:execute",
-      "tool_call:files",
-      "tool_result:files",
-      "tool_call:files",
-      "tool_result:files",
-      "tool_call:files",
-      "tool_result:files",
+      "ToolCall:execute",
+      "ToolResult:execute",
+      "ToolCall:files",
+      "ToolResult:files",
+      "ToolCall:files",
+      "ToolResult:files",
+      "ToolCall:files",
+      "ToolResult:files",
     ],
   );
-  assert.equal(emitted[1]!.payload.code, 0);
-  assert.equal(emitted[3]!.payload.found, true);
-  assert.equal(emitted[5]!.payload.bytes, 3);
-  assert.equal(emitted[7]!.payload.verb, "share");
-  assert.equal(
-    emitted.every((e) => e.scopeLabel === "personal:U1"),
-    true,
-  );
+  assert.equal(emitted[1]!.fields.code, 0);
+  assert.equal(emitted[3]!.fields.found, true);
+  assert.equal(emitted[5]!.fields.bytes, 3);
+  assert.equal(emitted[7]!.fields.verb, "share");
 });
 
 test("sandbox manages the box out-of-band instead of running a command", async () => {
@@ -711,7 +709,7 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -725,8 +723,8 @@ test("a giant tool result is capped for the model, keeping the tail and matching
   assert.ok(seen.includes("…[truncated — full result was"), "truncation notice names the full size");
   assert.ok(seen.endsWith("[exit 1]"), "the tail — stderr and exit marker — survives the cut");
   assert.ok(seen.includes("[stderr]\nboom"), "stderr survives the cut");
-  const payload = emitted.find((e) => e.type === "tool_result")!.payload;
-  assert.equal(payload.result, seen, "the replay record is exactly what the model saw");
+  const payload = emitted.find((e) => e.kind === "ToolResult")!.fields;
+  assert.equal(payload.text, seen, "the replay record is exactly what the model saw");
   assert.equal(payload.resultTruncated, true, "the entry is flagged so renderers can surface the loss");
   assert.equal(payload.stdout, undefined, "raw stdout is not stored beside the result");
   assert.equal(payload.stderr, undefined, "raw stderr is not stored beside the result");
@@ -741,31 +739,36 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     toolOutput: outputs,
     execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
   };
-  const ref: ToolContextRef = { current: tc, emit: (e) => void emitted.push(e as Emitted), scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => void emitted.push(emittedItem(e)),
+    scopeLabel: "personal:U1",
+  };
   const [execute] = createAgentTools(ref);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
   };
   const seen = ret.content.map((c) => c.text).join("\n");
-  const payload = emitted.find((e) => e.type === "tool_result")!.payload as {
+  const payload = emitted.find((e) => e.kind === "ToolResult")!.fields as {
     callId: string;
-    result: string;
-    output: { blob: string; chars: number; shownChars: number };
+    text: string;
+    blobSha: string;
+    output: { chars: number; shownChars: number };
   };
-  assert.equal(payload.result, seen, "the item stores exactly what the model saw");
+  assert.equal(payload.text, seen, "the item stores exactly what the model saw");
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
   assert.ok(seen.includes(`tool-output/${payload.callId}`), "the marker names the parked file");
   assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
-  assert.equal(outputs.parked.get(payload.output.blob)!.length, payload.output.chars);
-  assert.ok(outputs.parked.get(payload.output.blob)!.includes("line 1999"));
+  assert.equal(outputs.parked.get(payload.blobSha)!.length, payload.output.chars);
+  assert.ok(outputs.parked.get(payload.blobSha)!.includes("line 1999"));
 
   outputs.setInlineTokens(0);
   emitted.length = 0;
   await call(execute, { command: "seq", purpose: "Run test command" });
-  const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
+  const uncapped = emitted.find((e) => e.kind === "ToolResult")!.fields as { text: string; output?: unknown };
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
-  assert.ok(uncapped.result.includes("line 1000"));
+  assert.ok(uncapped.text.includes("line 1000"));
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
@@ -777,7 +780,7 @@ test("execute stores its output once and replays exactly what the model saw", as
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -786,17 +789,16 @@ test("execute stores its output once and replays exactly what the model saw", as
   const live = (await call(execute, { command: "make", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
   };
-  const stored = emitted.find((e) => e.type === "tool_result")!.payload;
+  const stored = emitted.find((e) => e.kind === "ToolResult")!.fields;
   assert.deepEqual(
     { stdout: stored.stdout, stderr: stored.stderr, code: stored.code, timedOut: stored.timedOut },
     { stdout: undefined, stderr: undefined, code: 2, timedOut: false },
   );
-  assert.equal(stored.result, "built 3 files\n[stderr]\nwarning: slow disk\n[exit 2]");
+  assert.equal(stored.text, "built 3 files\n[stderr]\nwarning: slow disk\n[exit 2]");
 
-  const history: SessionEntry[] = [
-    { type: "user" as const, payload: { text: "build it" } },
-    ...emitted.map((e) => ({ type: e.type, payload: e.payload })),
-  ].map((e, i) => ({ ...e, sessionId: "s", seq: i + 1, parentSeq: null, scopeLabel: "personal:U1", createdAt: i + 1 }));
+  const history = [{ kind: "UserMessage", text: "build it" } as NewItem, ...emitted].map((e, i) =>
+    storedItem(e, { sessionId: "s", seq: i + 1, createdAt: i + 1 }),
+  );
   const replayed = reconstructMessagesFromHistory(history).find((m) => m.role === "toolResult") as {
     content: Array<{ type: string; text: string }>;
     isError: boolean;
@@ -810,7 +812,7 @@ test("background start and poll store their output only in result", async () => 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -823,14 +825,14 @@ test("background start and poll store their output only in result", async () => 
     tools.find((t) => t.name === "background"),
     { action: "poll", process_id: "bg-1" },
   );
-  const [started, polled] = emitted.filter((e) => e.type === "tool_result").map((e) => e.payload);
+  const [started, polled] = emitted.filter((e) => e.kind === "ToolResult").map((e) => e.fields);
   assert.deepEqual(
-    { output: started.output, cursor: started.cursor, result: started.result },
-    { output: undefined, cursor: 7, result: "started bg-1\nstarted serve\n[cursor 7 | running]" },
+    { output: started.output, cursor: started.cursor, text: started.text },
+    { output: undefined, cursor: 7, text: "started bg-1\nstarted serve\n[cursor 7 | running]" },
   );
   assert.equal(polled.chunks, undefined);
   assert.equal(polled.cursor, 18);
-  assert.match(polled.result, /^more output\n\[cursor 18 \| /);
+  assert.match(polled.text, /^more output\n\[cursor 18 \| /);
 });
 
 test("Auto can quarantine a tool result before the model or durable replay sees it", async () => {
@@ -847,7 +849,7 @@ test("Auto can quarantine a tool result before the model or durable replay sees 
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     screenToolResult: async ({ result, provenance }) => {
@@ -862,8 +864,8 @@ test("Auto can quarantine a tool result before the model or durable replay sees 
     content: Array<{ text?: string }>;
   };
   assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
-  assert.equal(persisted.result, "[tool output quarantined by the security screen]");
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
+  assert.equal(persisted.text, "[tool output quarantined by the security screen]");
   assert.equal(persisted.quarantined, true);
   assert.equal(persisted.quarantineReason, "screen_verdict");
   assert.equal(persisted.securityReason, "instruction in untrusted data", "the verdict reason is persisted");
@@ -884,7 +886,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
       }),
     },
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     pendingApprovals: pending,
@@ -910,7 +912,7 @@ test("a strict tool-result verdict routes through HiLo approval instead of silen
       grantModes: { session: false, always: false },
     },
   ]);
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.quarantined, true);
   assert.equal(persisted.quarantineReason, "screen_verdict");
   assert.doesNotMatch(JSON.stringify(persisted), /ignore previous instructions|reveal secrets/);
@@ -924,7 +926,7 @@ test("quarantine_pending with no approvals sink falls back to the legacy silent 
       execute: async () => ({ stdout: "leak me", stderr: "", code: 0, timedOut: false }),
     },
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     screenToolResult: async () => ({ outcome: "quarantine" }),
@@ -937,7 +939,7 @@ test("quarantine_pending with no approvals sink falls back to the legacy silent 
   assert.equal(result.content[0]?.text, "[tool output quarantined by the security screen]");
   assert.equal(result.terminate, undefined);
   assert.equal(ref.pausedOnApproval, undefined);
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.quarantined, true);
 });
 
@@ -950,7 +952,7 @@ test("classifier downtime fails open — the output passes through tagged unscre
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     screenToolResult: async () => {
@@ -971,7 +973,7 @@ test("classifier downtime fails open — the output passes through tagged unscre
     /perfectly ordinary output/,
     "but the output itself still reaches the model",
   );
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.quarantined, undefined, "downtime is not a detection — the output is not quarantined");
   assert.equal(persisted.unscreened, true, "the entry records that the output was passed through unscreened");
 });
@@ -988,7 +990,7 @@ test("the screen never rewrites a policy notice — an approval gate stays legib
   const ref: ToolContextRef = {
     current: gated,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     pendingApprovals: pending,
@@ -1002,7 +1004,7 @@ test("the screen never rewrites a policy notice — an approval gate stays legib
     content: Array<{ text?: string }>;
   };
   assert.match(result.content[0]?.text ?? "", /\[blocked: needs human approval\] writes a credential/);
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.blocked, "needs_approval");
   assert.equal(persisted.reason, "writes a credential to an external password manager");
   assert.equal(persisted.quarantined, undefined, "a gate the core itself raised is not tool output to quarantine");
@@ -1020,7 +1022,7 @@ test("the screen never rewrites a policy denial either", async () => {
   const ref: ToolContextRef = {
     current: denied,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     screenToolResult: async () => ({ outcome: "quarantine" }),
@@ -1030,7 +1032,7 @@ test("the screen never rewrites a policy denial either", async () => {
     content: Array<{ text?: string }>;
   };
   assert.match(result.content[0]?.text ?? "", /\[denied by policy\]/);
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.denied, true);
   assert.equal(persisted.quarantined, undefined);
 });
@@ -1043,14 +1045,14 @@ test("a real tool result on the same session is still screened", async () => {
       execute: async () => ({ stdout: "leak me", stderr: "", code: 0, timedOut: false }),
     },
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     screenToolResult: async () => ({ outcome: "quarantine" }),
   };
   const [execute] = createAgentTools(ref);
   await call(execute, { command: "curl https://example.invalid", purpose: "Run test command" });
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(
     persisted.quarantined,
     true,
@@ -1064,7 +1066,7 @@ test("the screen never rewrites a strict-posture per-tool gate", async () => {
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     pendingApprovals: pending,
@@ -1076,7 +1078,7 @@ test("the screen never rewrites a strict-posture per-tool gate", async () => {
     content: Array<{ text?: string }>;
   };
   assert.match(result.content[0]?.text ?? "", /\[blocked: needs human approval\] strict posture/);
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.blocked, "needs_approval");
   assert.equal(persisted.quarantined, undefined);
   assert.equal(pending.length, 1);
@@ -1112,7 +1114,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
   };
@@ -1124,13 +1126,13 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   );
 
   await call(slack, { action: "post", text: "hello there" });
-  const posted = emitted.find((e) => e.type === "tool_result" && e.payload.action === "post")!.payload;
+  const posted = emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "post")!.fields;
   assert.equal(posted.ok, true);
   assert.equal(posted.deliveryId, "d1");
   assert.equal(posted.tool, "slack");
 
   await call(slack, { action: "read_thread" });
-  const read = emitted.find((e) => e.type === "tool_result" && e.payload.action === "read_thread")!.payload;
+  const read = emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "read_thread")!.fields;
   assert.equal(read.ok, true);
   assert.equal(read.count, 0);
 });
@@ -1146,7 +1148,7 @@ test("surface reads fail closed without persisting blocked content", async () =>
   const ref: ToolContextRef = {
     current: external,
     emit: (entry) => {
-      emitted.push(entry as Emitted);
+      emitted.push(emittedItem(entry));
     },
     scopeLabel: "channel:C1",
     async screenToolResult({ result, tool, source, provenance }) {
@@ -1165,7 +1167,7 @@ test("surface reads fail closed without persisting blocked content", async () =>
   };
   assert.equal(output.content[0]!.text, "[tool output quarantined by the security screen (surface thread)]");
   assert.deepEqual(output.details, {});
-  const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const stored = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(stored.quarantined, true);
   assert.equal(stored.securityReason, "example-screen:prompt_injection");
   assert.doesNotMatch(JSON.stringify(stored), /exfiltrate/);
@@ -1183,7 +1185,7 @@ test("a strict external-content verdict routes through HiLo approval instead of 
   const ref: ToolContextRef = {
     current: external,
     emit: (entry) => {
-      emitted.push(entry as Emitted);
+      emitted.push(emittedItem(entry));
     },
     scopeLabel: "channel:C1",
     pendingApprovals: pending,
@@ -1210,7 +1212,7 @@ test("a strict external-content verdict routes through HiLo approval instead of 
       grantModes: { session: false, always: false },
     },
   ]);
-  const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const stored = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(stored.quarantined, true);
   assert.equal(stored.securityReason, "example-screen:prompt_injection");
   assert.doesNotMatch(JSON.stringify(stored), /exfiltrate/);
@@ -1227,7 +1229,7 @@ test("surface reads fail open when the screener is unavailable — tagged untrus
   const ref: ToolContextRef = {
     current: external,
     emit: (entry) => {
-      emitted.push(entry as Emitted);
+      emitted.push(emittedItem(entry));
     },
     scopeLabel: "channel:C1",
     async screenToolResult() {
@@ -1240,7 +1242,7 @@ test("surface reads fail open when the screener is unavailable — tagged untrus
   };
   assert.match(output.content[0]!.text, /NOT security-screened/, "the model is warned the read was not screened");
   assert.match(output.content[0]!.text, /quarterly numbers/, "but the content itself still reaches the model");
-  const stored = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const stored = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(stored.quarantined, undefined, "downtime is not a detection — the read is not quarantined");
 });
 
@@ -1249,7 +1251,7 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
   };
@@ -1259,8 +1261,7 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
   await call(slack, { action: "edit", ref: "173.4", text: "fixed" });
   await call(slack, { action: "delete", ref: "173.4" });
 
-  const result = (action: string) =>
-    emitted.find((e) => e.type === "tool_result" && e.payload.action === action)!.payload;
+  const result = (action: string) => emitted.find((e) => e.kind === "ToolResult" && e.fields.action === action)!.fields;
   assert.deepEqual(result("react"), {
     tool: "slack",
     action: "react",
@@ -1268,7 +1269,7 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     deliveryId: "r1",
     callId: "t",
     isError: false,
-    result: "[reacted]",
+    text: "[reacted]",
   });
   assert.deepEqual(result("edit"), {
     tool: "slack",
@@ -1277,7 +1278,7 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     deliveryId: "e1",
     callId: "t",
     isError: false,
-    result: "[edited]",
+    text: "[edited]",
   });
   assert.deepEqual(result("delete"), {
     tool: "slack",
@@ -1286,12 +1287,12 @@ test("the surface tool's react/edit/delete actions delegate to the tool context"
     deliveryId: "x1",
     callId: "t",
     isError: false,
-    result: "[deleted]",
+    text: "[deleted]",
   });
 
-  assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "react")!.payload.ts, "173.4");
-  assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "edit")!.payload.ref, "173.4");
-  assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.action === "delete")!.payload.ref, "173.4");
+  assert.equal(emitted.find((e) => e.kind === "ToolCall" && e.fields.action === "react")!.fields.ts, "173.4");
+  assert.equal(emitted.find((e) => e.kind === "ToolCall" && e.fields.action === "edit")!.fields.ref, "173.4");
+  assert.equal(emitted.find((e) => e.kind === "ToolCall" && e.fields.action === "delete")!.fields.ref, "173.4");
 });
 
 test("post replies HERE only (placement via ts/broadcast, cross-targets rejected); reach carries every audience", async () => {
@@ -1339,7 +1340,7 @@ test("edit/delete surface an own-messages-only failure as a tool_result, not a t
   const ref: ToolContextRef = {
     current: notOurs,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
   };
@@ -1350,8 +1351,8 @@ test("edit/delete surface an own-messages-only failure as a tool_result, not a t
   const delOut = (await call(slack, { action: "delete", ref: "999.9" })) as { content: Array<{ text: string }> };
   assert.match(editOut.content[0]!.text, /not edited.*your own messages/);
   assert.match(delOut.content[0]!.text, /not deleted.*your own messages/);
-  assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.action === "edit")!.payload.ok, false);
-  assert.equal(emitted.find((e) => e.type === "tool_result" && e.payload.action === "delete")!.payload.ok, false);
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "edit")!.fields.ok, false);
+  assert.equal(emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "delete")!.fields.ok, false);
 });
 
 test("post reports a clean sentinel when the surface isn't wired this turn", async () => {
@@ -1368,14 +1369,14 @@ test("post reports a clean sentinel when the surface isn't wired this turn", asy
   const ref: ToolContextRef = {
     current: noSurface,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
   };
   const slack = surfaceTool(ref);
   const out = (await call(slack, { action: "post", text: "hi" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /not sent/);
-  const result = emitted.find((e) => e.type === "tool_result" && e.payload.action === "post")!.payload;
+  const result = emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "post")!.fields;
   assert.equal(result.ok, false);
 });
 
@@ -1385,7 +1386,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
   };
@@ -1416,8 +1417,8 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
   assert.match(gone, /couldn't read that file/);
 
   for (const n of ["whats_new", "search", "read_members", "read_file"]) {
-    const pair = emitted.filter((e) => e.payload.action === n).map((e) => e.type);
-    assert.ok(pair.includes("tool_call") && pair.includes("tool_result"), `${n} emits call + result`);
+    const pair = emitted.filter((e) => e.fields.action === n).map((e) => e.kind);
+    assert.ok(pair.includes("ToolCall") && pair.includes("ToolResult"), `${n} emits call + result`);
   }
 });
 
@@ -1439,7 +1440,7 @@ test("the post delivery ack is never screened — a classifier false positive ca
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "channel:C1",
     screenToolResult: async ({ result }) => {
@@ -1451,7 +1452,7 @@ test("the post delivery ack is never screened — a classifier false positive ca
   const result = (await call(slack, { action: "post", text: "hello" })) as { content: Array<{ text?: string }> };
   assert.equal(result.content[0]?.text, "[sent]");
   assert.equal(screened.length, 0, "the constant ack carries no external content to screen");
-  const persisted = emitted.find((entry) => entry.type === "tool_result")!.payload;
+  const persisted = emitted.find((entry) => entry.kind === "ToolResult")!.fields;
   assert.equal(persisted.quarantined, undefined);
 });
 
@@ -1526,14 +1527,14 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
     {
       current: fakeToolContext(),
       emit: (e) => {
-        emitted.push(e as Emitted);
+        emitted.push(emittedItem(e));
       },
       scopeLabel: "channel:C1",
     },
     "telegram",
   );
   await call(tg, { action: "post", text: "hi" });
-  const posted = emitted.find((e) => e.type === "tool_result" && e.payload.action === "post")!.payload;
+  const posted = emitted.find((e) => e.kind === "ToolResult" && e.fields.action === "post")!.fields;
   assert.equal(posted.tool, "telegram");
   assert.equal(posted.ok, true);
 });
@@ -1558,7 +1559,7 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
     pollFire: true,
@@ -1569,12 +1570,12 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
   assert.equal(ref.silentRequested, true);
   assert.equal(
     emitted.filter(
-      (e) => e.type === "tool_call" && e.payload.tool === "finish_silently" && e.payload.reason === "nothing new",
+      (e) => e.kind === "ToolCall" && e.fields.tool === "finish_silently" && e.fields.reason === "nothing new",
     ).length,
     1,
   );
   assert.equal(
-    emitted.filter((e) => e.type === "tool_result" && e.payload.tool === "finish_silently" && e.payload.silent === true)
+    emitted.filter((e) => e.kind === "ToolResult" && e.fields.tool === "finish_silently" && e.fields.silent === true)
       .length,
     1,
   );
@@ -1592,7 +1593,7 @@ test("finish_silently ends surface turns and replaces stay_silent", async () => 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -1605,9 +1606,9 @@ test("finish_silently ends surface turns and replaces stay_silent", async () => 
   assert.equal(
     emitted.filter(
       (e) =>
-        e.type === "tool_call" &&
-        e.payload.tool === "finish_silently" &&
-        e.payload.reason === "nothing new since the last check",
+        e.kind === "ToolCall" &&
+        e.fields.tool === "finish_silently" &&
+        e.fields.reason === "nothing new since the last check",
     ).length,
     1,
   );
@@ -1631,7 +1632,7 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -1642,20 +1643,20 @@ test("tool entries carry the call id + faithful model-facing result (WAL replay 
   await callWith(memory, "call-recall", { action: "search", query: "billing" });
 
   for (const id of ["call-exec", "call-read", "call-recall"]) {
-    const pair = emitted.filter((e) => e.payload.callId === id);
+    const pair = emitted.filter((e) => e.fields.callId === id);
     assert.deepEqual(
-      pair.map((e) => e.type),
-      ["tool_call", "tool_result"],
+      pair.map((e) => e.kind),
+      ["ToolCall", "ToolResult"],
       `${id} pairs call→result by id`,
     );
   }
 
-  const result = (id: string) => emitted.find((e) => e.type === "tool_result" && e.payload.callId === id)!.payload;
-  assert.equal(result("call-read").result, "data");
+  const result = (id: string) => emitted.find((e) => e.kind === "ToolResult" && e.fields.callId === id)!.fields;
+  assert.equal(result("call-read").text, "data");
   assert.equal(result("call-read").isError, false);
-  assert.match(result("call-recall").result, /Owns the billing service/);
-  assert.match(result("call-exec").result, /ran echo hi/);
-  assert.match(result("call-exec").result, /\[exit 0\]/);
+  assert.match(result("call-recall").text, /Owns the billing service/);
+  assert.match(result("call-exec").text, /ran echo hi/);
+  assert.match(result("call-exec").text, /\[exit 0\]/);
 });
 
 test("not-found read and denied command record isError + the faithful error text", async () => {
@@ -1670,7 +1671,7 @@ test("not-found read and denied command record isError + the faithful error text
   const ref: ToolContextRef = {
     current: denyTC,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "org:default-org",
   };
@@ -1678,14 +1679,14 @@ test("not-found read and denied command record isError + the faithful error text
   await callWith(execute, "c1", { command: "rm -rf /", purpose: "Run test command" });
   await callWith(read, "c2", { action: "read", path: "missing.txt" });
 
-  const denied = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "execute")!.payload;
+  const denied = emitted.find((e) => e.kind === "ToolResult" && e.fields.tool === "execute")!.fields;
   assert.equal(denied.isError, true);
-  assert.match(denied.result, /denied by policy/);
+  assert.match(denied.text, /denied by policy/);
 
-  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "files")!.payload;
+  const missing = emitted.find((e) => e.kind === "ToolResult" && e.fields.tool === "files")!.fields;
   assert.equal(missing.found, false);
   assert.equal(missing.isError, true);
-  assert.match(missing.result, /no such file/);
+  assert.match(missing.text, /no such file/);
 });
 
 test("a denied command still emits a tool_result (denied), and a missing read records found:false", async () => {
@@ -1700,7 +1701,7 @@ test("a denied command still emits a tool_result (denied), and a missing read re
   const ref: ToolContextRef = {
     current: denyTC,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "org:default-org",
   };
@@ -1709,10 +1710,10 @@ test("a denied command still emits a tool_result (denied), and a missing read re
   await call(execute, { command: "rm -rf /", purpose: "Run test command" });
   await call(read, { action: "read", path: "missing.txt" });
 
-  const denied = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "execute");
-  assert.equal(denied?.payload.denied, true);
-  const missing = emitted.find((e) => e.type === "tool_result" && e.payload.tool === "files");
-  assert.equal(missing?.payload.found, false);
+  const denied = emitted.find((e) => e.kind === "ToolResult" && e.fields.tool === "execute");
+  assert.equal(denied?.fields.denied, true);
+  const missing = emitted.find((e) => e.kind === "ToolResult" && e.fields.tool === "files");
+  assert.equal(missing?.fields.found, false);
 });
 
 test("no emit sink → tools still run, nothing logged (unit path)", async () => {
@@ -1858,7 +1859,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -1892,9 +1893,9 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   assert.match(listed, /bg-1/);
   assert.match(listed, /bg: npm test/);
 
-  const bg = emitted.filter((e) => e.payload.tool === "background");
+  const bg = emitted.filter((e) => e.fields.tool === "background");
   assert.equal(bg.length, 8);
-  assert.equal(emitted.filter((e) => e.payload.tool === "execute").length, 2);
+  assert.equal(emitted.filter((e) => e.fields.tool === "execute").length, 2);
 });
 
 test("background watch reports an already exited job as a successful tail result", async () => {
@@ -1915,7 +1916,7 @@ test("background watch reports an already exited job as a successful tail result
       },
     },
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -1925,7 +1926,7 @@ test("background watch reports an already exited job as a successful tail result
 
   assert.match(watched, /job already exited \(code 0\) — no watch armed; here is the tail of its output:/);
   assert.match(watched, /final line/);
-  const result = emitted.find((e) => e.type === "tool_result")!.payload;
+  const result = emitted.find((e) => e.kind === "ToolResult")!.fields;
   assert.equal(result.completed, true);
   assert.equal(result.error, undefined);
 });
@@ -2480,15 +2481,15 @@ test("typed control tools emit tool_call then tool_result like every other tool"
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
   const cronTool = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "cron")!;
   await call(cronTool, { action: "list" });
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.tool}`),
-    ["tool_call:cron", "tool_result:cron"],
+    emitted.map((e) => `${e.kind}:${e.fields.tool}`),
+    ["ToolCall:cron", "ToolResult:cron"],
   );
 });
 
@@ -2677,7 +2678,7 @@ test("execute and background dispatch every process action and preserves cursors
       current: tc,
       scopeLabel: "personal:U1",
       emit: (entry) => {
-        entries.push(entry.payload as Record<string, unknown>);
+        entries.push(itemFields(entry as Item));
       },
       screenToolResult: async ({ tool, provenance }) => {
         screens.push({ tool, provenance });
@@ -2865,7 +2866,7 @@ test("execute and process approvals preserve intent and action identity", async 
       pendingApprovals: [],
       scopeLabel: "personal:U1",
       emit: (entry) => {
-        entries.push(entry.payload as Record<string, unknown>);
+        entries.push(itemFields(entry as Item));
       },
     };
     const tool = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "execute")!;
@@ -2888,7 +2889,7 @@ test("execute keeps strict approval and quarantined output associated with the c
     pendingApprovals: [],
     scopeLabel: "personal:U1",
     emit: (entry) => {
-      entries.push(entry.payload as Record<string, unknown>);
+      entries.push(itemFields(entry as Item));
     },
     toolApprovalGate: () => false,
   };
@@ -2939,7 +2940,7 @@ test("unscreened background output retains the called action in the durable tran
       current: fakeToolContext(),
       scopeLabel: "personal:U1",
       emit: (entry) => {
-        entries.push(entry.payload as Record<string, unknown>);
+        entries.push(itemFields(entry as Item));
       },
       screenToolResult: async () => ({ outcome: "unscreened" }),
     },
@@ -3006,15 +3007,15 @@ for (const outcome of ["unscreened", "quarantine"] as const)
         },
         scopeLabel: "personal:U1",
         emit: (entry) => {
-          entries.push(entry as Emitted);
+          entries.push(emittedItem(entry));
         },
         screenToolResult: async () => ({ outcome }),
       },
       { sandboxResources: true },
     ).find((t) => t.name === "execute")!;
     await call(tool, { command: "exit 7", sandbox_id: "box-a", purpose: "Check failure rendering" });
-    const input = entries.find((e) => e.type === "tool_call")!.payload;
-    const output = entries.find((e) => e.type === "tool_result")!.payload;
+    const input = entries.find((e) => e.kind === "ToolCall")!.fields;
+    const output = entries.find((e) => e.kind === "ToolResult")!.fields;
     assert.equal(input.sandbox_id, "box-a");
     assert.equal(output.isError, outcome === "quarantine");
     assert.equal(output.stdout, undefined);
@@ -3022,8 +3023,8 @@ for (const outcome of ["unscreened", "quarantine"] as const)
     if (outcome === "unscreened") {
       assert.equal(output.code, 7);
       assert.equal(output.timedOut, false);
-      assert.match(String(output.result), /NOT security-screened/);
-      assert.match(String(output.result), /PRIVATE_COMMAND_OUTPUT/);
+      assert.match(String(output.text), /NOT security-screened/);
+      assert.match(String(output.text), /PRIVATE_COMMAND_OUTPUT/);
     } else {
       assert.equal(output.code, undefined);
       assert.doesNotMatch(JSON.stringify(output), /PRIVATE_COMMAND_OUTPUT/);
@@ -3037,7 +3038,7 @@ test("sandbox call transcripts retain explicit process and lifecycle targets", a
       current: { ...fakeToolContext(), sandboxResources: async () => ({}) },
       scopeLabel: "personal:U1",
       emit: (entry) => {
-        entries.push(entry as Emitted);
+        entries.push(emittedItem(entry));
       },
     },
     { sandboxResources: true },
@@ -3048,10 +3049,10 @@ test("sandbox call transcripts retain explicit process and lifecycle targets", a
       sandbox_id: "box-a",
       purpose: "Inspect target",
     });
-    assert.equal(entries.filter((e) => e.type === "tool_call").at(-1)!.payload.sandbox_id, "box-a");
+    assert.equal(entries.filter((e) => e.kind === "ToolCall").at(-1)!.fields.sandbox_id, "box-a");
   }
   await call(tool, { action: "set_default", sandbox_id: null, purpose: "Clear default" });
-  assert.equal(entries.filter((e) => e.type === "tool_call").at(-1)!.payload.sandbox_id, null);
+  assert.equal(entries.filter((e) => e.kind === "ToolCall").at(-1)!.fields.sandbox_id, null);
 });
 
 test("runtime persists its decision before terminating and blocks later effects", async () => {
@@ -3064,11 +3065,10 @@ test("runtime persists its decision before terminating and blocks later effects"
   const ref: ToolContextRef = {
     current: { ...fakeToolContext(), runtime: async () => ({ ok: true, handoff: { choice, lifetime: "task" } }) },
     scopeLabel: "personal:U1",
-    runtimeRunId: "run",
     runtimeActorId: "U1",
     emit: async (e) => {
-      events.push(e as Emitted);
-      if (e.type === "tool_result") await persisted;
+      events.push(emittedItem(e));
+      if (e.kind === "ToolResult") await persisted;
     },
   };
   const tools = createAgentTools(ref);
@@ -3087,8 +3087,7 @@ test("runtime persists its decision before terminating and blocks later effects"
   const result = (await pending) as { terminate: boolean };
   assert.equal(result.terminate, true);
   assert.deepEqual(ref.runtimeHandoff, { choice, lifetime: "task" });
-  assert.equal(events.filter((e) => e.type === "tool_result").length, 1);
-  assert.equal(events.at(-1)?.payload.runId, "run");
+  assert.equal(events.filter((e) => e.kind === "ToolResult").length, 1);
 });
 
 test("runtime persistence failure does not latch a handoff", async () => {
@@ -3102,7 +3101,7 @@ test("runtime persistence failure does not latch a handoff", async () => {
     },
     scopeLabel: "personal:U1",
     emit: async (e) => {
-      if (e.type === "tool_result") throw new Error("disk failed");
+      if (e.kind === "ToolResult") throw new Error("disk failed");
     },
   };
   await assert.rejects(
@@ -3238,7 +3237,7 @@ test("read passes turn cancellation through and cannot record a late success", a
     current: context,
     abortSignal: controller.signal,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
   }).find((t) => t.name === "files");
   const result = call(read, { action: "read", path: "notes.md" });
@@ -3247,7 +3246,7 @@ test("read passes turn cancellation through and cannot record a late success", a
   pending.resolve({ content: "late data", sourceScopeId: "personal:U1" });
   await assert.rejects(result, { name: "AbortError" });
   assert.equal(received, controller.signal);
-  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 0);
+  assert.equal(emitted.filter((e) => e.kind === "ToolResult").length, 0);
 });
 
 test("session tools are omitted when the actor feature is disabled", () => {
@@ -3288,7 +3287,7 @@ test("agent mail is screened separately, logged privately, and delivered once ac
     scopeLabel: "personal:U1",
     orgScopeId: "org:default-org",
     emit: (entry) => {
-      emitted.push(entry as Emitted);
+      emitted.push(emittedItem(entry));
     },
     screenToolResult: async (input) => {
       screens.push(input);
@@ -3304,10 +3303,9 @@ test("agent mail is screened separately, logged privately, and delivered once ac
   assert.ok(
     screens.some((input) => input.result === "child finding" && input.provenance === "external" && !input.unscreenable),
   );
-  const entry = emitted.find(
-    (entry) => entry.type === "tool_result" && String(entry.payload.result).includes("child finding"),
-  )!;
-  assert.equal(entry.scopeLabel, "personal:U1");
+  assert.ok(
+    emitted.some((entry) => entry.kind === "ToolResult" && String(entry.fields.text).includes("child finding")),
+  );
 });
 
 test("quarantined mail remains pending for release and mailbox failures preserve carrier output", async () => {
@@ -3710,7 +3708,7 @@ test("command and management call traces preserve purpose", async () => {
     current: fakeToolContext(),
     scopeLabel: "personal:U1",
     emit: (event) => {
-      if (event.type === "tool_call") calls.push(event.payload as Record<string, unknown>);
+      if (event.kind === "ToolCall") calls.push(itemFields(event as Item));
     },
   };
   const tools = createAgentTools(ref, { sandboxResources: true });
@@ -3757,7 +3755,7 @@ function clientToolRef(store = createMemoryRunSignalStore()) {
     },
     abortSignal: cancel.signal,
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -3784,11 +3782,11 @@ test("a client tool records the call, waits for the page, and returns its answer
   const ret = await pending;
   assert.equal(ret.content[0]?.text, "rows 3-5 selected");
   assert.deepEqual(ret.details, { structured: { rows: [3, 4, 5] } });
-  const toolCall = emitted.find((e) => e.type === "tool_call")!.payload;
+  const toolCall = emitted.find((e) => e.kind === "ToolCall")!.fields;
   assert.deepEqual(toolCall, { tool: "ui__get_selection", client: true, args: { note: "hi" }, callId: "t" });
-  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  const toolResult = emitted.find((e) => e.kind === "ToolResult")!.fields;
   assert.equal(toolResult.isError, false);
-  assert.equal(toolResult.result, "rows 3-5 selected");
+  assert.equal(toolResult.text, "rows 3-5 selected");
   assert.deepEqual(screened, [{ tool: "ui__get_selection", provenance: "external", source: "client page" }]);
 });
 
@@ -3802,7 +3800,7 @@ test("a client tool passes the page's isError through to the model", async () =>
   const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__highlight_rows")] }).slice(-1);
   const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
   assert.equal(ret.content[0]?.text, "no rows match");
-  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.isError, true);
+  assert.equal(emitted.find((e) => e.kind === "ToolResult")!.fields.isError, true);
 });
 
 test("a client tool times out with an error the model can act on", async () => {
@@ -3810,7 +3808,7 @@ test("a client tool times out with an error the model can act on", async () => {
   const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
   const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
   assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
-  const toolResult = emitted.find((e) => e.type === "tool_result")!.payload;
+  const toolResult = emitted.find((e) => e.kind === "ToolResult")!.fields;
   assert.equal(toolResult.isError, true);
   assert.equal(toolResult.timedOut, true);
 });
@@ -3822,7 +3820,7 @@ test("a client tool stops waiting when the turn is cancelled", async () => {
   cancel.abort();
   const ret = await pending;
   assert.match(ret.content[0]?.text ?? "", /cancelled/);
-  assert.equal(emitted.find((e) => e.type === "tool_result")!.payload.cancelled, true);
+  assert.equal(emitted.find((e) => e.kind === "ToolResult")!.fields.cancelled, true);
 });
 
 test("context recovery drains in-flight effects, preserves an active goal, and blocks subsequent calls", async () => {
@@ -3841,7 +3839,7 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
     scopeLabel: "personal:U1",
     goal: createGoalRecord({ objective: "finish verification" }),
     emit: async (entry) => {
-      events.push(entry as Emitted);
+      events.push(emittedItem(entry));
     },
   };
   const goal = structuredClone(ref.goal);
@@ -3857,7 +3855,7 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
   );
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
-    events.some((e) => e.payload.tool === "context"),
+    events.some((e) => e.fields.tool === "context"),
     false,
   );
   await call(
@@ -3870,8 +3868,8 @@ test("context recovery drains in-flight effects, preserves an active goal, and b
   assert.equal(((await recovery) as { terminate: boolean }).terminate, true);
   assert.deepEqual(ref.runtimeHandoff, { context: "recent" });
   assert.deepEqual(ref.goal, goal);
-  assert.equal(events.at(-1)!.payload.tool, "context");
-  assert.equal(events.filter((e) => e.type === "tool_result" && e.payload.tool === "execute").length, 1);
+  assert.equal(events.at(-1)!.fields.tool, "context");
+  assert.equal(events.filter((e) => e.kind === "ToolResult" && e.fields.tool === "execute").length, 1);
 });
 
 for (const cancel of [false, true]) {
@@ -3884,7 +3882,7 @@ for (const cancel of [false, true]) {
       abortSignal: abort.signal,
       runtimeInFlight: new Set([gate.promise]),
       emit: async (entry) => {
-        if (!cancel && entry.type === "tool_result") throw new Error("write failed");
+        if (!cancel && entry.kind === "ToolResult") throw new Error("write failed");
       },
     };
     const tool = createAgentTools(ref).find((t) => t.name === "context");
@@ -3918,7 +3916,7 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
           },
           scopeLabel: "personal:U1",
           emit: (entry) => {
-            entries.push(entry as Emitted);
+            entries.push(emittedItem(entry));
           },
         },
         { sandboxResources },
@@ -3930,14 +3928,14 @@ test("command exit codes are data; timeouts and thrown tool errors are failures"
         });
       if (outcome === "provider") {
         await assert.rejects(run, /sandbox provider unavailable/);
-        const result = entries.find((e) => e.type === "tool_result")!.payload;
+        const result = entries.find((e) => e.kind === "ToolResult")!.fields;
         assert.equal(result.isError, true);
-        assert.equal(result.result, "Command execution failed: sandbox provider unavailable");
+        assert.equal(result.text, "Command execution failed: sandbox provider unavailable");
         assert.equal(result.code, undefined);
         continue;
       }
       const returned = await run();
-      const result = entries.find((e) => e.type === "tool_result")!.payload;
+      const result = entries.find((e) => e.kind === "ToolResult")!.fields;
       assert.equal(result.isError, !["zero", "nonzero"].includes(outcome), outcome);
       if (outcome === "nonzero") {
         assert.equal(result.code, 1);
@@ -4054,7 +4052,7 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
   const ref: ToolContextRef = {
     current: fakeToolContext(),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
@@ -4080,9 +4078,9 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
   await callWith(history, "unsafe", { seq: 3, retrySafe: false });
   await callWith(history, "unmarked", { seq: 3 });
 
-  const calls = emitted.filter((e) => e.type === "tool_call");
+  const calls = emitted.filter((e) => e.kind === "ToolCall");
   assert.deepEqual(
-    calls.map((e) => e.payload),
+    calls.map((e) => e.fields),
     [
       {
         tool: "history",
@@ -4095,9 +4093,9 @@ test("core tools carry retrySafe while client tools cannot advertise automatic r
       { tool: "history", seq: 3, callId: "unmarked" },
     ],
   );
-  assert.equal(emitted.filter((e) => e.type === "tool_result").length, 3);
+  assert.equal(emitted.filter((e) => e.kind === "ToolResult").length, 3);
   assert.doesNotMatch(
-    JSON.stringify(emitted.filter((e) => e.type === "tool_result")),
+    JSON.stringify(emitted.filter((e) => e.kind === "ToolResult")),
     /retrySafe/,
     "the flag never reaches the tool body or its result",
   );
@@ -4111,7 +4109,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
     const ref: ToolContextRef = {
       current: fakeToolContext(),
       emit: (e) => {
-        emitted.push(e as Emitted);
+        emitted.push(emittedItem(e));
       },
       scopeLabel: "personal:U1",
       shutdown: shutdown.signal,
@@ -4124,13 +4122,13 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
     return emitted;
   };
   const strategy = (emitted: Emitted[]) => {
-    const entries = emitted.map((e, i) => ({ ...e, seq: i + 2 }) as unknown as SessionEntry);
+    const entries = emitted.map((e, i) => storedItem(e, { sessionId: "s", seq: i + 2, createdAt: i + 2 }));
     return resumeStrategy(entries, { userSeq: 1, workEntries: entries.length });
   };
 
   const interrupted = await record("shutdown");
-  assert.equal(interrupted.find((e) => e.type === "tool_result")?.payload.interrupted, true);
-  assert.deepEqual(interrupted.find((e) => e.type === "tool_result")?.payload.stop, { kind: "shutdown" });
+  assert.equal(interrupted.find((e) => e.kind === "ToolResult")?.fields.interrupted, true);
+  assert.deepEqual(interrupted.find((e) => e.kind === "ToolResult")?.fields.stop, { kind: "shutdown" });
   assert.deepEqual(strategy(interrupted), {
     kind: "retry",
     call: { callId: "call-shutdown", tool: "history", input: { query: "budget" } },
@@ -4143,7 +4141,7 @@ test("a tool result produced after shutdown is marked interrupted; user Stop and
 
   for (const abort of ["stop", "none"] as const) {
     const emitted = await record(abort);
-    const payload = emitted.find((e) => e.type === "tool_result")!.payload;
+    const payload = emitted.find((e) => e.kind === "ToolResult")!.fields;
     assert.ok(!("interrupted" in payload), `${abort}: an ordinary result stays a real answer`);
     assert.equal(payload.stopped === true, abort === "stop", `${abort}: only a Stop marks the result as cut off`);
     assert.deepEqual(strategy(emitted), { kind: "continue" });
@@ -4169,7 +4167,7 @@ test("background starts require a nonblank purpose as a repairable tool result",
         current,
         scopeLabel: "personal:U1",
         emit: (entry) => {
-          events.push(entry.payload as Record<string, unknown>);
+          events.push(itemFields(entry as Item));
         },
       },
       options,

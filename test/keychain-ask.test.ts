@@ -582,9 +582,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);
   const resumeTurns = async (sessionId: string, pattern: RegExp) =>
-    (await built.sessions.getEntries(sessionId)).filter(
-      (e) => e.type === "user" && pattern.test((e.payload as { text: string }).text),
-    );
+    (await built.sessions.getItems(sessionId)).filter((i) => i.kind === "UserMessage" && pattern.test(i.text ?? ""));
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
     mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
@@ -859,7 +857,8 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 
     const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
-    const { text: prompt, environment } = resolution[0]!.payload as { text: string; environment: string };
+    const prompt = resolution[0]!.text ?? "";
+    const environment = resolution[0]!.body.environment as string;
     assert.ok(
       !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
       "no ids in the resume text",
@@ -1192,7 +1191,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     await built.scheduler.tick(Date.now());
     const resolved = await waitFor(() => resumeTurns(session!.id, /did not answer the access request/));
     assert.equal(resolved.length, 1, "exactly one expired-resolution turn in the asking thread");
-    assert.ok(!(resolved[0]!.payload as { text: string }).text.includes(made.ask.id));
+    assert.ok(!(resolved[0]!.text ?? "").includes(made.ask.id));
 
     await built.scheduler.tick(Date.now());
     assert.equal(

@@ -3,7 +3,7 @@ import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../typ
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
-import type { TurnFailurePayload } from "../core/turn-error.ts";
+import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
@@ -92,7 +92,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
 
 export type TurnFailureSessions = Pick<
   SessionStore,
-  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getEntries"
+  "append" | "getByThread" | "acquireLease" | "peekLease" | "releaseLease" | "getItems"
 >;
 
 const FAILURE_RECORD_SCAN_LIMIT = 200;
@@ -113,14 +113,15 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
     return false;
   }
   try {
-    const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
+    const tail = await sessions.getItems(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
     if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
-    const payload: TurnFailurePayload = {
-      kind: "turn_failure",
-      message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
-      runId: run.id,
-    };
-    await sessions.append(lease, { type: "system", payload, scopeLabel: session.scopeId });
+    await sessions.append(
+      lease,
+      turnFailureItem(
+        `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,
+        run.id,
+      ),
+    );
     return true;
   } finally {
     await sessions.releaseLease(lease);

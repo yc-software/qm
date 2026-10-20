@@ -6,6 +6,7 @@ import { recordSteerIntake } from "../src/harness/harness-shared.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { isUserMessage } from "../src/sessions/items.ts";
 
 let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
 mock.module("../src/harness/mock-harness.ts", {
@@ -39,7 +40,7 @@ for (const mode of ["retry", "handoff"] as const) {
     exercise = async (turn) => {
       runId = turn.runId;
       if (mode === "handoff" && turn.input === request.text) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         return {
           reply: "",
           runtimeHandoff: {
@@ -51,32 +52,28 @@ for (const mode of ["retry", "handoff"] as const) {
       if (mode === "retry") assert.equal(turn.continueTurn, true);
       else {
         assert.match(turn.input, /Runtime switched/);
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
       }
       await recordSteerIntake(turn, { text: "Change of plan", ts: "steer-visible" });
-      await turn.emit({
-        type: "user",
-        payload: { text: "private steer", steered: true, hidden: true },
-        scopeLabel: turn.scopeLabel,
-      });
+      await turn.emit({ kind: "SteeringMessage", text: "private steer", hidden: true });
     };
     try {
       const result = await built.app.turn(request);
       assert.equal(result.status, "ok");
       const session = await built.app.getSession(result.sessionId!);
-      const users = session!.entries.filter((entry) => entry.type === "user");
+      const users = session!.items.filter(isUserMessage);
       const steerAt = mode === "retry" ? 1 : 2;
-      if (mode !== "retry") assert.equal((users[1]!.payload as { hidden?: boolean }).hidden, true);
+      if (mode !== "retry") assert.equal(users[1]!.hidden, true);
       assert.equal(users.length, steerAt + 2);
-      assert.equal((users[steerAt]!.payload as { text?: string }).text, "Change of plan");
-      assert.notEqual((users[steerAt]!.payload as { hidden?: boolean }).hidden, true);
-      assert.equal((users[steerAt + 1]!.payload as { hidden?: boolean }).hidden, true);
+      assert.equal(users[steerAt]!.text, "Change of plan");
+      assert.notEqual(users[steerAt]!.hidden, true);
+      assert.equal(users[steerAt + 1]!.hidden, true);
       const activity = (await built.app.getRun(runId!))!.activity ?? [];
-      const liveSteer = activity.find(
-        (entry) => entry.type === "user" && (entry.payload as { text?: string }).text === "Change of plan",
-      );
+      const liveSteer = activity
+        .flatMap((entry) => ("item" in entry ? [entry.item] : []))
+        .find((item) => isUserMessage(item) && item.text === "Change of plan");
       assert.ok(liveSteer);
-      assert.notEqual((liveSteer.payload as { hidden?: boolean }).hidden, true);
+      assert.notEqual(liveSteer.hidden, true);
     } finally {
       exercise = undefined;
     }

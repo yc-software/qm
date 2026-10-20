@@ -159,9 +159,9 @@ test("a queued tool-using run surfaces its activity + timings via getRun()", asy
     assert.equal(finished.status, "done");
 
     const run = await built.app.getRun(ack.runId!);
-    const types = (run?.activity ?? []).map((a) => a.type);
-    assert.ok(types.includes("tool_call"), "the execute tool_call was mirrored to the run's activity");
-    assert.ok(types.includes("tool_result"), "the execute tool_result was mirrored too");
+    const kinds = (run?.activity ?? []).map((a) => ("item" in a ? a.item.kind : a.marker));
+    assert.ok(kinds.includes("ToolCall"), "the execute tool call was mirrored to the run's activity");
+    assert.ok(kinds.includes("ToolResult"), "the execute tool result was mirrored too");
     assert.equal(typeof run?.startedAt, "number", "getRun surfaces when the run started");
     assert.equal(typeof run?.finishedAt, "number", "getRun surfaces when the run finished");
   } finally {

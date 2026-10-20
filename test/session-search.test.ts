@@ -17,9 +17,9 @@ async function seed(sessions: SessionStore, threadRef: string, principal: string
   const { lease } = await sessions.acquireLease(s.id);
   for (const [i, text] of texts.entries()) {
     await sessions.append(lease!, {
-      type: i % 2 === 0 ? "user" : "assistant",
-      payload: i % 2 === 0 ? { text, name: "josh" } : { text },
-      scopeLabel: scopeId("personal", principal),
+      kind: i % 2 === 0 ? "UserMessage" : "AgentMessage",
+      text,
+      body: i % 2 === 0 ? { name: "josh" } : {},
     });
   }
   await sessions.releaseLease(lease!);
@@ -52,16 +52,14 @@ test("memory store: search respects participant visibility windows and identity"
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
   const { lease } = await store.acquireLease(s.id);
   await store.append(lease!, {
-    type: "user",
-    payload: { text: "secret prelude" },
-    scopeLabel: scopeId("personal", "U1"),
+    kind: "UserMessage",
+    text: "secret prelude",
   });
   // U2 joins WITHOUT history — the prelude is outside their window.
   await store.addParticipant(s.id, "U2");
   await store.append(lease!, {
-    type: "user",
-    payload: { text: "shared secret plans" },
-    scopeLabel: scopeId("personal", "U1"),
+    kind: "UserMessage",
+    text: "shared secret plans",
   });
   await store.releaseLease(lease!);
 
@@ -79,14 +77,15 @@ test("memory store: search ignores non-conversational entry types", async () => 
   await store.addParticipant(s.id, "U1", undefined, { includeHistory: true });
   const { lease } = await store.acquireLease(s.id);
   await store.append(lease!, {
-    type: "tool_call",
-    payload: { tool: "execute", callId: "c1", text: "grep zanzibar" },
-    scopeLabel: scopeId("personal", "U1"),
+    kind: "ToolCall",
+    tool: "execute",
+    callId: "c1",
+    body: { text: "grep zanzibar" },
   });
   await store.append(lease!, {
-    type: "text",
-    payload: { text: "zanzibar itinerary" },
-    scopeLabel: scopeId("personal", "U1"),
+    kind: "AgentMessage",
+    variant: "narration",
+    text: "zanzibar itinerary",
   });
   await store.releaseLease(lease!);
 
@@ -105,9 +104,10 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   ]);
   const { lease } = await sessions.acquireLease(id);
   await sessions.append(lease!, {
-    type: "tool_result",
-    payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
-    scopeLabel: scopeId("personal", "U1"),
+    kind: "ToolResult",
+    tool: "execute",
+    callId: "c1",
+    text: "zanzibar weather outputonly",
   });
   await sessions.releaseLease(lease!);
   await sessions.updateTitle(id, "Trip planning");

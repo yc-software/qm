@@ -2065,7 +2065,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id/entries/:seq",
+    path: "/api/sessions/:id/items/:seq",
     handle: async (c) => {
       const { res, user } = c;
       const { id, seq } = c.params as { id: string; seq: string };
@@ -2073,7 +2073,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
       );
     },
   },

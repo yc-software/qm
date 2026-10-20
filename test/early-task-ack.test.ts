@@ -92,9 +92,10 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
       turn.onToolCallStart?.("slack");
       assert.equal((await built.deliveries.pending("slack")).length, 0);
       await turn.emit({
-        type: "tool_call",
-        payload: { tool: "slack", callId: `slack-${action}`, action: action === "delegated-read" ? "read" : action },
-        scopeLabel: turn.scopeLabel,
+        kind: "ToolCall",
+        tool: "slack",
+        callId: `slack-${action}`,
+        body: { action: action === "delegated-read" ? "read" : action },
       });
       started();
       await block;

@@ -1,4 +1,4 @@
-import { searchRowsFromEntries } from "../src/sessions/entry-search.ts";
+import { searchRowsFromItems } from "../src/sessions/entry-search.ts";
 import { openSessionStore, parseBackfillArgs, resolveSessions, runBackfill } from "./lib/backfill-runner.ts";
 
 const { apply, only } = parseBackfillArgs();
@@ -17,7 +17,7 @@ await runBackfill({
     return { action: "work", detail: `${missing} missing messages` };
   },
   applyStep: async (session, lease) => {
-    const rows = searchRowsFromEntries(await store.getEntries(session.id), -1);
+    const rows = searchRowsFromItems(await store.getItems(session.id), -1);
     for (let i = 0; i < rows.length; i += 500) {
       await store.appendSearchEntries(lease, rows.slice(i, i + 500));
     }

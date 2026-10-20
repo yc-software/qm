@@ -6,7 +6,6 @@ import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations }
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createItemsPromotion, ITEMS_CUTOVER_ID } from "../src/sessions/items-promotion.ts";
 import { ItemsCopyOperator } from "../scripts/ops/items-copy.ts";
-import { scopeId } from "../src/types.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -85,11 +84,7 @@ test("staged core stays on the verified copy until authenticated promotion compl
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM session_leases")).rows[0].n, 0);
     const { lease } = await staged.acquireLease(id);
     assert.ok(lease);
-    await staged.append(lease, {
-      type: "assistant",
-      payload: { text: "after" },
-      scopeLabel: scopeId("personal", "alice"),
-    });
+    await staged.append(lease, { kind: "AgentMessage", text: "after" });
     await staged.releaseLease(lease);
     assert.deepEqual(
       (await pool.query("SELECT text FROM items ORDER BY seq")).rows.map((r) => r.text),

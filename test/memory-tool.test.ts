@@ -9,6 +9,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -93,7 +94,6 @@ test("memory ops signal unavailable (null) when memory is not wired", async () =
   assert.equal(await ctx.memoryDelete(["1"]), null);
 });
 
-type Emitted = { type: string; payload: any; scopeLabel: string };
 const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, params: unknown) => {
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
@@ -107,11 +107,11 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
 
-  const emitted: Emitted[] = [];
+  const emitted: NewItem[] = [];
   const ref: ToolContextRef = {
     current: ctxFor({ scope: personal, workspace, memory }),
     emit: (e) => {
-      emitted.push(e as Emitted);
+      emitted.push(e);
     },
     scopeLabel: personal,
   };
@@ -131,15 +131,11 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.match(miss, /no remembered facts match/);
 
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.tool}`),
-    ["tool_call:memory", "tool_result:memory", "tool_call:memory", "tool_result:memory"],
+    emitted.map((e) => `${e.kind}:${e.tool}`),
+    ["ToolCall:memory", "ToolResult:memory", "ToolCall:memory", "ToolResult:memory"],
   );
-  assert.equal(emitted[1]!.payload.count, 1);
-  assert.equal(emitted[3]!.payload.count, 0);
-  assert.equal(
-    emitted.every((e) => e.scopeLabel === personal),
-    true,
-  );
+  assert.equal(emitted[1]!.body?.count, 1);
+  assert.equal(emitted[3]!.body?.count, 0);
 });
 
 test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing", async () => {

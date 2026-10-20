@@ -4,7 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "./items.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -141,7 +141,7 @@ export function createPostgresToolOutputStore(opts: {
 }
 
 export function createMemoryToolOutputStore(
-  opts: { inlineTokens?: number; sessions?: { getEntries(sessionId: string): Promise<SessionEntry[]> } } = {},
+  opts: { inlineTokens?: number; sessions?: { getItems(sessionId: string): Promise<Item[]> } } = {},
 ): ToolOutputStore & { setInlineTokens(n: number): void; parked: Map<string, string> } {
   let cap = opts.inlineTokens ?? DEFAULT_INLINE_TOKENS;
   const parked = new Map<string, string>();
@@ -159,12 +159,9 @@ export function createMemoryToolOutputStore(
       return sha;
     },
     async read(sessionId, callId) {
-      const entries = (await opts.sessions?.getEntries(sessionId)) ?? [];
-      const result = entries.find(
-        (e) => e.type === "tool_result" && (e.payload as { callId?: unknown } | null)?.callId === callId,
-      );
-      const blob = (result?.payload as { output?: { blob?: unknown } } | undefined)?.output?.blob;
-      if (typeof blob !== "string") return null;
+      const items = (await opts.sessions?.getItems(sessionId)) ?? [];
+      const blob = items.find((e) => e.kind === "ToolResult" && e.callId === callId)?.blobSha;
+      if (!blob) return null;
       const text = parked.get(blob);
       if (text === undefined) throw new Error(`tool output ${callId}: parked blob ${blob} is missing`);
       return { text };
