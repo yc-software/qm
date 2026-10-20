@@ -229,6 +229,25 @@ test("rate limiting is respected across different Slack items and never triggers
   assert.equal((await items.get(item.id))!.status, "ready");
 });
 
+test("a Gmail rate limit pauses reads across the owner's Gmail items", async () => {
+  const { items, item } = await fixture();
+  let reads = 0;
+  const refresh = createInboxSourceRefresh({
+    featureFlags,
+    items,
+    tokens,
+    directory,
+    fetchImpl: async () => {
+      reads++;
+      return new Response("limited", { status: 429, headers: { "retry-after": "120" } });
+    },
+  });
+  await refresh("owner", [item]);
+  await refresh("owner", [{ ...item, id: "second" }]);
+  assert.equal(reads, 1);
+  assert.match(String((await items.get(item.id))!.sourcePayload?.sourceRefreshError), /not been dismissed/);
+});
+
 test("slow Gmail reads have a total batch budget and later cards are visited on the next refresh", async () => {
   const { items, item } = await fixture();
   let clock = 0;
