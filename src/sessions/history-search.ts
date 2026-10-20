@@ -1,4 +1,5 @@
 import { isObj } from "../util/objects.ts";
+import { withoutWire } from "../harness/context-compaction.ts";
 import type { SessionEntry } from "../types.ts";
 import { contextSummaryPayload } from "./session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
@@ -23,8 +24,7 @@ function entryText(entry: SessionEntry): string {
   const text = (entry.payload as { text?: string } | null)?.text;
   if (typeof text === "string" && text.trim()) return text;
   if (!isObj(entry.payload)) return JSON.stringify(entry.payload ?? {});
-  const { step: _step, wire: _wire, ...rest } = entry.payload as Record<string, unknown>;
-  return JSON.stringify(rest);
+  return JSON.stringify(withoutWire(entry.payload));
 }
 
 function entryAuthor(entry: SessionEntry): string | undefined {

@@ -28,7 +28,7 @@ const ACMECLI_SHAPED = {
   label: "Acme CLI",
   advertise: "acmecli (organization CLI)",
   hints: ["acmecli is authenticated ambiently; never run acmecli login"],
-  approvals: [{ pattern: "\\bacmecli\\b[^;|&]*\\blogin\\b", decision: "deny", reason: "ambient authentication" }],
+  approvals: [{ command: "login", decision: "deny", reason: "ambient authentication" }],
   auth: {
     check: "acmecli me",
     reauth: "acmecli login --use-device-code",
@@ -50,7 +50,7 @@ test("loadDeploymentLayer derives the runtime shapes from tool descriptors", () 
   );
   assert.deepEqual(layer.hints, ["acmecli is authenticated ambiently; never run acmecli login"]);
   assert.deepEqual(layer.commandRules, [
-    { pattern: "\\bacmecli\\b[^;|&]*\\blogin\\b", decision: "deny", reason: "ambient authentication" },
+    { argv: ["acmecli", "login"], decision: "deny", reason: "ambient authentication" },
   ]);
   assert.deepEqual(layer.credentialPaths, [credentialDirectory(".acmecli"), credentialDirectory(".aws")]);
   assert.deepEqual(layer.splitEnvTemplates, [
@@ -128,7 +128,7 @@ test("command-form approval rules target install.binary and are enforced by poli
       },
     }),
   );
-  assert.equal(layer.commandRules[0]?.pattern, "\\bacmectl\\s+delete(?:\\b|\\s|$)");
+  assert.deepEqual(layer.commandRules[0], { argv: ["acmectl", "delete"], decision: "require_approval" });
   const policy = { mode: "denylist" as const, rules: [] };
   assert.equal(
     evaluateCommandWithLayer("acmectl delete project", policy, layer.commandRules).decision,
@@ -136,6 +136,7 @@ test("command-form approval rules target install.binary and are enforced by poli
   );
   assert.equal(evaluateCommandWithLayer("acmectl delete", policy, layer.commandRules).decision, "require_approval");
   assert.equal(evaluateCommandWithLayer("acmectl deleteall", policy, layer.commandRules).decision, "allow");
+  assert.equal(evaluateCommandWithLayer("acme delete project", policy, layer.commandRules).decision, "allow");
 });
 
 test("loadDeploymentLayer: a dir with no tools/ is a valid, empty layer", () => {

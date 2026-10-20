@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  compileApproval,
+  approvalRule,
   parseToolDescriptor,
   type ToolCredentialPath,
   type ToolCredentialBroker,
@@ -9,7 +9,7 @@ import {
   type ToolInstallFile,
 } from "./deployment-layer.ts";
 import { credentialServiceForPath } from "../credentials/resident-paths.ts";
-import type { CommandRule } from "../types.ts";
+import type { ArgvRule } from "../types.ts";
 
 export interface DeploymentLayerRuntime {
   dir: string;
@@ -19,7 +19,7 @@ export interface DeploymentLayerRuntime {
   credentialPaths: ToolCredentialPath[];
   splitEnvTemplates: Record<string, string>[];
   brokeredTools: BrokeredLayerTool[];
-  commandRules: CommandRule[];
+  commandRules: ArgvRule[];
   installFiles: LayerInstallFile[];
 }
 
@@ -141,10 +141,7 @@ export function resolvedDeploymentLayer(
       };
     }),
     commandRules: tools.flatMap((tool) =>
-      (tool.approvals ?? []).map((approval) => ({
-        ...compileApproval(tool.install?.binary ?? tool.id, approval),
-        ...(approval.reason ? { reason: approval.reason } : {}),
-      })),
+      (tool.approvals ?? []).map((approval) => approvalRule(tool.install?.binary ?? tool.id, approval)),
     ),
     installFiles,
   };

@@ -77,13 +77,13 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
     const orgPolicy = deps.config.getCommandPolicy(orgScope(deps)) ?? defaultOrgPolicy();
     const effective = targetKind === "org" ? target : composePolicy(orgPolicy, target);
     const result = evaluateCommand(command, effective);
-    const effectiveRuleIndex = result.approvalKey
-      ? effective.rules.findIndex((rule) => rule.pattern === result.approvalKey)
-      : -1;
-    const orgRuleCount = targetKind === "org" ? 0 : orgPolicy.rules.length;
+    const orgRuleCount = targetKind === "org" ? effective.rules.length : orgPolicy.rules.length;
     let ruleSource: "organization" | "scope" | null = null;
-    if (effectiveRuleIndex >= 0) ruleSource = effectiveRuleIndex < orgRuleCount ? "organization" : "scope";
-    const ruleIndex = effectiveRuleIndex < 0 ? null : effectiveRuleIndex - (ruleSource === "scope" ? orgRuleCount : 0);
+    let ruleIndex: number | null = null;
+    if (result.policyRuleIndex !== undefined) {
+      ruleSource = result.policyRuleIndex < orgRuleCount ? "organization" : "scope";
+      ruleIndex = result.policyRuleIndex - (ruleSource === "scope" ? orgRuleCount : 0);
+    }
     audit(deps, {
       principalId: actor.id,
       action: "command-policy.simulate",

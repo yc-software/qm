@@ -1,6 +1,11 @@
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { PendingApproval, ToolActivity, WorkBlock } from "./core-bridge.ts";
 
+export type CommandActivity =
+  | { kind: "read"; path: string }
+  | { kind: "list_files"; path?: string }
+  | { kind: "search"; pattern: string; path?: string };
+
 export interface ToolPayload {
   sessionId?: string;
   title?: string;
@@ -13,6 +18,7 @@ export interface ToolPayload {
 
   tool?: string;
   command?: string;
+  activity?: CommandActivity;
   background?: boolean;
   purpose?: string;
   path?: string;

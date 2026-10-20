@@ -8,39 +8,44 @@ import {
   thinkingPresentation,
   sessionPresentation,
 } from "../src/activity-presentation.ts";
-import type { ToolRowModel, ToolPayload, TimelineItem } from "../src/timeline.ts";
+import type { CommandActivity, ToolRowModel, ToolPayload, TimelineItem } from "../src/timeline.ts";
 
-function row(command: string, result: ToolPayload | null = { code: 0 }): ToolRowModel {
+function row(command: string, result: ToolPayload | null = { code: 0 }, activity?: CommandActivity): ToolRowModel {
   return {
     call: {
       seq: 1,
       parentSeq: null,
       type: "tool_call",
-      payload: { tool: "sandbox", action: "exec", command },
+      payload: { tool: "sandbox", action: "exec", command, ...(activity ? { activity } : {}) },
       createdAt: 1,
     },
     result: result ? { seq: 2, parentSeq: null, type: "tool_result", payload: result, createdAt: 2 } : null,
   };
 }
 
-test("simple shell reads and searches get semantic labels, compound commands stay exact", () => {
-  assert.equal(activityLabel(row("cat /workspace/src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg -n 'gateway' src/main.ts"), "complete"), "Searched for gateway in main.ts");
-  for (const command of [
-    "cat file; rm file",
-    "rg foo src | head -10",
-    "cat $(find .)",
-    "rg -g '*.ts' foo src",
-    "python3 <<'PY'\nprint(1)\nPY",
-  ]) {
-    assert.equal(activityDescription({ tool: "execute", command }).category, "execute");
-  }
+test("reads and searches are labelled from the activity core attached, other commands stay exact", () => {
+  const read = { kind: "read", path: "/workspace/src/main.ts" } as const;
+  assert.equal(activityLabel(row("cat /workspace/src/main.ts", { code: 0 }, read), "complete"), "main.ts");
   assert.equal(
-    activityLabel(row("rg -n 'gateway|secret' src/main.ts"), "complete"),
-    "Searched for gateway|secret in main.ts",
+    activityLabel(
+      row("rg -n 'gateway' src/main.ts", { code: 0 }, { kind: "search", pattern: "gateway", path: "src/main.ts" }),
+      "complete",
+    ),
+    "Searched for gateway in main.ts",
   );
-  assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
+  assert.equal(
+    activityLabel(row("rg --files src", { code: 0 }, { kind: "list_files", path: "src" }), "complete"),
+    "Searched for files in src",
+  );
+  assert.equal(activityLabel(row("rg --files", null, { kind: "list_files" }), "working"), "Searching for files");
+  assert.deepEqual(activityDescription({ tool: "execute", command: "cat file; rm file" }), {
+    category: "execute",
+    target: "cat file; rm file",
+  });
+  assert.deepEqual(activityDescription({ tool: "execute", command: "python3 <<'PY'\nprint(1)\nPY" }), {
+    category: "execute",
+    target: "python3 <<'PY'",
+  });
   assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
     category: "read",
     target: "publish",
@@ -58,13 +63,16 @@ test("simple shell reads and searches get semantic labels, compound commands sta
 test("status labels never report missing or failed results as successful", () => {
   assert.equal(activityLabel(row("npm test", null), "working"), "Running npm test");
   assert.equal(activityLabel(row("npm test", null), "complete"), "Tried running npm test");
-  assert.equal(activityLabel(row("cat missing", { code: 1 }), "complete"), "missing · exit 1");
+  assert.equal(
+    activityLabel(row("cat missing", { code: 1 }, { kind: "read", path: "missing" }), "complete"),
+    "missing · exit 1",
+  );
   assert.equal(activityLabel(row("npm test", { blocked: "needs_approval" }), "working"), null);
 });
 
 test("groups describe categories and surface errors and approvals", () => {
   const items: TimelineItem[] = [
-    { kind: "tool", row: row("cat README.md") },
+    { kind: "tool", row: row("cat README.md", { code: 0 }, { kind: "read", path: "README.md" }) },
     { kind: "tool", row: row("npm test") },
   ];
   assert.deepEqual(activityGroupSummary(items, "complete"), {
@@ -158,18 +166,23 @@ test("purpose takes precedence over commands while retaining failure and incompl
   tool.call!.payload = { tool: "sandbox", action: "start_process", purpose: "Start the preview server" };
   tool.result = null;
   assert.equal(activityLabel(tool, "working"), "Start the preview server");
-  tool.call!.payload = { tool: "execute", command: "cat report.csv", purpose: "  " };
+  tool.call!.payload = {
+    tool: "execute",
+    command: "cat report.csv",
+    activity: { kind: "read", path: "report.csv" },
+    purpose: "  ",
+  };
   assert.equal(activityLabel(tool, "working"), "Reading report.csv");
 });
 
 test("ordinary command exits stay neutral while tool errors retain failure labels", () => {
   for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
-    for (const [command, label] of [
-      ["grep absent file", "Searched for absent in file"],
-      ["[ -d dir ]", "[ -d dir ]"],
-    ]) {
-      const tool = row(command!, { code: 1, isError: false });
-      tool.call!.payload = { ...identity, command };
+    for (const [command, label, activity] of [
+      ["grep absent file", "Searched for absent in file", { kind: "search", pattern: "absent", path: "file" }],
+      ["[ -d dir ]", "[ -d dir ]", undefined],
+    ] as const) {
+      const tool = row(command, { code: 1, isError: false });
+      tool.call!.payload = { ...identity, command, ...(activity ? { activity } : {}) };
       assert.equal(activityLabel(tool, "complete"), `${label} · exit 1`);
       for (const result of [
         { code: 1, isError: true },
@@ -177,7 +190,7 @@ test("ordinary command exits stay neutral while tool errors retain failure label
         { error: "provider unavailable" },
         { denied: true },
       ]) {
-        tool.result = row(command!, result).result;
+        tool.result = row(command, result).result;
         assert.match(activityLabel(tool, "complete")!, /Failed/);
         assert.doesNotMatch(activityLabel(tool, "complete")!, /exit/);
       }

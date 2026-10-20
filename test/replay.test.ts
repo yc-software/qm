@@ -6,11 +6,13 @@ import {
   recordedMessageTimestamps,
   planColdStartSeed,
   reconstructMessagesFromHistory,
+  recordedToolArguments,
   renderOverheard,
   replayPreamble,
   seedPriorTurns,
   selectOverheardToImport,
 } from "../src/harness/replay.ts";
+import { compactTranscript } from "../src/harness/context-compaction.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
@@ -727,4 +729,16 @@ test("replayed context marks each Pacific calendar day once, dating overheard Sl
     (msgs[4]!.content[0] as { text: string }).text,
     "── Monday, October 19, 2026 ──\nhas the deadline passed?",
   );
+});
+
+test("the activity core attaches to an execute call is neither replayed nor summarized as an argument", () => {
+  const payload = {
+    tool: "execute",
+    callId: "c1",
+    command: "cat a.ts",
+    purpose: "Read the file",
+    activity: { kind: "read", path: "a.ts" },
+  };
+  assert.deepEqual(recordedToolArguments(payload), { command: "cat a.ts", purpose: "Read the file" });
+  assert.doesNotMatch(compactTranscript([ent("tool_call", payload)]), /activity/);
 });

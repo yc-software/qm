@@ -104,14 +104,14 @@ test("invalid descriptors never replace the durable current layer", async () => 
         tools: [
           {
             path: "tools/bad/tool.json",
-            content: JSON.stringify({ id: "bad", approvals: [{ pattern: "acme deploy" }] }),
+            content: JSON.stringify({ id: "bad", approvals: [{ pattern: "\\bbad\\b" }] }),
           },
         ],
         skills: [],
       },
       "bad",
     ),
-    /must refer to its own tool binary/,
+    /pattern is no longer supported/,
   );
   assert.equal((await store.get())?.contentHash, first.contentHash);
   assert.equal((await store.get())?.version, 1);

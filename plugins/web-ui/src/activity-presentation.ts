@@ -8,20 +8,6 @@ function compactPath(path: string): string {
   return parts.at(-1) === "SKILL.md" ? parts.slice(-2).join("/") : parts.at(-1) || path;
 }
 
-function shellWords(command: string): string[] | null {
-  if (command.includes("\n")) return null;
-  const pattern = /\s*(?:'([^']*)'|"([^"$`\\]*)"|([^\s'"\\;&|<>`$()]+))/gy;
-  const words: string[] = [];
-  while (pattern.lastIndex < command.length) {
-    if (!command.slice(pattern.lastIndex).trim()) break;
-    const match = pattern.exec(command);
-    if (!match) return null;
-    if (pattern.lastIndex < command.length && !/\s/.test(command[pattern.lastIndex]!)) return null;
-    words.push(match[1] ?? match[2] ?? match[3]!);
-  }
-  return words;
-}
-
 export function activityDescription(
   call: ToolPayload,
   result: ToolPayload = {},
@@ -37,44 +23,16 @@ export function activityDescription(
     return { category: "read", target: path === "SKILL.md" ? name : `${name}/${compactPath(path)}` };
   }
   if (tool !== "execute") return { category: "other", target: "" };
-  const command = call.command ?? "";
-  const words = shellWords(command);
-  if (words?.[0] === "cat" && words.length === 2 && !words[1]!.startsWith("-")) {
-    return { category: "read", target: compactPath(words[1]!) };
-  }
-  if (
-    words?.[0] === "sed" &&
-    words.length === 4 &&
-    words[1] === "-n" &&
-    /^\d+(?:,\d+)?p$/.test(words[2]!) &&
-    !words[3]!.startsWith("-")
-  ) {
-    return { category: "read", target: compactPath(words[3]!) };
-  }
-  if (words?.[0] === "rg" && words[1] === "--files" && words.length <= 3 && !words[2]?.startsWith("-")) {
-    return { category: "search", target: `files${words[2] ? ` in ${compactPath(words[2])}` : ""}` };
-  }
-  if (words && ["rg", "grep"].includes(words[0]!)) {
-    const args = words.slice(1);
-    const flags = new Set([
-      "-n",
-      "--line-number",
-      "-i",
-      "--ignore-case",
-      "-l",
-      "--files-with-matches",
-      "-F",
-      "--fixed-strings",
-      "-w",
-      "--word-regexp",
-      "--hidden",
-    ]);
-    while (args.length && flags.has(args[0]!)) args.shift();
-    if (args.length >= 1 && args.length <= 2 && !args.some((arg) => arg.startsWith("-"))) {
-      return { category: "search", target: `${args[0]}${args[1] ? ` in ${compactPath(args[1])}` : ""}` };
-    }
-  }
-  return { category: "execute", target: command.split("\n")[0] ?? "" };
+  const activity = call.activity;
+  if (activity?.kind === "read") return { category: "read", target: compactPath(activity.path) };
+  if (activity?.kind === "list_files")
+    return { category: "search", target: `files${activity.path ? ` in ${compactPath(activity.path)}` : ""}` };
+  if (activity?.kind === "search")
+    return {
+      category: "search",
+      target: `${activity.pattern}${activity.path ? ` in ${compactPath(activity.path)}` : ""}`,
+    };
+  return { category: "execute", target: (call.command ?? "").split("\n")[0] ?? "" };
 }
 
 export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): string | null {

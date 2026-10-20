@@ -17,7 +17,7 @@ before(() => {
 beforeEach(() => ff.reset());
 after(() => ff.cleanup());
 
-function acmecliBrokeredLayer(binary?: string, approvals?: Array<{ pattern: string; reason?: string }>): string {
+function acmecliBrokeredLayer(binary?: string, approvals?: Array<{ command: string; reason?: string }>): string {
   const dir = mkdtempSync(join(tmpdir(), "dfp-layer-"));
   mkdirSync(join(dir, "tools/acmecli"), { recursive: true });
   writeFileSync(
@@ -103,9 +103,7 @@ test("selected broker execute honors deployment approval rules before vending cr
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "dfp-credexec-approval-")),
       signingSecret: "device-flow-test-secret",
-      deploymentLayerDir: acmecliBrokeredLayer("env", [
-        { pattern: "\\benv\\b\\s+tool\\b", reason: "mutating subcommand" },
-      ]),
+      deploymentLayerDir: acmecliBrokeredLayer("env", [{ command: "tool", reason: "mutating subcommand" }]),
     }),
     {
       credentialBrokers: {

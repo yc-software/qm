@@ -13,7 +13,12 @@ import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.
 import { deliveryNote } from "../core/attachments.ts";
 import { goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
-import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
+import {
+  CONTEXT_SUMMARY_HEADER,
+  INTERRUPTED_TOOL_RESULT,
+  unrecordedToolResult,
+  withoutWire,
+} from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
@@ -267,7 +272,7 @@ function stepBlocks(e: SessionEntry, step: ReplayStep): Positioned[] {
 }
 
 export function recordedToolArguments(p: Record<string, unknown>): Record<string, unknown> {
-  const { tool: _tool, callId: _c, rerun, result: _r, step: _s, wire: _w, ...recorded } = p;
+  const { tool: _tool, callId: _c, rerun, result: _r, ...recorded } = withoutWire(p);
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
   if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;

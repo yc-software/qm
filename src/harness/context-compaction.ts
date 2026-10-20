@@ -42,7 +42,8 @@ export const CONTEXT_SUMMARY_HEADER =
   "[Earlier conversation summary — an index of turns compacted out of your context. Conversation turns and tool calls can be reopened with the history tool (seq parameter; a very long entry returns as head and tail), or searched (query). Tool results are excluded.]";
 
 export function withoutWire(payload: unknown): Record<string, unknown> {
-  return { ...(payload as Record<string, unknown> | null), step: undefined, wire: undefined };
+  const { step: _step, wire: _wire, activity: _activity, ...rest } = (payload ?? {}) as Record<string, unknown>;
+  return rest;
 }
 
 function modelReplayable(entries: SessionEntry[]): SessionEntry[] {

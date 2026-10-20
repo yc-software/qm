@@ -189,3 +189,15 @@ test("history view excludes tool results from search and reopening while retaini
   assert.match(openSessionEntry(view, 2)!, /Oakland/);
   assert.deepEqual(forModelContext(entries), entries);
 });
+
+test("history shows an execute call as the model sent it, without the activity core attached", () => {
+  const call = entry(9, "tool_call", {
+    tool: "execute",
+    command: "cat q2.md",
+    activity: { kind: "read", path: "q2.md" },
+    step: { id: "x" },
+  });
+  const opened = openSessionEntry([call], 9);
+  assert.match(opened ?? "", /cat q2\.md/);
+  assert.doesNotMatch(opened ?? "", /activity|"step"/);
+});

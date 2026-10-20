@@ -25,7 +25,7 @@ import type {
   ApprovalGrantModes,
   ClientToolResult,
   CommandPolicy,
-  CommandRule,
+  ArgvRule,
   ConversationKind,
   GrantedHandle,
   Permission,
@@ -497,7 +497,7 @@ export interface ToolContextDeps {
   };
   layers: WorkspaceLayer[];
   commandPolicy: () => CommandPolicy;
-  layerCommandRules?: () => readonly CommandRule[];
+  layerCommandRules?: () => readonly ArgvRule[];
   authorizeCommand: (command: string, approvalKey?: string, exactApprovalKey?: boolean) => boolean;
   grantedHandles: GrantedHandle[];
   context?: TurnContext;

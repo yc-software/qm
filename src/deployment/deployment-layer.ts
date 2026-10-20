@@ -1,5 +1,5 @@
 export {
-  compileApproval,
+  approvalRule,
   parseToolDescriptor,
   type ToolCredentialBroker,
   type ToolCredentialPath,

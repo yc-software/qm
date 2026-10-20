@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseSkillFrontmatter } from "../src/sandbox-layer.ts";
 import { builtInCredentialPaths } from "../src/credential-paths.ts";
-import { compileApproval, parseToolDescriptor } from "../src/tool-descriptor.ts";
+import { approvalRule, parseToolDescriptor } from "../src/tool-descriptor.ts";
 import * as canonical from "../../src/deployment/deployment-layer.ts";
 import { parseSeedSkillFrontmatter } from "../../src/skills/frontmatter.ts";
 
@@ -128,124 +128,45 @@ test("credentialPaths must be disjoint while exact file paths under one director
   );
 });
 
-test("ReDoS guard: catastrophic-backtracking approval patterns are rejected; normal patterns pass", () => {
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(?:(x|x)+)+$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(a+)+$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(?:ab|a?b)+$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "a+".repeat(8) + "$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+a+(a+)$" }] }),
-    /catastrophic backtracking/,
-  );
-  for (const adjacent of ["a+a+", "\\w+[a-z]+", "[ab]+a+", ".*a+"]) {
-    assert.throws(
-      () => P({ id: "acmecli", approvals: [{ pattern: `\\bacmecli\\b:${adjacent}$` }] }),
-      /catastrophic backtracking/,
-    );
-  }
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a|aa)".repeat(12) + "$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a|[a])".repeat(12) + "$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(
-    () => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a*|b)".repeat(12) + "$" }] }),
-    /catastrophic backtracking/,
-  );
-  assert.throws(() => P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b" + "a".repeat(300) }] }), /too long/);
-  for (const adjacent of ["\\s+[a-z]+", "[0-9]+[a-z]+"]) {
-    assert.doesNotThrow(() => P({ id: "acmecli", approvals: [{ pattern: `\\bacmecli\\b:${adjacent}$` }] }));
-  }
-  assert.doesNotThrow(() =>
-    P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a|b)".repeat(20) + "$" }] }),
-  );
-  assert.doesNotThrow(() =>
-    P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(ab|ac)".repeat(20) + "$" }] }),
-  );
-  assert.doesNotThrow(() =>
-    P({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(read|remove)".repeat(12) + "$" }] }),
-  );
-  assert.doesNotThrow(() => P({ id: "acmecli", approvals: [{ command: "deploy prod" }] }));
-});
-
-test("approvals: command|pattern (exactly one), decision enum, reason optional", () => {
+test("approvals: command words, decision enum, reason optional; raw patterns are refused", () => {
   const d = P({
     id: "my-tool",
     approvals: [
       { command: "deploy", reason: "ships to production" },
       { command: "secrets set" },
       { command: "delete", decision: "deny" },
-      { pattern: "\\bmy-tool\\b\\s+--force\\b" },
     ],
   });
-  assert.equal(d.approvals!.length, 4);
+  assert.equal(d.approvals!.length, 3);
   assert.deepEqual(d.approvals![0], { command: "deploy", reason: "ships to production" });
   assert.equal(d.approvals![2]!.decision, "deny");
-  assert.throws(() => P({ id: "x", approvals: [{}] }), /needs a "command" or a "pattern"/);
-  assert.throws(() => P({ id: "x", approvals: [{ command: "a", pattern: "b" }] }), /has both/);
+  assert.throws(() => P({ id: "x", approvals: [{}] }), /needs a "command"/);
+  assert.throws(() => P({ id: "x", approvals: [{ command: "  " }] }), /needs a "command"/);
   assert.throws(() => P({ id: "x", approvals: [{ command: "a", decision: "maybe" }] }), /decision must be/);
   assert.throws(() => P({ id: "x", approvals: [{ command: "a", decision: "allow" }] }), /decision must be/);
   assert.throws(() => P({ id: "x", approvals: {} }), /"approvals" must be an array/);
-  assert.throws(() => P({ id: "gh", approvals: [{ pattern: "nightmare" }] }), /must refer to its own tool binary/);
-  assert.throws(() => P({ id: "gh", approvals: [{ pattern: "\\bgh\\b|nightmare" }] }), /top-level alternative/);
-  assert.doesNotThrow(() => P({ id: "gh", approvals: [{ pattern: "\\bgh\\b(?:\\s+repo|\\s+pr)" }] }));
+  assert.throws(() => P({ id: "gh", approvals: [{ pattern: "\\bgh\\b\\s+repo" }] }), /pattern is no longer supported/);
 });
 
-test("compileApproval anchors a command to the binary and builds the regex; pattern is verbatim", () => {
-  assert.deepEqual(compileApproval("my-tool", { command: "deploy" }), {
-    pattern: "\\bmy-tool\\s+deploy(?:\\b|\\s|$)",
+test("approvalRule turns a descriptor approval into argv words after the tool's binary", () => {
+  assert.deepEqual(approvalRule("my-tool", { command: "deploy" }), {
+    argv: ["my-tool", "deploy"],
     decision: "require_approval",
   });
-  assert.deepEqual(compileApproval("my-tool", { command: "secrets set" }), {
-    pattern: "\\bmy-tool\\s+secrets\\s+set(?:\\b|\\s|$)",
-    decision: "require_approval",
-  });
-  assert.deepEqual(compileApproval("my-tool", { command: "delete", decision: "deny" }), {
-    pattern: "\\bmy-tool\\s+delete(?:\\b|\\s|$)",
+  assert.deepEqual(approvalRule("acmectl", { command: "  secrets   set ", decision: "deny", reason: "writes" }), {
+    argv: ["acmectl", "secrets", "set"],
     decision: "deny",
+    reason: "writes",
   });
-  assert.deepEqual(compileApproval("my-tool", { pattern: "\\bmy-tool\\b\\s+--force\\b" }), {
-    pattern: "\\bmy-tool\\b\\s+--force\\b",
-    decision: "require_approval",
-  });
-  const { pattern } = compileApproval("my-tool", { command: "secrets set" });
-  assert.ok(new RegExp(pattern).test("my-tool secrets set DB_URL=…"));
-  assert.ok(!new RegExp(pattern).test("my-tool status"));
-  assert.ok(!new RegExp(pattern).test("my-tool secrets setx"));
-  const glob = compileApproval("tool", { command: "rm -rf *", decision: "deny" });
-  assert.equal(glob.decision, "deny");
-  assert.ok(new RegExp(glob.pattern).test("tool rm -rf *"));
 });
 
-test("install.binary is the approval target for command and raw-pattern rules", () => {
+test("install.binary is the approval target", () => {
   const command = P({
     id: "acme",
     install: { binary: "acmectl" },
     approvals: [{ command: "delete", decision: "deny" }],
   });
   assert.deepEqual(command.approvals, [{ command: "delete", decision: "deny" }]);
-  assert.doesNotThrow(() =>
-    P({ id: "acme", install: { binary: "acmectl" }, approvals: [{ pattern: "\\bacmectl\\b\\s+delete" }] }),
-  );
-  assert.throws(
-    () => P({ id: "acme", install: { binary: "acmectl" }, approvals: [{ pattern: "\\bacme\\b\\s+delete" }] }),
-    /own tool binary/,
-  );
 });
 
 test("parseSkillFrontmatter requires name + description + body; requiredCapabilities optional", () => {
@@ -316,7 +237,7 @@ test("drift-lock: cli skill parser matches the core seed parser's output", () =>
 
 test("core and the CLI share one parser", () => {
   assert.equal(canonical.parseToolDescriptor, parseToolDescriptor);
-  assert.equal(canonical.compileApproval, compileApproval);
+  assert.equal(canonical.approvalRule, approvalRule);
 });
 
 test("the CLI rejects the reserved .agent-displaced directory and uses the derived built-in paths", () => {
@@ -360,7 +281,7 @@ test("parser accepts and rejects a fixed corpus", () => {
       id: "t",
       auth: { check: "c", reauth: "r", credentialPaths: [credentialFile(".acme/token"), credentialFile(".acme/key")] },
     },
-    { id: "t", approvals: [{ command: "deploy" }, { pattern: "\\bt\\b\\s+--force\\b", decision: "deny" }] },
+    { id: "t", approvals: [{ command: "deploy" }, { command: "--force", decision: "deny" }] },
     {
       id: "t",
       auth: {
@@ -378,7 +299,7 @@ test("parser accepts and rejects a fixed corpus", () => {
     {
       id: "t",
       install: { binary: "tool-bin" },
-      approvals: [{ command: "deploy" }, { pattern: "\\btool-bin\\b\\s+--force\\b" }],
+      approvals: [{ command: "deploy" }, { command: "push --force" }],
     },
   ];
   for (const v of valid) {
@@ -392,7 +313,7 @@ test("parser accepts and rejects a fixed corpus", () => {
     '{"id":"x","auth":{"check":"a","reauth":"b","broker":{"kind":"gcp","roleArnEnv":"R","region":"r","sessionActions":["a"]}}}',
     '{"id":"x","approvals":[{}]}',
     '{"id":"x","approvals":[{"command":"a","decision":"allow"}]}',
-    '{"id":"gh","approvals":[{"pattern":"nightmare"}]}',
+    '{"id":"gh","approvals":[{"pattern":"\\\\bgh\\\\b"}]}',
     "not json",
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":"a//b","kind":"file"}]}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":".ssh/id_rsa","kind":"file"}]}}',
@@ -404,16 +325,6 @@ test("parser accepts and rejects a fixed corpus", () => {
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":"workspace","kind":"directory"}]}}',
     '{"id":"x","auth":{"check":"a","reauth":"b","credentialPaths":[{"path":".acme","kind":"directory"},{"path":".acme/sub/key","kind":"file"}]}}',
     '{"id":"x","install":{"binary":"evil; rm -rf /"}}',
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(?:(x|x)+)+$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(a+)+$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+(?:ab|a?b)+$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "a+".repeat(8) + "$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+a+(a+)$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b:\\w+[a-z]+$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a|aa)".repeat(12) + "$" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b\\s+" + "(a|a)".repeat(12) + "$" }] }),
-    JSON.stringify({ id: "t", install: { binary: "tool-bin" }, approvals: [{ pattern: "\\bt\\b\\s+deploy" }] }),
-    JSON.stringify({ id: "acmecli", approvals: [{ pattern: "\\bacmecli\\b" + "a".repeat(300) }] }),
   ];
   for (const raw of invalid) {
     assert.throws(() => parseToolDescriptor(raw, "t.json"), Error, `should reject: ${raw}`);
@@ -425,9 +336,9 @@ test("parser accepts and rejects a fixed corpus", () => {
     [cred(".ssh/id_rsa"), /overlaps the built-in credential path ".ssh"/],
     [cred("a//b"), /must be a \$HOME-relative path with no traversal/],
     [cred("workspace", "directory"), /must start with a dotfile/],
-    [JSON.stringify({ id: "x", approvals: [{ pattern: "(" }] }), /is not a valid regex/],
+    [JSON.stringify({ id: "x", approvals: [{ pattern: "\\bx\\b" }] }), /pattern is no longer supported/],
     ["not json", /is not valid JSON/],
-    ['{"id":"x","approvals":[{}]}', /needs a "command" or a "pattern"/],
+    ['{"id":"x","approvals":[{}]}', /needs a "command"/],
   ];
   for (const [raw, message] of pinned) assert.throws(() => parseToolDescriptor(raw, "t.json"), message, raw);
 });

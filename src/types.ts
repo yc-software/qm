@@ -570,6 +570,12 @@ export interface CommandRule {
   reason?: string;
 }
 
+export interface ArgvRule {
+  argv: string[];
+  decision: Exclude<CommandDecision, "allow">;
+  reason?: string;
+}
+
 type CommandPolicyMode = "denylist" | "allowlist";
 
 export interface CommandPolicy {

@@ -22,6 +22,7 @@ import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
 import { redactCommand } from "../sandbox/exec-process-session.ts";
+import { commandActivity } from "./command-activity.ts";
 import { redactSecrets } from "./redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
@@ -395,8 +396,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const retryMarks = new Map<string, RetryMark>();
   const recordCall = (callId: string, payload: Record<string, unknown>): Promise<void> => {
     const mark = retryMarks.get(callId);
+    const activity =
+      payload.tool === "execute" && payload.background !== true && typeof payload.command === "string"
+        ? commandActivity(payload.command)
+        : undefined;
     return log("tool_call", {
       ...payload,
+      ...(activity ? { activity } : {}),
       callId,
       ...(mark ? { retrySafe: mark.safe, ...(mark.rerun ? { rerun: mark.rerun } : {}) } : {}),
     });

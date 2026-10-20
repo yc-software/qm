@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { Language, Parser, type Node } from "web-tree-sitter";
-import type { CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
+import type { ArgvRule, CommandDecision, CommandPolicy, CommandRule } from "../types.ts";
 import { errMessage } from "../util/errors.ts";
 import { compileSafeRegex } from "../util/safe-regex.ts";
 
@@ -17,8 +17,9 @@ const ORG_FLOOR_RULES: CommandRule[] = [
   },
   { pattern: "\\b(drop|truncate)\\s+table\\b", decision: "require_approval", reason: "destructive SQL" },
   { pattern: "\\bmkfs\\b|:\\(\\)\\s*\\{", decision: "deny", reason: "destructive / fork bomb" },
-  { pattern: "\\bcurl\\b.*\\|\\s*(sh|bash)\\b", decision: "require_approval", reason: "pipe-to-shell" },
 ];
+
+const PIPE_TO_SHELL_RULES: ArgvRule[] = [{ argv: ["curl"], decision: "require_approval", reason: "pipe-to-shell" }];
 
 export function defaultOrgPolicy(): CommandPolicy {
   return { mode: "denylist", rules: ORG_FLOOR_RULES };
@@ -72,7 +73,7 @@ parser.setLanguage(await Language.load(require.resolve("tree-sitter-bash/tree-si
 
 const MAX_DEPTH = 8;
 const SHELLS = new Set(["bash", "sh", "dash", "zsh", "ksh"]);
-const SHELL_VALUE_OPTIONS = ["-O", "-o", "--rcfile", "--init-file"];
+const SHELL_VALUE_OPTIONS = ["-O", "-o", "+O", "+o", "--rcfile", "--init-file"];
 const SCRIPT_INTERPRETERS = new Set(["node", "perl", "ruby"]);
 const STDIN_SCRIPTS = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 const WRAPPER_OPTIONS: Record<string, string[]> = {
@@ -125,15 +126,26 @@ export interface CommandEvaluation {
   reason?: string;
   matched?: string;
   approvalKey?: string;
+  policyRuleIndex?: number;
 }
 
 interface Executed {
   scripts: string[];
   code: string[];
+  commands: string[][];
+  feedsShell: boolean;
+  misread: boolean;
+}
+
+interface Scan {
+  lines: string[];
+  commands: string[][];
+  feedsShell: boolean;
+  uninspectable?: string;
 }
 
 export function scannableCommand(command: string): string {
-  return scanLines(command, 0).join("\n");
+  return scan(command, 0).lines.join("\n");
 }
 
 function parse(command: string) {
@@ -142,16 +154,27 @@ function parse(command: string) {
   return tree;
 }
 
-function scanLines(command: string, depth: number): string[] {
+function scan(command: string, depth: number): Scan {
+  if (depth >= MAX_DEPTH)
+    return { lines: [command], commands: [], feedsShell: false, uninspectable: "nested too deeply to inspect" };
   const tree = parse(command);
   try {
-    const executed = depth < MAX_DEPTH ? executedPayloads(tree.rootNode) : { scripts: [], code: [] };
-    return [
-      ...(tree.rootNode.hasError ? [command] : []),
-      render(tree.rootNode),
-      ...executed.code,
-      ...executed.scripts.flatMap((script) => scanLines(script, depth + 1)),
-    ];
+    const executed = executedPayloads(tree.rootNode);
+    const nested = executed.scripts.map((script) => scan(script, depth + 1));
+    let uninspectable = nested.find((inner) => inner.uninspectable)?.uninspectable;
+    if (executed.misread) uninspectable = "laid out in a way the shell parser may misread";
+    if (tree.rootNode.hasError) uninspectable = "shell syntax the parser could not read";
+    return {
+      lines: [
+        ...(tree.rootNode.hasError ? [command] : []),
+        render(tree.rootNode),
+        ...executed.code,
+        ...nested.flatMap((inner) => inner.lines),
+      ],
+      commands: [...executed.commands, ...nested.flatMap((inner) => inner.commands)],
+      feedsShell: executed.feedsShell || nested.some((inner) => inner.feedsShell),
+      ...(uninspectable ? { uninspectable } : {}),
+    };
   } finally {
     tree.delete();
   }
@@ -256,6 +279,30 @@ function commandWords(command: Node): Node[][] {
   return words;
 }
 
+const EXPANSIONS = [
+  "simple_expansion",
+  "expansion",
+  "command_substitution",
+  "process_substitution",
+  "arithmetic_expansion",
+];
+
+export function plainArgv(command: string): string[] | undefined {
+  const tree = parse(command);
+  try {
+    const [only, ...rest] = tree.rootNode.namedChildren;
+    if (tree.rootNode.hasError || rest.length || only?.type !== "command" || misread(only)) return undefined;
+    if (
+      only.namedChildren.some((child) => child?.type === "herestring_redirect" || child?.type === "variable_assignment")
+    )
+      return undefined;
+    if (only.descendantsOfType(EXPANSIONS).length) return undefined;
+    return argvOf(only);
+  } finally {
+    tree.delete();
+  }
+}
+
 function argvOf(command: Node): string[] {
   return commandWords(command).map((group) => group.map(literal).join(""));
 }
@@ -334,16 +381,58 @@ function shellInvocation(inner: string[]): { script?: string; readsStdin: boolea
     if (arg === "-s") return { readsStdin: true };
     if (arg === "--") return { readsStdin: args[i + 1] === undefined || STDIN_SCRIPTS.has(args[i + 1]!) };
     if (SHELL_VALUE_OPTIONS.includes(arg)) i++;
-    else if (!arg.startsWith("-") || arg === "-") return { readsStdin: STDIN_SCRIPTS.has(arg) };
+    else if ((!arg.startsWith("-") && !arg.startsWith("+")) || arg === "-")
+      return { readsStdin: STDIN_SCRIPTS.has(arg) };
     else if (!arg.startsWith("--") && arg.includes("c")) return { script: args[i + 1], readsStdin: false };
   }
   return { readsStdin: true };
+}
+
+function runsStdinAsShell(argv: string[]): boolean {
+  if (stdinReader(argv) === "shell") return true;
+  const script = shellInvocation(innermost(argv))?.script;
+  if (script === undefined) return false;
+  const tree = parse(script);
+  try {
+    return (
+      tree.rootNode.descendantsOfType(EXPANSIONS).length > 0 ||
+      tree.rootNode.descendantsOfType("command").some((command) => {
+        const inner = argvOf(command!);
+        return stdinReader(inner) === "shell" || basename(innermost(inner)[0] ?? "") === "eval";
+      })
+    );
+  } finally {
+    tree.delete();
+  }
+}
+
+function heredocMisread(redirect: Node): boolean {
+  const start = redirect.namedChildren.find((child) => child?.type === "heredoc_start");
+  return (
+    !!start &&
+    redirect
+      .childrenForFieldName("argument")
+      .some((argument) => !!argument && sourceBetween(redirect, start.endIndex, argument.startIndex).includes("\n"))
+  );
+}
+
+function misread(command: Node): boolean {
+  const name = command.childForFieldName("name");
+  const words = [name?.firstNamedChild ?? name, ...command.childrenForFieldName("argument")].filter(
+    (word): word is Node => !!word,
+  );
+  return words.some(
+    (word, i) =>
+      (word.type === "word" && word.text.includes("\n")) ||
+      (i > 0 && sourceBetween(command, words[i - 1]!.endIndex, word.startIndex).includes("\n")),
+  );
 }
 
 function stdinReader(argv: string[]): "shell" | "code" | undefined {
   const inner = innermost(argv);
   const executable = basename(inner[0] ?? "");
   if (shellInvocation(inner)?.readsStdin) return "shell";
+  if ((executable === "source" || executable === ".") && STDIN_SCRIPTS.has(inner[1] ?? "")) return "shell";
   if (sqlClientSpec(inner) || SCRIPT_INTERPRETERS.has(executable) || executable.startsWith("python")) return "code";
   return undefined;
 }
@@ -403,7 +492,7 @@ function heredocReceivers(statement: Node, redirect: Node): string[][] {
 }
 
 function executedPayloads(root: Node): Executed {
-  const executed: Executed = { scripts: [], code: [] };
+  const executed: Executed = { scripts: [], code: [], commands: [], feedsShell: false, misread: false };
   const variables = new Map<string, string>();
   const feed = (text: string, readers: string[][]) => {
     const kinds = readers.map(stdinReader);
@@ -419,9 +508,13 @@ function executedPayloads(root: Node): Executed {
     if (node.type === "command") {
       const words = commandWords(node);
       const argv = argvOf(node);
+      const chain = wrapperChain(argv);
+      const inner = chain.at(-1)!;
+      executed.commands.push(...chain);
+      executed.misread ||= misread(node);
       executed.scripts.push(...shellPayloads(argv));
-      executed.code.push(...sqlClientPayloads(innermost(argv)));
-      const position = argv.length - innermost(argv).length;
+      executed.code.push(...sqlClientPayloads(inner));
+      const position = argv.length - inner.length;
       const word = words[position];
       const variable = word?.length === 1 ? variableName(word[0]!) : undefined;
       const value = variable === undefined ? undefined : variables.get(variable);
@@ -430,6 +523,7 @@ function executedPayloads(root: Node): Executed {
       const herestring = node.namedChildren.find((child) => child?.type === "herestring_redirect")?.lastNamedChild;
       if (herestring) feed(literal(herestring), [argv]);
     }
+    if (node.type === "heredoc_redirect") executed.misread ||= heredocMisread(node);
     for (const redirect of node.type === "redirected_statement" ? node.childrenForFieldName("redirect") : []) {
       const body = redirect?.namedChildren.find((child) => child?.type === "heredoc_body");
       if (body) feed(body.text, heredocReceivers(node, redirect!));
@@ -438,8 +532,12 @@ function executedPayloads(root: Node): Executed {
       const stages = node.namedChildren.map(commandOf);
       for (let i = 1; i < stages.length; i++) {
         const [producer, consumer] = [stages[i - 1], stages[i]];
-        const payload = producer && consumer ? literalProducerPayload(argvOf(producer)) : undefined;
-        if (payload) feed(payload, [argvOf(consumer!)]);
+        if (!consumer) continue;
+        const consumerArgv = argvOf(consumer);
+        executed.feedsShell ||= runsStdinAsShell(consumerArgv);
+        if (!producer) continue;
+        const payload = literalProducerPayload(argvOf(producer));
+        if (payload) feed(payload, [consumerArgv]);
       }
     }
     for (const child of node.children) if (child) visit(child);
@@ -507,7 +605,7 @@ function sqlClientPayloads(words: string[]): string[] {
 }
 
 function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEvaluation | null {
-  for (const rule of rules) {
+  for (const [index, rule] of rules.entries()) {
     let re: RegExp;
     try {
       re = compileSafeRegex(rule.pattern, "i");
@@ -524,6 +622,36 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
         ...(rule.reason ? { reason: rule.reason } : {}),
         matched: hit[0],
         approvalKey: rule.pattern,
+        policyRuleIndex: index,
+      };
+    }
+  }
+  return null;
+}
+
+function containsInOrder(args: readonly string[], words: readonly string[]): boolean {
+  let next = 0;
+  for (const arg of args) {
+    if (next === words.length) break;
+    if (arg === words[next] || arg.startsWith(`${words[next]}=`)) next++;
+  }
+  return next === words.length;
+}
+
+function invokes(argv: readonly string[], [name, ...words]: readonly string[]): boolean {
+  const at = argv.findIndex((arg) => basename(arg) === name);
+  return at >= 0 && containsInOrder(argv.slice(at + 1), words);
+}
+
+function argvMatch(commands: readonly string[][], rules: readonly ArgvRule[]): CommandEvaluation | null {
+  for (const rule of rules) {
+    const hit = commands.find((argv) => invokes(argv, rule.argv));
+    if (hit) {
+      return {
+        decision: rule.decision,
+        ...(rule.reason ? { reason: rule.reason } : {}),
+        matched: hit.join(" "),
+        approvalKey: `argv:${JSON.stringify(rule.argv)}`,
       };
     }
   }
@@ -531,26 +659,22 @@ function firstMatch(scannable: string, rules: readonly CommandRule[]): CommandEv
 }
 
 export function evaluateCommand(command: string, policy: CommandPolicy): CommandEvaluation {
-  const matched = firstMatch(scannableCommand(command), policy.rules);
-  if (matched) return matched;
-  if (policy.mode === "allowlist") {
-    return { decision: "deny", reason: "not in allowlist" };
-  }
-  return { decision: "allow" };
+  return evaluateCommandWithLayer(command, policy, []);
 }
 
 export function evaluateCommandWithLayer(
   command: string,
   policy: CommandPolicy,
-  layerRules: readonly CommandRule[],
+  layerRules: readonly ArgvRule[],
 ): CommandEvaluation {
-  const scannable = scannableCommand(command);
-  const scopeMatch = firstMatch(scannable, policy.rules);
-  if (scopeMatch) return scopeMatch;
-  if (policy.mode === "allowlist") {
-    return { decision: "deny", reason: "not in allowlist" };
-  }
-  const layerMatch = firstMatch(scannable, layerRules);
-  if (layerMatch) return layerMatch;
-  return { decision: "allow" };
+  const { lines, commands, feedsShell, uninspectable } = scan(command, 0);
+  const policyMatch = firstMatch(lines.join("\n"), policy.rules);
+  if (policyMatch?.decision === "deny") return policyMatch;
+  if (policy.mode === "allowlist" && !policyMatch) return { decision: "deny", reason: "not in allowlist" };
+  const layerMatch = policyMatch ? null : argvMatch(commands, layerRules);
+  if (layerMatch?.decision === "deny") return layerMatch;
+  const floorMatch = feedsShell ? argvMatch(commands, PIPE_TO_SHELL_RULES) : null;
+  if (floorMatch) return floorMatch;
+  if (uninspectable) return { decision: "require_approval", reason: uninspectable };
+  return policyMatch ?? layerMatch ?? { decision: "allow" };
 }
