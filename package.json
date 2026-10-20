@@ -109,7 +109,7 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.10",
-    "hono": "4.13.9",
+    "hono": "4.13.13",
     "@fastify/ajv-compiler": {
       "fast-uri": "3.1.8"
     },
