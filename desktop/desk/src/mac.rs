@@ -22,7 +22,7 @@ use core_graphics::window::{copy_window_info, kCGWindowListOptionOnScreenOnly, k
 use foreign_types::ForeignType;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbolicTraits, NSRunningApplication, NSWorkspace};
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
-use objc2_foundation::NSString;
+use objc2_foundation::{NSBundle, NSString};
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -1322,18 +1322,36 @@ fn relocate(roots: &[(El, Locator)], target: Locator) -> Option<El> {
     found
 }
 
-fn empty_web(e: &El, depth: usize, seen: &mut usize) -> bool {
-    *seen += 1;
-    if *seen > MAX_BUSY_VISITS || depth > MAX_DEPTH {
-        return false;
+fn web_ready<T>(root: T, required: bool, mut read: impl FnMut(&T) -> Option<(bool, Vec<T>)>) -> Option<bool> {
+    let mut stack = vec![(root, 0)];
+    let mut seen = 0;
+    let mut found = false;
+    while let Some((element, depth)) = stack.pop() {
+        seen += 1;
+        if seen > MAX_BUSY_VISITS || depth > MAX_DEPTH {
+            return None;
+        }
+        let (web, children) = read(&element)?;
+        if web {
+            found = true;
+            if children.is_empty() {
+                return Some(false);
+            }
+        } else {
+            stack.extend(children.into_iter().map(|child| (child, depth + 1)));
+        }
     }
-    let mut values = READINESS_NAMES.with(|names| fetch_attributes(e, names)).into_iter();
-    let role = values.next().flatten().as_ref().and_then(text_of);
-    let kids = values.next().flatten().map(list).unwrap_or_default();
-    if role.as_deref() == Some("AXWebArea") {
-        return kids.is_empty();
-    }
-    kids.iter().any(|c| empty_web(c, depth + 1, seen))
+    Some(found || !required)
+}
+
+fn electron_app(app: &App) -> bool {
+    app.path
+        .as_ref()
+        .and_then(|path| path.to_str())
+        .and_then(|path| NSBundle::bundleWithPath(&NSString::from_str(path)))
+        .and_then(|bundle| bundle.objectForInfoDictionaryKey(&NSString::from_str("NSPrincipalClass")))
+        .and_then(|value| value.downcast::<NSString>().ok())
+        .is_some_and(|class| class.to_string() == "AtomApplication")
 }
 
 fn narrow(clip: Rect, role: &str, f: Option<Rect>) -> Rect {
@@ -1487,34 +1505,54 @@ impl Desk {
         r.unwrap_or_else(Reply::Error)
     }
 
-    fn enable(&mut self, pid: i32, ax: &El, w: &El) {
-        if self.enabled.contains_key(&pid) {
-            return;
+    fn enable(&mut self, app: &App, ax: &El, w: &El) -> Result<(), Failure> {
+        let required = electron_app(app);
+        if self.enabled.contains_key(&app.pid) && !required {
+            return Ok(());
         }
-        let mut prior = vec![];
-        let mut turn_on = |name: &'static str| {
-            let was = bool_attr(ax, name);
-            let on = was == Some(true) || set_attr(ax, name, &CFBoolean::true_value().as_CFType()) == 0;
-            if on && was != Some(true) {
-                prior.push((name, false));
-            }
-            on
-        };
-        let manual = turn_on("AXManualAccessibility");
-        let wait = || {
-            for _ in 0..10 {
-                if cancellation::cancelled() || !empty_web(w, 0, &mut 0) {
-                    return true;
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.enabled.entry(app.pid) {
+            let mut prior = vec![];
+            let mut turn_on = |name: &'static str| {
+                let was = bool_attr(ax, name);
+                let on = was == Some(true) || set_attr(ax, name, &CFBoolean::true_value().as_CFType()) == 0;
+                if on && was != Some(true) {
+                    prior.push((name, false));
                 }
+                on
+            };
+            if !turn_on("AXManualAccessibility") {
+                turn_on("AXEnhancedUserInterface");
+            }
+            slot.insert(prior);
+        }
+        for attempt in 0..=10 {
+            if cancellation::cancelled() {
+                return Err(fail(ErrorCode::ActionFailed, "Accessibility enablement cancelled"));
+            }
+            let ready = web_ready(w.clone(), required, |element| {
+                if cancellation::cancelled() {
+                    return None;
+                }
+                let mut values = READINESS_NAMES.with(|names| fetch_attributes(element, names)).into_iter();
+                let role = values.next().flatten().as_ref().and_then(text_of)?;
+                let children = values.next().flatten().map(list).unwrap_or_default();
+                Some((role == "AXWebArea", children))
+            });
+            if cancellation::cancelled() {
+                return Err(fail(ErrorCode::ActionFailed, "Accessibility enablement cancelled"));
+            }
+            if ready == Some(true) || (!required && ready.is_none()) {
+                return Ok(());
+            }
+            if attempt < 10 {
                 cancellation::wait(Duration::from_millis(100));
             }
-            false
-        };
-        if !wait() && !manual {
-            turn_on("AXEnhancedUserInterface");
-            wait();
         }
-        self.enabled.insert(pid, prior);
+        if required {
+            Err(fail(ErrorCode::ActionFailed, "Electron accessibility content is not ready; observe again"))
+        } else {
+            Ok(())
+        }
     }
 
     fn observe(&mut self, app: &App, shot: bool, diff: bool) -> Result<Observation, Failure> {
@@ -1524,7 +1562,7 @@ impl Desk {
             settle(&w, at, self.observers.get(&app.pid).map(|o| &*o.notices));
         }
         let (ax, w) = window(app)?;
-        self.enable(app.pid, &ax, &w);
+        self.enable(app, &ax, &w)?;
         if let std::collections::hash_map::Entry::Vacant(slot) = self.observers.entry(app.pid) {
             if let Some(o) = Observer::new(app.pid, &ax) {
                 slot.insert(o);
@@ -2117,6 +2155,21 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn web_readiness_waits_for_missing_electron_content_and_stops_at_limits() {
+        use super::web_ready;
+        use std::collections::HashMap;
+        let mut nodes = HashMap::from([(0, (false, vec![1])), (1, (false, vec![]))]);
+        assert_eq!(web_ready(0, false, |id| nodes.get(id).cloned()), Some(true));
+        assert_eq!(web_ready(0, true, |id| nodes.get(id).cloned()), Some(false));
+        nodes.insert(1, (true, vec![]));
+        assert_eq!(web_ready(0, true, |id| nodes.get(id).cloned()), Some(false));
+        nodes.insert(1, (true, vec![2]));
+        assert_eq!(web_ready(0, true, |id| nodes.get(id).cloned()), Some(true));
+        assert_eq!(web_ready(0, true, |_| None::<(bool, Vec<i32>)>), None);
+        assert_eq!(web_ready(0, true, |id| Some((false, vec![id + 1]))), None);
+    }
+
     #[test]
     fn primary_window_preserves_authoritative_choice_and_uses_last_fallback() {
         use super::primary_window;
