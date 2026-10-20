@@ -3,8 +3,11 @@ import { composioSlackConnection, hasSlackAccount } from "./slack-composio.ts";
 import { parseSlackThreadRef } from "../../slack/message-gating.ts";
 import { sendJson } from "../http.ts";
 import { reportFailure } from "../../util/errors.ts";
+import { appendToTranscript } from "../../surfaces/outbound.ts";
 import { activePrincipal } from "./shared.ts";
 import type { ApiCtx } from "./route.ts";
+
+const RECEIPT_WAIT_MS = 2_000;
 
 export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   if (!ctx.actor || ctx.actor.imp || ctx.capability)
@@ -27,7 +30,8 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
       !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.clientMessageId))
   )
     return sendJson(ctx.res, 400, { error: "invalid_message" });
-  if (send && !ctx.deps.deliveries)
+  const sessions = ctx.deps.sessions;
+  if (send && !sessions)
     return sendJson(ctx.res, 503, {
       error: "slack_unavailable",
       message: "Slack replies are temporarily unavailable.",
@@ -36,15 +40,24 @@ export async function slackReply(ctx: ApiCtx, send: boolean): Promise<void> {
   const recordReply = async (ts: unknown, name: string) => {
     slackConfirmed = true;
     if (typeof ts !== "string" || !/^\d+\.\d+$/.test(ts)) throw new Error("Slack response missing timestamp");
-    await ctx.deps.deliveries!.enqueue({
-      destination: {
-        type: "web",
-        target: source.session.threadRef,
-        audienceScopeId: source.session.scopeId,
-        webTranscript: { kind: "slack_reply", sessionId: body.sessionId as string, ts, name },
-      },
-      text: body.text as string,
-      idempotencyKey: `slack-reply:${body.sessionId}:${target.container}:${ts}`,
+    const key = `slack-reply:${source.session.id}:${target.container}:${ts}`;
+    const record = (leaseWaitMs?: number) =>
+      appendToTranscript(
+        {
+          sessions: sessions!,
+          ...(ctx.deps.sessionStateBus ? { sessionStates: ctx.deps.sessionStateBus } : {}),
+          ...(leaseWaitMs !== undefined ? { leaseWaitMs } : {}),
+        },
+        source.session,
+        { type: "user", payload: { text: body.text, name, ts, slackReplyReceipt: true, deliveryKey: key } },
+        key,
+        () => sessions!.hasDeliveryEntry(source.session.id, key, ts),
+      );
+    await record(RECEIPT_WAIT_MS).catch((error: unknown) => {
+      if (!(error as { busy?: boolean }).busy) throw error;
+      void record().catch((late: unknown) =>
+        reportFailure("slack reply: transcript record", late, `session=${source.session.id}`),
+      );
     });
     return sendJson(ctx.res, 200, { sent: true, ts });
   };

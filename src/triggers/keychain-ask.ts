@@ -77,7 +77,7 @@ export async function fireAskResolution(
   }
   const fallbackDestination = cronId ? principalDestination(ask.ownerId, ask.ownerId) : ask.requesterDestination;
   if (fallbackDestination && (await destinationVisible(deps, ask.requesterId, fallbackDestination))) {
-    await deps.deliveries.enqueue({
+    await deps.outbound.send({
       destination: withWebTranscriptText(fallbackDestination),
       text: fallbackText(ask),
       idempotencyKey: `ask:${ask.id}:${ask.status}:fallback`,
@@ -134,7 +134,7 @@ export async function fireDropResolution(deps: TriggerDeps, drop: DropResolution
   });
   if (outcome.ran && outcome.status === "ok") return outcome;
   if (drop.destination && (await destinationVisible(deps, drop.ownerId, drop.destination))) {
-    await deps.deliveries.enqueue({
+    await deps.outbound.send({
       destination: withWebTranscriptText(drop.destination),
       text: dropFallbackText(drop),
       idempotencyKey: `drop:${drop.id}:fallback`,

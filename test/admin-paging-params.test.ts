@@ -28,7 +28,7 @@ test("admin list endpoints accept fractional limit values", { skip: !URL }, asyn
     workspace: built.workspace,
     files: built.files,
     config: built.config,
-    deliveries: built.deliveries,
+    outbound: built.outbound,
     crons: built.crons,
   });
   server.listen(0);

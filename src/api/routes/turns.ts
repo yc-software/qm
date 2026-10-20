@@ -257,36 +257,6 @@ async function postRunWithdraw(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 409, outcome);
 }
 
-async function listDeliveries(ctx: ApiCtx): Promise<void> {
-  const { res, app, url } = ctx;
-  const type = url.searchParams.get("type") ?? "";
-  const claimMsRaw = Number(url.searchParams.get("claimMs") ?? 0);
-  const claimMs = Number.isFinite(claimMsRaw) && claimMsRaw > 0 ? claimMsRaw : 0;
-  return sendJson(res, 200, { deliveries: await app.pendingDeliveries(type, claimMs) });
-}
-
-async function ackDelivery(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const id = ctx.params.id!;
-  const recipientThreadRef =
-    isObj(body) && typeof body.recipientThreadRef === "string" ? body.recipientThreadRef : undefined;
-  const slackApiMs =
-    isObj(body) && typeof body.slackApiMs === "number" && Number.isFinite(body.slackApiMs) && body.slackApiMs >= 0
-      ? body.slackApiMs
-      : undefined;
-  if (recipientThreadRef) await app.recordPrincipalDelivery(id, recipientThreadRef);
-  await app.ackDelivery(id, slackApiMs);
-  return sendJson(res, 200, { ok: true });
-}
-
-async function ackDeliveryByKey(ctx: ApiCtx): Promise<void> {
-  const { res, app, body } = ctx;
-  const idempotencyKey = isObj(body) && typeof body.idempotencyKey === "string" ? body.idempotencyKey : "";
-  if (!idempotencyKey) return sendJson(res, 400, { error: "bad_request", message: "idempotencyKey required" });
-  await app.ackDeliveryByKey(idempotencyKey);
-  return sendJson(res, 200, { ok: true });
-}
-
 async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   const runId = ctx.params.runId!;
@@ -323,7 +293,4 @@ export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
   { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
   { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
-  { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
-  { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
-  { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

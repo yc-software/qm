@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
@@ -26,7 +26,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
       onBehalfOf: "U_ALICE",
     },
   });
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const idempotency = createIdempotencyStore();
   const ask: KeychainAsk = {
     id: "retry-ask",
@@ -44,13 +44,13 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     expiresAt: Date.now() + 60_000,
   };
   const deps: AskResolutionDeps = {
-    deliveries,
+    outbound,
     idempotency,
     identity: createIdentityService(),
     getCron: (id) => crons.get(id),
     run,
   };
-  return { crons, cron, deliveries, idempotency, ask, deps };
+  return { crons, cron, outbound, idempotency, ask, deps };
 }
 
 test("busy cron credential resolution leaves its fire retryable and resumes exactly once when available", async () => {
@@ -68,7 +68,7 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
   assert.equal(requests[0]?.model, "gpt-6-luna");
   assert.equal(requests[0]?.thinkingLevel, "low");
   assert.equal(await f.idempotency.committed(fireKey), false);
-  assert.equal((await f.deliveries.pending("principal")).length, 0);
+  assert.equal((await f.outbound.pending("principal")).length, 0);
   const resumed = await fireAskResolution(f.deps, f.ask);
   assert.equal(resumed.status, "ok");
   assert.equal(await f.idempotency.committed(fireKey), true);
@@ -77,7 +77,7 @@ test("busy cron credential resolution leaves its fire retryable and resumes exac
   assert.equal(requests.length, 2);
   assert.ok(requests.every((request) => request.conversation.threadRef === f.ask.requesterThreadRef));
   assert.ok(requests.every((request) => request.triggered === true));
-  const pending = await f.deliveries.pending("principal");
+  const pending = await f.outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_BOB");
   assert.equal(pending[0]!.text, "dummy scheduled result");
@@ -95,7 +95,7 @@ test("failed cron credential resolution notifies only the owner", async () => {
 
   assert.equal(failed.status, "failed");
   assert.equal(runs, 1);
-  const pending = await f.deliveries.pending("principal");
+  const pending = await f.outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_ALICE");
   assert.equal(pending[0]!.destination.audienceScopeId, "personal:U_ALICE");
@@ -137,7 +137,7 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
   assert.equal(runs, 2);
   assert.notEqual((await keychain.getAsk(f.ask.id))?.notifiedAt, undefined);
   assert.equal(await f.idempotency.committed(`ask:${f.ask.id}:approved`), true);
-  const pending = await f.deliveries.pending("principal");
+  const pending = await f.outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_BOB");
 });

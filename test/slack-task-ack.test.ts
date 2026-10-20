@@ -4,7 +4,6 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createTaskAcknowledgements, type TaskAckState } from "../src/slack/task-ack.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 function setup() {
@@ -136,11 +135,10 @@ test("reconciliation retries a persisted move without another incoming message",
   assert.equal(events.length, count);
 });
 
-for (const outbound of ["run", "post", "ack", "silent"] as const) {
-  test(`restart clears completed task acknowledgement only after delivery, outbound=${outbound}`, async () => {
+for (const reply of ["owed", "posted-by-turn", "silent"] as const) {
+  test(`restart clears a finished task's acknowledgement only once its reply is out, reply=${reply}`, async () => {
     const { client, manager, store, events } = setup();
     const { runs } = createMemoryRunStore();
-    const deliveries = createDeliveryStore();
     const actor = { id: "person", type: "internal" as const };
     const { run } = await runs.enqueue({
       sessionId: "task-session",
@@ -149,36 +147,27 @@ for (const outbound of ["run", "post", "ack", "silent"] as const) {
         conversation: { kind: "dm", threadRef: "dm:D1", audience: [actor] },
         origin: { kind: "human" },
         surface: "slack",
-        surfaceTools: outbound !== "run",
+        surfaceTools: reply !== "owed",
         deliveryTarget: "D1",
         text: "Do the task",
       } as OrchestratorInput,
     });
     await manager.move(client, run.id, "D1", "10.1");
-    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs, deliveries });
+    const restarted = createTaskAcknowledgements(store, createNoopLeaderLease(), { runs });
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, false);
     const claimed = await runs.claimById(run.id, "test", 10000);
     assert.ok(claimed);
-    const finalDelivery =
-      outbound === "silent"
-        ? undefined
-        : await deliveries.enqueue({
-            destination: { type: "slack", target: "D1" },
-            text: "Done",
-            idempotencyKey: outbound === "post" ? `post:${run.id}:slack:D1:0` : `${outbound}:${run.id}`,
-          });
     await runs.complete(
       run.id,
       claimed.leaseToken!,
-      outbound === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
+      reply === "silent" ? { status: "silent" } : { status: "ok", reply: "Done" },
     );
-    if (finalDelivery) {
+    if (reply === "owed") {
       await restarted.reconcile(client);
-      assert.equal((await store.get(run.id))?.finished, false);
+      assert.equal((await store.get(run.id))?.finished, false, "the run's reply has not been posted yet");
       assert.ok(!events.some((event) => event.startsWith("remove:")));
-      if (outbound === "run") await restarted.finish(client, run.id);
-      await deliveries.ack(finalDelivery.id, Date.now());
+      await restarted.finish(client, run.id);
     }
     await restarted.reconcile(client);
     assert.equal((await store.get(run.id))?.finished, true);

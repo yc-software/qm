@@ -162,7 +162,7 @@ test("post replies remain visible in new and continuing conversations", async (t
     const host = document.querySelector<HTMLElement>("#main")!;
     appState.mainEl = host;
     ensureDeliveryStream();
-    const delivery = FakeEventSource.instances.find((es) => es.url === "/api/deliveries/events")!;
+    const delivery = FakeEventSource.instances.find((es) => es.url === "/api/session-events")!;
     const shownAnswer = () =>
       [...host.querySelectorAll(".assistant-body > .streaming-text")].some((el) => el.textContent?.includes(answer));
     async function mount(recorded: SessionEntry[] = [user], readOnly = false, wait = true) {
@@ -603,7 +603,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       for (let i = 0; i < 3; i++) visible.push(shown(await postTurn(i, true)));
       assert.deepEqual(visible, [true, true, true]);
       transcriptFails = false;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await settle();
       for (let i = 0; i < 3; i++) {
         assert.equal(shownReplies(`Confirmed answer ${i}`).length, 1, "refresh must not duplicate a displayed post");
@@ -621,11 +621,11 @@ test("post replies remain visible in new and continuing conversations", async (t
       const pending = deferredTranscript([user]);
       intercept = (path) =>
         path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
       intercept = undefined;
       entries = completed;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await settle();
       assert.ok(shownAnswer());
       pending.release();
@@ -638,7 +638,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       const pending = deferredTranscript(completed);
       intercept = (path) =>
         path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
       intercept = undefined;
       conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
@@ -655,11 +655,11 @@ test("post replies remain visible in new and continuing conversations", async (t
       const pending = deferredTranscript([{ ...user, payload: { text: "Stale inherited text" } }]);
       intercept = (path) =>
         path.startsWith("/api/sessions/s1") && !path.endsWith("/approvals") ? pending.promise : undefined;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await until(() => requests.some((path) => path.startsWith("/api/sessions/s1")));
       intercept = undefined;
       entries = [{ ...user, payload: { text: "Current inherited text" } }, ...completed.slice(1)];
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await settle();
       const inherited = JSON.stringify(conv!.state.inheritedMessages);
       assert.match(inherited, /Current inherited text/);
@@ -668,7 +668,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       assert.equal(JSON.stringify(conv!.state.inheritedMessages), inherited);
       conv!.state.inheritedLoaded = true;
       entries = completed;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await settle();
       assert.equal(JSON.stringify(conv!.state.inheritedMessages), inherited);
     });
@@ -680,7 +680,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       });
       entries = completed;
       intercept = (path) => (path.endsWith("/approvals") ? promise : undefined);
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await until(() => requests.some((path) => path.endsWith("/approvals")));
       conv!.mountContinuable("web:owner:replacement", null, row.scopeId, []);
       release();
@@ -734,7 +734,7 @@ test("post replies remain visible in new and continuing conversations", async (t
         { seq: 5, type: "assistant", createdAt: Date.now(), payload: { text: "Replies sent." } },
       ];
       transcriptFails = false;
-      delivery.emit("delivery", { threadRef: row.threadRef });
+      delivery.emit("session_state", { threadRef: row.threadRef, state: "idle", at: 1 });
       await settle();
       assert.equal(count(answer), 1);
       assert.equal(count("Second confirmed reply"), 1);

@@ -1,4 +1,5 @@
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import type { OrchestratorInput } from "../src/core/orchestrator/types.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -98,7 +99,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     },
   };
   const identity = createIdentityService();
-  const deliveries = createDeliveryStore();
+  const { runs } = createMemoryRunStore();
   const original = [
     ...entries,
     entry("user", { text: "File", attachments: [{ artifactId: "f1", secret: "SECRET" }] }, 12),
@@ -134,7 +135,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       params: { id: "s1", token: parts[3], fileId: parts[5] },
       body: body ? JSON.parse(body) : null,
       actor: null,
-      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
+      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, runs },
       app: {
         canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
           accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
@@ -192,44 +193,41 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
   visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
-  const delivery = await deliveries.enqueue({
-    destination: { type: "web", target: "web:alice:s1" },
-    text: "Generated",
-    attachments: [{ artifactId: "f1", blobId: "blob-f1", name: "example.html", mimetype: "text/html", sizeBytes: 34 }],
-    provenance: {
-      sourceSessionId: "s1",
-      sourceThreadRef: "web:alice:s1",
-      sourceScopeId: scopeId("personal", "alice"),
-      sourceAssistantEntrySeq: 2,
-      trigger: "conversation",
-      surface: "web",
-      fireKey: "test",
-    },
-    idempotencyKey: "generated",
-  });
-  const pendingShare = (await (await create()).json()) as { share: { token: string } };
-  assert.equal((await (await read(pendingShare.share.token)).text()).includes("example.html"), false);
-  for (const [index, change] of [
-    { shadow: true },
-    { destination: { type: "web", target: "another-thread" } },
-    { provenance: { ...delivery.provenance!, sourceSessionId: "another-session" } },
-    { provenance: { ...delivery.provenance!, sourceAssistantEntrySeq: 99 } },
-  ].entries()) {
-    const rejected = await deliveries.enqueue({
-      destination: delivery.destination,
-      text: "PRIVATE_DELIVERY_TEXT",
-      attachments: delivery.attachments,
-      provenance: delivery.provenance,
-      ...change,
-      idempotencyKey: `excluded-${index}`,
+  const file = { artifactId: "f1", blobId: "blob-f1", name: "example.html", mimetype: "text/html", sizeBytes: 34 };
+  const webReply = async (over: { deliveryTarget?: string; sessionId?: string; seq?: number; text?: string } = {}) =>
+    (
+      await runs.enqueue({
+        sessionId: "web:alice:s1",
+        request: {
+          surface: "web",
+          deliveryTarget: over.deliveryTarget ?? "web:alice:s1",
+          actor: { id: "alice", type: "internal" },
+          conversation: { kind: "dm", threadRef: "web:alice:s1", audience: [] },
+          origin: { kind: "direct" },
+          text: "Generate file",
+        } as OrchestratorInput,
+      })
+    ).run;
+  const finish = async (runId: string, over: { sessionId?: string; seq?: number; text?: string } = {}) => {
+    const claimed = await runs.claimById(runId, "w1", 5_000);
+    await runs.complete(runId, claimed!.leaseToken!, {
+      status: "ok",
+      reply: over.text ?? "Generated",
+      sessionId: over.sessionId ?? "s1",
+      sourceAssistantEntrySeq: over.seq ?? 2,
+      attachments: [file],
     });
-    await deliveries.ack(rejected.id, Date.now());
+  };
+  for (const change of [{ deliveryTarget: "another-thread" }, { sessionId: "another-session" }, { seq: 99 }]) {
+    const rejected = await webReply(change);
+    await finish(rejected.id, { ...change, text: "PRIVATE_DELIVERY_TEXT" });
   }
-  const excludedShare = (await (await create()).json()) as { share: { token: string } };
-  const excludedText = await (await read(excludedShare.share.token)).text();
-  assert.equal(excludedText.includes("example.html"), false);
+  const generated = await webReply();
+  const pendingShare = (await (await create()).json()) as { share: { token: string } };
+  const excludedText = await (await read(pendingShare.share.token)).text();
+  assert.equal(excludedText.includes("example.html"), false, "unfinished and mismatched runs share no files");
   assert.equal(excludedText.includes("PRIVATE_DELIVERY_TEXT"), false);
-  await deliveries.ack(delivery.id, Date.now());
+  await finish(generated.id);
   const generatedShare = (await (await create()).json()) as { share: { token: string } };
   assert.equal((await (await read(generatedShare.share.token)).text()).includes("example.html"), true);
   visible = original;

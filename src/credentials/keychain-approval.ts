@@ -4,7 +4,7 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ActorAssertion, Destination } from "../types.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
 import { samePerson } from "../directory/person.ts";
 import { swallow } from "../util/errors.ts";
@@ -49,7 +49,7 @@ export function createKeychainApprovals(deps: {
   identity: IdentityService;
   sessions: SessionStore;
   audit?: AuditLog;
-  deliveries?: Pick<DeliveryStore, "enqueue">;
+  outbound?: Pick<Outbound, "send">;
   resume(ask: KeychainAsk, grant?: KeychainGrant): Promise<unknown>;
 }): KeychainApprovals {
   const { keychain, app, identity, sessions } = deps;
@@ -138,8 +138,8 @@ export function createKeychainApprovals(deps: {
       });
       const destination = approvalCardDestination(resolved);
       if (destination)
-        await deps.deliveries
-          ?.enqueue({ destination, text: "Credential request resolved.", idempotencyKey: `ask:${id}:resolved` })
+        await deps.outbound
+          ?.send({ destination, text: "Credential request resolved.", idempotencyKey: `ask:${id}:resolved` })
           .catch((error) => swallow("keychain: sync approval card", error));
       void deps
         .resume(resolved, grant)

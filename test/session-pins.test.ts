@@ -3,7 +3,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildTestApp, type TestApp } from "./support/test-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -18,7 +18,7 @@ function dm(externalId: string, text: string, thread: string): TurnRequest {
 describe("conversation pins self-API", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: TestApp;
   let sessionId: string;
   const THREAD = "web:U1:pins";
 
@@ -46,7 +46,7 @@ describe("conversation pins self-API", async () => {
     });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
+    built = buildTestApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, { signingSecret: SECRET, sessions: built.sessions });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -176,27 +176,25 @@ describe("conversation pins self-API", async () => {
     const res = await call("POST", "/v1/pins", { seq: 0 }, token);
     assert.equal(res.status, 200);
     const { pin } = (await res.json()) as { pin: { id: string } };
-    let queued = await built.deliveries.pending("slack");
-    assert.equal(queued.length, 1, "the DM entry pin enqueues one native pin action");
-    assert.deepEqual(queued[0]!.destination.pin, { messageTs: "1723497600.000100" });
-    assert.equal(queued[0]!.destination.target, "D0PINCHAN");
-    await built.deliveries.ack(queued[0]!.id, Date.now());
+    let posted = await built.posts.pending("slack");
+    assert.equal(posted.length, 1, "the DM entry pin posts one native pin action");
+    assert.deepEqual(posted[0]!.destination.pin, { messageTs: "1723497600.000100" });
+    assert.equal(posted[0]!.destination.target, "D0PINCHAN");
 
     const noteRes = await call("POST", "/v1/pins", { text: "just a note" }, token);
     assert.equal(noteRes.status, 200);
-    assert.equal((await built.deliveries.pending("slack")).length, 0, "a text-only pin has no Slack message to pin");
+    assert.equal((await built.posts.pending("slack")).length, 1, "a text-only pin has no Slack message to pin");
 
     const del = await call("DELETE", `/v1/pins/${pin.id}`, undefined, token);
     assert.equal(del.status, 200);
-    queued = await built.deliveries.pending("slack");
-    assert.equal(queued.length, 1, "unpinning mirrors a native unpin");
-    assert.deepEqual(queued[0]!.destination.pin, { messageTs: "1723497600.000100", remove: true });
-    await built.deliveries.ack(queued[0]!.id, Date.now());
+    posted = await built.posts.pending("slack");
+    assert.equal(posted.length, 2, "unpinning mirrors a native unpin");
+    assert.deepEqual(posted[1]!.destination.pin, { messageTs: "1723497600.000100", remove: true });
 
     const webToken = await capFor("U1", THREAD);
     const webRes = await call("POST", "/v1/pins", { seq: 0 }, webToken);
     assert.equal(webRes.status, 200);
-    assert.equal((await built.deliveries.pending("slack")).length, 0, "a web conversation never touches Slack pins");
+    assert.equal((await built.posts.pending("slack")).length, 2, "a web conversation never touches Slack pins");
     const webPin = ((await webRes.json()) as { pin: { id: string } }).pin;
     await call("DELETE", `/v1/pins/${webPin.id}`, undefined, webToken);
   });

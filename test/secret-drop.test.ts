@@ -14,7 +14,7 @@ import { createServer } from "../src/api/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
@@ -94,7 +94,7 @@ describe("SecretDropStore", () => {
 
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
     identity: createIdentityService(createMemoryMap()),
     run,
@@ -147,9 +147,9 @@ describe("fireDropResolution", () => {
   });
 
   it("enqueues a fallback delivery when the resume turn doesn't land (drop is single-use, no sweep)", async () => {
-    const deliveries = createDeliveryStore();
+    const outbound = recordingOutbound();
     const deps = {
-      deliveries,
+      outbound,
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
@@ -166,7 +166,7 @@ describe("fireDropResolution", () => {
       credentialHandle: "kc_stripe",
       granted: true,
     });
-    const fb = (await deliveries.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
+    const fb = (await outbound.pending("slack")).filter((d) => d.idempotencyKey === "drop:dropF:fallback");
     assert.equal(fb.length, 1, "the conversation hears the key arrived even when the resume turn didn't run");
     assert.match(fb[0]!.text, /saved to the keychain/);
   });
@@ -245,7 +245,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       signingSecret: SECRET,
       keychain: built.keychain,
       secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
+      outbound: built.outbound,
       workspace: built.workspace,
       auditLog: built.auditLog,
       runs: built.runs,
@@ -661,7 +661,7 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
       signingSecret: SECRET,
       keychain: built.keychain,
       secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
+      outbound: built.outbound,
       workspace: built.workspace,
       auditLog: built.auditLog,
       fireDropResolution: async (drop) => {

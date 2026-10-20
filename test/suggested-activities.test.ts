@@ -5,7 +5,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -23,12 +23,12 @@ function fixture() {
   const store = createMemoryMap<SuggestedActivityProfile>();
   const sessions = createMemorySessionStore();
   const crons = createCronStore();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
     crons,
-    deliveries,
+    outbound,
     identity: createIdentityService(),
     idempotency: createIdempotencyStore(),
     run: async (request) => {
@@ -71,7 +71,7 @@ function fixture() {
     crons,
     sessions,
     store,
-    deliveries,
+    outbound,
     settle: () => Promise.all(settled),
     advance: (ms: number) => {
       time += ms;
@@ -99,7 +99,7 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.match(f.calls[0]!.text, /past conversations and unfinished work/);
   assert.deepEqual(await f.service.get("alice", []), { activities, pending: false });
   assert.equal(f.calls.length, 1);
-  assert.deepEqual(await f.deliveries.pending("slack"), []);
+  assert.deepEqual(await f.outbound.pending("slack"), []);
   const restarted = createSuggestedActivityService(f.deps);
   assert.deepEqual(await restarted.get("alice", []), { activities, pending: false });
 });

@@ -1,3 +1,4 @@
+import { swallowAs } from "../util/errors.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
@@ -206,17 +207,19 @@ export function createSessionMethods(
     entrySeq: number | undefined,
     remove: boolean,
   ): Promise<void> => {
-    if (entrySeq === undefined || !deps.deliveries) return;
+    if (entrySeq === undefined || !deps.outbound) return;
     const channel = slackDmChannel(session);
     if (!channel) return;
     const entry = await renderedEntryAt(session.id, entrySeq);
     const ts = (entry?.payload as { ts?: unknown } | undefined)?.ts;
     if (typeof ts !== "string" || !ts) return;
-    await deps.deliveries.enqueue({
-      destination: { type: "slack", target: channel, pin: { messageTs: ts, ...(remove ? { remove: true } : {}) } },
-      text: "",
-      idempotencyKey: `session-pin:${pinId}:${remove ? "remove" : "add"}`,
-    });
+    await deps.outbound
+      .send({
+        destination: { type: "slack", target: channel, pin: { messageTs: ts, ...(remove ? { remove: true } : {}) } },
+        text: "",
+        idempotencyKey: `session-pin:${pinId}:${remove ? "remove" : "add"}`,
+      })
+      .catch(swallowAs("pins: mirror the pin in Slack", undefined));
   };
 
   /** Sessions whose title matches the query — the entry index only covers message text. */

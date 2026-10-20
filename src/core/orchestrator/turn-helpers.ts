@@ -11,7 +11,6 @@ import type {
 } from "../../types.ts";
 import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
-import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
 import type { SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
@@ -140,31 +139,6 @@ export function renderTitleTranscript(entries: SessionEntry[]): string {
     if (lines.length >= 6) break;
   }
   return lines.join("\n\n");
-}
-
-const DELIVERY_NOTE_ITEM_MAX_CHARS = 200;
-
-export async function recentPrincipalDeliveryNote(
-  deliveries: DeliveryStore | undefined,
-  threadRef: string,
-  since = 0,
-): Promise<string> {
-  if (!deliveries) return "";
-  const recent = (await deliveries.listByRecipientThread(threadRef, { limit: 5 })).filter(
-    (d) => (d.deliveredAt ?? d.createdAt) > since,
-  );
-  if (!recent.length) return "";
-  const lines = recent.map((d) => {
-    const from = d.destination.onBehalfOf ? ` from ${d.destination.onBehalfOf}` : "";
-    const trigger = d.provenance?.trigger ? ` [${d.provenance.trigger}]` : "";
-    const flattened = d.text.trim().replace(/\s+/g, " ");
-    const text =
-      flattened.length > DELIVERY_NOTE_ITEM_MAX_CHARS
-        ? `${flattened.slice(0, DELIVERY_NOTE_ITEM_MAX_CHARS)}…`
-        : flattened;
-    return `- ${new Date(d.deliveredAt ?? d.createdAt).toISOString()}${trigger}${from}: ${text}`;
-  });
-  return ["Delivered here since the user's last message (delivery events, not your turns):", ...lines].join("\n");
 }
 
 function principalAssertion(p: Principal): ActorAssertion {

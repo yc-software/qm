@@ -4,14 +4,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
+  return buildTestApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
 }
 
 const actor = { externalId: "U1" };
@@ -35,13 +35,13 @@ test("a retried turn does not re-post: the same position dedups against the deli
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
   await assert.rejects(built.app.turn(req), /boom/);
-  const afterFirst = await built.deliveries.pending("slack");
+  const afterFirst = await built.posts.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.equal(rows.length, 1, "the retry's re-post collapses onto the first attempt's delivery");
   assert.equal(rows[0]!.text, "deploy is done", "the delivered copy is the first attempt's, keyed not text-matched");
   assert.match(
@@ -59,7 +59,7 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(
     rows.map((d) => d.text).sort(),
     ["first update", "second update"],
@@ -85,7 +85,7 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(
     rows.map((d) => d.text).sort(),
     ["monitor first", "monitor second"],
@@ -98,7 +98,7 @@ test("distinct posts in one turn each get their own key and all deliver", async 
   const res = await built.app.turn(channelTurn("!post2 alpha|beta", { idempotencyKey: "dedup-two-1" }));
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(rows.map((d) => d.text).sort(), ["alpha", "beta"]);
   assert.equal(new Set(rows.map((d) => d.idempotencyKey)).size, 2);
 });

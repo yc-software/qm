@@ -197,7 +197,7 @@ for (const scope of ["conversation", "channel"] as const) {
     const { control } = build();
     const channelPolicy = createMemoryChannelPolicyStore();
     const surface = createSurfaceToolDeps({
-      deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+      deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
       input: { surfaceTools: true },
       actor: { id: "U1" },
       conversation: { kind: "channel", channelRef: "C1" },
@@ -246,7 +246,7 @@ for (const scope of ["conversation", "channel"] as const) {
 test("channel guidance metadata updates preserve intervening edits and initialize missing policies", async () => {
   const channelPolicy = createMemoryChannelPolicyStore();
   const surface = createSurfaceToolDeps({
-    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
     actor: { id: "U1" },
     conversation: { kind: "channel", channelRef: "C1" },

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -32,7 +32,7 @@ function deps(
     return { status: "ok", reply: "posted" };
   };
   return {
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(createMemoryMap()),
     identity: createIdentityService(),
     run,
@@ -160,7 +160,7 @@ describe("runTrigger home-scope gate for group homes", () => {
       listByParticipant: async (): Promise<readonly { scopeId: ScopeId }[]> => [{ scopeId: GSCOPE }],
     };
     const d: TriggerDeps = {
-      deliveries: createDeliveryStore(),
+      outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(createMemoryMap()),
       identity: createIdentityService(),
       run: async () => {

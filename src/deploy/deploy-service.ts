@@ -1,6 +1,6 @@
 import { EXTERNAL_APP_SHARING_OFF } from "../feature-flags.ts";
 import { notifyDeploymentShared } from "./share-notice.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
 import { deploymentShareScope } from "./email-access.ts";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -131,7 +131,7 @@ export class DeployAccessError extends Error {
 }
 
 export interface DeployServiceDeps {
-  deliveries?: DeliveryStore;
+  outbound?: Outbound;
   deployAppsDomain?: string;
   publicLinksAvailable?: boolean;
   publicWebUrl?: string;

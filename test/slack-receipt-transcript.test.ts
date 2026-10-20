@@ -4,9 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
+import { appendToTranscript } from "../src/surfaces/outbound.ts";
 import { forModelContext, forSearchView } from "../src/harness/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
@@ -87,40 +85,40 @@ for (const backend of ["memory", "postgres"] as const) {
   );
 
   test(
-    `${backend}: receipt retries remain pending and deduplicate beyond the transcript tail`,
+    `${backend}: a receipt waits for a busy session and deduplicates beyond the transcript tail`,
     {
       skip: backend === "postgres" && !databaseUrl ? "requires DATABASE_URL" : false,
     },
     async () => {
       const sessions: SessionStore =
         backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(databaseUrl!);
-      const inner =
-        backend === "memory"
-          ? createDeliveryStore({ maxAgeMs: 1 })
-          : createPostgresDeliveryStore(databaseUrl!, { maxAgeMs: 1 });
       const thread = `dm:${randomUUID()}`;
       const session = await sessions.getOrCreateByThread(thread, "dm", scope, undefined, "slack");
+      const key = `receipt:${randomUUID()}`;
+      const record = () =>
+        appendToTranscript(
+          { sessions },
+          session,
+          {
+            type: "user",
+            payload: {
+              text: "Durable receipt",
+              name: "Alice",
+              ts: "200.123",
+              slackReplyReceipt: true,
+              deliveryKey: key,
+            },
+          },
+          key,
+          () => sessions.hasDeliveryEntry(session.id, key, "200.123"),
+        );
       const { lease } = await sessions.acquireLease(session.id, "turn");
       assert.ok(lease);
-      const deliveries = withWebTranscriptDeliveries(inner, sessions);
-      const row = await deliveries.enqueue({
-        destination: {
-          type: "web",
-          target: thread,
-          audienceScopeId: scope,
-          webTranscript: { kind: "slack_reply", sessionId: session.id, ts: "200.123", name: "Alice" },
-        },
-        text: "Durable receipt",
-        idempotencyKey: `receipt:${randomUUID()}`,
-      });
-      row.createdAt = Date.now() - 7 * 60 * 60_000;
-      await sleep(10);
-      assert.deepEqual(await deliveries.claimPending("web", 1), []);
-      assert.equal((await inner.get(row.id))?.expiredAt, undefined);
-      assert.equal((await sessions.getEntries(session.id)).length, 0);
+      const pending = record();
+      await sleep(50);
+      assert.equal((await sessions.getEntries(session.id)).length, 0, "nothing lands while a turn holds the session");
       await sessions.releaseLease(lease);
-      await sleep(10);
-      assert.equal((await deliveries.claimPending("web", 1)).length, 1);
+      await pending;
       const next = await sessions.acquireLease(session.id, "turn");
       assert.ok(next.lease);
       await sessions.appendMany(
@@ -132,11 +130,9 @@ for (const backend of ["memory", "postgres"] as const) {
         })),
       );
       await sessions.releaseLease(next.lease);
-      const restarted = withWebTranscriptDeliveries(inner, sessions);
-      await restarted.pending("web");
+      await record();
       const entries = (await createTranscriptSource(sessions).forRender(session.id)).entries;
       assert.equal(entries.filter((e) => (e.payload as { slackReplyReceipt?: boolean }).slackReplyReceipt).length, 1);
-      await inner.ack(row.id, Date.now());
     },
   );
 }

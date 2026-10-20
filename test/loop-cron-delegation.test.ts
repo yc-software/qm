@@ -13,7 +13,7 @@ function deps(fired: string[], turns: TurnRequest[]) {
     crons,
     scheduler: createScheduler({
       crons,
-      deliveries: { enqueue: async () => ({ id: "d" }) } as never,
+      outbound: { enqueue: async () => ({ id: "d" }) } as never,
       idempotency: createIdempotencyStore(),
       identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
       run: async (req: TurnRequest): Promise<TurnResult> => {
@@ -58,7 +58,7 @@ test("a failing loop fire is recorded on the cron's fire log and the schedule ad
   const crons = createCronStore();
   const scheduler = createScheduler({
     crons,
-    deliveries: { enqueue: async () => ({ id: "d" }) } as never,
+    outbound: { enqueue: async () => ({ id: "d" }) } as never,
     idempotency: createIdempotencyStore(),
     identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
     run: async (req: TurnRequest): Promise<TurnResult> => {
@@ -84,7 +84,7 @@ test("a loop-backed cron fails closed when the loop service is unavailable", asy
   const crons = createCronStore();
   const scheduler = createScheduler({
     crons,
-    deliveries: { enqueue: async () => ({ id: "d" }) } as never,
+    outbound: { enqueue: async () => ({ id: "d" }) } as never,
     idempotency: createIdempotencyStore(),
     identity: { refresh: async () => {}, classify: () => ({ type: "internal" as const }) } as never,
     run: async (req: TurnRequest): Promise<TurnResult> => {

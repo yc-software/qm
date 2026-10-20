@@ -43,13 +43,13 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildTestApp } = await import("./support/test-app.ts");
 const { createServer } = await import("../src/api/server.ts");
 const SECRET = "synthetic-continuity-http-signing-key";
 const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const }));
 
 async function fixture(t: TestContext) {
-  const b = buildApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
+  const b = buildTestApp(testConfig({ signingSecret: SECRET, memoryCapture: "off" }));
   await b.config.hydrate?.();
   await b.identity.hydrate();
   await b.deploymentLayerReady;
@@ -196,7 +196,7 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
   const edit = await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Member edited proof" });
   assert.equal(edit.status, 200, JSON.stringify(edit.body));
   assert.equal((await b.crons.get(id))?.owner, "alice");
-  const notices = await b.deliveries.pending("principal");
+  const notices = await b.posts.pending("principal");
   assert.equal(notices.length, 1);
   assert.equal(notices[0]!.destination.target, "alice");
   assert.match(notices[0]!.text, /bob.*renamed/);
@@ -209,7 +209,7 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
   const log = await b.awaitFire(id, owner);
   assert.ok(log?.length, "HTTP scheduler created a fire log");
   assert.ok(
-    (await b.deliveries.pending("slack")).some((d) => d.text.includes("cron-owner-resource")),
+    (await b.posts.pending("slack")).some((d) => d.text.includes("cron-owner-resource")),
     JSON.stringify(log),
   );
   assert.equal(
@@ -217,7 +217,7 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
       .status,
     200,
   );
-  assert.equal((await b.deliveries.pending("principal")).length, 1, "owner edits do not notify themselves");
+  assert.equal((await b.posts.pending("principal")).length, 1, "owner edits do not notify themselves");
 });
 
 test("HTTP Open shared cron isolates synthetic owner credential and revokes resource access", async (t) => {
@@ -240,7 +240,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   assert.equal((await b.request("POST", `/v1/crons/${id}/run`, owner, {})).status, 200);
   const log = await b.awaitFire(id, owner);
   assert.ok(
-    (await b.deliveries.pending("slack")).some((d) => d.text.includes("owner-credential-present")),
+    (await b.posts.pending("slack")).some((d) => d.text.includes("owner-credential-present")),
     JSON.stringify(log),
   );
   assert.equal(
@@ -252,7 +252,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const result = await b.scheduler.runNow(id);
   if (result.started) await result.settled;
   assert.equal(
-    (await b.deliveries.pending("slack")).filter((d) => d.text.includes("owner-credential-present")).length,
+    (await b.posts.pending("slack")).filter((d) => d.text.includes("owner-credential-present")).length,
     1,
     "once the owner leaves, the public-channel cron no longer gets their keychain",
   );
@@ -283,7 +283,7 @@ for (const isPrivate of [false, true]) {
       const initial = await b.scheduler.runNow(id);
       assert.equal(initial.started, true);
       if (initial.started) await initial.settled;
-      assert.ok((await b.deliveries.pending("slack")).some((d) => d.text.includes("veto-credential-present")));
+      assert.ok((await b.posts.pending("slack")).some((d) => d.text.includes("veto-credential-present")));
       const original = b.keychain.materializeOwnById.bind(b.keychain);
       let materializations = 0;
       b.keychain.materializeOwnById = async (...args: Parameters<typeof original>) => {
@@ -295,7 +295,7 @@ for (const isPrivate of [false, true]) {
       if (revoked.started) await revoked.settled;
       assert.equal(materializations, 0);
       assert.equal(
-        (await b.deliveries.pending("slack")).filter((d) => d.text.includes("veto-credential-present")).length,
+        (await b.posts.pending("slack")).filter((d) => d.text.includes("veto-credential-present")).length,
         1,
       );
       assert.equal((await b.turn('!run printf "%s" "${CONTINUITY_VETO_TOKEN-unset}"', "bob")).reply, "unset");
@@ -330,6 +330,6 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
   if (fired.started) await fired.settled;
   const { runs } = await b.crons.listFires(cron.id);
   assert.equal(runs.at(-1)?.status, "ok", "the fire still runs");
-  assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));
+  assert.ok(!(await b.posts.pending("slack")).some((d) => d.text.includes("isolated-credential-present")));
   assert.equal((await b.crons.get(cron.id))?.enabled, true);
 });

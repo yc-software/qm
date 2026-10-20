@@ -86,7 +86,7 @@ export async function decideDeploymentAccess(
     });
     return `Approved. ${requesterId} can now open "${label}".`;
   }
-  await app.enqueueDelivery({
+  await app.postToSurface({
     destination: principalDestination(requesterId, actor.id),
     text: `${actor.id} declined your request for access to "${label}".`,
     idempotencyKey: `deploy-declined:${deploymentId}:${requesterId.toLowerCase()}:${Math.floor(Date.now() / 86_400_000)}`,

@@ -3495,7 +3495,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               tool: surfaceName,
               action: "post",
               ok: r.ok,
-              ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(r.ok ? "[sent]" : `[not sent] ${r.message ?? "delivery failed"}`),
@@ -3538,7 +3537,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               tool: surfaceName,
               action: "reach",
               ok: r.ok,
-              ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}),
               ...(r.ok && r.attachments?.length ? { files: r.attachments } : {}),
             },
             text(
@@ -3562,7 +3560,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const r = await tc.react({ ts: params.ts, emoji: params.emoji, ...routing });
           return recordResult(
             callId,
-            { tool: surfaceName, action: "react", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            { tool: surfaceName, action: "react", ok: r.ok },
             text(r.ok ? "[reacted]" : `[not reacted] ${r.message ?? "reaction failed"}`),
             !r.ok,
           );
@@ -3580,7 +3578,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const r = await tc.edit({ ref: params.ref, text: params.text, ...routing });
           return recordResult(
             callId,
-            { tool: surfaceName, action: "edit", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            { tool: surfaceName, action: "edit", ok: r.ok },
             text(r.ok ? "[edited]" : `[not edited] ${r.message ?? "edit failed"}`),
             !r.ok,
           );
@@ -3591,7 +3589,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           const r = await tc.delete({ ref: params.ref, ...routing });
           return recordResult(
             callId,
-            { tool: surfaceName, action: "delete", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            { tool: surfaceName, action: "delete", ok: r.ok },
             text(r.ok ? "[deleted]" : `[not deleted] ${r.message ?? "delete failed"}`),
             !r.ok,
           );

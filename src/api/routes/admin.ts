@@ -11,7 +11,7 @@ import {
 } from "./admin/scope-config.ts";
 import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns, metrics } from "./admin/observability.ts";
-import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
+import { getAdminSession, getAdminSessionLlm, listAdminSessions } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
   archiveAdminSkill,
@@ -123,7 +123,6 @@ const routes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/admin/sessions/:id/llm", auth: "either", handle: getAdminSessionLlm },
   { method: "GET", path: "/v1/admin/sessions/:id", auth: "either", handle: getAdminSession },
   { method: "GET", path: "/v1/admin/runs", auth: "either", handle: listAdminRuns },
-  { method: "GET", path: "/v1/admin/deliveries/shadow", auth: "either", handle: listAdminShadowDeliveries },
   { method: "GET", path: "/v1/admin/slack-mirror/messages", auth: "either", handle: listSlackMirrorMessages },
   { method: "GET", path: "/v1/admin/slack-mirror", auth: "either", handle: listSlackMirrorContainers },
   { method: "GET", path: "/v1/admin/ambient-judgments", auth: "either", handle: listAmbientJudgments },

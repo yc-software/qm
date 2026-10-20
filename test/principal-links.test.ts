@@ -265,7 +265,7 @@ describe("linked sign-ins across the HTTP surface", () => {
       auditLog: built.auditLog,
       keychain: built.keychain,
       secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
+      outbound: built.outbound,
       workspace: built.workspace,
       runs: built.runs,
       signals: built.signals,

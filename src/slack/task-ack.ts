@@ -3,8 +3,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { sleep, createKeyedQueue } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { isTerminal, type RunStore } from "../runs/run-store.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import { runResultDelivery } from "../delivery/run-result-delivery.ts";
+import { runResultPost } from "../runs/run-results.ts";
 
 export interface TaskAckState {
   channel: string;
@@ -25,7 +24,7 @@ interface ReactionClient {
 export function createTaskAcknowledgements(
   store: DurableMap<TaskAckState>,
   lease: LeaderLease,
-  recovery?: { runs: Pick<RunStore, "get">; deliveries: Pick<DeliveryStore, "pending"> },
+  recovery?: { runs: Pick<RunStore, "get"> },
 ) {
   if (!store.update) throw new Error("Task acknowledgements require atomic updates");
   const update = store.update.bind(store);
@@ -128,17 +127,9 @@ export function createTaskAcknowledgements(
       for (const [runId, state] of await store.entries()) {
         if (!state.finished && recovery) {
           const run = await recovery.runs.get(runId);
-          if (run && isTerminal(run.status) && !runResultDelivery(run)) {
-            const pending = await recovery.deliveries.pending("slack");
-            if (
-              !pending.some(
-                (delivery) =>
-                  delivery.idempotencyKey === `ack:${runId}` || delivery.idempotencyKey?.startsWith(`post:${runId}:`),
-              )
-            ) {
-              await change(client, runId).catch(swallowAs("slack: finish recovered task acknowledgement", undefined));
-              continue;
-            }
+          if (run && isTerminal(run.status) && (run.deliveryState?.postedAt !== undefined || !runResultPost(run))) {
+            await change(client, runId).catch(swallowAs("slack: finish recovered task acknowledgement", undefined));
+            continue;
           }
         }
         if (!state.synced)

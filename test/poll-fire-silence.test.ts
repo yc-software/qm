@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -13,7 +13,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-pollsilence-"));
-  return buildApp(testConfig({ dataDir }));
+  return buildTestApp(testConfig({ dataDir }));
 }
 
 function monitorFire(text: string, channel: string, root: string, fireKey: string): TurnRequest {
@@ -35,8 +35,8 @@ function monitorFire(text: string, channel: string, root: string, fireKey: strin
   };
 }
 
-async function slackDeliveries(deliveries: { pending(type: string): Promise<unknown[]> }): Promise<any[]> {
-  return (await deliveries.pending("slack")) as any[];
+async function slackDeliveries(outbound: { pending(type: string): Promise<unknown[]> }): Promise<any[]> {
+  return (await outbound.pending("slack")) as any[];
 }
 
 test("poll fire: narration before a tool call is NOT auto-posted as an ack when the turn ends silently", async () => {
@@ -49,7 +49,7 @@ test("poll fire: narration before a tool call is NOT auto-posted as an ack when 
     assert.equal(res.status, "silent", "the model finished silently — the turn is silent");
     await sleep(300);
     assert.deepEqual(
-      (await slackDeliveries(built.deliveries)).map((d) => d.text),
+      (await slackDeliveries(built.posts)).map((d) => d.text),
       [],
       "no mid-turn narration leaks to the surface on a background fire that ends silent",
     );
@@ -65,7 +65,7 @@ test("poll fire: a closing reply ending in a bracketed token is delivered, since
     const res = await built.app.turn(monitorFire("Still queued.\n\n[no-update]", "C-watch2", "801.1", "monitor:m1:f2"));
     assert.equal(res.status, "silent", "surfaceTools turn: delivery happens via the surface, result is silent");
     await sleep(300);
-    const texts = (await slackDeliveries(built.deliveries)).map((d) => d.text);
+    const texts = (await slackDeliveries(built.posts)).map((d) => d.text);
     assert.equal(texts.length, 1, JSON.stringify(texts));
     assert.match(texts[0]!, /You said: Still queued\.\n\n\[no-update\]/);
   } finally {
@@ -82,7 +82,7 @@ test("poll fire: a genuine report is still delivered exactly once, buffered to t
     );
     assert.equal(res.status, "silent", "surfaceTools turn: delivery happens via the surface, result is silent");
     await sleep(300);
-    const texts = (await slackDeliveries(built.deliveries)).map((d) => d.text);
+    const texts = (await slackDeliveries(built.posts)).map((d) => d.text);
     assert.equal(texts.length, 1, `exactly one delivery, buffered to turn end (got: ${JSON.stringify(texts)})`);
     assert.match(texts[0]!, /Deploy finished — all green\./, "the full report text is delivered");
     assert.match(texts[0]!, /All clear — nothing broke\./, "the trailing reply text is included");
@@ -112,7 +112,7 @@ test("interactive mention: the first-block ack still posts immediately (unchange
     const deadline = Date.now() + 5_000;
     let ack: any;
     while (Date.now() < deadline && !ack) {
-      ack = (await slackDeliveries(built.deliveries)).find((d) => d.text === "On it — checking.");
+      ack = (await slackDeliveries(built.posts)).find((d) => d.text === "On it — checking.");
       if (!ack) await sleep(50);
     }
     assert.ok(ack, "a person is waiting: the ack still posts mid-turn");

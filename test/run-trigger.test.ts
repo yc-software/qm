@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound, type PostLog } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -29,9 +29,12 @@ function directory(member: boolean) {
   };
 }
 
-function deps(run: (req: TurnRequest) => Promise<TurnResult>, dir?: ReturnType<typeof directory>): TriggerDeps {
+function deps(
+  run: (req: TurnRequest) => Promise<TurnResult>,
+  dir?: ReturnType<typeof directory>,
+): TriggerDeps & { outbound: PostLog } {
   return {
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(createMemoryMap()),
     identity: createIdentityService(),
     run,
@@ -60,7 +63,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal(req?.addressed, true, "and is addressed so it must reply-or-decline (shed fallback delivers)");
     assert.deepEqual(req?.triggerDestination, toChannel, "the post tool aims at the arming thread");
     assert.equal(req?.idempotencyKey, "monitor:m1:exit");
-    assert.equal((await d.deliveries.pending("slack")).length, 0);
+    assert.equal((await d.outbound.pending("slack")).length, 0);
   });
 
   it("a monitor whose destination is no longer visible stays off the live path: no surface tools, a note, no enqueue", async () => {
@@ -80,7 +83,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     });
     assert.equal(req?.surfaceTools, undefined, "a non-visible destination does not get the surface tools");
     assert.match(out.note ?? "", /no longer visible/);
-    assert.equal((await d.deliveries.pending("slack")).length, 0, "and nothing is delivered");
+    assert.equal((await d.outbound.pending("slack")).length, 0, "and nothing is delivered");
   });
 
   it("§10 leg (a) at fire time: an actor who can no longer READ the trigger's home scope skips the run entirely", async () => {
@@ -101,7 +104,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     assert.equal(out.ran, true, "the fire is consumed and recorded, not mistaken for a dedupe hit");
     assert.equal(out.authzFailed, false, "skip-not-disable: a stale directory must not kill the trigger");
     assert.match(out.note ?? "", /no longer a member/);
-    assert.equal((await d.deliveries.pending("slack")).length, 0);
+    assert.equal((await d.outbound.pending("slack")).length, 0);
   });
 
   it("§10 leg (a): a member in good standing runs as before (group home scope)", async () => {
@@ -120,7 +123,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     });
     assert.equal(ranTurn, true);
     assert.equal(out.ran, true);
-    assert.equal((await d.deliveries.pending("slack")).length, 1, "output delivered");
+    assert.equal((await d.outbound.pending("slack")).length, 1, "output delivered");
   });
 
   it("a group-DM home destination (slack-typed, group audience scope) is gated by the GROUPS tables, not the channel tables", async () => {
@@ -180,7 +183,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     });
     assert.equal(req?.surfaceTools, undefined, "a lost group membership does not go live");
     assert.match(out.note ?? "", /no longer visible/);
-    assert.equal((await d.deliveries.pending("slack")).length, 0);
+    assert.equal((await d.outbound.pending("slack")).length, 0);
   });
 
   it("a bare monitor (no destination) runs but neither goes live nor enqueues", async () => {
@@ -199,7 +202,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
     });
     assert.equal(out.ran, true);
     assert.equal(req?.surfaceTools, undefined);
-    assert.equal((await d.deliveries.pending("slack")).length, 0);
+    assert.equal((await d.outbound.pending("slack")).length, 0);
   });
 });
 
@@ -243,7 +246,7 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       errorNotice: (s) => `⚠️ could not run: ${s}`,
     });
     assert.equal(out.note, "failed: TypeError: fetch failed at sandbox.ts:42", "the operator record keeps the detail");
-    const pending = await d.deliveries.pending("slack");
+    const pending = await d.outbound.pending("slack");
     assert.equal(pending.length, 1);
     assert.equal(pending[0]!.text, "⚠️ could not run: something went wrong on my end");
   });
@@ -264,7 +267,7 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       destination: toChannel,
       errorNotice: (s) => `⚠️ could not run: ${s}`,
     });
-    const pending = await d.deliveries.pending("slack");
+    const pending = await d.outbound.pending("slack");
     assert.equal(pending.length, 1);
     assert.equal(pending[0]!.text, "⚠️ could not run: the conversation was busy with another task");
     assert.doesNotMatch(pending[0]!.text, /session busy|refused|try again/);
@@ -286,7 +289,7 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
     });
     assert.equal(req?.surfaceTools, undefined, "a cron never gets addressed/shed semantics — it may stay silent");
-    assert.equal((await d.deliveries.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
+    assert.equal((await d.outbound.pending("slack")).length, 1, "core delivers the cron reply via the enqueue path");
   });
 });
 
@@ -318,7 +321,7 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     assert.equal(first.deferred, true);
     assert.equal(first.ran, false);
     assert.equal(first.status, undefined);
-    assert.equal((await d.deliveries.pending("slack")).length, 0, "a deferral is not a failure — no notice");
+    assert.equal((await d.outbound.pending("slack")).length, 0, "a deferral is not a failure — no notice");
     assert.equal(await d.idempotency.committed(spec.fireKey), false, "the fire key is still available");
 
     const second = await runTrigger(d, spec);
@@ -335,6 +338,6 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     assert.equal(out.ran, true);
     assert.equal(out.status, "refused");
     assert.equal(await d.idempotency.committed(spec.fireKey), true);
-    assert.equal((await d.deliveries.pending("slack")).length, 1);
+    assert.equal((await d.outbound.pending("slack")).length, 1);
   });
 });

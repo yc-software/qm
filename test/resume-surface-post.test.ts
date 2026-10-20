@@ -21,8 +21,8 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Harness } from "../src/harness/harness.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
+import type { Outbound } from "../src/surfaces/outbound.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 
@@ -54,7 +54,7 @@ function fakeSandbox(): Sandbox {
 function buildOrchestrator(
   harness: Harness,
   sessions: ReturnType<typeof createMemorySessionStore>,
-  deliveries: DeliveryStore,
+  outbound: Outbound,
 ) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
@@ -79,7 +79,7 @@ function buildOrchestrator(
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
     harness,
     memory: createMemoryService(workspace),
-    deliveries,
+    outbound,
     memoryStrategy: {},
     deploy,
     acl,
@@ -88,7 +88,7 @@ function buildOrchestrator(
 
 test("a resumed turn whose dead attempt already posted does not post its closing text again", async () => {
   const sessions = createMemorySessionStore();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const base = createMockHarness();
   const harness: Harness = {
     ...base,
@@ -111,7 +111,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   ] as const)
     await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
   await sessions.releaseLease(lease);
-  const orch = buildOrchestrator(harness, sessions, deliveries);
+  const orch = buildOrchestrator(harness, sessions, outbound);
   const result = await orch.handleTurn({
     surface: "slack",
     actor,
@@ -125,5 +125,5 @@ test("a resumed turn whose dead attempt already posted does not post its closing
     runId: "run-1",
   } as OrchestratorInput);
   assert.notEqual(result.status, "error");
-  assert.deepEqual(await deliveries.pending("slack"), []);
+  assert.deepEqual(await outbound.pending("slack"), []);
 });

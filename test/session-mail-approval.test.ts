@@ -21,7 +21,7 @@ import { defineHarness } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
@@ -123,7 +123,7 @@ async function scenario() {
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     featureFlags,
     sessionSyscalls,
   });

@@ -17,6 +17,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 
 let externalSharing = true;
@@ -184,12 +185,14 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     acl: createAclStore(),
     deployDir: mkdtempSync(join(tmpdir(), "signin-")),
   });
+  const outbound = recordingOutbound();
   const app = createApp({
     deploy,
     acl: createAclStore(),
     directory: createDirectoryStore(),
     sessions: createMemorySessionStore(),
     identity: createIdentityService(),
+    outbound,
   } as unknown as Parameters<typeof createApp>[0]);
   await app.deploy({
     ownerScopeId: scopeId("personal", "alice@example.com"),
@@ -198,10 +201,6 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     files: [],
     name: "mysite",
   });
-  const deliveries: { destination: unknown; text: string; idempotencyKey: string }[] = [];
-  (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
-    deliveries.push(input);
-  };
   const server = createInsecureTestServer(app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
@@ -333,11 +332,11 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
       Cookie: `portal_session=${mintPortalSession("mallory@example.com")}`,
     });
     assert.equal(again.status, 200, "asking twice is idempotent, not an error");
-    assert.equal(deliveries.length, 2, "both posts enqueue (the outbox dedupes by idempotency key)");
-    assert.equal(deliveries[0]!.idempotencyKey, deliveries[1]!.idempotencyKey, "same visitor+app+day dedupes");
-    assert.match(deliveries[0]!.text, /mallory@example\.com is asking for access/);
-    assert.match(deliveries[0]!.text, /mysite/);
-    assert.deepEqual(deliveries[0]!.destination, {
+    const posts = outbound.posts;
+    assert.equal(posts.length, 1, "the same visitor+app+day request posts to the owner once");
+    assert.match(posts[0]!.text, /mallory@example\.com is asking for access/);
+    assert.match(posts[0]!.text, /mysite/);
+    assert.deepEqual(posts[0]!.destination, {
       type: "principal",
       target: "alice@example.com",
       audienceScopeId: "personal:alice@example.com",

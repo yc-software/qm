@@ -20,7 +20,7 @@ import { defineHarness } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { HarnessTurnResult } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -84,7 +84,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     auditLog,
     acl,
   });
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const orchestrator = createOrchestrator({
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
@@ -99,7 +99,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     memory: createMemoryService(workspace),
     deploy,
     acl,
-    deliveries,
+    outbound,
   });
   const input = (text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
     surface: "slack",
@@ -109,7 +109,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     text,
     ...extra,
   });
-  return { orchestrator, sessions, deliveries, input };
+  return { orchestrator, sessions, outbound, input };
 }
 
 test("a cancel-stopped turn still persists and surfaces its pending approvals", async () => {

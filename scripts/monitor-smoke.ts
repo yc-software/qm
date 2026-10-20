@@ -10,7 +10,7 @@ import { createBackgroundBroker } from "../src/connectors/background-exec-broker
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createOutbound, type OutboundPost } from "../src/surfaces/outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { loadConfig } from "../src/config.ts";
@@ -62,7 +62,9 @@ const destination = { type: "smoke", target: "smoke-dm", audienceScopeId: scope 
 
 const registry = createMemoryProcessRegistry();
 const monitors = createMonitorStore();
-const deliveries = createDeliveryStore();
+const posted: OutboundPost[] = [];
+const outbound = createOutbound({});
+outbound.register(["smoke"], async (post) => void posted.push(post));
 const broker = createBackgroundBroker({ sandbox: sb, registry, scopeId: scope, pollMs: 4000, ttlMaxMs: 60 * 60_000 });
 let h: Awaited<ReturnType<typeof sb.provision>> | undefined;
 const monitorBroker = createMonitorBroker({
@@ -92,7 +94,7 @@ const poller = createMonitorPoller({
   monitors,
   processes: registry,
   sandbox: sb,
-  deliveries,
+  outbound,
   idempotency: createIdempotencyStore(),
   identity: createIdentityService(),
   run: async (req: TurnRequest): Promise<TurnResult> => {
@@ -156,8 +158,7 @@ try {
     wakes.every((q) => !/Successfully installed|Collecting /.test(q.text)),
     "pattern filter kept pip noise out of wakes",
   );
-  const pending = await deliveries.pending("smoke");
-  ok(pending.length === wakes.length, `one delivery per wake (${pending.length})`);
+  ok(posted.length === wakes.length, `one post per wake (${posted.length})`);
 
   const exitWake = wakes.find((q) => /exited with code/.test(q.text));
   const cleanExit = /exited with code 0/.test(exitWake?.text ?? "");

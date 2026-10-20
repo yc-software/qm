@@ -47,12 +47,11 @@ async function fixture() {
     listContexts: async () => [{ scopeId: ask.requesterScopeId, name: "the Reports conversation" }],
   } as unknown as Pick<App, "belongsToScope" | "listContexts">;
   const identity = createIdentityService();
-  const enqueued: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
+  const sent: Array<{ destination: { target: string; keychainAskId?: string }; idempotencyKey?: string }> = [];
   const approvals = createKeychainApprovals({
-    deliveries: {
-      enqueue: async (d: any) => {
-        enqueued.push(d);
-        return d;
+    outbound: {
+      send: async (post) => {
+        sent.push(post);
       },
     },
     keychain,
@@ -72,7 +71,7 @@ async function fixture() {
     sessions,
     approvals,
     resumed,
-    enqueued,
+    sent,
     revokeMembership: () => {
       member = false;
     },
@@ -327,7 +326,7 @@ test("a sub-agent request shows in both sessions, and deciding anywhere syncs th
   assert.equal(view.requesterSessionId, child.id);
   assert.equal(view.sessionId, f.session.id, "the parent sees it too");
   await f.approvals.decide(ask.id, { externalId: "alice@example.com" }, "standing");
-  const sync = f.enqueued.find((d) => d.idempotencyKey === `ask:${ask.id}:resolved`);
+  const sync = f.sent.find((d) => d.idempotencyKey === `ask:${ask.id}:resolved`);
   assert.equal(sync?.destination.keychainAskId, ask.id);
 
   const calls: Array<{ method: string; ts?: string }> = [];

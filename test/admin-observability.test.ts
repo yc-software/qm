@@ -24,7 +24,7 @@ function start(overrides: Parameters<typeof testConfig>[0] = {}) {
     workspace: built.workspace,
     files: built.files,
     config: built.config,
-    deliveries: built.deliveries,
+    outbound: built.outbound,
     crons: built.crons,
   });
   server.listen(0);
@@ -253,287 +253,6 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
   }
 });
 
-test("recipient delivery rows expose origin provenance and gated origin context", async () => {
-  const s = start();
-  try {
-    const sourceScope = "channel:C-origin";
-    const source = await s.built.sessions.getOrCreateByThread("cron:c1:42", "channel", sourceScope, "ops");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "post the digest" },
-      scopeLabel: sourceScope,
-    });
-    const sourceResume = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "(system note: resume)" },
-      scopeLabel: sourceScope,
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Digest posted." },
-      scopeLabel: sourceScope,
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "post the digest" }] },
-      truncated: false,
-    });
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceResume.seq,
-      step: 1,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "(system note: resume)" }] },
-      truncated: false,
-    });
-
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "The script ran clean and posted the digest DM.",
-      attachments: [
-        {
-          name: "digest.gif",
-          mimetype: "image/gif",
-          sizeBytes: 99,
-          blobId: "blob-digest",
-          artifactId: "art-digest",
-          artifactViewerId: "U-alice",
-        },
-      ],
-      idempotencyKey: "cron:c1:42",
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey: "cron:c1:42",
-        sourceScopeId: sourceScope,
-        sourceThreadRef: "cron:c1:42",
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-erica");
-    assert.ok(recipient);
-
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
-    assert.equal(orgRead.status, 200);
-    const orgBody = (await orgRead.json()) as any;
-    assert.equal(
-      orgBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-      "recipient transcript is not copied assistant history",
-    );
-    assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivered output inline");
-    const event = orgBody.deliveryEvents[0];
-    assert.equal(event.type, "principal_delivery");
-    assert.equal(event.text, "The script ran clean and posted the digest DM.");
-    assert.equal(event.provenance.fireKey, "cron:c1:42");
-    assert.equal(event.provenance.sourceSessionId, source.id);
-    assert.equal(event.sourceSession.id, source.id);
-    assert.equal(event.sourceSession.scopeId, sourceScope);
-    assert.equal(event.llmRequests.length, 2);
-    assert.equal(event.llmRequests[0].turnSeq, sourceUser.seq);
-    assert.deepEqual(event.llmRequests[0].promptEnvelope.messages, [{ role: "user", content: "post the digest" }]);
-    assert.equal(event.llmRequests[1].turnSeq, sourceResume.seq);
-
-    const scopedRead = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-erica")}`,
-    );
-    assert.equal(scopedRead.status, 200);
-    const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(
-      scopedBody.entries.some((e: any) => e.type === "assistant"),
-      false,
-    );
-    assert.equal(scopedBody.deliveryEvents.length, 1);
-    assert.equal(scopedBody.deliveryEvents[0].provenance.sourceSessionId, source.id);
-    assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
-    assert.equal(scopedBody.deliveryEvents[0].llmRequests, undefined);
-
-    const sourceRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=org:default-org`);
-    assert.equal(sourceRead.status, 200);
-    const sourceBody = (await sourceRead.json()) as any;
-    assert.equal(sourceBody.deliveryEvents.length, 1, "source transcript renders the outbound Slack delivery");
-    assert.equal(sourceBody.deliveryEvents[0].type, "outbound_delivery");
-    assert.equal(sourceBody.deliveryEvents[0].text, "The script ran clean and posted the digest DM.");
-    assert.equal(sourceBody.deliveryEvents[0].recipientThreadRef, "dm:D-erica");
-    assert.deepEqual(sourceBody.deliveryEvents[0].attachments, [
-      {
-        name: "digest.gif",
-        mimetype: "image/gif",
-        sizeBytes: 99,
-        blobId: "blob-digest",
-        artifactId: "art-digest",
-        artifactViewerId: "U-alice",
-      },
-    ]);
-  } finally {
-    await s.close();
-  }
-});
-
-test("recipient delivery rows expose non-cron wake provenance without cron idempotency", async () => {
-  const s = start();
-  try {
-    const sourceScope = "channel:C-webhook";
-    const fireKey = "webhook:wh_123:delivery_456";
-    const source = await s.built.sessions.getOrCreateByThread(fireKey, "channel", sourceScope, "alerts");
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "triage the webhook" },
-      scopeLabel: sourceScope,
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Webhook triaged." },
-      scopeLabel: sourceScope,
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: sourceScope,
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "triage the webhook" }] },
-      truncated: false,
-    });
-
-    const sourceRead = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=${encodeURIComponent(sourceScope)}`,
-    );
-    assert.equal(sourceRead.status, 200);
-    const sourceBody = (await sourceRead.json()) as any;
-    assert.equal(sourceBody.origin.kind, "background_wake");
-    assert.equal(sourceBody.origin.label, "Webhook wake");
-    assert.equal(sourceBody.origin.trigger, "webhook");
-    assert.equal(sourceBody.origin.fireKey, fireKey);
-
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "Webhook alert triaged.",
-      idempotencyKey: "delivery:non-cron-key",
-      provenance: {
-        trigger: "webhook",
-        surface: "webhook",
-        fireKey,
-        sourceScopeId: sourceScope,
-        sourceThreadRef: fireKey,
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-webhook-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-webhook-erica");
-    assert.ok(recipient);
-
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
-    assert.equal(orgRead.status, 200);
-    const orgBody = (await orgRead.json()) as any;
-    assert.equal(orgBody.deliveryEvents.length, 1);
-    const event = orgBody.deliveryEvents[0];
-    assert.equal(event.idempotencyKey, "delivery:non-cron-key");
-    assert.equal(event.origin.kind, "background_wake");
-    assert.equal(event.origin.label, "Webhook wake");
-    assert.equal(event.origin.trigger, "webhook");
-    assert.equal(event.origin.fireKey, fireKey);
-    assert.equal(event.origin.sourceId, "wh_123");
-    assert.equal(event.origin.fireSlot, "delivery_456");
-    assert.equal(event.sourceSession.id, source.id);
-    assert.equal(event.llmRequests.length, 1);
-
-    const scopedRead = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-erica")}`,
-    );
-    assert.equal(scopedRead.status, 200);
-    const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(scopedBody.deliveryEvents.length, 1);
-    assert.equal(scopedBody.deliveryEvents[0].origin.label, "Webhook wake");
-    assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
-    assert.equal(scopedBody.deliveryEvents[0].llmRequests, undefined);
-
-    const mismatched = await s.built.deliveries.enqueue({
-      destination: {
-        type: "principal",
-        target: "U-mismatch",
-        audienceScopeId: "personal:U-mismatch",
-        onBehalfOf: "U-alice",
-      },
-      text: "Mismatched legacy provenance.",
-      idempotencyKey: "delivery:mismatched-key",
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey,
-        sourceScopeId: sourceScope,
-        sourceThreadRef: fireKey,
-        sourceSessionId: source.id,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(mismatched.id, "dm:D-mismatch");
-    const mismatchRecipient = await s.built.sessions.getByThread("dm:D-mismatch");
-    assert.ok(mismatchRecipient);
-    const mismatchRead = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(mismatchRecipient!.id)}?scope=org:default-org`,
-    );
-    assert.equal(mismatchRead.status, 200);
-    const mismatchBody = (await mismatchRead.json()) as any;
-    assert.equal(mismatchBody.deliveryEvents.length, 1);
-    assert.equal(mismatchBody.deliveryEvents[0].origin.kind, "background_wake");
-    assert.equal(mismatchBody.deliveryEvents[0].origin.trigger, "webhook");
-    assert.equal(mismatchBody.deliveryEvents[0].origin.cronId, undefined);
-  } finally {
-    await s.close();
-  }
-});
-
-test("a live conversation post's provenance joins its source session but renders no wake-origin card", async () => {
-  const s = start();
-  try {
-    const sourceScope = "channel:C-live";
-    const source = await s.built.sessions.getOrCreateByThread("slack/C-live:171.5", "channel", sourceScope, "live");
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-erica", audienceScopeId: "personal:U-erica", onBehalfOf: "U-alice" },
-      text: "forwarding this from the channel",
-      idempotencyKey: "post:live:1",
-      provenance: {
-        trigger: "conversation",
-        surface: "slack",
-        fireKey: "post:live:1",
-        sourceScopeId: sourceScope,
-        sourceThreadRef: "slack/C-live:171.5",
-        sourceSessionId: source.id,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-live-erica");
-    const recipient = await s.built.sessions.getByThread("dm:D-live-erica");
-    assert.ok(recipient);
-    const read = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
-    assert.equal(read.status, 200);
-    const body = (await read.json()) as any;
-    assert.equal(body.deliveryEvents.length, 1);
-    const event = body.deliveryEvents[0];
-    assert.equal(event.origin ?? null, null, "no background-wake card for a conversation post");
-    assert.equal(event.provenance.sourceSessionId, source.id, "the session join survives");
-    assert.equal(event.sourceSession.id, source.id);
-  } finally {
-    await s.close();
-  }
-});
-
 test("a cron-fired transcript carries its originating cron", async () => {
   const s = start();
   try {
@@ -571,70 +290,32 @@ test("a cron-fired transcript carries its originating cron", async () => {
   }
 });
 
-test("principal deliveries render as delivery events and later DM turns get structured context", async () => {
+test("a Slack DM post joins the recipient's DM conversation and shows up in their next turn's context", async () => {
   const s = start();
   try {
-    const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U-carol",
-      owner: "U-carol",
-      createdBy: "U-carol",
-      schedule: { everyMs: 60_000 },
-      title: "Deploy notice",
-      message: "the deploy is done",
-    });
-    const delivery = await s.built.deliveries.enqueue({
+    s.built.outbound.register(["principal"], async () => ({ recipientThreadRef: "dm:D-alice" }));
+    await s.built.outbound.send({
       destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
       text: "the deploy is done",
-      attachments: [
-        {
-          name: "rsi.gif",
-          mimetype: "image/gif",
-          sizeBytes: 42,
-          blobId: "blob-1",
-          artifactId: "art-1",
-          artifactViewerId: "U-alice",
-        },
-      ],
-      idempotencyKey: `cron:${cron.id}:42`,
+      idempotencyKey: "cron:c1:42",
+      provenance: {
+        trigger: "cron",
+        surface: "cron",
+        fireKey: "cron:c1:42",
+        sourceScopeId: "personal:U-carol",
+        sourceThreadRef: "cron:c1:42",
+      },
     });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice");
-
-    const session = await s.built.sessions.getByThread("dm:D-alice");
+    let session = await s.built.sessions.getByThread("dm:D-alice");
+    for (let i = 0; i < 50 && !session; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      session = await s.built.sessions.getByThread("dm:D-alice");
+    }
     assert.ok(session, "recipient session exists");
     assert.equal(
       (await s.built.sessions.getEntries(session!.id)).some((e) => e.type === "assistant"),
       false,
-    );
-
-    const orgTx = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=org:default-org`);
-    assert.equal(orgTx.status, 200);
-    const orgBody = (await orgTx.json()) as any;
-    assert.equal(orgBody.entries.length, 0, "delivery is not a transcript entry");
-    assert.equal(orgBody.deliveryEvents.length, 1, "recipient transcript renders delivery rows inline");
-    assert.equal(orgBody.deliveryEvents[0].text, "the deploy is done");
-    assert.deepEqual(orgBody.deliveryEvents[0].attachments, [
-      {
-        name: "rsi.gif",
-        mimetype: "image/gif",
-        sizeBytes: 42,
-        blobId: "blob-1",
-        artifactId: "art-1",
-        artifactViewerId: "U-alice",
-      },
-    ]);
-    assert.equal(orgBody.deliveryEvents[0].origin.cronId, cron.id);
-    assert.equal(orgBody.deliveryEvents[0].origin.cron.title, "Deploy notice");
-
-    const scopedTx = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(session!.id)}?scope=${encodeURIComponent("personal:U-alice")}`,
-    );
-    assert.equal(scopedTx.status, 200);
-    const scopedBody = (await scopedTx.json()) as any;
-    assert.equal(
-      scopedBody.deliveryEvents[0].origin.cron,
-      null,
-      "origin context outside the requested scope fails closed",
+      "the post is not written into the recipient's chat history",
     );
 
     const turn: TurnRequest = {
@@ -648,92 +329,7 @@ test("principal deliveries render as delivery events and later DM turns get stru
     const latest = reqs[reqs.length - 1] as any;
     const userMessage = latest.promptEnvelope.messages.at(-1).content;
     assert.match(userMessage, /Delivered here since the user's last message/);
-    assert.match(userMessage, /the deploy is done/);
-  } finally {
-    await s.close();
-  }
-});
-
-test("monitor delivery origin context is scope-gated in admin", async () => {
-  const s = start();
-  try {
-    const monitorId = "m1";
-    const source = await s.built.sessions.getOrCreateByThread(
-      `agent:main:monitor:${monitorId}`,
-      "dm",
-      "personal:U-carol",
-    );
-    const { lease } = await s.built.sessions.acquireLease(source.id);
-    assert.ok(lease);
-    const sourceUser = await s.built.sessions.append(lease, {
-      type: "user",
-      payload: { text: "monitor wake" },
-      scopeLabel: "personal:U-carol",
-    });
-    const sourceAssistant = await s.built.sessions.append(lease, {
-      type: "assistant",
-      payload: { text: "Approval is due." },
-      scopeLabel: "personal:U-carol",
-    });
-    await s.built.sessions.releaseLease(lease);
-    await s.built.sessions.recordLlmRequest(source.id, {
-      turnSeq: sourceUser.seq,
-      step: 0,
-      model: "mock",
-      scopeLabel: "personal:U-carol",
-      promptEnvelope: { model: "mock", messages: [{ role: "user", content: "monitor wake" }] },
-      truncated: false,
-    });
-    const delivery = await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U-alice", audienceScopeId: "personal:U-alice", onBehalfOf: "U-carol" },
-      text: "Approval is due.",
-      idempotencyKey: `monitor:${monitorId}:42`,
-      provenance: {
-        trigger: "monitor",
-        surface: "monitor",
-        fireKey: `monitor:${monitorId}:42`,
-        sourceScopeId: "personal:U-carol",
-        sourceThreadRef: `agent:main:monitor:${monitorId}`,
-        sourceSessionId: source.id,
-        sourceUserSeq: sourceUser.seq,
-        sourceAssistantEntrySeq: sourceAssistant.seq,
-      },
-    });
-    await s.built.app.recordPrincipalDelivery(delivery.id, "dm:D-alice");
-    const recipient = await s.built.sessions.getByThread("dm:D-alice");
-    assert.ok(recipient);
-
-    const orgRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=org:default-org`);
-    assert.equal(orgRead.status, 200);
-    const orgBody = (await orgRead.json()) as any;
-    assert.equal(orgBody.deliveryEvents.length, 1);
-    assert.equal(orgBody.deliveryEvents[0].origin.kind, "background_wake");
-    assert.equal(orgBody.deliveryEvents[0].origin.trigger, "monitor");
-    assert.equal(orgBody.deliveryEvents[0].origin.sourceId, monitorId);
-    assert.equal(orgBody.deliveryEvents[0].sourceSession.id, source.id);
-    assert.equal(orgBody.deliveryEvents[0].llmRequests.length, 1);
-
-    const sourceRead = await get(s.base, `/v1/admin/sessions/${encodeURIComponent(source.id)}?scope=org:default-org`);
-    assert.equal(sourceRead.status, 200);
-    const sourceBody = (await sourceRead.json()) as any;
-    assert.equal(sourceBody.deliveryEvents.length, 1);
-    assert.equal(sourceBody.deliveryEvents[0].type, "outbound_delivery");
-    assert.equal(sourceBody.deliveryEvents[0].origin.kind, "background_wake");
-    assert.equal(sourceBody.deliveryEvents[0].origin.trigger, "monitor");
-    assert.equal(sourceBody.deliveryEvents[0].recipientThreadRef, "dm:D-alice");
-
-    const scopedRead = await get(
-      s.base,
-      `/v1/admin/sessions/${encodeURIComponent(recipient!.id)}?scope=${encodeURIComponent("personal:U-alice")}`,
-    );
-    assert.equal(scopedRead.status, 200);
-    const scopedBody = (await scopedRead.json()) as any;
-    assert.equal(scopedBody.deliveryEvents.length, 1);
-    assert.equal(scopedBody.deliveryEvents[0].origin.kind, "background_wake");
-    assert.equal(scopedBody.deliveryEvents[0].origin.trigger, "monitor");
-    assert.equal(scopedBody.deliveryEvents[0].origin.sourceId, monitorId);
-    assert.equal(scopedBody.deliveryEvents[0].sourceSession, undefined);
-    assert.equal(scopedBody.deliveryEvents[0].llmRequests, undefined);
+    assert.match(userMessage, /\[cron\] from U-carol: the deploy is done/);
   } finally {
     await s.close();
   }
@@ -881,30 +477,6 @@ test("the Crons history lists one row per cron; ?cron= paginates that cron's fir
     const g = list.crons.find((x: { cronId: string }) => x.cronId === cron.id);
     assert.equal(g.sessions, 3, "the group aggregates every fire");
     assert.equal(g.origin.cron.title, "Tweet watcher", "group row resolves the cron's name");
-    assert.equal(g.deliveredRuns, 0, "no deliveries yet: delivered rollup is zero");
-
-    await s.built.deliveries.enqueue({
-      destination: { type: "principal", target: "U1", onBehalfOf: "U1" },
-      text: "recap",
-      idempotencyKey: `cron:${cron.id}:slot0:msg`,
-      provenance: {
-        trigger: "cron",
-        surface: "cron",
-        fireKey: `cron:${cron.id}:slot0`,
-        sourceScopeId: scope,
-        sourceThreadRef: `cron:${cron.id}:slot0`,
-        sourceSessionId: "fire-0",
-      },
-    });
-    const relisted = await getJson(
-      s.base,
-      `/v1/admin/sessions?scope=${encodeURIComponent(scope)}&category=background&origin=cron`,
-    );
-    assert.equal(
-      relisted.crons.find((x: { cronId: string }) => x.cronId === cron.id).deliveredRuns,
-      1,
-      "the listing rolls up delivering runs per cron",
-    );
 
     const p1 = await getJson(
       s.base,

@@ -222,10 +222,7 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
-  webTranscript?:
-    | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
-    | { kind: "turn_failure"; notBefore: number; runId?: string };
+  webTranscript?: { kind: "reply" };
 }
 
 export interface CandidateDestination extends Destination {
@@ -500,22 +497,6 @@ export interface ShipGrant {
   revokedAt?: number;
   revokedBy?: string;
   revocationHistory?: Array<{ revokedAt: number; revokedBy: string }>;
-}
-
-export interface Delivery {
-  id: string;
-  destination: Destination;
-  text: string;
-  attachments?: OutgoingAttachment[];
-  provenance?: DeliveryProvenance;
-  idempotencyKey: string;
-  createdAt: number;
-  deliveredAt: number | null;
-  expiredAt?: number;
-  shadow?: boolean;
-  recipientThreadRef?: string;
-  deliverLatencyMs?: number;
-  slackApiMs?: number;
 }
 
 export interface SurfaceContextQuery {

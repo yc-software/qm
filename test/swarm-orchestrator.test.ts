@@ -5,7 +5,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockHarness from "../src/harness/mock-harness.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
-import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
+import { runResultPost } from "../src/runs/run-results.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
@@ -167,7 +167,7 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
       assert.match(JSON.stringify(input?.payload), /Swarm human message/);
       assert.match(JSON.stringify(input?.payload), /automation/);
       assert.equal(await built.app.getSessionForViewer(view.session.id, "U2"), null);
-      assert.equal(runResultDelivery(run), null);
+      assert.equal(runResultPost(run), null);
       const requests = await built.sessions.listLlmRequests(view.session.id);
       assert.ok(JSON.stringify(requests).includes("Swarm session identity"));
       assert.ok(JSON.stringify(requests).includes("untrusted metadata"));
@@ -367,7 +367,7 @@ for (const storage of ["memory", "postgres"] as const) {
         const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
         for (const run of completed) {
           assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
-          assert.equal(runResultDelivery(run), null);
+          assert.equal(runResultPost(run), null);
         }
         await built.app.swarms!.sweep();
         const replies = (await built.runs.list()).filter(
@@ -556,7 +556,7 @@ test("disabled swarms park queued notifications once without running the model o
     assert.equal(completed.attempts, 1);
     assert.equal(completed.result?.reason, "swarm service unavailable");
     assert.equal(swarmModelCalls, 0);
-    assert.equal(runResultDelivery(completed), null);
+    assert.equal(runResultPost(completed), null);
     const entries = await built.sessions.getEntries(root.id);
     assert.ok(!entries.some((entry) => JSON.stringify(entry.payload).includes("turn_failure")));
     for (const [surface, threadRef] of [

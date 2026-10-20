@@ -1,7 +1,7 @@
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -1029,7 +1029,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
-  deliveries?: Pick<DeliveryStore, "enqueue">;
+  outbound?: Pick<Outbound, "send">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
   sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
@@ -1159,14 +1159,14 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         throw new Error("the current parent audience cannot read this child result");
     }
   }
-  if (result?.attachments?.length && deps.deliveries) {
+  if (result?.attachments?.length && deps.outbound) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
       candidate ??
       (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
       principalDestination(meta.actor.id, meta.actor.id);
-    await deps.deliveries.enqueue({
+    await deps.outbound.send({
       destination,
       text: "",
       attachments: result.attachments,

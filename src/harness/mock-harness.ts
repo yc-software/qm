@@ -213,7 +213,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(msg);
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -269,7 +269,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(first);
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           resumePostSessions.set(turn.session.id, second);
@@ -671,7 +671,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.reach(msg, { channel });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "reach", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "reach", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -689,7 +689,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(msg, { ts: threadTs });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -704,7 +704,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(msg, { broadcast: true });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -723,7 +723,7 @@ export function createMockHarness(): Harness {
             const r = await turn.tools.post(msg);
             await turn.emit({
               type: "tool_result",
-              payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+              payload: { tool: "post", ok: r.ok },
               scopeLabel: turn.scopeLabel,
             });
             if (r.ok) sent++;
@@ -740,7 +740,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(msg);
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -754,7 +754,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.post(msg, undefined, paths);
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "post", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -764,7 +764,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.react({ ts: ts ?? "", emoji: emoji ?? "" });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "react", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "react", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -777,7 +777,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.edit({ ref: editRef, text: newText });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "edit", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "edit", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;
@@ -787,7 +787,7 @@ export function createMockHarness(): Harness {
           const r = await turn.tools.delete({ ref: delRef ?? "" });
           await turn.emit({
             type: "tool_result",
-            payload: { tool: "delete", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
+            payload: { tool: "delete", ok: r.ok },
             scopeLabel: turn.scopeLabel,
           });
           usedTool = true;

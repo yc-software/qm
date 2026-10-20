@@ -707,13 +707,13 @@ test("pg store: a client_result round-trips, dedupes, and wakes a waiter", { ski
 test("a queued steer remains durable until its native intake acknowledges it", async () => {
   const store = createMemoryRunSignalStore();
   let acknowledge: (() => Promise<void>) | undefined;
-  let deliveries = 0;
+  let outbound = 0;
   const stop = startSignalPoll(
     store,
     "intake",
     {
       onSteer: async (_text, _ts, _request, ack) => {
-        deliveries++;
+        outbound++;
         acknowledge = ack;
         return false;
       },
@@ -724,7 +724,7 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await store.send("intake", { kind: "steer", text: "queued, not consumed" });
   await until(() => !!acknowledge);
   await sleep(20);
-  assert.equal(deliveries, 1);
+  assert.equal(outbound, 1);
   assert.equal((await store.pending("intake")).length, 1);
   await acknowledge!();
   await acknowledge!();

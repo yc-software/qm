@@ -6,6 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp as buildAppRaw } from "../src/wiring.ts";
+import { recordSurfacePosts } from "./support/recording-outbound.ts";
+import type { OutboundPost } from "../src/surfaces/outbound.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -40,8 +42,9 @@ async function selectComputer(built: ReturnType<typeof buildAppRaw>, actorId: st
   await asSpeaker.setDefault(actorId, scope, computer.id);
   return computer;
 }
-function buildApp(...args: Parameters<typeof buildAppRaw>): ReturnType<typeof buildAppRaw> {
-  const built = buildAppRaw(...args);
+function buildTestApp(...args: Parameters<typeof buildAppRaw>) {
+  const raw = buildAppRaw(...args);
+  const built = Object.assign(raw, { posts: recordSurfacePosts(raw.outbound) });
   const ready = new Map<string, Promise<void>>();
   const ensure = (actorId: string, scope: string) => {
     let p = ready.get(scope);
@@ -70,7 +73,7 @@ function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecuritySc
     ...overrides,
   });
   config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
-  return buildApp(config, securityScreener ? { securityScreener } : {});
+  return buildTestApp(config, securityScreener ? { securityScreener } : {});
 }
 
 function spyProvisioning(sandbox: Sandbox) {
@@ -291,7 +294,7 @@ test("a silent cron source run stays out of normal human chat history", async ()
 
   await runNowSettled(built.scheduler, cron.id);
 
-  assert.equal((await built.deliveries.pending("principal")).length, 0, "finish_silently means no delivery");
+  assert.equal((await built.posts.pending("principal")).length, 0, "finish_silently means no delivery");
   const source = (await built.sessions.scanAll()).find((s) => s.threadRef.startsWith(`cron:${cron.id}:fire:`));
   assert.ok(source, "cron source run is still durably recorded (in its per-fire background thread)");
   const sourceEntries = await built.sessions.getEntries(source!.id);
@@ -306,8 +309,13 @@ test("a silent cron source run stays out of normal human chat history", async ()
   );
 });
 
-test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async () => {
+test("a cron-delivered digest is noted in the recipient's next DM turn, not written into their transcript", async () => {
   const built = freshApp();
+  const posted: OutboundPost[] = [];
+  built.outbound.register(["principal"], async (post) => {
+    posted.push(post);
+    return { recipientThreadRef: "dm:D-alice" };
+  });
   await built.app.upsertDirectory([
     { principalId: "U-carol", displayName: "Carol", type: "internal" },
     { principalId: "U-alice", displayName: "Alice", type: "internal" },
@@ -327,27 +335,26 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   });
 
   await runNowSettled(built.scheduler, cron.id);
-  const pending = await built.deliveries.pending("principal");
+  const pending = posted;
   assert.equal(pending.length, 1);
   assert.match(pending[0]!.text, /deploy digest ready/);
   assert.match(pending[0]!.provenance?.fireKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
 
-  await built.app.recordPrincipalDelivery(pending[0]!.id, "dm:D-alice");
-  const recipient = await built.sessions.getByThread("dm:D-alice");
-  assert.ok(recipient, "recipient DM session exists after delivery ack");
+  let recipient = await built.sessions.getByThread("dm:D-alice");
+  for (let i = 0; i < 50 && !recipient; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    recipient = await built.sessions.getByThread("dm:D-alice");
+  }
+  assert.ok(recipient, "recipient DM session exists once the post lands");
   assert.equal(
     (await built.sessions.getEntries(recipient!.id)).some((e) => e.type === "assistant"),
     false,
     "recipient transcript is not polluted with a fake assistant row",
   );
-  const events = await built.deliveries.listByRecipientThread("dm:D-alice");
-  assert.equal(events.length, 1);
-  assert.equal(events[0]!.id, pending[0]!.id);
-  assert.equal(events[0]!.provenance?.sourceSessionId, pending[0]!.provenance?.sourceSessionId);
 
   const visibleToSender = await built.app.listSessions("U-carol");
   assert.equal(
-    visibleToSender.some((s) => s.threadRef === events[0]!.provenance?.sourceThreadRef),
+    visibleToSender.some((s) => s.threadRef === pending[0]!.provenance?.sourceThreadRef),
     false,
     "cron source session does not show as a human conversation for the sender",
   );
@@ -485,7 +492,7 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -505,7 +512,7 @@ test("a per-turn egress-proxy token is minted and passed to provision, carrying 
 
 test("large channel turns apply the compression rollout setting to every sandbox token", async () => {
   for (const capabilityTokenCompression of [false, true]) {
-    const { app, sandbox } = buildApp(
+    const { app, sandbox } = buildTestApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "ap-")),
         signingSecret: "test-secret",
@@ -555,7 +562,7 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -672,7 +679,7 @@ test("org credentials are delivered only when requested and read live after rota
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -738,7 +745,7 @@ test("a disabled or broker-delivery credential never rides provision env", async
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await grantCred(acl, org, "x-firehose");
   await grantCred(acl, org, "browse-steel");
@@ -781,7 +788,7 @@ test("a credential flipped away from env between the metadata read and the secre
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -821,7 +828,7 @@ test("env-delivery credentials are not offered to an external audience", async (
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -861,7 +868,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl, deliveries, identity } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl, outbound, identity } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -910,7 +917,7 @@ test("a channel cron receives env credentials only when the directory proves an 
   const fire = async (channelId: string) => {
     const out = await runTrigger(
       {
-        deliveries,
+        outbound,
         idempotency: createIdempotencyStore(createMemoryMap()),
         identity,
         run: (req) => app.turn(req),
@@ -947,7 +954,7 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox, serviceCreds, acl } = buildApp(config);
+  const { app, sandbox, serviceCreds, acl } = buildTestApp(config);
   const org = scopeId("org", "default-org");
   await serviceCreds.setServiceCredential(org, {
     slug: "browse-steel",
@@ -1001,7 +1008,7 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const built = buildApp(config);
+  const built = buildTestApp(config);
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1043,7 +1050,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const built = buildApp(config);
+  const built = buildTestApp(config);
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1069,7 +1076,7 @@ test("browse follows a live org base model change, not the process-start default
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const built = buildApp(config);
+  const built = buildTestApp(config);
   const { app, sandbox } = built;
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
@@ -1102,7 +1109,7 @@ test("an OpenAI deployment provisions managed browser access without its provide
     modelId: "gpt-5.6-sol",
     openaiApiKey: "openai-org-key",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -1126,7 +1133,7 @@ test("turn timezone rides the prompt and control-plane capability token", async 
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -1224,7 +1231,7 @@ test("unattended grants enter capability claims only on non-live turns", async (
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -1381,7 +1388,7 @@ test("an org admin's turn carries org-notebook write (token claim + prompt hint)
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -1438,7 +1445,7 @@ test("admin reach rides only live, all-internal turns — autonomous and guest-a
     signingSecret: "test-secret",
     apiBaseUrl: "https://core.example.com",
   });
-  const { app, sandbox } = buildApp(config);
+  const { app, sandbox } = buildTestApp(config);
   let captured: ProvisionOptions | undefined;
   const realProvision = sandbox.provision.bind(sandbox);
   sandbox.provision = (layers, opts) => {
@@ -3830,7 +3837,7 @@ test("environments: an unattached scope provisions through its own scope (today'
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
   });
-  const built = buildApp(config);
+  const built = buildTestApp(config);
   const { app, sandbox } = built;
   const realProvision = sandbox.provision.bind(sandbox);
   let rwScope: string | undefined;

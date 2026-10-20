@@ -35,7 +35,7 @@ export function parseBackfillArgs(forceMessage?: string): BackfillArgs {
   return { apply, only, force };
 }
 
-export function databaseUrl(): string {
+function databaseUrl(): string {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error("DATABASE_URL is required");

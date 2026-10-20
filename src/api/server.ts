@@ -115,7 +115,6 @@ function isAdminContentRead(pathname: string): boolean {
     return true;
   if (pathname === "/v1/admin/crons" || pathname === "/v1/admin/deployments" || pathname === "/v1/admin/skills")
     return true;
-  if (pathname === "/v1/admin/deliveries/shadow") return true;
   if (pathname.startsWith("/v1/admin/slack-mirror")) return true;
   if (pathname.startsWith("/v1/admin/ambient-judgments")) return true;
   if (pathname.startsWith("/v1/admin/ack-emoji-picks")) return true;

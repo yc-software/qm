@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -25,7 +25,7 @@ import { createKeychainApprovals, type KeychainApprovals } from "../src/credenti
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -304,7 +304,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     crons: createCronStore(createMemoryMap()),
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: idStore,
     identity: createIdentityService(createMemoryMap()),
     run: async () => ({ status: "ok" }) as TurnResult,
@@ -373,7 +373,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   let seen: TurnRequest | undefined;
   const outcome = await runTrigger(
     {
-      deliveries: createDeliveryStore(),
+      outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
@@ -395,10 +395,10 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
 });
 
 test("runTrigger: silent markers never silence a notification-shaped fire (keychain-ask)", async () => {
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const outcome = await runTrigger(
     {
-      deliveries,
+      outbound,
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
@@ -413,7 +413,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
     },
   );
   assert.equal(outcome.ran, true);
-  assert.equal((await deliveries.pending("slack")).length, 1, "the sentinel is poll-only; an ask notice must deliver");
+  assert.equal((await outbound.pending("slack")).length, 1, "the sentinel is poll-only; an ask notice must deliver");
 });
 
 test("fireAskResolution: a turn that fires but doesn't land falls back to a plain delivery (once)", async () => {
@@ -432,16 +432,16 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     grantId: "g1",
   };
   const mkDeps = (run: (req: TurnRequest) => Promise<TurnResult>, current: KeychainAsk = ask) => {
-    const deliveries = createDeliveryStore();
+    const outbound = recordingOutbound();
     return {
-      deliveries,
+      outbound,
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
       run,
       getAsk: async () => current,
     };
   };
-  const texts = async (deps: ReturnType<typeof mkDeps>) => (await deps.deliveries.pending("slack")).map((d) => d.text);
+  const texts = async (deps: ReturnType<typeof mkDeps>) => (await deps.outbound.pending("slack")).map((d) => d.text);
 
   const refused = mkDeps(async () => ({ status: "refused", reason: "rate limit exceeded" }) as TurnResult);
   await fireAskResolution(refused, ask);
@@ -577,7 +577,7 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
 describe("/v1/keychain/asks — card approval end to end", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: ReturnType<typeof buildTestApp>;
   let approvals: KeychainApprovals;
   const decide = (askId: string, actorId: string, decision: "once" | "standing" | "deny") =>
     approvals.decide(askId, { externalId: actorId }, decision);
@@ -611,7 +611,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   };
 
   before(async () => {
-    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
+    built = buildTestApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-asks-")), signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U_ALICE", displayName: "Alice", type: "internal" },
       { principalId: "U_BOB", displayName: "Bob", type: "internal" },
@@ -634,14 +634,14 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       app: built.app,
       identity: built.identity,
       sessions: built.sessions,
-      deliveries: built.deliveries,
+      outbound: built.outbound,
       resume: (ask, grant) => built.fireAskResolution!(ask, grant),
     });
     server = createServer(built.app, {
       signingSecret: SECRET,
       keychain: built.keychain,
       keychainApprovals: approvals,
-      deliveries: built.deliveries,
+      outbound: built.outbound,
       ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
       workspace: built.workspace,
       auditLog: built.auditLog,
@@ -698,7 +698,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal((await built.keychain!.getGrant(view.ask.grantId))!.audienceScopeId, "channel:C_INFRA");
     assert.deepEqual(await inline("U_ALICE"), [], "a decided card leaves the session");
     assert.ok(
-      (await built.deliveries.pending("slack")).some((d) => d.idempotencyKey === `ask:${ask.id}:resolved`),
+      (await built.posts.pending("slack")).some((d) => d.idempotencyKey === `ask:${ask.id}:resolved`),
       "the Slack card is told to update",
     );
   });
@@ -769,14 +769,12 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(ask.requesterScopeId, "channel:C_INFRA", "scope comes from the token, not the body");
     assert.equal(ask.requesterThreadRef, "ch:C_INFRA-thread");
 
-    const notices = (await built.deliveries.pending("slack")).filter(
-      (d) => d.idempotencyKey === `ask:${ask.id}:notice`,
-    );
+    const notices = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`);
     assert.equal(notices.length, 1);
     assert.equal(notices[0]!.destination.target, "C_INFRA", "the card lands where the request came from");
     assert.equal(notices[0]!.destination.keychainAskId, ask.id);
     assert.equal(
-      (await built.deliveries.pending("principal")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
+      (await built.posts.pending("principal")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
       0,
       "no separate owner DM",
     );
@@ -799,7 +797,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     assert.equal(dup.existing, true);
     assert.equal(dup.ask.id, ask.id);
     assert.equal(
-      (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
+      (await built.posts.pending("slack")).filter((d) => d.idempotencyKey === `ask:${ask.id}:notice`).length,
       1,
       "no second card — no nagging",
     );
@@ -995,7 +993,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
         const { ask } = (await made.json()) as any;
         assert.equal(ask.ownerId, "U_ALICE");
         assert.equal(ask.requesterId, requesterId);
-        const notices = (await built.deliveries.pending("principal")).filter(
+        const notices = (await built.posts.pending("principal")).filter(
           (d) => d.idempotencyKey === `ask:${ask.id}:notice`,
         );
         assert.equal(notices.length, 1);
@@ -1111,7 +1109,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
       ).json()) as any;
       assert.equal(duplicate.ask.id, ask.id);
       assert.equal(duplicate.existing, true);
-      const notices = (await built.deliveries.pending("principal")).filter(
+      const notices = (await built.posts.pending("principal")).filter(
         (d) => d.idempotencyKey === `ask:${ask.id}:notice`,
       );
       assert.equal(notices.length, 1);
@@ -1204,7 +1202,7 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
 });
 
 test("turn e2e: trigger-fired turns mint `triggered` into the capability token; threadRef is carried", async () => {
-  const built = buildApp(
+  const built = buildTestApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "kc-claims-")),
       signingSecret: SECRET,
