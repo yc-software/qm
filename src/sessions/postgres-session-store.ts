@@ -314,24 +314,20 @@ export function createPostgresSessionStore(
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
     return rows[0] ? rowToParticipantSession(rows[0]) : null;
   };
-  const originExpr = (alias: string): string =>
-    `COALESCE(${alias}.origin, ${threadRefOriginExpr(`${alias}.thread_ref`)})`;
-  const cronIdExpr = (alias: string): string =>
-    `COALESCE(${alias}.origin_id, ${threadRefCronIdExpr(`${alias}.thread_ref`)})`;
-  const isBackground = (alias: string): string => `${originExpr(alias)} <> 'conversation'`;
-  const hasOrigin = (alias: string, origin: SessionOrigin): string => `${originExpr(alias)} = '${origin}'`;
+  const isBackground = (alias: string): string => `${alias}.origin <> 'conversation'`;
+  const hasOrigin = (alias: string, origin: SessionOrigin): string => `${alias}.origin = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
-    origin === "other_background" ? `${originExpr(alias)} NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
+    origin === "other_background" ? `${alias}.origin NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
   const spendSql = `WITH RECURSIVE ancestry AS (
-           SELECT s.id AS session_id, s.parent_session_id, ${originExpr("s")} AS origin, ${cronIdExpr("s")} AS cron_id,
+           SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
                   ARRAY[s.id] AS path
              FROM sessions s
-            WHERE s.parent_session_id IS NOT NULL AND ${originExpr("s")} = 'conversation'
+            WHERE s.parent_session_id IS NOT NULL AND s.origin = 'conversation'
               AND EXISTS (SELECT 1 FROM session_llm_requests r
                            WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
                              AND r.usage_json IS NOT NULL)
            UNION ALL
-           SELECT a.session_id, p.parent_session_id, ${originExpr("p")}, ${cronIdExpr("p")}, a.path || p.id
+           SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
             WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
          ), origins AS (
@@ -339,8 +335,8 @@ export function createPostgresSessionStore(
              FROM ancestry ORDER BY session_id, cardinality(path) DESC
          ), rollup AS MATERIALIZED (
            SELECT (r.created_at / 86400000)::bigint AS day, s.scope_id,
-                COALESCE(o.origin, ${originExpr("s")}) AS origin,
-                COALESCE(o.cron_id, ${cronIdExpr("s")}) AS cron_id, r.model,
+                COALESCE(o.origin, s.origin) AS origin,
+                COALESCE(o.cron_id, s.origin_id) AS cron_id, r.model,
                 COUNT(*) AS calls,
                 COALESCE(SUM(cost_usd), 0)::text AS cost_usd,
                 COALESCE(SUM(input), 0) AS input,
@@ -370,7 +366,7 @@ export function createPostgresSessionStore(
                  OFFSET 0) r
            JOIN sessions s ON s.id = r.session_id
            LEFT JOIN origins o ON o.session_id = s.id
-          GROUP BY day, s.scope_id, COALESCE(o.origin, ${originExpr("s")}), COALESCE(o.cron_id, ${cronIdExpr("s")}), r.model
+          GROUP BY day, s.scope_id, COALESCE(o.origin, s.origin), COALESCE(o.cron_id, s.origin_id), r.model
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
@@ -1809,7 +1805,7 @@ export function createPostgresSessionStore(
       let cronClause = "";
       if (page.cronId) {
         params.push(page.cronId);
-        cronClause = ` AND ${cronIdExpr("s")} = $${params.length}`;
+        cronClause = ` AND s.origin_id = $${params.length}`;
       }
       let keysetClause = "";
       if (page.before) {
@@ -1818,7 +1814,7 @@ export function createPostgresSessionStore(
       }
       params.push(page.limit);
       const rows = await q(
-        `SELECT s.id, s.type, s.scope_id, s.thread_ref, ${originExpr("s")} AS origin, s.created_at, s.messages, s.turns,
+        `SELECT s.id, s.type, s.scope_id, s.thread_ref, s.origin, s.created_at, s.messages, s.turns,
                 ${lastActivityExpr("s")} AS last_activity, s.first_user_preview, s.last_user_preview
            FROM sessions s
           WHERE ($1::boolean OR s.scope_id = $2)${categoryClause}${originClause}${cronClause}${keysetClause}
@@ -1866,7 +1862,7 @@ export function createPostgresSessionStore(
                 COALESCE(SUM(t.turns), 0) AS turns,
                 MAX(t.activity) AS last_activity,
                 MIN(t.created_at) AS created_at
-           FROM (SELECT ${cronIdExpr("s")} AS cron_id, s.scope_id, s.messages, s.turns, s.created_at,
+           FROM (SELECT s.origin_id AS cron_id, s.scope_id, s.messages, s.turns, s.created_at,
                         ${lastActivityExpr("s")} AS activity
                    FROM sessions s
                   WHERE ($1::boolean OR s.scope_id = $2)) t
@@ -1927,14 +1923,14 @@ export function createPostgresSessionStore(
       if (originFilter) matchedClauses.push(originFilterClause("s", originFilter));
       if (cronId) {
         params.push(cronId);
-        matchedClauses.push(`${cronIdExpr("s")} = $${params.length}`);
+        matchedClauses.push(`s.origin_id = $${params.length}`);
       }
       const rows = await q(
         `SELECT origin, CASE WHEN origin = 'conversation' THEN type ELSE origin END AS bucket,
                 matched, COUNT(*) AS sessions, COALESCE(SUM(turns), 0) AS turns,
                 COUNT(DISTINCT cron_id) AS crons
-           FROM (SELECT s.type, ${originExpr("s")} AS origin,
-                        ${cronIdExpr("s")} AS cron_id,
+           FROM (SELECT s.type, s.origin AS origin,
+                        s.origin_id AS cron_id,
                         (${matchedClauses.join(" AND ") || "TRUE"}) AS matched,
                         COALESCE(s.turns, 0) AS turns
                    FROM sessions s
