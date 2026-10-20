@@ -487,7 +487,13 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(res, 200, { sessions: await app.listSessions(principalId) });
+  return sendJson(res, 200, { sessions: (await app.listSessions(principalId)).map(sidebarRow) });
+}
+
+/** A session as the sidebar lists it, without fields only the server uses. */
+function sidebarRow(session: Session): Omit<Session, "spawnMeta" | "clientTools" | "hasEntries"> {
+  const { spawnMeta: _spawnMeta, clientTools: _clientTools, hasEntries: _hasEntries, ...row } = session;
+  return row;
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {

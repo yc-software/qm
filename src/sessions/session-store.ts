@@ -363,6 +363,14 @@ export interface DistinctScope {
   channelName?: string;
 }
 
+/** One scope a person has sessions in: how many have content, and when the newest of those was last active. */
+export interface ParticipantScope {
+  scopeId: ScopeId;
+  channelName?: string;
+  sessionCount: number;
+  lastActivityAt: number | null;
+}
+
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
   seq: number;
@@ -577,6 +585,7 @@ export interface SessionStore {
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;
   removeParticipant(sessionId: string, principalId: string): Promise<void>;
   listByParticipant(principalId: string, opts?: { limit: number }): Promise<Session[]>;
+  participantScopes(principalId: string): Promise<ParticipantScope[]>;
   getForParticipant(sessionId: string, principalId: string): Promise<Session | null>;
 
   deleteSession(sessionId: string): Promise<void>;

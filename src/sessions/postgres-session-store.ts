@@ -13,6 +13,7 @@ import type {
   EntrySearchHit,
   ScopeActivity,
   DistinctScope,
+  ParticipantScope,
   GetEntriesOptions,
   Lease,
   LeaseAttempt,
@@ -198,6 +199,11 @@ function rowToEntry(r: Record<string, unknown>): SessionEntry {
 const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => `${column === "blob_sha" ? "encode(i.blob_sha, 'hex')" : `i.${column}`} AS "${key}"`).join(",")}, ts.scope_id AS scope_label, ${msOf("i.created_at")} AS created_at`;
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
+// Session columns a list row needs. Spawn metadata, client tool schemas, previews and status stay out:
+// nothing that lists sessions reads them, and spawn metadata alone is most of a large list's bytes.
+const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+const HAS_CONTENT = "(COALESCE(s.messages, 0) > 0 OR NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL)";
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
 function rowToSpendRow(r: Record<string, unknown>): SpendRow {
@@ -273,8 +279,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ),
     )
     .join(" UNION ALL ");
-  const participantSessionsSql = (extraWhere: string): string =>
-    `SELECT s.*, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
+  const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
+    `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
             p.read_at AS p_read_at,
             (SELECT ${msOf("MAX(e.created_at)")} FROM items e
               WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND ${AGENT_REPLY_ITEM("e")}) AS agent_last_reply,
@@ -287,11 +293,29 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const participantSessions = async (principalId: string, opts?: { limit: number }): Promise<Session[]> => {
     const limit = opts ? Math.max(0, Math.floor(opts.limit)) : undefined;
     const rows = await q(
-      participantSessionsSql("") +
+      participantSessionsSql("", LIST_COLUMNS) +
         (limit === undefined ? "" : " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $2"),
       limit === undefined ? [principalId] : [principalId, limit],
     );
     return rows.map(rowToParticipantSession);
+  };
+  const participantScopes = async (principalId: string): Promise<ParticipantScope[]> => {
+    const rows = await q(
+      `SELECT s.scope_id, MAX(s.channel_name) AS channel_name,
+              COUNT(*) FILTER (WHERE ${HAS_CONTENT}) AS session_count,
+              MAX(${lastActivityExpr("s")}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
+         FROM sessions s
+         JOIN participants p ON p.session_id = s.id
+        WHERE p.principal_id = $1
+        GROUP BY s.scope_id`,
+      [principalId],
+    );
+    return rows.map((r) => ({
+      scopeId: r.scope_id as ScopeId,
+      ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
+      sessionCount: Number(r.session_count),
+      lastActivityAt: r.last_activity == null ? null : Number(r.last_activity),
+    }));
   };
   const participantSession = async (sessionId: string, principalId: string): Promise<Session | null> => {
     const rows = await q(participantSessionsSql(" AND s.id = $2"), [principalId, sessionId]);
@@ -1493,6 +1517,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async listByParticipant(principalId, opts): Promise<Session[]> {
       return participantSessions(principalId, opts);
+    },
+
+    async participantScopes(principalId): Promise<ParticipantScope[]> {
+      return participantScopes(principalId);
     },
 
     async getForParticipant(sessionId, principalId): Promise<Session | null> {

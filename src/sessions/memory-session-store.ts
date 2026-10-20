@@ -15,6 +15,7 @@ import type {
   NewLlmRequest,
   NewSearchEntry,
   NewSessionPin,
+  ParticipantScope,
   ParticipantWindow,
   SessionPage,
   SessionStore,
@@ -494,13 +495,31 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const out: Session[] = [];
       for (const id of ids) {
         const row = participantSession(id, principalId);
-        if (row) out.push(row);
+        if (!row) continue;
+        const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...listed } = row;
+        out.push(listed);
       }
       return opts
         ? out
             .sort((a, b) => (b.lastActivityAt ?? b.createdAt) - (a.lastActivityAt ?? a.createdAt))
             .slice(0, Math.max(0, Math.floor(opts.limit)))
         : out;
+    },
+
+    async participantScopes(principalId) {
+      const byScope = new Map<ScopeId, ParticipantScope>();
+      for (const id of participants.get(principalId) ?? []) {
+        const row = participantSession(id, principalId);
+        if (!row) continue;
+        const scope = byScope.get(row.scopeId) ?? { scopeId: row.scopeId, sessionCount: 0, lastActivityAt: null };
+        if (!scope.channelName && row.channelName) scope.channelName = row.channelName;
+        if (row.hasEntries !== false || Boolean(row.title?.trim())) {
+          scope.sessionCount++;
+          scope.lastActivityAt = Math.max(scope.lastActivityAt ?? 0, row.lastActivityAt ?? row.createdAt);
+        }
+        byScope.set(row.scopeId, scope);
+      }
+      return [...byScope.values()];
     },
 
     async getForParticipant(sessionId, principalId) {

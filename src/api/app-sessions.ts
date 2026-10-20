@@ -2,8 +2,8 @@ import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
-import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import { isSubagentThreadRef, workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
+import type { PendingApprovalRecord, Session } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
@@ -455,6 +455,17 @@ export function createSessionMethods(
       }
       const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
       const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
+      // Whether a row can be continued here depends only on its thread kind and scope, so each pair is checked once.
+      const continueChecks = new Map<string, Promise<boolean>>();
+      const continueAccess = (s: Session): Promise<boolean> => {
+        const key = `${isSubagentThreadRef(s.threadRef)} ${s.threadRef.startsWith("web:")} ${s.scopeId}`;
+        let check = continueChecks.get(key);
+        if (!check) {
+          check = canContinueOnWeb(principalId, s, sharedAccess);
+          continueChecks.set(key, check);
+        }
+        return check;
+      };
       const sharedAccess = new Map<ScopeId, Promise<boolean>>(
         all
           .filter((s) => {
@@ -472,24 +483,28 @@ export function createSessionMethods(
               workingThreadRefs.has(s.threadRef) ||
               waiting.has(s.id),
           )
-          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, sharedAccess) })),
+          .map(async (s) => ({ ...s, canContinue: await continueAccess(s) })),
       );
       const now = Date.now();
+      const listed = sessions.map((s) => s.threadRef);
+      const listedRefs = new Set(listed);
+      const [liveJobs, liveWatches, tiedCrons] = await Promise.all([
+        deps.processes?.liveForSessions(listed, now) ?? [],
+        deps.monitors?.enabledFor(listed, now) ?? [],
+        deps.crons.tiedTo(listed),
+      ]);
       const jobCounts = new Map<string, number>();
-      for (const rec of (await deps.processes?.listLive(now)) ?? []) {
+      for (const rec of liveJobs) {
         if (rec.kind !== "background" || !rec.sessionRef) continue;
         jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
       }
       const watchCounts = new Map<string, number>();
-      for (const m of (await deps.monitors?.enabled()) ?? []) {
-        if (m.expiresAt <= now) continue;
-        watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
-      }
+      for (const m of liveWatches) watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
       const cronCounts = new Map<string, number>();
-      for (const c of await deps.crons.list()) {
+      for (const c of tiedCrons) {
         if (!cronIsActive(c)) continue;
         for (const ref of new Set([c.destination?.target, c.sessionRef])) {
-          if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
+          if (ref && listedRefs.has(ref)) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
         }
       }
       const working = sessions.filter((s) => workingThreadRefs.has(s.threadRef));
@@ -582,8 +597,8 @@ export function createSessionMethods(
       const session = await sessionForViewer(sessionId, viewer);
       if (!session) return null;
       const now = Date.now();
-      const jobs = ((await deps.processes?.listLive(now)) ?? [])
-        .filter((r) => r.kind === "background" && r.sessionRef === session.threadRef)
+      const jobs = ((await deps.processes?.liveForSessions([session.threadRef], now)) ?? [])
+        .filter((r) => r.kind === "background")
         .sort((a, b) => b.startedAt - a.startedAt)
         .map((r) => ({
           processId: r.processId,
@@ -592,8 +607,7 @@ export function createSessionMethods(
           startedAt: r.startedAt,
           expiresAt: r.expiresAt,
         }));
-      const watches = ((await deps.monitors?.enabled()) ?? [])
-        .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now)
+      const watches = ((await deps.monitors?.enabledFor([session.threadRef], now)) ?? [])
         .sort((a, b) => b.createdAt - a.createdAt)
         .map((m) => ({
           id: m.id,
@@ -606,7 +620,7 @@ export function createSessionMethods(
           ...(m.lastFiredAt !== undefined ? { lastFiredAt: m.lastFiredAt } : {}),
         }));
       const crons = await Promise.all(
-        (await deps.crons.list())
+        (await deps.crons.tiedTo([session.threadRef]))
           .filter((c) => cronIsActive(c) && cronTiedTo(c, session.threadRef))
           .sort((a, b) => b.createdAt - a.createdAt)
           .map(async (c) => {

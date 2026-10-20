@@ -11,6 +11,8 @@ export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
 
 export interface DurableMap<T> {
   all(): Promise<T[]>;
+  /** The values that satisfy the predicate; copies only those, where all() copies every value. */
+  allMatching?(predicate: (value: T) => boolean): Promise<T[]>;
   entries(): Promise<Array<[string, T]>>;
   select<K extends Extract<keyof T, string> = never>(query: DurableMapSelect<T, K>): Promise<Array<Omit<T, K>>>;
   selectEntries<K extends Extract<keyof T, string> = never>(
@@ -107,6 +109,11 @@ export function createMemoryMap<T>(): DurableMap<T> {
   return {
     async all() {
       return sortedEntries().map(([, v]) => v);
+    },
+    async allMatching(predicate) {
+      return sortedEntries()
+        .map(([, v]) => v)
+        .filter(predicate);
     },
     async entries() {
       return sortedEntries();
@@ -260,6 +267,9 @@ export function createPostgresMap<T>(
   const CACHE_MAX_AGE_MS = 15_000;
   let cache: { v: string; fetchedAt: number; entries: Array<[string, T]> } | null = null;
   async function snapshot(): Promise<Array<[string, T]>> {
+    return structuredClone(await cachedEntries());
+  }
+  async function cachedEntries(): Promise<Array<[string, T]>> {
     await ready();
     const vRows = await pg.q(`SELECT v FROM ${VERSIONS_TABLE} WHERE tbl = '${table}'`);
     const v = vRows.length ? String(vRows[0]!.v) : "";
@@ -267,7 +277,7 @@ export function createPostgresMap<T>(
       const rows = await pg.q(`SELECT id, json FROM ${table} ORDER BY id`);
       cache = { v, fetchedAt: Date.now(), entries: rows.map((row) => [row.id as string, row.json as T]) };
     }
-    return structuredClone(cache.entries);
+    return cache.entries;
   }
   async function selectRows<K extends Extract<keyof T, string>>(
     query: DurableMapSelect<T, K>,
@@ -310,6 +320,9 @@ export function createPostgresMap<T>(
   return {
     async all() {
       return (await snapshot()).map(([, value]) => value);
+    },
+    async allMatching(predicate) {
+      return structuredClone((await cachedEntries()).flatMap(([, value]) => (predicate(value) ? [value] : [])));
     },
     async entries() {
       return snapshot();
