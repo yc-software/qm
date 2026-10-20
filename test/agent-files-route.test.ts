@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { Readable } from "node:stream";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { createServer } from "../src/api/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";
@@ -11,6 +12,7 @@ import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 
 const SECRET = "agent-files-secret".repeat(3);
 
@@ -38,11 +40,13 @@ describe("agent files self-API", async () => {
   let theirsId: string;
   let encodedId: string;
   let binaryId: string;
+  const blobTransfer = createMemoryBlobTransferStore();
 
-  const capFor = (actorId: string) =>
+  const capFor = (actorId: string, liveActor = false) =>
     mintCapabilityToken(
       {
         actorId,
+        liveActor,
         scopeId: scopeId("personal", actorId),
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
@@ -54,8 +58,8 @@ describe("agent files self-API", async () => {
     fetch(`${base}${path}`, { headers: token ? { "x-agent-capability": token } : {} });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
+    built = buildApp(testConfig({ signingSecret: SECRET, adminGrants: "U1:org_admin" }));
+    server = createServer(built.app, { signingSecret: SECRET, files: built.files, admin: built.admin, blobTransfer });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = fileArtifactId("mine", "out", 0);
@@ -123,6 +127,39 @@ describe("agent files self-API", async () => {
   it("returns 404 for another principal's file content", async () => {
     const res = await get(`/v1/files/${theirsId}/content`, await capFor("U1"));
     assert.equal(res.status, 404);
+  });
+
+  it("preserves uploaded charset parameters and bytes when serving a file", async () => {
+    const data = Buffer.from("Hello café", "utf16le");
+    const file = await built.app.uploadFileForViewer("U1", {
+      name: "encoded.txt",
+      mimetype: "text/plain; charset=utf-16le",
+      data: Readable.from([data]),
+    });
+    assert.ok(file);
+    const response = await get(`/v1/files/${file.id}/content`, await capFor("U1"));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/plain;charset=utf-16le");
+    const bytes = Buffer.from(await response.arrayBuffer());
+    assert.deepEqual(bytes, data);
+    assert.equal(new TextDecoder("utf-16le").decode(bytes), "Hello café");
+  });
+
+  it("preserves the declared charset through an admin upload and download", async () => {
+    const data = Buffer.from("Hello café", "utf16le");
+    const { blobId } = await blobTransfer.put(data);
+    const token = await capFor("U1", true);
+    const upload = await fetch(`${base}/v1/admin/files/upload?scope=personal:U1`, {
+      method: "POST",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify({ blobId, name: "encoded.txt", mimetype: "text/plain; charset=utf-16le" }),
+    });
+    assert.equal(upload.status, 200, await upload.clone().text());
+    const { file } = (await upload.json()) as { file: { id: string } };
+    const download = await get(`/v1/admin/files/download?id=${file.id}`, token);
+    assert.equal(download.status, 200);
+    assert.equal(download.headers.get("content-type"), "text/plain;charset=utf-16le");
+    assert.deepEqual(Buffer.from(await download.arrayBuffer()), data);
   });
 
   it("adds UTF-8 to textual file content without changing explicit charsets or binary types", async () => {

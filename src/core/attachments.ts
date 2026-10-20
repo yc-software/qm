@@ -1,5 +1,6 @@
 import type { Readable } from "node:stream";
 import { basename } from "node:path";
+import { MIMEType } from "node:util";
 import { randomUUID } from "node:crypto";
 import type {
   AttachmentMeta,
@@ -122,6 +123,14 @@ const MIME_BY_EXT: Record<string, string> = {
 export function mimeFromName(name: string): string {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+export function attachmentContentType(name: string, declared?: string): string {
+  try {
+    return new MIMEType(declared?.trim() || mimeFromName(name)).toString();
+  } catch {
+    return mimeFromName(name);
+  }
 }
 
 export const MAX_OUTBOUND_FILES = 20;
@@ -334,7 +343,8 @@ export async function materializeInbound(
     const bytes = await collectBlob(blob.stream);
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
-    const mimetype = baseMime(a.mimetype || mimeFromName(name));
+    const contentType = attachmentContentType(name, a.mimetype);
+    const mimetype = baseMime(contentType);
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
     if (screenText && textContent !== null) {
       const verdict = await screenText({ content: textContent, name, mimetype });
@@ -347,7 +357,7 @@ export async function materializeInbound(
     const box = await computer();
     if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
     const registered = register
-      ? await registerArtifact(register, "in", metas.length, name, mimetype, bytes)
+      ? await registerArtifact(register, "in", metas.length, name, contentType, bytes)
       : undefined;
     if (!box) {
       if (!registered) {

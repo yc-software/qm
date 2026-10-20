@@ -26,12 +26,15 @@ import {
   materializeInbound,
   withoutAlreadyIngested,
   mimeFromName,
+  attachmentContentType,
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
   sharedManifest,
   turnFileId,
 } from "../src/core/attachments.ts";
+import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
@@ -89,6 +92,22 @@ test("mimeFromName maps known extensions, defaults to octet-stream", () => {
   assert.equal(mimeFromName("a.PNG"), "image/png");
   assert.equal(mimeFromName("a.webp"), "image/webp");
   assert.equal(mimeFromName("noext"), "application/octet-stream");
+});
+
+test("attachmentContentType preserves MIME parameters while normalizing safe header values", () => {
+  for (const [declared, expected] of [
+    [" Text/Plain; charset=UTF-16LE ", "text/plain;charset=UTF-16LE"],
+    ['multipart/mixed; boundary="CaseSensitive"', "multipart/mixed;boundary=CaseSensitive"],
+    ["text/plain; charset=utf-16le\r\nx-injected: yes", "text/plain"],
+    ['text/plain; note="bad\u0000"', "text/plain"],
+    [";charset=utf-16le", "text/plain"],
+    ["invalid", "text/plain"],
+    ["  ", "text/plain"],
+    [undefined, "text/plain"],
+  ] as const) {
+    assert.equal(attachmentContentType("notes.txt", declared), expected);
+  }
+  assert.equal(attachmentContentType("unknown"), "application/octet-stream");
 });
 
 test("inboundManifest lists files under ./inbox/", () => {
@@ -279,6 +298,26 @@ test("withoutAlreadyIngested drops images this context already holds and keeps e
     huge,
   ]);
   assert.deepEqual(withoutAlreadyIngested([seen], []), [seen]);
+});
+
+test("materializeInbound preserves MIME parameters in the stored file", async () => {
+  const { sandbox, handle } = fakeSandbox();
+  const transfer = createMemoryBlobTransferStore();
+  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const data = Buffer.from("Hello café", "utf16le");
+  const { blobId } = await transfer.put(data);
+  const { metas } = await materializeInbound(
+    sandbox,
+    handle,
+    [{ name: "encoded.txt", mimetype: "text/plain; charset=utf-16le", sizeBytes: data.length, blobId }],
+    transfer,
+    { store, ownerScopeId: "personal:U1", createdBy: "U1", seed: "encoded-upload" },
+  );
+  assert.equal(metas.length, 1);
+  const stored = await store.open(metas[0]!.artifactId!);
+  assert.ok(stored);
+  assert.equal(stored.artifact.mimetype, "text/plain;charset=utf-16le");
+  assert.deepEqual(await collectBlob(stored.stream), data);
 });
 
 test("materializeInbound screens text before any sandbox or artifact write", async () => {
