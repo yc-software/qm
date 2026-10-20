@@ -55,7 +55,7 @@ test("a mid-run send with the steer preference steers at once and queues only wh
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { seedRuntimeConfig, invalidateRuntimeConfigs } = await vite.ssrLoadModule("/src/runtime-config-store.ts");
     const { setAlwaysSteer } = await vite.ssrLoadModule("/src/core-bridge.ts");
-    const { render, nothing } = await vite.ssrLoadModule("lit");
+    const { render } = await vite.ssrLoadModule("lit");
     appState.me = { user: "tester", org: "test" };
     const model = {
       id: "alpha",
@@ -112,10 +112,6 @@ test("a mid-run send with the steer preference steers at once and queues only wh
         isStopping: () => false,
         hasLiveRun: () => live,
         hasUnresolvedApproval: () => false,
-        activePendingApprovals: () => [],
-        turnRuntime: () => null,
-        scrollToBottom() {},
-        notePendingSessionOnSend() {},
         currentTurnOptions: () => ({}),
         signalLiveRun: async (_kind: string, _text: string, queuedRunId: string) => {
           signalled.push(queuedRunId);
@@ -165,27 +161,6 @@ test("a mid-run send with the steer preference steers at once and queues only wh
       );
       assert.equal(seenTags.has("Queued"), false);
       reset();
-    });
-
-    await t.test("with the preference on, the queue button queues each message instead of steering", async () => {
-      const form = document.createElement("div");
-      document.body.append(form);
-      try {
-        for (const text of ["later", "and then this"]) {
-          composer!.state.draft = text;
-          render(composer!.composerForm(agent), form);
-          form.querySelector<HTMLButtonElement>(".queue-btn")!.click();
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        draw();
-        assert.deepEqual(turns.slice(-2), ["later", "and then this"]);
-        assert.deepEqual(signalled, []);
-        assert.deepEqual(chips(), ["Queued", "Queued"]);
-      } finally {
-        render(nothing, form);
-        form.remove();
-        reset();
-      }
     });
 
     await t.test("a harness that cannot steer falls back to the queue", async () => {

@@ -11,7 +11,7 @@ import { FolderDropError, folderToZipFile, isFolderReadError, splitDropItems, ty
 import { html, nothing, render, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
-import { ArrowUp, Box, CornerDownRight, FileText, ListEnd, Paperclip, Square, X } from "lucide";
+import { ArrowUp, Box, CornerDownRight, FileText, Paperclip, Square, X } from "lucide";
 import {
   api,
   ApiError,
@@ -805,26 +805,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         ${icon(ArrowUp, 16)}
       </button>`;
     }
-    const steerFirst = alwaysSteer() && canSteer(agent);
-    const label = steerFirst ? "Steer the running task" : "Queue for after this turn";
+    const label = alwaysSteer() && canSteer(agent) ? "Steer the running task" : "Queue for after this turn";
     return html`
       <button class="stop-btn" type="button" aria-label="Stop" ${tip("Stop")} @click=${() => stopStreaming(agent)}>
         ${icon(Square, 16)}
       </button>
-      ${
-        steerFirst
-          ? html`<button
-              class="queue-btn"
-              type="button"
-              aria-label="Queue for after this turn"
-              ${tip("Queue for after this turn")}
-              ?disabled=${!composerCanSend()}
-              @click=${() => void sendPrompt(agent, true)}
-            >
-              ${icon(ListEnd, 16)}
-            </button>`
-          : nothing
-      }
       <button class="send-btn" type="submit" ${tip(label)} aria-label=${label} ?disabled=${!composerCanSend()}>
         ${icon(ArrowUp, 16)}
       </button>
@@ -1370,7 +1355,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       : mintSendKey();
   }
 
-  async function queueDraft(agent: Agent, queueOnly = false): Promise<void> {
+  async function queueDraft(agent: Agent): Promise<void> {
     const threadRef = ctx.chat.state.threadRef;
     const text = composerState.draft.trim();
     const staged = composerState.attachments;
@@ -1391,7 +1376,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
-    const steer = !queueOnly && alwaysSteer() && canSteer(agent);
+    const steer = alwaysSteer() && canSteer(agent);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
     } else if (transientIds.size && stillHere()) {
@@ -1575,20 +1560,20 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   };
   window.addEventListener("qm:prepare-update", preventUnsafeUpdate);
 
-  async function sendPrompt(agent: Agent, queueOnly = false): Promise<void> {
+  async function sendPrompt(agent: Agent): Promise<void> {
     pendingSubmissions++;
     try {
-      await sendPromptNow(agent, queueOnly);
+      await sendPromptNow(agent);
     } finally {
       pendingSubmissions--;
       if (disposed && !pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     }
   }
 
-  async function sendPromptNow(agent: Agent, queueOnly: boolean): Promise<void> {
+  async function sendPromptNow(agent: Agent): Promise<void> {
     if (!composerCanSend()) return;
     if (composerState.pasteView) closePasteView(agent);
-    if (agent.state.isStreaming) return queueDraft(agent, queueOnly);
+    if (agent.state.isStreaming) return queueDraft(agent);
     const text = composerState.draft.trim();
     if (!text && composerState.attachments.length === 0) return;
     const submit = options.prepareSubmit?.();
