@@ -1062,9 +1062,9 @@ impl Walk {
         Item::leaf(key, s)
     }
 
-    fn fold(&mut self, n: &mut Node) {
+    fn fold(&mut self, n: &mut Node) -> Option<Vec<Node>> {
         if !n.props.folds_text() || n.children.is_empty() || n.children.len() > 20 || self.visited + n.children.len() > MAX_VISITS {
-            return;
+            return None;
         }
         self.visited += n.children.len();
         let kids: Vec<Node> = n.children.iter().map(|c| complete(c, fetch(c), self.cache.as_mut())).collect();
@@ -1072,6 +1072,9 @@ impl Walk {
             let parts: Vec<(String, Option<Rect>)> = kids.iter().filter_map(|k| Some((k.raw.clone()?, k.frame))).collect();
             n.props.title = Some(tree::joined_text(&parts)).filter(|t| !t.is_empty());
             n.children.clear();
+            None
+        } else {
+            Some(kids)
         }
     }
 
@@ -1086,14 +1089,14 @@ impl Walk {
             return;
         }
         let locator = at.child(&n.props);
-        self.fold(&mut n);
+        let prefetched = self.fold(&mut n);
         n.limit_text(&mut self.text_budget);
         let (s, keep) = n.props.describe();
         let keep = keep || force;
         let clip = narrow(clip, &n.props.role, n.frame);
         let drawn = n.props.role == "AXWebArea" || n.children.is_empty();
         let (anchor, mut kids) = if keep { (self.id(e, locator), vec![]) } else { (anchor, vec![]) };
-        self.children(&n.children, WalkAt { depth: depth + 1, anchor, clip, at: locator }, n.props.content_list(), &mut kids);
+        self.children(&n.children, prefetched, WalkAt { depth: depth + 1, anchor, clip, at: locator }, n.props.content_list(), &mut kids);
         if kids.is_empty()
             && drawn
             && !self.truncated
@@ -1131,25 +1134,30 @@ impl Walk {
         run.clear();
     }
 
-    fn children(&mut self, kids: &[El], context: WalkAt, list: bool, out: &mut Vec<Item>) {
+    fn children(&mut self, kids: &[El], prefetched: Option<Vec<Node>>, context: WalkAt, list: bool, out: &mut Vec<Item>) {
         let WalkAt { anchor, clip, .. } = context;
+        let mut prefetched = prefetched.unwrap_or_default().into_iter();
         let mut hidden = 0;
         let mut run: Vec<(El, Node)> = vec![];
         for (i, c) in kids.iter().enumerate() {
-            if self.full() {
+            let prefetched_node = prefetched.next();
+            if cancellation::cancelled() || (prefetched_node.is_none() && self.full()) {
                 self.truncated = true;
                 self.text_run(&mut run, context, out);
                 let note = format!("… {} more not shown; the observation size limit was reached", kids.len() - i);
                 out.push(self.note(anchor, note));
                 break;
             }
-            self.visited += 1;
-            let n = fetch(c);
+            let loaded = prefetched_node.is_some();
+            let n = prefetched_node.unwrap_or_else(|| {
+                self.visited += 1;
+                fetch(c)
+            });
             if n.frame.is_some_and(|f| tree::visible(f, clip).is_none()) {
                 hidden += 1;
                 continue;
             }
-            let mut n = complete(c, n, self.cache.as_mut());
+            let mut n = if loaded { n } else { complete(c, n, self.cache.as_mut()) };
             n.props.list_item = list;
             if n.props.plain_text() && n.children.is_empty() {
                 run.push((c.clone(), n));
@@ -1438,6 +1446,7 @@ impl Desk {
         let kids = attr(&w, "AXChildren").map(list).unwrap_or_default();
         walk.children(
             &kids,
+            None,
             WalkAt { depth: 0, anchor: ROOT, clip: if f.w > 0.0 && f.h > 0.0 { f } else { everywhere }, at: Locator::ROOT },
             false,
             &mut items,
@@ -1939,6 +1948,49 @@ fn capture(w: &El, f: Rect, panels: &[u32]) -> Result<Screenshot, Failure> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prefetched_children_keep_content_clipping_and_visit_budget() {
+        let window = Rect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let mut walk = Walk {
+            ids: tree::Ids::default(),
+            elements: vec![],
+            text: HashMap::new(),
+            text_budget: 1024 * 1024,
+            notes: HashMap::new(),
+            truncated: false,
+            visited: MAX_VISITS,
+            window,
+            cache: None,
+        };
+        let node = |title: &str, x| Node {
+            props: Props { role: "AXButton".into(), title: Some(title.into()), ..Default::default() },
+            raw: None,
+            rendered: None,
+            frame: Some(Rect { x, y: 10.0, w: 20.0, h: 20.0 }),
+            children: vec![],
+        };
+        let elements = [app_element(10001), app_element(10002)];
+        let mut items = vec![];
+        walk.children(
+            &elements,
+            Some(vec![node("Apply", 10.0), node("Offscreen", 200.0)]),
+            WalkAt { depth: 0, anchor: ROOT, clip: window, at: Locator::ROOT },
+            false,
+            &mut items,
+        );
+        let (lines, cut) = tree::layout(&items, MAX_TREE_CHARS);
+        assert_eq!(walk.visited, MAX_VISITS);
+        assert!(!walk.truncated && !cut);
+        assert_eq!(walk.elements.len(), 1);
+        assert!(lines.iter().any(|(_, line)| line.contains("Apply")));
+        assert!(lines.iter().any(|(_, line)| line.contains("1 more offscreen")));
+        assert!(!lines.iter().any(|(_, line)| line.contains("Offscreen")));
+        let mut unprefetched = vec![];
+        walk.children(&elements[..1], None, WalkAt { depth: 0, anchor: ROOT, clip: window, at: Locator::ROOT }, false, &mut unprefetched);
+        assert!(walk.truncated);
+        assert_eq!(walk.visited, MAX_VISITS);
+    }
+
     #[test]
     fn observed_selection_follows_rebound_element_ids() {
         let locator = Locator::ROOT.child(&Props { role: "AXTextArea".into(), identifier: Some("editor".into()), ..Default::default() });
