@@ -1,37 +1,7 @@
 import { escapeHtml } from "../../plugins/chassis/src/http.ts";
 
-export interface InviteMailer {
-  send(message: { to: string; subject: string; text: string; html: string }): Promise<string>;
-}
-
 export const INVITE_EMAIL_NOT_CONFIGURED =
   "invitation emails are not configured — set RESEND_API_KEY and AUTH_EMAIL_FROM on core (the same Resend key and verified sender the sign-in broker uses)";
-
-const RESEND_ENDPOINT = "https://api.resend.com/emails";
-const RESEND_TIMEOUT_MS = 15_000;
-
-export function createResendMailer(apiKey: string, from: string, fetchImpl: typeof fetch = fetch): InviteMailer {
-  return {
-    async send(message) {
-      const r = await fetchImpl(RESEND_ENDPOINT, {
-        method: "POST",
-        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          from,
-          to: [message.to],
-          subject: message.subject,
-          text: message.text,
-          html: message.html,
-        }),
-        signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
-      });
-      const body = (await r.json().catch(() => ({}))) as { id?: string; message?: string; name?: string };
-      if (!r.ok)
-        throw new Error(`Resend rejected the message: HTTP ${r.status} ${body.message ?? body.name ?? ""}`.trim());
-      return body.id ?? "accepted";
-    },
-  };
-}
 
 export function renderInviteEmail(a: {
   to: string;

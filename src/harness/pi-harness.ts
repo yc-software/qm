@@ -75,7 +75,7 @@ import {
   codexProviderModelId,
   modelHasPrices,
 } from "../model/pi-models.ts";
-import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
+import { customModelsJson, customProvidersVersion, resolveCustomModel } from "../model/custom-providers.ts";
 import {
   GatewayModelUnavailableError,
   modelGatewayRequest,
@@ -93,7 +93,6 @@ import {
   type GapWork,
 } from "./harness.ts";
 import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -152,7 +151,6 @@ export interface PiHarnessOptions {
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
-  mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -1204,7 +1202,7 @@ export async function buildModelRuntime(
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER
           ? codexProviderModelId(model.id)
-          : (modelRequestOverrides(model.id)?.model ?? model.id);
+          : (modelRequestOverrides(model.id)?.model ?? resolveCustomModel(model.id)?.upstreamId ?? model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),
@@ -1549,7 +1547,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const scratchExec = opts?.scratchExec ?? false;
   const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
-  const mcpTools = opts?.mcpTools;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -1560,7 +1557,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       scratchExec,
       ownerAuthExec,
       reachExec,
-      ...(mcpTools ? { mcpTools } : {}),
+      ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),

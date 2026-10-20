@@ -25,6 +25,7 @@ import type { ConnectorStatusCache } from "../src/credentials/connector-status.t
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 
@@ -89,6 +90,7 @@ async function buildOrchestrator(
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "pm-")));
   const memory = createMemoryService(workspace);
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "pm-deploy"),
@@ -103,6 +105,7 @@ async function buildOrchestrator(
   }
 
   return createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     sessionSyscalls: opts.sessionSyscalls,
     featureFlags: opts.featureFlags,

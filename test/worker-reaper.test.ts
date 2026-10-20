@@ -17,6 +17,7 @@ import type { Principal } from "../src/types.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
@@ -33,7 +34,7 @@ test("reaper requeues a run whose lease expired (crashed worker)", async () => {
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 60_000 });
+  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
   assert.equal(swept.parked, 0);
@@ -63,7 +64,7 @@ test("a run parks once the ERROR budget (error_attempts) is exhausted", async ()
 test("repeated lease-expiry reaps requeue forever without spending the error budget", async () => {
   const { runs } = createMemoryRunStore();
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 2 })).run;
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 60_000 });
+  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
 
   for (let i = 0; i < 5; i++) {
     await runs.claim("dead-worker", 10);
@@ -81,7 +82,7 @@ test("repeated lease-expiry reaps requeue forever without spending the error bud
 test("with maxClaims set, repeated lease-expiry reaps PARK the poison pill instead of requeuing forever", async () => {
   const { runs } = createMemoryRunStore({ maxClaims: 3 });
   const r = (await runs.enqueue({ sessionId: "s1", request: turn, maxAttempts: 99 })).run;
-  const reaper = createReaper(runs, createMemorySessionStore(), { intervalMs: 60_000 });
+  const reaper = createReaper(runs, createMemorySessionStore(), { ...singleProcessDeps(), intervalMs: 60_000 });
 
   for (let i = 1; i <= 2; i++) {
     await runs.claim("dead-worker", 10);
@@ -174,7 +175,7 @@ test("reaping a lease-expired run releases its stranded session lease", async ()
   await runs.claim("dead-worker", 10);
   await sleep(30);
 
-  const reaper = createReaper(runs, sessions, { intervalMs: 60_000 });
+  const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
   assert.equal(swept.requeued, 1);
   assert.equal((await runs.get(r.id))?.status, "pending", "expired run is requeued");
@@ -218,7 +219,7 @@ test("a heartbeat landing between SELECT and retire leaves the run AND its sessi
 
   assert.equal(await runs.heartbeat(r.id, claimed!.leaseToken!, 10_000), true, "live worker renews its lease");
 
-  const reaper = createReaper(runs, sessions, { intervalMs: 60_000 });
+  const reaper = createReaper(runs, sessions, { ...singleProcessDeps(), intervalMs: 60_000 });
   const swept = await reaper.sweep();
 
   assert.equal(swept.requeued, 0, "the renewed run is not requeued");

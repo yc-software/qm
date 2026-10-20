@@ -317,10 +317,16 @@ function patchFromCronPatchRequest(
   };
 }
 
-const UNATTENDED_GRANTS = new Set(["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"]);
+export const UNATTENDED_ADMIN_GRANTS = [
+  "admin.sessions.read",
+  "admin.audit.read",
+  "admin.egress.read",
+  "admin.files.read",
+] as const;
 
 function validateUnattendedGrants(grants: string[]): string | null {
-  if (!grants.every((grant) => UNATTENDED_GRANTS.has(grant))) return "unknown unattended grant";
+  if (!grants.every((grant) => (UNATTENDED_ADMIN_GRANTS as readonly string[]).includes(grant)))
+    return "unknown unattended grant";
   return null;
 }
 

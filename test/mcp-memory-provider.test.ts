@@ -6,8 +6,6 @@ import { recallText } from "./support/recall-text.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
-    base: "http://knowledge.internal",
-    host: "knowledge.internal",
     async listTools() {
       return [];
     },
@@ -59,8 +57,6 @@ test("MCP recall is locally bounded and times out", async () => {
   assert.equal(recallText(await bounded.recall("org:acme", { maxChars: 4 })), "abcd");
 
   const hanging: McpClient = {
-    base: "http://knowledge.internal",
-    host: "knowledge.internal",
     async listTools() {
       return [];
     },

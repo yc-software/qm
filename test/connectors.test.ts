@@ -16,6 +16,7 @@ import {
   type DurableMapSelect,
 } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -28,6 +29,7 @@ function makeKeychain(
   } = {},
 ) {
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: opts.creds ?? createMemoryMap<KeychainCredential>(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

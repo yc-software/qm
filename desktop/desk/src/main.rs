@@ -1,5 +1,21 @@
 mod cancellation;
+#[cfg(target_os = "macos")]
+mod focus;
+#[cfg(any(target_os = "macos", test))]
+mod focus_protocol;
+#[cfg(target_os = "macos")]
+mod intervention;
+#[cfg(any(target_os = "macos", test))]
+mod keys;
 mod protocol;
+mod text;
+#[cfg(any(target_os = "macos", test))]
+mod tree;
+
+#[cfg(target_os = "macos")]
+mod capture;
+#[cfg(target_os = "macos")]
+mod pasteboard;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -102,9 +118,40 @@ fn print(reply: Reply, png: Option<&str>) -> Result<(), String> {
     }
 }
 
+struct InputLines(std::sync::mpsc::Receiver<std::io::Result<String>>);
+
+impl InputLines {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lock().lines() {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self(receiver)
+    }
+}
+
+impl Iterator for InputLines {
+    type Item = std::io::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !cancellation::cancelled() {
+            match self.0.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(line) => return Some(line),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            }
+        }
+        None
+    }
+}
+
 fn serve(desk: &mut mac::Desk) -> Result<(), String> {
     let mut out = std::io::stdout().lock();
-    let mut lines = std::io::stdin().lock().lines();
+    let mut lines = InputLines::new();
     while let Some(line) = lines.next() {
         if cancellation::cancelled() {
             break;

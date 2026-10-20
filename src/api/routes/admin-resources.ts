@@ -122,6 +122,7 @@ export interface AdminResource {
   authz?: "scope-admin" | "org-admin";
   label?: string;
   enumValues?: readonly unknown[];
+  refreshesModels?: true;
 }
 
 function generic<V>(
@@ -194,6 +195,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "auto-flagger",
+    refreshesModels: true,
     kind: "custom",
     target: "org",
     clearable: true,
@@ -524,6 +526,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "memory-embedding-model",
+    refreshesModels: true,
     kind: "enum",
     target: "org",
     clearable: true,
@@ -538,16 +541,15 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const { modelId } = ctx.body as { modelId?: unknown };
       if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
         return { error: "Provide an embedding modelId, or null to disable semantic recall" };
-      if (modelId !== null) {
-        await ctx.deps.refreshModels?.();
-        if (!resolveEmbeddingModel(modelId as string)) return { error: "Unknown or unverified embedding model" };
-      }
+      if (modelId !== null && !resolveEmbeddingModel(modelId))
+        return { error: "Unknown or unverified embedding model" };
       await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
       return { ok: true };
     },
   },
   {
     id: "base-model",
+    refreshesModels: true,
     kind: "enum",
     target: "any",
     clearable: true,
@@ -619,6 +621,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   ...([undefined, "cron", "subagent", "fallback"] as const).map((purpose): AdminResource => ({
     id: purpose ? `${purpose}-runtime` : "runtime",
+    refreshesModels: true,
     kind: "custom",
     target: purpose ? "org" : "any",
     clearable: true,
@@ -700,6 +703,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "webui-models",
+    refreshesModels: true,
     kind: "string-list",
     target: "org",
     clearable: true,
@@ -810,6 +814,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
   },
   {
     id: "browse-model",
+    refreshesModels: true,
     kind: "enum",
     target: "org",
     clearable: true,

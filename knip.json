@@ -47,6 +47,9 @@
       "entry": ["bin/qm.ts", "src/contract.ts"]
     },
     "plugins/*": {},
+    "plugins/portal": {
+      "ignoreDependencies": ["nodemailer"]
+    },
     "plugins/web-ui": {
       "entry": [
         "src/shared-session.ts",

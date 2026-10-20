@@ -23,6 +23,8 @@ const productionEnv = {
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
+  DATABASE_URL: "postgres://qm@localhost/qm",
+  SESSION_STORE: "postgres",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
@@ -295,6 +297,25 @@ test("sandbox backend is parsed once before production backend guards", () => {
   );
 });
 
+test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+  const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
+  assert.throws(
+    () => loadConfig(noDatabase),
+    /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
+  );
+  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
+  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
+    /production requires SESSION_STORE=postgres/,
+  );
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(
+    () => loadConfig({ SANDBOX_BACKEND: "local" }),
+    "a single-process dev instance needs no durable store",
+  );
+});
+
 test("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ NODE_ENV: "production" }),
@@ -461,23 +482,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     }).sandboxBackend,
     "superserve",
   );
-  const superserveProd = {
-    ...productionEnv,
-    SANDBOX_BACKEND: "superserve",
-    SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-    SUPERSERVE_API_KEY: "ss_live_k",
-  };
-  assert.throws(
-    () => loadConfig(superserveProd),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "without a durable store the generation and provisioning lock are per-process",
-  );
-  assert.throws(
-    () => loadConfig({ ...superserveProd, SANDBOX_BACKEND: "local" }),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "the requirement follows the credentials that enable it, not just the primary backend",
-  );
-  assert.doesNotThrow(() => loadConfig({ ...superserveProd, DATABASE_URL: "postgres://qm@localhost/qm" }));
   assert.doesNotThrow(
     () =>
       loadConfig({

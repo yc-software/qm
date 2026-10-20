@@ -17,6 +17,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import type { AppPageView, AppPageViewLog } from "../src/deploy/page-views.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -56,6 +57,7 @@ async function harness(log: AppPageViewLog) {
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const acl = createAclStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     externalSharingAllowed: async () => true,
     deployStore: createDeployStore(),
     provider: {

@@ -1,4 +1,4 @@
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
@@ -608,14 +608,14 @@ export function createKeychain(deps: {
   grants: DurableMap<KeychainGrant>;
   asks: DurableMap<KeychainAsk>;
   key: SecretKey;
-  lock?: AdvisoryLock;
+  lock: AdvisoryLock;
   refreshConnector?: OAuthRefresh;
   oauthSkewMs?: number;
   oauthRefreshMarginMs?: number;
   now?: () => number;
 }): Keychain {
   const now = deps.now ?? Date.now;
-  const lock = deps.lock ?? createMemoryAdvisoryLock();
+  const lock = deps.lock;
   const oauthSkew = deps.oauthSkewMs ?? 60_000;
   const oauthRefreshMargin = Math.max(deps.oauthRefreshMarginMs ?? 10 * 60_000, oauthSkew);
 

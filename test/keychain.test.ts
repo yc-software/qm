@@ -27,11 +27,13 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
 function kc(now?: () => number): Keychain {
   return createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -98,7 +100,13 @@ test("listing and per-owner reads use the store's projected select and never a f
       return backing.select(query);
     },
   };
-  const k = createKeychain({ creds, grants: createMemoryMap(), asks: createMemoryMap(), key: KEY });
+  const k = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds,
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+  });
   const org = scopeId("org", "default-org");
   await k.save({ ...GH, ownerId: "Alice@X.com" });
   await k.save(GH);
@@ -214,7 +222,13 @@ test("concurrent materialization consumes a once grant exactly once", async () =
 
 test("legacy retry grants remain consumed and invalidate prepared uses", async () => {
   const grants = createMemoryMap<KeychainGrant>();
-  const k = createKeychain({ creds: createMemoryMap(), grants, asks: createMemoryMap(), key: KEY });
+  const k = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds: createMemoryMap(),
+    grants,
+    asks: createMemoryMap(),
+    key: KEY,
+  });
   const credential = await k.save(GH);
   const grant = await k.createGrant({
     credentialId: credential.id,
@@ -276,7 +290,7 @@ test("materializeOwnById: the owner's own credential needs no grant — scope, o
 test("a grant row pointing at a broker credential cannot materialize (defense in depth)", async () => {
   const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = createMemoryMap<import("../src/credentials/keychain.ts").KeychainGrant>();
-  const k = createKeychain({ creds, grants, asks: createMemoryMap(), key: KEY });
+  const k = createKeychain({ lock: createMemoryAdvisoryLock(), creds, grants, asks: createMemoryMap(), key: KEY });
   const ORG = scopeId("org", "default-org");
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
@@ -307,6 +321,7 @@ describe("connectors are grantable like any keychain record", () => {
   type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
+      lock: createMemoryAdvisoryLock(),
       creds: createMemoryMap<Rec>(),
       grants: createMemoryMap(),
       asks: createMemoryMap(),
@@ -671,10 +686,22 @@ test("materializeOwn round-trips the owner's env creds; expired creds are skippe
 test("materializeOwn skips a row that doesn't decrypt under the current key instead of throwing", async () => {
   const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({ creds, grants: createMemoryMap(), asks: createMemoryMap(), key: OTHER });
+  const writer = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds,
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: OTHER,
+  });
   await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ creds, grants: createMemoryMap(), asks: createMemoryMap(), key: KEY });
+  const reader = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds,
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+  });
   await reader.save(GH);
 
   const own = await reader.materializeOwn("U1");
@@ -689,10 +716,16 @@ test("single-grant materialize surfaces a 422 (not a raw crypto 500) when the ro
   const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = createMemoryMap<import("../src/credentials/keychain.ts").KeychainGrant>();
   const OTHER = deriveConnectorKey("a-different-master-key");
-  const writer = createKeychain({ creds, grants, asks: createMemoryMap(), key: OTHER });
+  const writer = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds,
+    grants,
+    asks: createMemoryMap(),
+    key: OTHER,
+  });
   const cred = await writer.save({ ownerId: "U1", service: "stripe", secret: "sk_bad", envKey: "STRIPE_KEY" });
 
-  const reader = createKeychain({ creds, grants, asks: createMemoryMap(), key: KEY });
+  const reader = createKeychain({ lock: createMemoryAdvisoryLock(), creds, grants, asks: createMemoryMap(), key: KEY });
   const grant = await reader.createGrant({
     credentialId: cred.id,
     ownerId: "U1",
@@ -792,7 +825,13 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
 
 test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", async () => {
   const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
-  const k = createKeychain({ creds, grants: createMemoryMap(), asks: createMemoryMap(), key: KEY });
+  const k = createKeychain({
+    lock: createMemoryAdvisoryLock(),
+    creds,
+    grants: createMemoryMap(),
+    asks: createMemoryMap(),
+    key: KEY,
+  });
   const meta = await k.save({
     ownerId: "U1",
     service: "acme-portal",
@@ -1342,6 +1381,7 @@ test("prepared grants reject credential rotation without consuming a single use"
 test("connector refresh during preparation binds the refreshed version and later rotation invalidates it", async () => {
   let refreshes = 0;
   const k = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -1408,6 +1448,7 @@ test("Composio keys remain backend-only across all materialization paths includi
 test("manifest timestamps stay stable until credentials and pending asks actually expire", async () => {
   let now = Date.parse("2030-01-01T00:00:00Z");
   const k = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

@@ -7,11 +7,13 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeployStore, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function harness(failRestore = false) {
   let applies = 0;
   let destroys = 0;
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: {
       profile: { managedScaleToZero: false },
@@ -50,6 +52,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
   let destroys = 0;
   let applies = 0;
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: store,
     provider: {
       profile: { managedScaleToZero: false },

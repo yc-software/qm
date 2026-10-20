@@ -23,6 +23,7 @@ import { scopeId } from "../src/types.ts";
 import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;
@@ -32,6 +33,8 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createManagedAgentsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-ws-"))), {
+    snapshots: createMemorySnapshotStore(),
+    store: createMemoryMap(),
     client: fake.client,
     namePrefix: "qmt",
     ...extra,

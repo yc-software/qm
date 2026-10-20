@@ -14,6 +14,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 
@@ -46,6 +47,7 @@ async function fixture(
   const upstreamPort = (upstream.address() as AddressInfo).port;
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

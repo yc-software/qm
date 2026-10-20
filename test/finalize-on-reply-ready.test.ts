@@ -24,6 +24,7 @@ import type { Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/san
 import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -111,6 +112,7 @@ function buildOrchestrator(
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
   const sessions = createMemorySessionStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore: createDeployStore(),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "frr-deploy"),
@@ -118,6 +120,7 @@ function buildOrchestrator(
     acl,
   });
   const orch = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
     sessions,

@@ -1,0 +1,28 @@
+name: Desktop native checks
+
+on:
+  pull_request:
+    paths:
+      - "desktop/desk/**"
+      - ".github/workflows/desk-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desk:
+    name: macOS desk build and tests
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - run: cargo +stable fmt --manifest-path desktop/desk/Cargo.toml --check
+      - run: cargo +stable clippy --manifest-path desktop/desk/Cargo.toml --locked -- -D warnings
+      - run: cargo +stable test --manifest-path desktop/desk/Cargo.toml --locked
+      - run: cargo +stable build --manifest-path desktop/desk/Cargo.toml --locked --release
+      - run: swiftc desktop/desk/tests/manual/focus-witness.swift -o /tmp/desk-focus-witness
+      - run: clang -fobjc-arc -framework ApplicationServices -framework CoreGraphics -framework Foundation desktop/desk/tests/manual/focus-trace.m -o /tmp/desk-focus-trace

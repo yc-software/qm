@@ -34,10 +34,17 @@ test("model chips add and remove with stable keyed rendering", () => {
   const dom = setup();
   try {
     dom.window.eval("settingsUI.load(" + JSON.stringify(models) + ',"org:test","webui-models")');
-    const select = dom.window.document.getElementById("webui-models-add") as HTMLSelectElement;
-    select.value = "b";
-    select.dispatchEvent(new dom.window.Event("change"));
-    dom.window.document.getElementById("webui-models-add-button")!.click();
+    const doc = dom.window.document;
+    const input = doc.getElementById("webui-models-add") as HTMLInputElement;
+    const options = () => [...doc.querySelectorAll("#webui-models-options option")].map((o) => o.textContent);
+    assert.deepEqual(options(), ["Alpha (a)", "Beta (b)"]);
+    input.value = "Bet";
+    input.dispatchEvent(new dom.window.Event("input"));
+    assert.equal((doc.getElementById("webui-models-add-button") as HTMLButtonElement).disabled, true);
+    input.value = "b";
+    input.dispatchEvent(new dom.window.Event("input"));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
+    assert.deepEqual(options(), ["Alpha (a)"]);
     assert.equal(dom.window.eval('settingsUI.collect("webui-models").ids.join()'), "b");
     dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Remove b"]')!.click();
     assert.equal(dom.window.eval('settingsUI.states.get("webui-models").dirty'), false);

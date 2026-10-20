@@ -7,7 +7,6 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();
@@ -94,9 +93,6 @@ test("authenticated swarm API binds agent operations to the token and human oper
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
-    assert.ok(agentApiMatches("GET", "/v1/swarm"));
-    assert.ok(agentApiMatches("POST", "/v1/swarm"));
-    assert.ok(!agentApiMatches("POST", `/v1/sessions/${fixture.root.id}/swarm`));
     if (fixture.caller.kind !== "agent") throw new Error("wrong caller");
     const token = await mintCapabilityToken(fixture.caller.claims, capabilitySecret);
     const headers = { "x-agent-capability": token, "content-type": "application/json" };

@@ -28,6 +28,7 @@ type SecretGate =
 export interface RuntimeSecretSpec {
   name: string;
   requiredWhen: SecretGate | readonly SecretGate[];
+  reason?: string;
 }
 
 export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
@@ -41,7 +42,12 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "OPENAI_API_KEY", requiredWhen: ["model-openai"] },
   { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
   { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
-  { name: "DATABASE_URL", requiredWhen: "postgres" },
+  {
+    name: "DATABASE_URL",
+    requiredWhen: ["production", "postgres"],
+    reason:
+      "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
+  },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
   { name: "AGENT37_API_KEY", requiredWhen: "agent37" },

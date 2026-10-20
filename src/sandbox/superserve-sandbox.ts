@@ -4,8 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -85,7 +84,7 @@ const CONFIG_EPOCH_LOCK = "superserve-config-epoch";
 export function createConfigEpochResolver(
   store: DurableMap<StoredConfigEpoch>,
   generationKey: string,
-  lock: AdvisoryLock = createNoopAdvisoryLock(),
+  lock: AdvisoryLock,
 ): () => Promise<number> {
   let pending: Promise<number> | undefined;
   const claim = (): Promise<number> =>
@@ -113,15 +112,15 @@ export interface SuperserveSandboxOptions extends BlobStagingOptions {
   homeDir?: string;
   idlePauseSec?: number;
   keepWarmSec?: number;
-  configEpoch?: number | (() => Promise<number>);
+  configEpoch: number | (() => Promise<number>);
   retentionSec?: number;
   egressAllow?: string[];
   egressDeny?: string[];
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store?: DurableMap<StoredSuperserveSandbox>;
-  advisoryLock?: AdvisoryLock;
+  store: DurableMap<StoredSuperserveSandbox>;
+  advisoryLock: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
@@ -150,8 +149,8 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
           ...(opts.egressDeny?.length ? { denyOut: opts.egressDeny } : {}),
         }
       : undefined;
-  const store = opts.store ?? createMemoryMap<StoredSuperserveSandbox>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const store = opts.store;
+  const advisoryLock = opts.advisoryLock;
   const lockKey = (scope: string): string => `superserve-provision:${scope}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -178,9 +177,8 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
     .digest("hex")
     .slice(0, 16);
 
-  const bootEpoch = Date.now();
   const configEpoch = async (): Promise<number> =>
-    typeof opts.configEpoch === "function" ? opts.configEpoch() : (opts.configEpoch ?? bootEpoch);
+    typeof opts.configEpoch === "function" ? opts.configEpoch() : opts.configEpoch;
   void configEpoch().catch(swallowAs("superserve-sandbox: claim config generation", undefined));
   const scopeMetadata = async (name: string): Promise<Record<string, string>> => ({
     [SUPERSERVE_METADATA.epoch]: String(await configEpoch()),

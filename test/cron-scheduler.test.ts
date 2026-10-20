@@ -14,6 +14,7 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Cron } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {
@@ -38,6 +39,7 @@ function harness(
     return { status: "ok", reply };
   };
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries,
     idempotency: createIdempotencyStore(),
@@ -336,6 +338,7 @@ test("only the leader instance fires due crons on tick (non-leader skips)", asyn
   };
   let leader = false;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries,
     idempotency,
@@ -549,6 +552,7 @@ test("a cron whose attempt marker cannot persist is held back and cannot starve 
     },
   };
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: flaky,
     deliveries,
     idempotency: createIdempotencyStore(),
@@ -583,6 +587,7 @@ test("capped rotation survives a scheduler restart mid-cycle", async () => {
   };
   const mk = () =>
     createScheduler({
+      ...singleProcessDeps(),
       crons,
       deliveries,
       idempotency: createIdempotencyStore(),
@@ -725,6 +730,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -763,6 +769,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: {
@@ -837,6 +844,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
   });
   const crons = createCronStore();
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -874,6 +882,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
   const enqueued: Array<{ cronId: string; scheduledAt: number }> = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -937,11 +946,12 @@ for (const queued of [false, true]) {
       async stop() {},
     };
     const scheduler = createScheduler({
+      ...singleProcessDeps(),
       crons,
       deliveries: createDeliveryStore(),
       idempotency: createIdempotencyStore(),
       identity: createIdentityService(),
-      lock: createMemoryAdvisoryLock(),
+      advisoryLock: createMemoryAdvisoryLock(),
       now: () => clock,
       ...(queued ? { jobQueue } : {}),
       run: async (req) => {
@@ -1037,12 +1047,13 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
   const enqueued: CronFireJob[] = [];
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     now: () => clock,
-    lock: {
+    advisoryLock: {
       ...mutex,
       async tryWithLock(key, fn) {
         const gate = gates[attempts++];
@@ -1106,6 +1117,7 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
   t.mock.timers.enable({ apis: ["setInterval"] });
   const heldKeys: string[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: createCronStore(),
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1142,6 +1154,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
   let onFire: ((job: { cronId: string; scheduledAt: number }) => Promise<void>) | undefined;
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1374,6 +1387,7 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
   const calls: TurnRequest[] = [];
   let clock = 1000;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1423,6 +1437,7 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
   const crons = createCronStore();
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1455,6 +1470,7 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   let onFire: ((job: { cronId: string; scheduledAt: number; notBefore?: number }) => Promise<void>) | undefined;
   const enqueued: Array<{ cronId: string; scheduledAt: number; notBefore?: number }> = [];
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1514,6 +1530,7 @@ test("scheduler stop waits for delayed queue startup and supports an awaited res
   let starts = 0;
   let stops = 0;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: createCronStore(),
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1551,6 +1568,7 @@ test("scheduler cannot resume after uncertain queue shutdown until a stop retry 
   let starts = 0;
   let stops = 0;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: createCronStore(),
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1585,6 +1603,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
   let claimsStopped = false;
   let queueClosed = false;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1669,6 +1688,7 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
   let starts = 0;
   let closed = false;
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
@@ -1747,6 +1767,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
     return get(id);
   };
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     admittedWork: work,
     crons,
     deliveries: createDeliveryStore(),

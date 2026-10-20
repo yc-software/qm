@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type Socket } from "node:net";
+import { doctorCommon } from "../src/backends/doctor.ts";
 import type { QmConfig } from "../src/config.ts";
 import { CliError } from "../src/log.ts";
 import {
@@ -183,6 +184,50 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
   } finally {
     await smtp.close();
   }
+});
+
+test("email preflight warns instead of failing when a STARTTLS relay does not offer STARTTLS", async () => {
+  const smtp = await fakeSmtp("right");
+  const config = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(smtp.port), SMTP_TLS: "starttls" } },
+  };
+  try {
+    const lines = await quietAsync(() =>
+      emailTransportPreflight(
+        config,
+        new Map([
+          ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+          ["SMTP_HOST", "127.0.0.1"],
+          ["SMTP_USERNAME", "user"],
+          ["SMTP_PASSWORD", "right"],
+        ]),
+      ),
+    );
+    assert.ok(lines.some((line) => line.includes("could not verify the SMTP credentials")));
+    assert.ok(!lines.some((line) => line.includes("credentials accepted")));
+  } finally {
+    await smtp.close();
+  }
+});
+
+test("doctor reports an SMTP relay reachable when it answers and unreachable when it does not", async () => {
+  const smtp = await fakeSmtp("right");
+  const relay = (port: number): QmConfig => ({
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(port) } },
+  });
+  const secrets = new Map([["SMTP_HOST", "127.0.0.1"]]);
+  try {
+    const lines = await quietAsync(() => doctorCommon(relay(smtp.port), secrets));
+    assert.ok(lines.some((line) => line.includes(`SMTP relay 127.0.0.1:${smtp.port}: reachable`)));
+  } finally {
+    await smtp.close();
+  }
+  await assert.rejects(
+    quietAsync(() => doctorCommon(relay(smtp.port), secrets)),
+    (e: unknown) => e instanceof CliError && e.message.includes("is unreachable"),
+  );
 });
 
 test("email preflight warns when SMTP values are set but the transport is resend", async () => {

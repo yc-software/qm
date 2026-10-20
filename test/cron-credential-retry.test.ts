@@ -9,6 +9,7 @@ import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore();
@@ -116,6 +117,7 @@ test("a concurrent sweep cannot mark an in-flight busy resume notified before it
   const asks = createMemoryMap<KeychainAsk>();
   await asks.put(f.ask.id, f.ask);
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks,

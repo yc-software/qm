@@ -7,6 +7,7 @@ import { createUserModelCredentialStore } from "../src/model/user-model-credenti
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -30,6 +31,7 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 
 function testStore() {
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -101,6 +103,7 @@ test("user model credential store round-trips api key and oauth per user+provide
 test("stale subscription tokens refresh once (single-flight) inside the keychain", async () => {
   let refreshCalls = 0;
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),

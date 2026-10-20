@@ -916,21 +916,7 @@ async function runAwsCandidateMigration(
       throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
     }
     step(`migration task: ${taskArn}`);
-    awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
-    const stopped = awsJson<{
-      tasks?: Array<{
-        stoppedReason?: string;
-        containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
-      }>;
-      failures?: Array<{ arn?: string; reason?: string }>;
-    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
-    const task = stopped.tasks?.[0];
-    const core = task?.containers?.find((container) => container.name === "core");
-    if (stopped.failures?.length || core?.exitCode !== 0) {
-      throw new CliError(
-        `AWS migration task failed (${core?.reason ?? task?.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
-      );
-    }
+    await awaitEcsTaskExit(aws, taskArn, "migration");
     ok(`candidate ${label} migrations applied`);
   } finally {
     if (taskDefinition && !existingTaskDefinition) {
@@ -1180,7 +1166,7 @@ interface EcsServiceRevision {
   taskDefinition?: string;
 }
 
-function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
+async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<void> {
   const aws = requireAws(config);
   if (!core.taskDefinition) throw new Error("core service has no live task definition");
   if (!core.networkConfiguration?.awsvpcConfiguration) throw new Error("core service has no VPC network configuration");
@@ -1253,19 +1239,41 @@ function awsLiveSession(config: QmConfig, core: EcsServiceState): void {
       `could not start canary task: ${failure?.reason ?? failure?.detail ?? failure?.arn ?? "no task returned"}`,
     );
   }
-  awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
-  const stopped = awsJson<{
-    tasks?: Array<{
-      stoppedReason?: string;
-      containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
-    }>;
-  }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
-  const task = stopped.tasks?.[0];
-  const coreContainer = task?.containers?.find((container) => container.name === "core");
-  if (coreContainer?.exitCode !== 0) {
-    throw new Error(
-      `canary task exited ${coreContainer?.exitCode ?? "without a code"}: ${coreContainer?.reason ?? task?.stoppedReason ?? "unknown reason"}`,
-    );
+  await awaitEcsTaskExit(aws, taskArn, "canary");
+}
+
+async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): Promise<void> {
+  const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 5_000);
+  const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+  for (;;) {
+    const described = awsJson<{
+      tasks?: Array<{
+        lastStatus?: string;
+        stoppedReason?: string;
+        containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
+      }>;
+      failures?: Array<{ arn?: string; reason?: string }>;
+    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
+    const task = described.tasks?.[0];
+    const failures = (described.failures ?? []).map((failure) => failure.reason ?? "unknown");
+    if (failures.some((reason) => reason !== "MISSING")) {
+      throw new CliError(`AWS ${kind} task ${taskArn} failed (${failures.join(", ")})`);
+    }
+    if (task?.lastStatus === "STOPPED") {
+      const core = task.containers?.find((container) => container.name === "core");
+      if (core?.exitCode === 0) return;
+      throw new CliError(
+        `AWS ${kind} task ${taskArn} exited ${core?.exitCode ?? "without a code"}: ${[core?.reason, task.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
+      );
+    }
+    if (Date.now() > deadline) {
+      throw new CliError(
+        task
+          ? `timed out waiting for the AWS ${kind} task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`
+          : `timed out waiting for the AWS ${kind} task; ECS still does not list ${taskArn}`,
+      );
+    }
+    await sleep(pollMs);
   }
 }
 
@@ -4848,7 +4856,7 @@ async function checkLive(
           request: (body) => transport("POST", body),
         });
       } else {
-        awsLiveSession(config, states.get("core")!);
+        await awsLiveSession(config, states.get("core")!);
       }
       if (opts.report ?? true) step("core: private live session smoke passed");
     } catch (error) {

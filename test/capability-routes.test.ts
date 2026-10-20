@@ -530,6 +530,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     );
     assert.equal(create.status, 403);
     assert.match(((await create.json()) as { message: string }).message, /direct control-plane mutations/i);
+    const search = await post("/v1/memory/search", { query: "anything" }, { "x-agent-capability": token });
+    assert.doesNotMatch(await search.text(), /direct control-plane mutations/i);
   });
 
   it("a capability cannot cancel another user's cron", async () => {

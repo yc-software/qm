@@ -12,6 +12,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -93,28 +94,13 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   const previous = process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
   process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = "operator-token";
   const built = buildApp(testConfig({ dataDir: dir, egressServiceHosts: ["accounts.example.com"] }));
-  let calls = 0;
-  const remote = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(Buffer.from(chunk));
-    const rpc = JSON.parse(Buffer.concat(chunks).toString());
-    if (rpc.method === "tools/call") calls++;
-    res.setHeader("content-type", "application/json");
-    res.end(
-      JSON.stringify({
-        id: rpc.id,
-        result:
-          rpc.method === "tools/list"
-            ? { tools: [{ name: "identity", inputSchema: { type: "object" } }] }
-            : { content: [{ type: "text", text: req.headers.authorization }] },
-      }),
-    );
+  const remote = await startMcpTestServer(t, {
+    tools: [{ name: "identity", inputSchema: { type: "object" } }],
+    call: (_name, _args, authorization) => ({ content: [{ type: "text", text: authorization ?? "" }] }),
   });
-  remote.listen(0, "127.0.0.1");
-  await once(remote, "listening");
+  const calls = () => remote.requests.filter((r) => r.rpc === "tools/call").length;
   t.after(async () => {
     built.mcpToolService.close();
-    await new Promise<void>((resolve) => remote.close(() => resolve()));
     if (previous === undefined) delete process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
     else process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = previous;
     await rm(dir, { recursive: true, force: true });
@@ -122,7 +108,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
   await built.mcpServers.put({
     id: "crm",
     name: "CRM",
-    url: `http://127.0.0.1:${(remote.address() as AddressInfo).port}/mcp`,
+    url: `${remote.url}/mcp`,
     auth: "none",
     credentialScope: "per-user",
     credentialHost: "accounts.example.com",
@@ -137,12 +123,12 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
     "operator-token",
   );
   await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Connect your account/);
-  assert.equal(calls, 0);
+  assert.equal(calls(), 0);
   await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
     accessToken: "alice-only",
   });
   assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
-  assert.equal(calls, 1);
+  assert.equal(calls(), 1);
 });
 
 test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadata, and never shadows built-in connectors", async (t) => {

@@ -8,6 +8,7 @@ import type { LoopItemLedger } from "./item-ledger.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
+import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
@@ -61,26 +62,33 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     const method = path.split("?")[0]!;
     const key = `${owner}:${source}:${source === "slack" ? method : "read"}`;
     if (limited.has(key)) throw new Error("Source rate limited. The next refresh will retry.");
-    const base = source === "slack" ? slackBase : "https://gmail.googleapis.com/gmail/v1/users/me/";
-    const res = await fetchImpl(`${base}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(Math.max(1, Math.min(3000, deadline - now()))),
-    });
-    if (res.status === 429) {
-      const retry = Number(res.headers.get("retry-after"));
+    const timeoutMs = Math.max(1, Math.min(3000, deadline - now()));
+    const rateLimit = (retry: number) =>
       limited.set(key, true, { ttl: Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000 });
+    const failure = (cause: Error) =>
+      new Error("Couldn't refresh the source. Your item has not been dismissed.", { cause });
+    if (source === "gmail") {
+      try {
+        return await gmailApi(token, fetchImpl)<Record<string, unknown>>(path, { timeoutMs });
+      } catch (error) {
+        if (!(error instanceof GmailApiError)) throw error;
+        if (error.status === 429) rateLimit(error.retryAfterSeconds);
+        throw failure(error);
+      }
     }
-    if (!res.ok)
-      throw new Error("Couldn't refresh the source. Your item has not been dismissed.", {
-        cause: new Error(`${source} ${method}: HTTP ${res.status}`),
-      });
+    const res = await fetchImpl(`${slackBase}${path}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 429) rateLimit(Number(res.headers.get("retry-after")));
+    if (!res.ok) throw failure(new Error(`${source} ${method}: HTTP ${res.status}`));
     const body: unknown = await res.json();
     if (!isObj(body) || body.ok === false)
-      throw new Error("Couldn't refresh the source. Your item has not been dismissed.", {
-        cause: new Error(
+      throw failure(
+        new Error(
           `${source} ${method}: ${isObj(body) && typeof body.error === "string" ? body.error : "Invalid response"}`,
         ),
-      });
+      );
     return body;
   }
 

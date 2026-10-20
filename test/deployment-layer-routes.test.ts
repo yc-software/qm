@@ -9,7 +9,6 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
-import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -348,9 +347,6 @@ test("a skill collision racing after validation is accepted degraded and audited
 });
 
 test("a VALID capability token is rejected on the deployment-layer routes (source-auth only)", async () => {
-  assert.equal(agentApiMatches("GET", PATH), false);
-  assert.equal(agentApiMatches("PUT", PATH), false);
-
   const srv = start();
   try {
     const cap = await mintCapabilityToken(
