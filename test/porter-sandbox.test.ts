@@ -12,6 +12,7 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 let fake: FakePorter;
 let sandbox: Sandbox;
@@ -21,6 +22,7 @@ const slug = porterScopeSlug("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createPorterSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "porter-ws-"))), {
+    ...singleProcessDeps(),
     namePrefix: "qmt",
     client: fake.client,
     ...extra,

@@ -6,7 +6,7 @@ import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./dep
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
 import { execFailure, swallow, swallowAs } from "../util/errors.ts";
@@ -89,7 +89,7 @@ export interface AwsDeployProviderOptions {
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
   store?: DurableMap<StoredDeployBody>;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;
   s3?: Pick<S3Client, "send">;
@@ -108,7 +108,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     });
   const store = opts.store ?? createMemoryMap<StoredDeployBody>();
   const launchQueue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
   const inflightResolves = new Map<string, Promise<DeployEndpoint | null>>();
   const resolveGens = new Map<string, number>();

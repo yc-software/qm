@@ -21,6 +21,7 @@ import {
 } from "../src/slack/deploy-access.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -50,6 +51,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     })),
   );
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",

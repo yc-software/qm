@@ -14,6 +14,7 @@ import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;
@@ -22,6 +23,7 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createAgent37Sandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "a37-ws-"))), {
+    ...singleProcessDeps(),
     apiKey: FAKE_AGENT37_API_KEY,
     namePrefix: "qmt",
     fetchImpl: fake.fetchImpl,

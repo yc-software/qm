@@ -114,8 +114,7 @@ import {
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
-import { collectBlob, createMemoryBlobTransferStore } from "../persistence/blob-transfer.ts";
+import { collectBlob } from "../persistence/blob-transfer.ts";
 import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
@@ -255,13 +254,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     );
   }
   const leaseKeepaliveMs = Math.floor(deps.sessions.leaseTtlMs / 3);
-  const pending = deps.approvals ?? createMemoryMap<PendingApprovalRecord>();
+  const pending = deps.approvals;
   const transcripts = createTranscriptSource(deps.sessions);
-  const approvalGrants = deps.approvalGrants ?? createMemoryMap<CommandApprovalGrant>();
+  const approvalGrants = deps.approvalGrants;
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
   const memoryStrategy =
     deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
-  const blobTransfer = deps.blobTransfer ?? createMemoryBlobTransferStore();
+  const blobTransfer = deps.blobTransfer;
 
   const pendingCaptures = new Map<ScopeId, Promise<void>>();
 
@@ -1020,6 +1019,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
       const useMemory = !external && input.skipMemory !== true;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
@@ -3590,6 +3590,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             systemPrompt,
             history: continuation?.history ?? history,
             tools,
+            ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,

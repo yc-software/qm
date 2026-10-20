@@ -361,9 +361,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async setStandingOrder(orders) {
       return { ok: true, orders: orders ?? "" };
     },
-    mcpToolDefs() {
-      return [];
-    },
     async callMcpTool() {
       return "";
     },
@@ -3513,7 +3510,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     { current: fakeToolContext() },
     {
       controlTools: true,
-      mcpTools: () => [
+      mcpTools: [
         {
           name: "example_search",
           serverId: "example",

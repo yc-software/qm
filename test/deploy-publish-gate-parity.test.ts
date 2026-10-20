@@ -10,6 +10,7 @@ import { createDirectoryStore, type DirectoryStore } from "../src/directory/dire
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const CH = "CBUILT";
 const CH_OTHER = "CSHARED";
@@ -32,6 +33,7 @@ async function setup(opts: { withResolver: boolean } = { withResolver: true }) {
     ],
   );
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

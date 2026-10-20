@@ -30,6 +30,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -194,6 +195,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     await installed();
     const creds = createMemoryMap<KeychainCredential>();
     const keychain = createKeychain({
+      lock: createMemoryAdvisoryLock(),
       creds,
       grants: createMemoryMap(),
       asks: createMemoryMap(),

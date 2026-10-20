@@ -12,6 +12,7 @@ import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.t
 import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
+import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const { awsDeploy } = loadConfig();
 if (!awsDeploy.dataBucket || !awsDeploy.dataRoleArn)
@@ -24,7 +25,7 @@ const api = createMicrovmApi({
 });
 const client = createMicrovmClient(api, { agentPort: awsDeploy.agentPort ?? 8080, tokenTtlMinutes: 30 });
 const store = createMemoryMap<StoredDeployBody>();
-const provider = createAwsDeployProvider({ ...awsDeploy, store, api });
+const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store, api });
 const s3 = new S3Client({ region: awsDeploy.region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
 
 const APP = `

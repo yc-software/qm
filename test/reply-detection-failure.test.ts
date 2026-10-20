@@ -24,6 +24,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import type { Harness } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -52,6 +53,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const errors = createErrorLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rdf-")));
   const orch = createOrchestrator({
+    ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService("default-org", config, acl),
     sessions: createMemorySessionStore(),
@@ -67,6 +69,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     harness,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
+      ...singleProcessDeps(),
       deployStore: createDeployStore(),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "rdf-deploy"),

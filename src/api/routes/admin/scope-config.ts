@@ -47,19 +47,6 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
-  if (
-    [
-      "base-model",
-      "runtime",
-      "cron-runtime",
-      "subagent-runtime",
-      "fallback-runtime",
-      "webui-models",
-      "browse-model",
-      "auto-flagger",
-    ].includes(resource)
-  )
-    await deps.refreshModels?.();
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
     deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
 
@@ -104,6 +91,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
+  if (desc.refreshesModels) await deps.refreshModels?.();
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, actor, targetScope);

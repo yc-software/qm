@@ -19,6 +19,7 @@ import { scopeId } from "../src/types.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
 import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -52,6 +53,7 @@ function mintPortalSession(sub: string): string {
 function serviceWithProvider(provider: DeployProvider) {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog,
@@ -140,6 +142,7 @@ test("reachDeployment: a provider without resolveEndpoint returns the frozen sto
 function appServingUpstream(upstreamPort: number) {
   const deployStore = createDeployStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

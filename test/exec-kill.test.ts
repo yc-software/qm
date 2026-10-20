@@ -9,6 +9,8 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 test("killableScript: records its PGID to the per-exec marker first, runs under setsid, preserves rc", () => {
   const s = killableScript("do_work", "abc");
@@ -36,6 +38,8 @@ after(() => ff.cleanup());
 function sprites(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "sprites-kill-ws-"));
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
