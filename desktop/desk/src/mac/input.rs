@@ -151,51 +151,10 @@ pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
     Ok((register_target(ax, &focused)?, ax.clone()))
 }
 
-fn nested_menu<T>(
-    root: T,
-    limit: usize,
-    max_depth: usize,
-    mut read: impl FnMut(&T) -> Result<(bool, Vec<T>), Failure>,
-) -> Result<bool, Failure> {
-    let mut queue = std::collections::VecDeque::from([(root, 0)]);
-    let mut visited = 0;
-    while let Some((element, depth)) = queue.pop_front() {
-        if visited >= limit || depth > max_depth {
-            return Err(fail(ErrorCode::ActionFailed, "Cannot finish checking for open menus; input was not sent"));
-        }
-        visited += 1;
-        let (open, children) = read(&element)?;
-        if open {
-            return Ok(true);
-        }
-        queue.extend(children.into_iter().map(|child| (child, depth + 1)));
-    }
-    Ok(false)
-}
-
-pub(super) fn menu_open(ax: &El) -> Result<bool, Failure> {
-    active()?;
+pub(super) fn menu_open(ax: &El) -> bool {
     let kids = |e: &El| attr(e, "AXChildren").map(list).unwrap_or_default();
-    if kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
+    kids(ax).iter().any(|c| has_role(c, &["AXMenu"]))
         || attr(ax, "AXMenuBar").is_some_and(|bar| kids(&bar).iter().any(|item| bool_attr(item, "AXSelected") == Some(true)))
-    {
-        return Ok(true);
-    }
-    let window = window_of(ax).ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the window while checking for open menus"))?;
-    nested_menu(window, MAX_VISITS, MAX_DEPTH, |element| {
-        if cancellation::cancelled() {
-            return Err(fail(ErrorCode::ActionFailed, "Computer action cancelled"));
-        }
-        let hidden = bool_attr(element, "AXHidden");
-        let role = str_attr(element, "AXRole");
-        if hidden == Some(true) || (role.as_deref() == Some("AXMenuBarItem") && bool_attr(element, "AXSelected") != Some(true)) {
-            return Ok((false, vec![]));
-        }
-        if role.as_deref() == Some("AXMenu") {
-            return Ok((hidden == Some(false), vec![]));
-        }
-        Ok((false, kids(element)))
-    })
 }
 
 pub(super) const MENU_OPEN: &str =
@@ -428,17 +387,6 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nested_menu_detection_checks_descendants_and_refuses_incomplete_scans() {
-        let read = |node: &usize| Ok((*node == 2, if *node < 2 { vec![node + 1] } else { vec![] }));
-        assert!(nested_menu(0, 3, 2, read).unwrap());
-        assert!(nested_menu(0, 2, 2, read).is_err());
-        assert!(nested_menu(0, 3, 1, read).is_err());
-        assert!(!nested_menu(0, 1, 0, |_| Ok((false, vec![]))).unwrap());
-        let error = nested_menu(0, 3, 2, |_| Err(fail(ErrorCode::ActionFailed, "cancelled during scan"))).unwrap_err();
-        assert_eq!(error.message, "cancelled during scan");
-    }
 
     #[test]
     fn date_values_preserve_components_outside_the_control() {
