@@ -5128,7 +5128,6 @@ a.connector-widget:focus-visible {
 @media (max-width: 860px) {
   .layout {
     position: relative;
-    /* left safe-area inset + the 44px touch-size toggle + its 8px right padding */
     --rail-w: calc(max(8px, env(safe-area-inset-left)) + 52px);
   }
   .sidebar {
@@ -5148,6 +5147,8 @@ a.connector-widget:focus-visible {
     border: 0;
     border-radius: 0;
     background: color-mix(in srgb, var(--scrim) 24%, transparent);
+    transition: opacity 0.26s ease;
+    opacity: 1;
   }
   .sidebar .icon-btn,
   .session-menu-btn,
@@ -5191,8 +5192,8 @@ a.connector-widget:focus-visible {
     gap: 6px;
   }
   .pane {
-    padding: calc(28px + var(--surface-safe-top)) max(28px, env(safe-area-inset-right))
-      calc(40px + env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
+    padding: calc(50px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
+      calc(40px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
   }
   .composer-approval .approval-actions {
     justify-content: flex-start;
@@ -5234,8 +5235,7 @@ a.connector-widget:focus-visible {
 
 @media (max-width: 560px) {
   .pane {
-    padding: calc(20px + var(--surface-safe-top)) max(14px, env(safe-area-inset-right))
-      calc(32px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    padding-bottom: calc(32px + env(safe-area-inset-bottom));
   }
   .composer-approval .approval-actions {
     display: grid;
@@ -5534,10 +5534,6 @@ a.connector-widget:focus-visible {
   position: relative;
   align-items: center;
   gap: 12px;
-}
-.file-row {
-  color: inherit;
-  text-decoration: none;
 }
 .file-row-icon {
   display: inline-flex;
@@ -6314,6 +6310,7 @@ a.connector-widget:focus-visible {
   color: var(--muted-foreground);
 }
 .file-row {
+  text-decoration: none;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
   justify-content: initial;
@@ -10018,10 +10015,6 @@ h3.ambient-field-label {
   .layout:not(.sidebar-closed) .sidebar {
     transition-delay: 0s;
   }
-  .sidebar-scrim {
-    transition: opacity 0.26s ease;
-    opacity: 1;
-  }
   .layout.sidebar-closed .sidebar-scrim {
     display: block;
     opacity: 0;
@@ -10081,9 +10074,6 @@ h3.ambient-field-label {
     height: 44px;
   }
 
-  .pane {
-    padding-top: calc(50px + var(--surface-safe-top));
-  }
   .pane > .pane-head:first-child,
   .pane > .inbox-item-head:first-child {
     min-height: 44px;
@@ -10455,11 +10445,6 @@ h3.ambient-field-label {
 }
 
 @media (max-width: 860px) {
-  .pane {
-    padding-left: max(14px, env(safe-area-inset-left));
-    padding-right: max(14px, env(safe-area-inset-right));
-  }
-
   .pane .session-topbar {
     margin: calc(-50px - var(--surface-safe-top)) calc(-1 * max(14px, env(safe-area-inset-right))) 12px
       calc(-1 * max(14px, env(safe-area-inset-left)));
