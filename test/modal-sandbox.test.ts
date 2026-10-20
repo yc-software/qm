@@ -446,12 +446,12 @@ test("stageIn pulls a blob into the guest atomically (temp then mv)", async () =
 test("persistHomeSnapshot writes the live home to the snapshot store on demand", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   const counting = instrumentedSnapshotStore();
-  const s = make({ store, snapshots: counting.store, nativeSnapshotIntervalMs: 60 * 60_000 });
+  const s = make({ store, snapshots: counting.store });
   const h = await s.provision(layers);
   await s.writeFile(h, "keep.txt", "persist me\n");
   assert.ok(s.persistHomeSnapshot);
   await s.persistHomeSnapshot!(scope);
-  assert.equal(counting.puts(), 1, "persists immediately, ignoring the teardown throttle");
+  assert.equal(counting.puts(), 1);
 });
 
 test("rotation aborts and keeps the old box when the pre-rotation checkpoint fails", async () => {
