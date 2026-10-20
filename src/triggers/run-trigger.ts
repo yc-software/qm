@@ -11,7 +11,7 @@ import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../di
 import { samePerson } from "../directory/person.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
-import { reportFailureAs } from "../util/errors.ts";
+import { reportFailureAs, swallowAs } from "../util/errors.ts";
 
 const MEMBERSHIP_SKIP_NOTE = "the acting person is no longer a member of this trigger's home scope — run skipped";
 const UNKNOWN_HOME_SKIP_NOTE =
@@ -101,7 +101,7 @@ async function relayAttribution(deps: TriggerDeps, spec: TriggerSpec): Promise<s
 }
 
 async function participatesInScope(deps: TriggerDeps, actorId: string, scope: ScopeId): Promise<boolean> {
-  const scopes = await deps.sessions?.participantScopes(actorId).catch(() => []);
+  const scopes = await deps.sessions?.participantScopes(actorId).catch(swallowAs("trigger: participant scopes", []));
   return scopes?.some((s) => s.scopeId === scope) === true;
 }
 
