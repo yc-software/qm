@@ -29,7 +29,9 @@ import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
   cancelGoal,
-  createGoalRecord,
+  goalFromParams,
+  GoalCreateParams,
+  type GoalCreateInput,
   goalFloorMeter,
   goalIsOpen,
   goalReport,
@@ -3904,31 +3906,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
       'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
       "Fails if an unfinished goal exists.",
-    parameters: Type.Object({
-      objective: Type.String({
-        description:
-          "The concrete end state to pursue, in the user's terms. Verifiable phrasing ('all tests in X pass') beats vague ('improve X').",
-      }),
-      floor: Type.Optional(
-        Type.Object(
-          {
-            minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
-            minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
-            minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
-            minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
-          },
-          {
-            description:
-              "Work floor — set when the user names a duration/amount ('for 30 minutes'). Completing early is allowed, but the harness keeps prompting for more work until the floor is met.",
-          },
-        ),
-      ),
-      token_cap: Type.Optional(
-        Type.Number({ description: "Wind-down token budget. Set only when the user explicitly caps spend/size." }),
-      ),
-    }),
+    parameters: GoalCreateParams,
     async execute(callId, params) {
-      const p = params as { objective: string; floor?: Record<string, number>; token_cap?: number };
+      const p = params as GoalCreateInput;
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
       if (goalIsOpen(ref.goal)) {
         return recordCoreAuthoredResult(
@@ -3942,11 +3922,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       }
       let record: GoalRecord;
       try {
-        record = createGoalRecord({
-          objective: p.objective,
-          ...(p.floor ? { floor: p.floor } : {}),
-          ...(p.token_cap !== undefined ? { capTokens: p.token_cap } : {}),
-        });
+        record = goalFromParams(p);
       } catch (e) {
         return recordCoreAuthoredResult(
           callId,

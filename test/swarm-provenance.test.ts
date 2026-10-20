@@ -113,6 +113,9 @@ const mutations: Record<string, (input: OrchestratorInput) => void> = {
   deadline: (i) => {
     i.turnWallClockMs = 1;
   },
+  goal: (i) => {
+    i.swarmGoal = { objective: "forged", token_cap: 1, assignedAt: Date.now() };
+  },
   participants: (i) => {
     i.sessionParticipantIds = ["outsider"];
   },

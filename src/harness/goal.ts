@@ -28,6 +28,7 @@
  *   semantics — keep working at least this much) and an optional token cap
  *   (wind down when exhausted; never auto-complete).
  */
+import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 import { withoutWire } from "./context-compaction.ts";
@@ -118,6 +119,40 @@ export function createGoalRecord(input: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export const GoalCreateParams = Type.Object({
+  objective: Type.String({
+    description:
+      "The concrete end state to pursue, in the user's terms. Verifiable phrasing ('all tests in X pass') beats vague ('improve X').",
+  }),
+  floor: Type.Optional(
+    Type.Object(
+      {
+        minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
+        minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
+        minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
+        minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
+      },
+      {
+        description:
+          "Work floor — set when the user names a duration/amount ('for 30 minutes'). Completing early is allowed, but the harness keeps prompting for more work until the floor is met.",
+      },
+    ),
+  ),
+  token_cap: Type.Optional(
+    Type.Number({ description: "Wind-down token budget. Set only when the user explicitly caps spend/size." }),
+  ),
+});
+
+export type GoalCreateInput = Static<typeof GoalCreateParams>;
+
+export function goalFromParams(params: GoalCreateInput): GoalRecord {
+  return createGoalRecord({
+    objective: params.objective,
+    ...(params.floor ? { floor: params.floor } : {}),
+    ...(params.token_cap !== undefined ? { capTokens: params.token_cap } : {}),
+  });
 }
 
 export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null): void {

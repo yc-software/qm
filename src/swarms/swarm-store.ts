@@ -1,4 +1,4 @@
-import type { GrindBudget } from "../harness/grind.ts";
+import type { GoalCreateInput } from "../harness/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
@@ -35,12 +35,6 @@ export interface SwarmMember {
   error?: string;
 }
 
-export interface SwarmGoal {
-  objective: string;
-  floor?: GrindBudget;
-  capTokens: number;
-}
-
 export interface SwarmMessage {
   id: string;
   seq: number;
@@ -51,7 +45,7 @@ export interface SwarmMessage {
   text: string;
   audience: string[];
   replyTo?: string;
-  goal?: SwarmGoal;
+  goal?: GoalCreateInput;
   createdAt: number;
   notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;
 }

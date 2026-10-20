@@ -175,15 +175,16 @@ for its next message. To keep a worker working, its parent can attach a goal to
 }
 ```
 
-The goal is installed as the worker session's goal when the turn starts, and the
-turn runs under the normal goal loop: the worker is prompted to continue until
-the goal's governor approves completion, pauses it, or `token_cap` is spent.
-Goal turns, and any later turn while the worker's goal is active, run without the
-swarm `turnMs` deadline. `token_cap` is required, and `floor` takes the same keys
-as the goal tool. Only a parent can assign goals, and only to its own workers;
-a goal needs `notify`. The worker treats its parent as the user for the goal and
-messages it when it needs a decision. Sending a new goal replaces a paused or
-different one; resending the same active goal leaves it running.
+The goal is installed as the worker session's goal when that turn starts, and the
+turn runs under the normal goal loop: the worker is prompted to continue until the
+goal's governor approves completion, pauses it, or `token_cap` is spent. A turn
+that carries a goal runs without the swarm `turnMs` deadline; other turns keep it.
+`token_cap` is required because it is the bound that replaces the deadline, and
+`floor` takes the same keys as the goal tool. Only a parent can assign goals, and
+only to its own workers; a goal needs `notify`. The worker treats its parent as
+the user for the goal and messages it when it needs a decision. Each goal message
+installs a fresh goal once (a retried delivery does not reinstall it), so sending
+a goal again replaces a paused or finished one and starts a new token budget.
 
 ### Ask, read, and tail
 
