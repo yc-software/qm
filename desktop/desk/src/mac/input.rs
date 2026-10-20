@@ -437,9 +437,13 @@ fn date_value(before: &core_foundation::date::CFDate, value: &str, mask: u64, ca
     Some(core_foundation::date::CFDate::new(date.timeIntervalSinceReferenceDate()).as_CFType())
 }
 
+fn has_focus(host: &El, element: &El) -> bool {
+    bool_attr(element, "AXFocused") == Some(true) || attr(host, "AXFocusedUIElement").as_ref() == Some(element)
+}
+
 pub(super) fn focus_field(host: &El, element: &El, click: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
     register_target(host, element)?;
-    if bool_attr(element, "AXFocused") == Some(true) {
+    if has_focus(host, element) {
         return Ok(());
     }
     if settable(element, "AXFocused") {
@@ -447,10 +451,10 @@ pub(super) fn focus_field(host: &El, element: &El, click: impl FnOnce() -> Resul
         if status != 0 {
             return Err(fail(ErrorCode::ActionFailed, format!("Focusing the element failed (AXError {status})")));
         }
-    } else {
-        click()?;
+        return register_target(host, element).map(|_| ());
     }
-    if bool_attr(element, "AXFocused") != Some(true) {
+    click()?;
+    if !has_focus(host, element) {
         return Err(fail(ErrorCode::ActionFailed, "The element did not acquire keyboard focus; observe again"));
     }
     register_target(host, element)?;
@@ -500,7 +504,7 @@ pub(super) fn set_value(
     let host = app_element(pid);
     let texty = has_role(e, TEXT_ROLES);
     let require_focus = || {
-        if bool_attr(e, "AXFocused") == Some(true) {
+        if has_focus(&host, e) {
             Ok(())
         } else {
             Err(fail(ErrorCode::ActionFailed, format!("element {index} does not have keyboard focus; observe it before continuing")))
@@ -508,7 +512,6 @@ pub(super) fn set_value(
     };
     if texty {
         focus()?;
-        require_focus()?;
     } else {
         register_target(&host, e)?;
     }
