@@ -88,7 +88,7 @@ import {
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
-import { createResendMailer } from "./admin/invite-email.ts";
+import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import {
   createMemoryConfigStore,
   type ScopedConfigStore,
@@ -2149,7 +2149,7 @@ export function buildApp(
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: createResendMailer(config.resendApiKey, config.emailFrom) }
+      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
     memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
@@ -3174,7 +3174,7 @@ export function serverDeps(
     ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
     ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
     ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: createResendMailer(config.resendApiKey, config.emailFrom) }
+      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     rateLimiter: built.rateLimiter,
     acl: built.acl,

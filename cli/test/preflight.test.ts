@@ -185,6 +185,31 @@ test("email preflight fails check on rejected SMTP credentials and warns on stra
   }
 });
 
+test("email preflight warns instead of failing when a STARTTLS relay does not offer STARTTLS", async () => {
+  const smtp = await fakeSmtp("right");
+  const config = {
+    ...CONFIG,
+    env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(smtp.port), SMTP_TLS: "starttls" } },
+  };
+  try {
+    const lines = await quietAsync(() =>
+      emailTransportPreflight(
+        config,
+        new Map([
+          ["AUTH_EMAIL_FROM", "QM <noreply@example.com>"],
+          ["SMTP_HOST", "127.0.0.1"],
+          ["SMTP_USERNAME", "user"],
+          ["SMTP_PASSWORD", "right"],
+        ]),
+      ),
+    );
+    assert.ok(lines.some((line) => line.includes("could not verify the SMTP credentials")));
+    assert.ok(!lines.some((line) => line.includes("credentials accepted")));
+  } finally {
+    await smtp.close();
+  }
+});
+
 test("email preflight warns when SMTP values are set but the transport is resend", async () => {
   const config = { ...CONFIG, env: { auth: { AUTH_EMAIL_TRANSPORT: "resend" } } };
   const lines = await quietAsync(() =>

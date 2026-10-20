@@ -1,6 +1,6 @@
 import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { InviteMailer } from "../admin/invite-email.ts";
+import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
@@ -638,7 +638,7 @@ export interface AppDeps {
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
-  inviteMailer?: InviteMailer;
+  inviteMailer?: Mailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;

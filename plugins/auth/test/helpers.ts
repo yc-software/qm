@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { emailConfigured, readConfig, type AuthConfig } from "../src/config.ts";
 import type { ClaimStore } from "../../chassis/src/claims.ts";
-import type { Mailer, OutgoingEmail } from "../src/email.ts";
+import type { Mailer, OutgoingEmail } from "../../chassis/src/resend.ts";
 import { loadSigningKey } from "../src/keys.ts";
 import { TokenSigner } from "../src/tokens.ts";
 import { createAuthHandler } from "../src/server.ts";
@@ -73,9 +73,6 @@ export function captureMailer(): Mailer & { sent: OutgoingEmail[]; failNext: boo
       }
       state.sent.push(message);
       return "test-message-id";
-    },
-    async verify(): Promise<string> {
-      return "ok";
     },
   };
   return state;

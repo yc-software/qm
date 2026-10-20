@@ -36,7 +36,7 @@ import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
-import type { InviteMailer } from "../admin/invite-email.ts";
+import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
@@ -150,7 +150,7 @@ export interface ServerDeps {
   harnessId?: string;
   harnessCarriedModelAuth?: ModelProvider;
   admin?: AdminService;
-  inviteMailer?: InviteMailer;
+  inviteMailer?: Mailer;
   emailAuthPrincipals?: readonly string[];
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];

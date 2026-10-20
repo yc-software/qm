@@ -95,6 +95,7 @@
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
     "modal": "^0.10.1",
+    "nodemailer": "^10.1.0",
     "officeparser": "^8.0.0",
     "pg": "^8.13.1",
     "pg-boss": "^12.26.1",
