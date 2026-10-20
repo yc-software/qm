@@ -18,6 +18,21 @@ type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
 type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
 type GetProcessPid = unsafe extern "C" fn(*const ProcessSerialNumber, *mut i32) -> i32;
 
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn IsSecureEventInputEnabled() -> u8;
+}
+
+fn check_secure_input() -> Result<(), Failure> {
+    if unsafe { IsSecureEventInputEnabled() } != 0 {
+        return Err(Failure::new(
+            ErrorCode::ActionFailed,
+            "macOS Secure Input is active; keyboard protection is unavailable, so computer input was stopped",
+        ));
+    }
+    Ok(())
+}
+
 #[repr(C)]
 #[derive(Default)]
 struct ProcessSerialNumber {
@@ -320,6 +335,7 @@ pub struct Intervention {
 
 impl Intervention {
     pub fn begin(target: i32, foreground: i32, keyboard_owner: i32) -> Result<Self, Failure> {
+        check_secure_input()?;
         let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CPSReleaseKeyFocusWithID".as_ptr()) };
         if pointer.is_null() {
             return Err(Failure::new(ErrorCode::ActionFailed, "Key-focus lease release is unavailable; input was not started"));
@@ -404,7 +420,7 @@ impl Intervention {
         if let Some(message) = failure.as_ref() {
             return Err(Failure::new(ErrorCode::ActionFailed, message.clone()));
         }
-        Ok(())
+        check_secure_input()
     }
 }
 
@@ -417,7 +433,7 @@ pub fn check_current() -> Result<(), Failure> {
             return Err(Failure::new(ErrorCode::ActionFailed, message.clone()));
         }
     }
-    Ok(())
+    check_secure_input()
 }
 
 impl Drop for Intervention {
