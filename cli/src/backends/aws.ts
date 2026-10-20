@@ -916,7 +916,7 @@ async function runAwsCandidateMigration(
       throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
     }
     step(`migration task: ${taskArn}`);
-    awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+    awaitMigrationTaskStopped(aws, taskArn);
     const stopped = awsJson<{
       tasks?: Array<{
         stoppedReason?: string;
@@ -941,6 +941,49 @@ async function runAwsCandidateMigration(
       }
     }
     rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `aws ecs wait tasks-stopped` gives up after a fixed ~10 minutes, but a
+ * migration can legitimately queue longer: migrate-main blocks on the
+ * `qm:schema-migrations` advisory lock, which operator scripts also hold
+ * (e.g. a concurrent index build). Keep waiting up to a configurable deadline,
+ * and if the deploy still gives up, stop the task so it cannot apply this
+ * candidate's migrations later with no release following it.
+ */
+function awaitMigrationTaskStopped(aws: AwsConfig, taskArn: string): void {
+  const deadline = Date.now() + envNum("QM_AWS_MIGRATION_DEADLINE_MS", 30 * 60_000);
+  for (;;) {
+    try {
+      awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
+      return;
+    } catch (error) {
+      if (Date.now() < deadline) {
+        warn("migration task still running; continuing to wait");
+        continue;
+      }
+      try {
+        awsText(aws, [
+          "ecs",
+          "stop-task",
+          "--cluster",
+          aws.cluster,
+          "--task",
+          taskArn,
+          "--reason",
+          "qm deploy stopped waiting for migrations",
+        ]);
+      } catch (stopError) {
+        warn(`could not stop migration task ${taskArn}: ${errMessage(stopError)}`);
+      }
+      throw new CliError(
+        "AWS migration task did not finish before the deadline and was stopped. It usually waits on the " +
+          "qm:schema-migrations advisory lock; check pg_locks for another session holding it (for example an " +
+          "operator index build) before redeploying.",
+        { cause: error },
+      );
+    }
   }
 }
 
