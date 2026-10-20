@@ -383,7 +383,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         model: rec.model,
         scopeLabel: rec.scopeLabel as ScopeId,
         createdAt: now(),
-        request: null,
         promptHash: envelope?.hash ?? null,
         truncated: rec.truncated ?? false,
         ttftMs: rec.ttftMs ?? null,
@@ -415,7 +414,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
             )
           : all;
       return filtered.map((r) => {
-        if (opts?.omitRequest) return { ...r, request: null };
+        if (opts?.omitRequest) return { ...r };
         const body = r.promptHash != null ? promptEnvelopes.get(r.promptHash) : undefined;
         return body !== undefined ? { ...r, promptEnvelope: JSON.parse(body) } : { ...r };
       });

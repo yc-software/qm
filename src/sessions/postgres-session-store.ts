@@ -61,6 +61,9 @@ import {
 } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
+const LLM_CAPTURE_PURGE_BATCH = 100;
+const ENVELOPE_TOUCH_MS = 24 * 60 * 60_000;
+
 const threadRefOriginExpr = (threadRef: string): string =>
   `COALESCE(substring(${threadRef} FROM '${stableOriginPattern(ORIGIN_ALTERNATION)}'), substring(${threadRef} FROM '${legacyOriginPattern(ORIGIN_ALTERNATION)}'), 'conversation')`;
 
@@ -154,7 +157,6 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
     model: r.model as string,
     scopeLabel: r.scope_label as ScopeId,
     createdAt: Number(r.created_at),
-    request: r.request != null ? JSON.parse(r.request as string) : null,
     promptHash: r.prompt_hash == null ? null : (r.prompt_hash as string),
     ...(r.prompt_body != null ? { promptEnvelope: JSON.parse(r.prompt_body as string) } : {}),
     truncated: Boolean(r.truncated),
@@ -382,7 +384,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q } = createPgPool(
+  const { pool, q, query } = createPgPool(
     connectionString,
     [
       ...DIRECTORY_MIGRATIONS,
@@ -955,6 +957,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           `ALTER INDEX items_one_call_per_kind_digest RENAME TO items_one_call_per_kind`,
         ],
       },
+      {
+        id: "sessions/store/0041-drop-inline-llm-request",
+        statements: [
+          `SET LOCAL lock_timeout = '15s'`,
+          `ALTER TABLE session_llm_requests DROP COLUMN IF EXISTS request`,
+        ],
+      },
+      {
+        id: "sessions/store/0042-llm-prompt-envelopes-created-at",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS llm_prompt_envelopes_created_at
+             ON llm_prompt_envelopes(created_at)`,
+        ],
+      },
     ],
     [
       {
@@ -1356,7 +1372,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       const envelope = promptEnvelopeBody(rec.promptEnvelope);
       if (envelope) {
         await q(
-          "INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+          `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
+           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+            WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
           { signal },
         );
@@ -1369,7 +1387,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         model: rec.model,
         scopeLabel: rec.scopeLabel as ScopeId,
         createdAt: now(),
-        request: null,
         promptHash: envelope?.hash ?? null,
         ...(rec.promptEnvelope !== undefined ? { promptEnvelope: rec.promptEnvelope } : {}),
         truncated: rec.truncated ?? false,
@@ -1468,6 +1485,23 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         beforeId = last.id as string;
       }
       return samples;
+    },
+
+    async purgeLlmCaptures(cutoff, opts) {
+      const deadline = opts?.deadline ?? Infinity;
+      let envelopes = 0;
+      while (Date.now() < deadline && !opts?.stop?.()) {
+        const deleted = await query(
+          `DELETE FROM llm_prompt_envelopes
+            WHERE hash IN (SELECT hash FROM llm_prompt_envelopes WHERE created_at < $1
+                            ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED)
+              AND created_at < $1`,
+          [cutoff, LLM_CAPTURE_PURGE_BATCH],
+        );
+        envelopes += deleted.rowCount;
+        if (deleted.rowCount < LLM_CAPTURE_PURGE_BATCH) break;
+      }
+      return envelopes;
     },
 
     async addParticipant(sessionId, principalId, title, opts): Promise<void> {

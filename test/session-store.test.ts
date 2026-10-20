@@ -475,7 +475,6 @@ for (const [name, make] of backends) {
     );
     assert.equal(list[0]!.turnSeq, 0, "correlated to the turn's user entry seq");
     assert.equal(list[1]!.truncated, true, "truncated flag round-trips");
-    assert.equal(list[0]!.request, null, "message-array bodies are never stored");
     assert.deepEqual(
       list[0]!.promptEnvelope,
       { system: "you are helpful", tools: [{ name: "execute" }] },
@@ -550,7 +549,7 @@ for (const [name, make] of backends) {
     const meta = await store.listLlmRequests(s.id, { omitRequest: true });
     assert.equal(meta.length, 4, "every row still listed");
     assert.ok(
-      meta.every((r) => r.request === null && r.promptEnvelope === undefined),
+      meta.every((r) => r.promptEnvelope === undefined),
       "bodies omitted",
     );
     assert.ok(

@@ -10639,7 +10639,7 @@
         );
       }
       function requestBody(q) {
-        return q && q.promptEnvelope != null ? q.promptEnvelope : q ? q.request : null;
+        return q && q.promptEnvelope != null ? q.promptEnvelope : null;
       }
       function contextSections(request, transport) {
         const req = request && typeof request === "object" ? request : {};
