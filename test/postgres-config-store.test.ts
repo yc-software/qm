@@ -103,10 +103,6 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
     right.getSoul(channel),
     "a cross-instance refresh advances current SOUL and history together",
   );
-  right.clearSoul(channel);
-  await right.flushScope(channel);
-  assert.equal(await souls.get(channel), null);
-  assert.equal(right.soulHistory(channel).length, 0);
 });
 
 test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
@@ -114,14 +110,12 @@ test("SOUL snapshot restore preserves the canonical version and history byte-for
   const left = createMemoryConfigStore("default-org", { souls });
   const right = createMemoryConfigStore("default-org", { souls });
   const channel = scopeId("channel", "snapshot");
-  left.setSoul(channel, "one", "alice");
-  left.setSoul(channel, "two", "bob");
-  await left.flushScope(channel);
+  await left.setSoul(channel, "one", "alice");
+  await left.setSoul(channel, "two", "bob");
   const snapshot = await left.captureSoulSnapshot(channel);
 
   await right.refreshScope(channel);
-  right.setSoul(channel, "attempted import", "importer");
-  await right.flushScope(channel);
+  await right.setSoul(channel, "attempted import", "importer");
   assert.equal(await left.restoreSoulSnapshot(channel, snapshot), true);
   await right.refreshScope(channel);
 
@@ -131,15 +125,15 @@ test("SOUL snapshot restore preserves the canonical version and history byte-for
   assert.deepEqual(right.soulHistory(channel), snapshot?.history);
 });
 
-test("setSoulLatest advances the canonical row without trusting a stale instance cache", async () => {
+test("setSoul advances the canonical row without trusting a stale instance cache", async () => {
   const souls = createMemoryMap<PersistedSoul>();
   const left = createMemoryConfigStore("default-org", { souls });
   const right = createMemoryConfigStore("default-org", { souls });
   const channel = scopeId("channel", "latest");
 
-  assert.equal(await left.setSoulLatest(channel, "left", "alice"), 1);
+  assert.equal(await left.setSoul(channel, "left", "alice"), 1);
   assert.equal(right.soulVersion(channel), 0);
-  assert.equal(await right.setSoulLatest(channel, "right", "bob"), 2);
+  assert.equal(await right.setSoul(channel, "right", "bob"), 2);
 
   const durable = await souls.get(channel);
   assert.equal(durable?.version, 2);
@@ -158,7 +152,7 @@ test("the first write after upgrade retains a canonical revision that predates e
   await souls.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
   const store = createMemoryConfigStore("default-org", { souls });
 
-  assert.equal(await store.setSoulLatest(channel, "post-upgrade", "alice"), 9);
+  assert.equal(await store.setSoul(channel, "post-upgrade", "alice"), 9);
   assert.deepEqual(
     (await souls.get(channel))?.history?.map(({ version, content, updatedAt }) => ({ version, content, updatedAt })),
     [
@@ -217,16 +211,13 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
   assert.equal(legacyScans, 1, "legacy history is scanned once at hydration, never per scope refresh or write");
 });
 
-test("embedded history prevents a stale core from re-injecting legacy revisions after restore or clear", async () => {
+test("embedded history prevents a stale core from re-injecting legacy revisions after restore", async () => {
   const souls = createMemoryMap<PersistedSoul>();
   const legacyHistory = createMemoryMap<PersistedSoulRevision>();
   const restored = scopeId("channel", "legacy-restored");
-  const cleared = scopeId("channel", "legacy-cleared");
-  for (const channel of [restored, cleared]) {
-    await souls.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-    await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
-    await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
-  }
+  await souls.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
+  await legacyHistory.put(`${restored}:4`, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
+  await legacyHistory.put(`${restored}:3`, { scopeId: restored, content: "legacy prior", version: 3, updatedAt: 30 });
   const left = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
   const stale = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
   await Promise.all([left.hydrate?.(), stale.hydrate?.()]);
@@ -241,24 +232,12 @@ test("embedded history prevents a stale core from re-injecting legacy revisions 
   assert.equal(await left.restoreSoulSnapshot(restored, restoredSnapshot), true);
   await stale.refreshScope(restored);
   assert.deepEqual((await souls.get(restored))?.history, []);
-  assert.equal(await stale.setSoulLatest(restored, "after restore", "bob"), 2);
+  assert.equal(await stale.setSoul(restored, "after restore", "bob"), 2);
   assert.deepEqual(
     (await souls.get(restored))?.history?.map(({ version, content }) => ({ version, content })),
     [
       { version: 2, content: "after restore" },
       { version: 1, content: "restored canonical" },
-    ],
-  );
-
-  left.clearSoul(cleared);
-  await left.flushScope(cleared);
-  assert.equal(await left.setSoulLatest(cleared, "new canonical", "alice"), 1);
-  assert.equal(await stale.setSoulLatest(cleared, "after clear", "bob"), 2);
-  assert.deepEqual(
-    (await souls.get(cleared))?.history?.map(({ version, content }) => ({ version, content })),
-    [
-      { version: 2, content: "after clear" },
-      { version: 1, content: "new canonical" },
     ],
   );
 });
@@ -310,17 +289,17 @@ test(
 
     const m = maps(f);
     const a = createMemoryConfigStore("default-org", m);
-    const version = a.setSoul(ch, "a channel-specific soul");
-    a.setCommandPolicy(ch, policy);
+    const version = await a.setSoul(ch, "a channel-specific soul");
+    await a.setCommandPolicy(ch, policy);
     await a.setSecurityPosture(ch, "strict");
     await a.setSharingPosture(org, "open");
     await a.setSharingPosture(ch, "open");
     await a.setApprovalGrantModes(ch, { session: false, always: true });
-    a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
-    a.setBaseModel(ch, "claude-opus-4-8");
-    a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
-    a.setBrowseMaxSteps(ch, 120);
-    a.setBrowseModel(ch, "claude-sonnet-4-6");
+    await a.setEgress(ch, { allowedHosts: ["api.example.com"], deniedHosts: ["evil.example"] });
+    await a.setBaseModel(ch, "claude-opus-4-8");
+    await a.setPeopleDirectoryUrl(ch, "https://www.example.com/people");
+    await a.setBrowseMaxSteps(ch, 120);
+    await a.setBrowseModel(ch, "claude-sonnet-4-6");
     await settle(
       async () =>
         (await m.souls.get(ch))?.version === version &&
@@ -368,17 +347,17 @@ test(
 
     let lastVersion = 0;
     for (let i = 1; i <= 8; i++) {
-      lastVersion = a.setSoul(ch, `soul v${i}`);
-      a.setEgress(ch, { allowedHosts: [`host${i}.example`], deniedHosts: [] });
+      lastVersion = await a.setSoul(ch, `soul v${i}`);
+      await a.setEgress(ch, { allowedHosts: [`host${i}.example`], deniedHosts: [] });
     }
-    a.setBaseModel(ch, "claude-opus-4-8");
-    a.setBaseModel(ch, null);
-    a.setPeopleDirectoryUrl(ch, "https://example.com/people");
-    a.setPeopleDirectoryUrl(ch, null);
-    a.setBrowseMaxSteps(ch, 60);
-    a.setBrowseMaxSteps(ch, null);
-    a.setBrowseModel(ch, "claude-sonnet-4-6");
-    a.setBrowseModel(ch, null);
+    await a.setBaseModel(ch, "claude-opus-4-8");
+    await a.setBaseModel(ch, null);
+    await a.setPeopleDirectoryUrl(ch, "https://example.com/people");
+    await a.setPeopleDirectoryUrl(ch, null);
+    await a.setBrowseMaxSteps(ch, 60);
+    await a.setBrowseMaxSteps(ch, null);
+    await a.setBrowseModel(ch, "claude-sonnet-4-6");
+    await a.setBrowseModel(ch, null);
     await settle(
       async () =>
         (await m.souls.get(ch))?.content === "soul v8" &&

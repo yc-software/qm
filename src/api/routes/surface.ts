@@ -18,6 +18,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
+import { SoulUpdateDeniedError } from "../app-types.ts";
 import { parsePinnedSkills } from "../../skills/materialize.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -32,7 +33,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
   isArtifactType,
@@ -1187,10 +1188,10 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
   const config = ctx.deps.config;
-  if (ctx.body.inherit === true) await config.setRuntimeSelectionLatest(target.scope, null);
+  if (ctx.body.inherit === true) await config.setRuntimeSelection(target.scope, null);
   else if (ctx.body.keep === true) {
     const runtime = await config.getRuntimeSelectionDurable(target.scope);
-    if (runtime) await config.acknowledgeRuntimeSelectionLatest(target.scope);
+    if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
     else {
       const legacyModel = await config.getBaseModelOwnDurable(target.scope);
       const fallback = runtimeFallback(ctx);
@@ -1201,7 +1202,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
         modelSupportedByHarness(legacyModel, fallback.harnessId) &&
         (await webuiModelEnabled(ctx, legacyModel))
       ) {
-        await config.setRuntimeSelectionLatest(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
+        await config.setRuntimeSelection(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
       }
     }
   } else {
@@ -1225,7 +1226,7 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
       if (!available.modelsByHarness[harnessId]?.includes(modelId))
         return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
     }
-    await config.setRuntimeSelectionLatest(target.scope, choice);
+    await config.setRuntimeSelection(target.scope, choice);
   }
   audit(ctx.deps, {
     principalId: target.actorId,
@@ -1259,7 +1260,7 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: "expected { on: boolean | null } (null reverts to the org default)",
     });
-  await ctx.deps.config.setChannelHeaderPinLatest(target.scope, ctx.body.on);
+  await ctx.deps.config.setChannelHeaderPin(target.scope, ctx.body.on);
   audit(ctx.deps, {
     principalId: target.actorId,
     action: "channel-header-pin.update",
@@ -1313,9 +1314,9 @@ export async function postSoul(ctx: ApiCtx): Promise<void> {
     );
     return sendJson(res, 200, { ok: true, version });
   } catch (e) {
-    const message = errMessage(e);
-    const denied = message === "not authorized to update SOUL for this scope";
-    return sendJson(res, denied ? 403 : 500, { error: denied ? "soul_update_denied" : "soul_update_failed", message });
+    if (e instanceof SoulUpdateDeniedError)
+      return sendJson(res, 403, { error: "soul_update_denied", message: e.message });
+    return sendJson(res, 500, { error: "soul_update_failed", message: errMessage(e) });
   }
 }
 
@@ -1350,38 +1351,12 @@ async function putPinnedSkills(ctx: ApiCtx): Promise<void> {
 export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...sessionSharingRoutes,
   ...suggestedActivityRoutes,
-  { method: "POST", path: "/v1/session-cap", auth: "source", handle: sessionCapability },
-  { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },
-  { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
-  { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
-  { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
-  { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
-  { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
-  { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },
-  { method: "GET", path: "/v1/sessions/:id/background", auth: "source", handle: getSessionBackground },
-  {
-    method: "GET",
-    path: "/v1/sessions/:id/background/:pid/output",
-    auth: "source",
-    handle: getSessionBackgroundOutput,
-  },
-  { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
-  { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
-  { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
-  { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
-  { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },
-  { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
-  { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
+  { method: "POST", path: "/v1/session-cap", actor: "system", auth: "source", handle: sessionCapability },
   { method: "GET", path: "/v1/conversations", auth: "either", handle: listAgentConversations },
   { method: "GET", path: "/v1/conversations/:id", auth: "either", handle: getAgentConversation },
   { method: "POST", path: "/v1/conversations/:id", auth: "either", handle: patchAgentConversation },
-  { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
-  { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
   { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
-  { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
-  { method: "PATCH", path: "/v1/memory", auth: "source", handle: selfMemory },
-  { method: "DELETE", path: "/v1/memory", auth: "source", handle: selfMemory },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
   {
     match: (m, p) =>
@@ -1396,14 +1371,8 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     auth: "source",
     handle: agentMemory,
   },
-  { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
-  { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
-  { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
-  { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
-  { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
-  { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
-  { method: "POST", path: "/v1/grants", auth: "source", handle: createGrant },
-  { method: "POST", path: "/v1/grants/revoke", auth: "source", handle: revokeGrant },
+  { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
+  { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
   { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
   { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
@@ -1411,7 +1380,45 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
   { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
   { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
-  { method: "POST", path: "/v1/soul", auth: "either", handle: postSoul },
+  { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   { method: "GET", path: "/v1/pinned-skills", auth: "either", handle: getPinnedSkills },
   { method: "PUT", path: "/v1/pinned-skills", auth: "either", handle: putPinnedSkills },
+  ...withActor("body.principalId", [
+    { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
+    { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
+    { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
+    { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
+    { method: "POST", path: "/v1/files/upload", auth: "source", handle: uploadFile },
+    { method: "POST", path: "/v1/sessions/:id", auth: "source", handle: patchSession },
+    { method: "PATCH", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "DELETE", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "POST", path: "/v1/skills", auth: "either", handle: createSkill },
+    { method: "PUT", path: "/v1/skills/:id", auth: "either", handle: updateSkill },
+    { method: "DELETE", path: "/v1/skills/:id", auth: "either", handle: deleteSkill },
+    { method: "POST", path: "/v1/skills/:id/restore", auth: "either", handle: restoreSkill },
+  ]),
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },
+    { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
+    { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },
+    { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
+    { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
+    { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
+    { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
+  ]),
+  ...withActor("query.viewer", [
+    { method: "GET", path: "/v1/sessions/:id/approvals", auth: "source", handle: listSessionApprovals },
+    { method: "GET", path: "/v1/sessions/:id/background", auth: "source", handle: getSessionBackground },
+    {
+      method: "GET",
+      path: "/v1/sessions/:id/background/:pid/output",
+      auth: "source",
+      handle: getSessionBackgroundOutput,
+    },
+    { method: "GET", path: "/v1/sessions/:id/entries/:seq", auth: "source", handle: getSessionEntry },
+    { method: "GET", path: "/v1/sessions/:id", auth: "source", handle: getSession },
+    { method: "GET", path: "/v1/files/:id/content", auth: "either", handle: getFileContent },
+    { method: "GET", path: "/v1/files", auth: "either", handle: listFiles },
+  ]),
 ];

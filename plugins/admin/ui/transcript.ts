@@ -73,7 +73,6 @@ export function prepare(data: Row, requests: Row[]) {
   const units: Row[] = [];
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
-    if (e.type === "soul") continue;
     if (e.type === "tool_call" || e.type === "tool_result") {
       if (e.type === "tool_result" && pairedSeqs.has(e.seq)) continue;
       let paired: Row | undefined;
@@ -539,7 +538,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         ? s.deliveryFileBadges(e.payload?.files || [])
         : nothing;
     return html`<div
-      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "soul" || e.type === "system", filtered: s.entryHidden([e.type], false) })}
+      class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "system", filtered: s.entryHidden([e.type], false) })}
     >
       <div class="who">
         ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span

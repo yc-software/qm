@@ -827,11 +827,10 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
     const threadRef = ctx.chat.state.threadRef;
-    const steering = steeringRunsFor(threadRef, agent);
     const queued = queuedRunsFor(threadRef).filter((q) => !pendingSteers.has(q.runId));
     if (queuedEdit?.threadRef === ctx.chat.state.threadRef && !queued.some((q) => q.runId === queuedEdit?.runId))
       queued.push({ runId: queuedEdit.runId, text: queuedEdit.original });
-    if (!queued.length && !steering.length) return nothing;
+    if (!queued.length) return nothing;
     const steerable = canSteer(agent);
     const steerTip = (): string => {
       if (steerable) return "Steer the running task with this instead of waiting";
@@ -839,16 +838,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     };
     return html`
       <div class="queued-strip" role="list" aria-label="Queued messages">
-        ${steering.map(
-          (q) => html`
-            <div class="queued-chip queued-steering" role="listitem" aria-busy="true">
-              <span class="queued-tag">Steering</span>
-              <span class="queued-text" dir="auto" ${tip(q.text || "Files, no text")}
-                >${q.text || (q.hasAttachments ? "(files)" : "")}</span
-              >
-            </div>
-          `,
-        )}
         ${queued.map((q) =>
           queuedEdit?.runId === q.runId && queuedEdit.threadRef === ctx.chat.state.threadRef
             ? html` <div class="queued-chip queued-editing" role="listitem">
@@ -2064,6 +2053,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     composerForm,
     composerApprovalPanel,
     queuedStrip,
+    waitingSteers: (agent: Agent) => steeringRunsFor(ctx.chat.state.threadRef, agent),
     queuedRunsFor,
     setQueuedRuns,
     resetComposer,

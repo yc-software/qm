@@ -172,8 +172,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
         : builtInModelCatalog();
       const configured = await config.getWebuiModelsDurable(scope);
       const ids = configured ?? catalog.map((model) => model.id);
-      config.setWebuiModels(scope, [...new Set([...ids, spec.id])]);
-      await config.flushScope(scope);
+      await config.setWebuiModels(scope, [...new Set([...ids, spec.id])]);
     };
     if (ctx.deps.advisoryLock) await ctx.deps.advisoryLock.withLock("admin-model-picker", apply);
     else await apply();

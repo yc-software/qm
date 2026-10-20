@@ -22,7 +22,7 @@ export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntr
   );
   return entries.filter((entry) => {
     const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
-    return entry.type !== "soul" && !(payload?.slackReplyReceipt && payload.ts && received.has(payload.ts));
+    return !(payload?.slackReplyReceipt && payload.ts && received.has(payload.ts));
   });
 }
 
@@ -35,11 +35,10 @@ export function createTranscriptSource(sessions: TranscriptStore): TranscriptSou
     opts: GetEntriesOptions | undefined,
     principalId?: string,
   ): Promise<TranscriptRead> => {
-    const entries = transcriptEntries(
+    const entries =
       principalId === undefined
         ? await sessions.getEntries(sessionId, { ...opts, transcript: true })
-        : await sessions.visibleEntries(sessionId, principalId, { ...opts, transcript: true }),
-    );
+        : await sessions.visibleEntries(sessionId, principalId, { ...opts, transcript: true });
     const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && entries.length >= opts.limit);
     const earlier = windowed
       ? await sessions.countEntriesBefore(sessionId, entries[0]?.seq ?? emptyWindowStart(opts), principalId)

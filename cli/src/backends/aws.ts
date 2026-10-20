@@ -56,8 +56,8 @@ import {
   type ServiceName,
 } from "../services.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
+import { canonicalJson } from "../canonical-json.ts";
 import {
-  canonicalJson,
   capture,
   deploymentSecretValue,
   envNum,
@@ -380,7 +380,12 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       : {};
   const env: Record<string, string> = {
     ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-    ...(service === "core" ? {} : { CORE_API_URL: coreUrl }),
+    ...(service === "core"
+      ? {}
+      : {
+          CORE_API_URL:
+            isServiceName(service) && serviceDef(service).tcpIngress ? (config.apiUrl ?? config.publicUrl) : coreUrl,
+        }),
     ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? securityScreenEnv(config) : {}),
@@ -498,7 +503,8 @@ export function renderTaskDefinition(
   const aws = requireAws(config);
   const spec = aws.services[service];
   if (!spec) throw new CliError(`aws.services.${service} is missing`);
-  const internalPort = isServiceName(service) ? serviceDef(service).docker.internalPort : 8080;
+  const def = isServiceName(service) ? serviceDef(service) : undefined;
+  const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
   const managedTaskRole = spec.assumeRoleArns?.length
     ? `${aws.cluster}-${service}-task`
@@ -512,9 +518,9 @@ export function renderTaskDefinition(
       })),
     )
     .sort((a, b) => a.name.localeCompare(b.name));
-  const healthCheck = isServiceName(service)
+  const healthCheck = def
     ? {
-        command: [
+        command: def.tcpIngress?.healthCheck ?? [
           "CMD",
           "node",
           "-e",
@@ -553,7 +559,7 @@ export function renderTaskDefinition(
             containerPort: internalPort,
             hostPort: internalPort,
             protocol: "tcp",
-            appProtocol: "http",
+            ...(def?.tcpIngress ? {} : { appProtocol: "http" }),
           },
         ],
         ...(healthCheck ? { healthCheck } : {}),
@@ -3120,6 +3126,26 @@ export async function awsBackgroundWorkStatus(
   return { status, deploymentId: cohort.deploymentId, taskArns: cohort.taskArns, manifestId: cohort.manifest.id };
 }
 
+export async function awsItemsPromotion(
+  config: QmConfig,
+  configDir: string,
+  options: { writersStopped?: boolean; candidate?: string } = {},
+): Promise<{ deploymentId: string; ready: boolean }> {
+  assertAwsCallerAccount(requireAws(config));
+  const cohort = await awsBackgroundCohort(config, configDir, options.candidate);
+  const transport = awsBackgroundWorkTransport(config, "/v1/items-promotion", 120_000);
+  const response = await transport(
+    options.writersStopped ? "POST" : "GET",
+    options.writersStopped ? JSON.stringify({ deploymentId: cohort.deploymentId, writersStopped: true }) : "",
+  );
+  if (response.status !== 200) throw new CliError(`items promotion failed with HTTP ${response.status}`);
+  const result = JSON.parse(response.body) as { deploymentId?: string; ready?: boolean };
+  if (result.deploymentId !== cohort.deploymentId || typeof result.ready !== "boolean")
+    throw new CliError("items promotion returned an unexpected deployment");
+  if (options.writersStopped && !result.ready) throw new CliError("items promotion has not completed");
+  return { deploymentId: cohort.deploymentId, ready: result.ready };
+}
+
 export interface AwsBackgroundWorkCapacity {
   manifestId: string;
   deploymentId: string;
@@ -4053,7 +4079,11 @@ export function assertAwsPublicRouting(
     }
   }
   for (const name of deployedAwsServices(aws)) {
-    if (!ingress.includes(name) && (routingServices.get(name)?.loadBalancers ?? []).length) {
+    if (
+      !ingress.includes(name) &&
+      !(isServiceName(name) && serviceDef(name).tcpIngress) &&
+      (routingServices.get(name)?.loadBalancers ?? []).length
+    ) {
       throw new Error(`private ECS service ${name} is attached to a load balancer`);
     }
   }

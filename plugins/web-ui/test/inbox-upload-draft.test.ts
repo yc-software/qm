@@ -65,7 +65,7 @@ test("a submission freezes the edited draft before upload and never retries a co
             at: 101,
           };
           return conflict
-            ? Response.json({ message: "the draft changed" }, { status: 409 })
+            ? Response.json({ error: "draft_changed", message: "the draft changed" }, { status: 409 })
             : Response.json({ item: ledger });
         }
         if (path.endsWith("/followup")) {

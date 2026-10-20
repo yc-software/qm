@@ -1056,6 +1056,7 @@ test("runtime handoff continues once with saved results under the original run a
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1127,6 +1128,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
             type: "tool_result",
             payload: {
               tool: "runtime",
+              callId: `runtime-${input.runId}`,
               runId: input.runId,
               actorId: actor.id,
               runtimeHandoff: { choice, lifetime: "task" },
@@ -1167,7 +1169,13 @@ test("only a cron automation receives task-runtime authority and each fire start
           await input.emit({
             type: "tool_result",
             scopeLabel: input.scopeLabel,
-            payload: { tool: "runtime", runId: input.runId, actorId: actor.id, runtimeHandoff: result.handoff },
+            payload: {
+              tool: "runtime",
+              callId: `runtime-${input.runId}`,
+              runId: input.runId,
+              actorId: actor.id,
+              runtimeHandoff: result.handoff,
+            },
           });
           return { reply: "", runtimeHandoff: result.handoff };
         }
@@ -1237,8 +1245,8 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     ),
   );
   const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelectionLatest(PERSONAL, {
+  await built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setRuntimeSelection(PERSONAL, {
     harnessId: "pi",
     modelId: "claude-sonnet-5",
     effortLevel: "high",
@@ -1283,9 +1291,8 @@ test("human child continuations respect non-fast category defaults", async () =>
     ),
   );
   const built = buildOrchestrator(router);
-  built.config.setApprovedHarnesses(["pi"]);
-  built.config.setInteractiveFastMode(true);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setInteractiveFastMode(true);
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
   const child = await built.sessions.getOrCreateByThread("subagent:review", "dm", PERSONAL);
@@ -1345,8 +1352,7 @@ test("verified swarm workers resolve their own defaults instead of copying the r
       ),
     );
     const built = buildOrchestrator(router, undefined, undefined, f);
-    built.config.setApprovedHarnesses(["pi"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setApprovedHarnesses(["pi"]);
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
     assert.equal(result.status, "ok");
@@ -1407,8 +1413,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         ),
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
-      built.config.setApprovedHarnesses(["pi"]);
-      await built.config.flushScope("org:default-org");
+      await built.config.setApprovedHarnesses(["pi"]);
       if (configured) await built.config.setPurposeRuntime("subagent", category);
       assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
     }

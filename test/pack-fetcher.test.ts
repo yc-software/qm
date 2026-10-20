@@ -149,7 +149,23 @@ test("resolvePackAuth: an explicit host-bound slug honors the configured injecti
   };
   assert.deepEqual(
     await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
-    { header: "Authorization", value: "Bearer svc:dep", secret: "svc:dep" },
+    { headers: { Authorization: "Bearer svc:dep" }, secret: "svc:dep" },
+  );
+});
+
+test("resolvePackAuth: a credential's fixed headers ride along with its auth header", async () => {
+  const sources = {
+    serviceCredential: async (s: string) => ({
+      secret: "svc:" + s,
+      host: "github.com",
+      enabled: true,
+      injection: { header: "X-Token", scheme: "", headers: { "x-api-version": "2" } },
+    }),
+    connectorToken: async () => "connector",
+  };
+  assert.deepEqual(
+    await resolvePackAuth(sources, { url: "https://github.com/o/r", authCredentialSlug: "dep", createdBy: "u1" }),
+    { headers: { "x-api-version": "2", "X-Token": "svc:dep" }, secret: "svc:dep" },
   );
 });
 
@@ -209,8 +225,7 @@ test("resolvePackAuth: a github repo with no slug reuses the registrant's connec
     },
   };
   assert.deepEqual(await resolvePackAuth(sources, { url: "https://github.com/o/r.git", createdBy: "alice" }), {
-    header: "Authorization",
-    value: "Bearer ghtok",
+    headers: { Authorization: "Bearer ghtok" },
     secret: "ghtok",
   });
   assert.deepEqual(calls, [["api.github.com", "alice"]], "looks up the registrant's api.github.com connector token");

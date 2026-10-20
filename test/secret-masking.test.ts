@@ -6,6 +6,7 @@ import {
   MaskedExecutionError,
   executionSecretEnv,
 } from "../src/security/secret-masking.ts";
+import { forceThroughProxyEnv } from "../src/sandbox/sandbox-env.ts";
 
 const SECRET = "ghp_secretvalue12345";
 
@@ -110,4 +111,13 @@ test("MaskedExecutionError keeps the original error class, code and masked stack
   assert.equal(masked.code, "ECONNRESET");
   assert.match(masked.stack ?? "", /^TypeError: connect failed for <redacted:credential>\n\s+at /);
   assert.doesNotMatch(masked.stack ?? "", /s3cr3t-value/);
+});
+
+test("forced-egress env masks the proxy token without rewriting ordinary output", () => {
+  const token = "egress-token-value-123";
+  const env = forceThroughProxyEnv("https://proxy.example.com", token, {});
+  const mask = createExactSecretValueMasker(Object.values(executionSecretEnv(env)));
+  const output = "0f1e2d3c-4b5a-1111-basic\n[exit 0]";
+  assert.equal(mask(output), output);
+  assert.equal(mask(env.HTTPS_PROXY!), "<redacted:credential>");
 });

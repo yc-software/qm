@@ -6,7 +6,7 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { scopeStorageKey } from "../util/scope-storage-key.ts";
+import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { nonInteractiveShellPrefix } from "./sandbox-env.ts";

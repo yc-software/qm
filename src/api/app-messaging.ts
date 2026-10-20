@@ -74,14 +74,12 @@ export function createMessagingMethods(
   | "latestCronFireForThread"
   | "setCronDestination"
   | "setCronRuntime"
-  | "setCronRecipientConsent"
   | "createWebhook"
   | "getWebhook"
   | "listWebhooks"
   | "listWebhookEvents"
   | "setWebhookEnabled"
   | "updateWebhook"
-  | "setWebhookRecipientConsent"
   | "pendingDeliveries"
   | "enqueueDelivery"
   | "ingestSurfaceEvents"
@@ -275,9 +273,6 @@ export function createMessagingMethods(
       });
       return deps.crons.get(id);
     },
-    setCronRecipientConsent(id, recipientConsent) {
-      return deps.crons.setRecipientConsent(id, recipientConsent);
-    },
     async createWebhook(input) {
       const webhook = await deps.webhooks.create(input);
       deps.auditLog.record({
@@ -310,9 +305,6 @@ export function createMessagingMethods(
     },
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
-    },
-    setWebhookRecipientConsent(id, recipientConsent) {
-      return deps.webhooks.setRecipientConsent(id, recipientConsent);
     },
     pendingDeliveries(type, claimMs) {
       return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);

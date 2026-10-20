@@ -76,12 +76,17 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   until the description's report covers every lens for the PR head: relevant lenses with
   an Accept verdict, and the rest as `Not relevant` with the triage model as reviewer and
   its one-line reason as the assessment.
-- **Disclose config-matrix and database-schema changes in the PR description.** Name
-  added, removed, or changed settings, flags, modes, and providers, including changes to
-  defaults, precedence, and supported combinations. Name changed tables, columns,
-  indexes, and constraints, and describe migrations or backfills and any rollout or
-  compatibility implications. Explain why the changes are needed. If either area is
-  unchanged, say so explicitly; keep the disclosure proportional to the change.
+- **Disclose configuration changes in the PR description.** Name added, removed,
+  or changed settings, flags, modes, and providers, including defaults, precedence,
+  and supported combinations. Explain why; keep this proportional to the change.
+- **Keep humans in the loop on schema and data types.** Humans must see and review
+  changes to tables and persisted/API payload shapes. Surface them in chat and the
+  PR description as you make them: complete affected old and new shapes, including
+  keys, indexes, constraints, enum variants, and JSON fields, with representative
+  before/after rows. Label invented examples. Account for every field kept, moved,
+  transformed, or dropped; explain migration, backfill, rollout, and compatibility
+  effects. Distinguish approved design, implemented code, and live schema. A migration
+  diff alone is not enough. If configuration or schema is unchanged, say so explicitly.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several

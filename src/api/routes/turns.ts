@@ -307,17 +307,23 @@ async function postTurnMetrics(ctx: ApiCtx): Promise<void> {
 }
 
 export const turnRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/turns", auth: "source", handle: postTurn },
-  { method: "POST", path: "/v1/turns/:runId/metrics", auth: "source", handle: postTurnMetrics },
-  { method: "GET", path: "/v1/approvals/pending", auth: "source", handle: getPendingApproval },
-  { method: "GET", path: "/v1/approvals/:id", auth: "source", handle: getApproval },
-  { method: "POST", path: "/v1/runs/:id/delivery-state", auth: "source", handle: postRunDeliveryState },
+  { method: "POST", path: "/v1/turns", actor: "system", auth: "source", handle: postTurn },
+  { method: "POST", path: "/v1/turns/:runId/metrics", actor: "system", auth: "source", handle: postTurnMetrics },
+  { method: "GET", path: "/v1/approvals/pending", actor: "person", auth: "source", handle: getPendingApproval },
+  { method: "GET", path: "/v1/approvals/:id", actor: "person", auth: "source", handle: getApproval },
+  {
+    method: "POST",
+    path: "/v1/runs/:id/delivery-state",
+    actor: "system",
+    auth: "source",
+    handle: postRunDeliveryState,
+  },
   { method: "POST", path: "/v1/runs/:id/signal", auth: "source", maxBodyBytes: 6_000_000, handle: postRunSignal },
   { method: "PATCH", path: "/v1/runs/:id/input", auth: "source", handle: patchQueuedRun },
   { method: "POST", path: "/v1/runs/:id/withdraw", auth: "source", handle: postRunWithdraw },
-  { method: "GET", path: "/v1/runs/:id", auth: "source", handle: getRun },
-  { method: "GET", path: "/v1/runs", auth: "source", handle: getActiveRunForThread },
+  { method: "GET", path: "/v1/runs/:id", actor: "person", auth: "source", handle: getRun },
+  { method: "GET", path: "/v1/runs", actor: "person", auth: "source", handle: getActiveRunForThread },
   { method: "GET", path: "/v1/deliveries", auth: "source", handle: listDeliveries },
-  { method: "POST", path: "/v1/deliveries/:id/ack", auth: "source", handle: ackDelivery },
-  { method: "POST", path: "/v1/deliveries/ack-by-key", auth: "source", handle: ackDeliveryByKey },
+  { method: "POST", path: "/v1/deliveries/:id/ack", actor: "system", auth: "source", handle: ackDelivery },
+  { method: "POST", path: "/v1/deliveries/ack-by-key", actor: "system", auth: "source", handle: ackDeliveryByKey },
 ];

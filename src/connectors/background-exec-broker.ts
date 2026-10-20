@@ -2,8 +2,8 @@ import type { ProcessSandbox, ProcessState, SandboxHandle } from "../sandbox/san
 import type { ProcessRegistry, ProcessStatus } from "../processes/process-registry.ts";
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
-import { pollProcess, processIsGone } from "../sandbox/process-poll.ts";
-import { redactCommand } from "../sandbox/exec-process-session.ts";
+import { pollProcess } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { createExactSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
@@ -149,7 +149,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
             processId = null;
           }
         } catch (error) {
-          if (!processIsGone(error)) throw error;
+          if (!(error instanceof ProcessSessionGoneError)) throw error;
           await deps.registry.delete(existingProcessId);
           processId = null;
         }

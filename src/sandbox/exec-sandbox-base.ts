@@ -187,10 +187,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
+      const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       if (Object.keys(env).length) handle.env = env;
       const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
       const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;

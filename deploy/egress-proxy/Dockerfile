@@ -8,11 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends iptables && rm 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-COPY .husky/install.mjs .husky/install.mjs
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY src ./src
-COPY cli/src/credential-paths.ts cli/src/tool-descriptor.ts ./cli/src/
+COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY plugins/chassis ./plugins/chassis
 COPY tsconfig.json ./
 RUN node --input-type=module -e "await import('./src/egress-authz-main.ts')"

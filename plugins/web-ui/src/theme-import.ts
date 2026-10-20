@@ -71,19 +71,33 @@ function themeName(raw: string): string {
   return trimmed || "Imported theme";
 }
 
-const PLIST_COLOR_ENTRY = /<key>([^<]+)<\/key>\s*<dict>([\s\S]*?)<\/dict>/g;
-const PLIST_COMPONENT = /<key>(Red|Green|Blue) Component<\/key>\s*<(?:real|integer)>([-+\d.eE]+)<\/(?:real|integer)>/g;
+function plistDict(dict: Element | null | undefined): Map<string, Element> {
+  const entries = new Map<string, Element>();
+  const children = [...(dict?.children ?? [])];
+  for (let i = 0; i + 1 < children.length; i += 2) {
+    if (children[i]!.tagName === "key") entries.set(children[i]!.textContent!.trim(), children[i + 1]!);
+  }
+  return entries;
+}
 
 function parseItermColors(name: string, xml: string): Palette {
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const error = doc.querySelector("parsererror");
+  if (error) {
+    const detail = (error.querySelector("div") ?? error).textContent!.trim().split("\n")[0];
+    throw new Error(`Couldn't read that file as XML: ${detail}`);
+  }
+  const root = doc.querySelector("plist > dict");
   const colors = new Map<string, Rgb>();
-  for (const entry of xml.matchAll(PLIST_COLOR_ENTRY)) {
-    const parts: Partial<Record<"Red" | "Green" | "Blue", number>> = {};
-    for (const component of entry[2].matchAll(PLIST_COMPONENT)) {
-      parts[component[1] as "Red" | "Green" | "Blue"] = Number(component[2]);
-    }
-    const { Red, Green, Blue } = parts;
-    if (![Red, Green, Blue].every((v) => v !== undefined && Number.isFinite(v))) continue;
-    colors.set(entry[1].trim(), { r: unitToByte(Red), g: unitToByte(Green), b: unitToByte(Blue) });
+  for (const [key, value] of plistDict(root)) {
+    if (value.tagName !== "dict") continue;
+    const parts = plistDict(value);
+    const [r, g, b] = ["Red", "Green", "Blue"].map((c) => {
+      const node = parts.get(`${c} Component`);
+      return node?.tagName === "real" || node?.tagName === "integer" ? Number(node.textContent) : NaN;
+    });
+    if (![r, g, b].every(Number.isFinite)) continue;
+    colors.set(key, { r: unitToByte(r!), g: unitToByte(g!), b: unitToByte(b!) });
   }
   const lookup = (key: string): Rgb | undefined =>
     colors.get(key) ?? colors.get(`${key} (Dark)`) ?? colors.get(`${key} (Light)`);
@@ -105,8 +119,7 @@ function parseItermColors(name: string, xml: string): Palette {
   };
 }
 
-function unitToByte(value: number | undefined): number {
-  if (value === undefined) return 0;
+function unitToByte(value: number): number {
   return Math.round(Math.min(1, Math.max(0, value)) * 255);
 }
 

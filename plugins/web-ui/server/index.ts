@@ -1375,6 +1375,16 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "POST",
+    path: "/api/composio/disconnect",
+    handle: async (c) => {
+      const body = await readJson<{ accountId?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/disconnect", JSON.stringify({ accountId: body.accountId }));
+    },
+  },
+  {
     match: (_method, pathname) => pathname === "/me",
     handle: async (c) => {
       const { req, res, user } = c;
@@ -3016,7 +3026,7 @@ const apiRoutes: readonly WebRoute[] = [
           ) {
             return json(res, 400, {
               error: "unsupported_verification",
-              message: "verification requires a scheme (HMAC-SHA256, GitHub, Slack, or Stripe)",
+              message: "verification requires a scheme",
             });
           }
           verification = {
@@ -3060,12 +3070,6 @@ const apiRoutes: readonly WebRoute[] = [
           error: "action_required",
           message: "an action (the agent's instructions) is required",
         });
-      if (!["hmac-sha256", "github", "slack", "stripe"].includes(verification.scheme)) {
-        return json(res, 400, {
-          error: "unsupported_verification",
-          message: "choose HMAC-SHA256, GitHub, Slack, or Stripe signature verification",
-        });
-      }
       if (!verification.secret) {
         verification = { ...verification, secret: randomBytes(32).toString("hex") };
       }

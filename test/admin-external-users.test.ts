@@ -108,7 +108,7 @@ test("broker admission preserves configured email members without external invit
   }
   await s.built.identity.deactivate("ops@allowed.example");
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
-  s.built.config.setInternalMemberOverrides(["ops@allowed.example"]);
+  await s.built.config.setInternalMemberOverrides(["ops@allowed.example"]);
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
   await s.built.identity.putExternalMember({
     email: "person@corp.example",
@@ -119,7 +119,7 @@ test("broker admission preserves configured email members without external invit
     updatedAt: Date.now(),
   });
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
-  s.built.config.setInternalMemberOverrides(["person@corp.example"]);
+  await s.built.config.setInternalMemberOverrides(["person@corp.example"]);
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
 });
 

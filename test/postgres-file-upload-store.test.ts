@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createPostgresFileUploadStore, MAX_ACTIVE_UPLOADS } from "../src/files/file-upload-store.ts";
-import type { FileUpload } from "../src/files/file-upload-store.ts";
+import {
+  createPostgresFileUploadStore,
+  FileUploadError,
+  MAX_ACTIVE_UPLOADS,
+  type FileUpload,
+} from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const url = process.env.DATABASE_URL;
@@ -30,6 +34,12 @@ test(
     const uploads = Array.from({ length: MAX_ACTIVE_UPLOADS + 3 }, row);
     const results = await Promise.allSettled(uploads.map((r, i) => (i % 2 ? first : second).insert(r)));
     assert.equal(results.filter((r) => r.status === "fulfilled").length, MAX_ACTIVE_UPLOADS);
+    for (const r of results) {
+      if (r.status === "fulfilled") continue;
+      assert.ok(r.reason instanceof FileUploadError);
+      assert.equal(r.reason.status, 429);
+      assert.equal(r.reason.code, "upload_quota");
+    }
     const accepted = uploads[results.findIndex((r) => r.status === "fulfilled")]!;
     assert.deepEqual(await second.get(accepted.id), accepted);
     const claims = await Promise.all([

@@ -31,7 +31,6 @@ const MACHINE_START_TIMEOUT_MS = 90_000;
 const APP_READY_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 1_000;
 const API_TIMEOUT_MS = 30_000;
-const APP_ALREADY_TAKEN = /already\s+(exists|been\s+taken)|name\s+is\s+taken/i;
 
 interface FlyApp {
   name: string;
@@ -208,10 +207,9 @@ function createFlyMachinesApi(opts: { token: string; fetchImpl?: typeof fetch })
       }
       const r = await request("POST", "/apps", { app_name: appName, org_slug: orgSlug, network: appName });
       if (r.ok) return;
-      if (r.status !== 409 && r.status !== 422 && !APP_ALREADY_TAKEN.test(r.text)) {
-        throw failure(`create app ${appName}`, r);
-      }
-      const found = await getApp(appName);
+      const found = await getApp(appName).catch((e: unknown) => {
+        throw new Error(failure(`create app ${appName}`, r).message, { cause: e });
+      });
       if (!found) throw failure(`create app ${appName}`, r);
       assertOwned(appName, orgSlug, found);
     },
@@ -410,12 +408,6 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
   async function bundleBase64(version: DeploymentVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
-    const sourceBytes = tree.reduce((total, file) => total + file.data.byteLength, 0);
-    if (sourceBytes > MAX_BUNDLE_SOURCE_BYTES) {
-      throw new Error(
-        `the app source is too large for the Fly deploy provider: ${sourceBytes} bytes, maximum ${MAX_BUNDLE_SOURCE_BYTES} bytes`,
-      );
-    }
     const encoded = gzipSync(await makeTar(tree)).toString("base64");
     if (encoded.length > MAX_BUNDLE_BASE64_BYTES) {
       throw new Error(
@@ -509,7 +501,11 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   }
 
   return {
-    profile: { managedScaleToZero: !!opts.sharedAppName, ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}) },
+    profile: {
+      managedScaleToZero: !!opts.sharedAppName,
+      maxAppBytes: MAX_BUNDLE_SOURCE_BYTES,
+      ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}),
+    },
 
     async resolveEndpoint(d, version) {
       if (!checked.has(d.id)) {

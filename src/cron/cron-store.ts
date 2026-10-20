@@ -1,4 +1,4 @@
-import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination, RecipientConsent } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   createMemoryCronFireStore,
@@ -11,7 +11,6 @@ import {
   buildTriggerBase,
   contentPart,
   createDeduped,
-  setTriggerRecipientConsent,
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
@@ -59,7 +58,6 @@ export interface CronStore {
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   setDestination(id: string, destination: Destination | undefined): Promise<void>;
-  setRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   beginFire(id: string, entry: CronFireLogEntry, opts?: { exclusive?: boolean }): Promise<BeginFireResult>;
   sweepStrandedFires(now: number): Promise<number>;
   pruneFires(now: number): Promise<number>;
@@ -166,9 +164,6 @@ export function createCronStore(
     },
     async setDestination(id, destination) {
       await backing.merge(id, { destination });
-    },
-    setRecipientConsent(id, recipientConsent) {
-      return setTriggerRecipientConsent(backing, id, recipientConsent);
     },
     async beginFire(id, entry, opts) {
       if ((await backing.get(id)) === null) return { begun: false };

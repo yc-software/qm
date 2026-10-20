@@ -26,6 +26,15 @@ Check `connections` before work that depends on an app. If the app is in the cat
 - For other apps in Slack conversations, mint a link with `authorize` (step 3 below) and say you'll pick the task back up when they reply.
 - If the app isn't in the catalog, say so in one sentence and don't show the picker. Look for the provider's official API or MCP server yourself. If it uses API keys, send a secure keychain drop link instead of asking for the key in chat.
 
+## Reconnect or disconnect an app
+
+Each account in `connections` lists `missingScopes`: permissions the app's configuration now requests that this connection never got. Providers like X can't upgrade a token in place, so only a fresh consent fixes it.
+
+- When a tool fails with 403 or an insufficient-scope error and that account's `missingScopes` is non-empty, say so in one sentence and offer to reconnect instead of retrying.
+- In web chat, show `::connect-apps{toolkit="twitter"}`. For a connected app it offers Reconnect and Disconnect, and removes the replaced account itself after a verified reconnect.
+- Elsewhere, `authorize` a new link (step 3 below). Once the new account ID is listed in `connections`, remove the old one with `apps("disconnect", {accountId})`, never before.
+- When asked to remove or reset a connection, call `apps("disconnect", {accountId})` on a turn the user started. It only removes their own connections and can't be undone.
+
 ## Backend API
 
 Use the authenticated QM API from the computer through `execute` with an explicit `sandbox_id`. The Composio project key stays in QM's backend. Do not request it from the keychain, install the Composio SDK, use old SDK scripts, or call Composio directly. Existing execute approval and command policies still apply.

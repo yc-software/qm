@@ -126,6 +126,7 @@ import {
 } from "./core-bridge";
 import {
   buildTimeline,
+  thinkingStepKey,
   messageWorkTimeline,
   workTimelineSegments,
   streamedAnswer,
@@ -389,6 +390,9 @@ export function createChatSurface(
     </div>`;
   }
   let transcriptRefreshGeneration = 0;
+  // Bumped whenever approval state is replaced or a decision starts, so a late
+  // approvals result can tell it has been superseded.
+  let approvalsEpoch = 0;
   const forkOriginController = createForkOriginController({
     state: chatState,
     load: async () => {
@@ -433,6 +437,7 @@ export function createChatSurface(
   let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let liveWorkExpanded = false;
+  const openThinking = new Set<string>();
 
   function notePendingSessionOnSend(): void {
     if (!chatState.threadRef || chatState.sessionId !== null) return;
@@ -585,6 +590,7 @@ export function createChatSurface(
     clearLiveWork();
     resetBackgroundPanel();
     chatState.resolvingApprovals.clear();
+    openThinking.clear();
     const onWork = observeLiveWork(agent);
     const onSendIssues = (issues: string[], retryable: Attachment[]): void => {
       if (agent !== chatState.agent || !issues.length) return;
@@ -808,6 +814,7 @@ export function createChatSurface(
     if (agent !== chatState.agent || !chatState.threadRef || agent.state.isStreaming) return;
     if (chatState.resolvingApprovals.size > 0) return;
     chatState.resolvingApprovals.add(decision.requestId);
+    approvalsEpoch++;
     let resolving = true;
     const releaseSubmission = (): void => {
       if (!resolving) return;
@@ -872,16 +879,67 @@ export function createChatSurface(
     return activePendingApprovals().some(approvalBlocksComposer);
   }
 
-  async function syncPendingApprovals(agent: Agent, messages = agent.state.messages): Promise<void> {
+  async function syncPendingApprovals(
+    agent: Agent,
+    messages?: AgentMessage[],
+    pending?: Promise<{ approvals: PendingApproval[] } | null>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<boolean> {
     const id = chatState.sessionId;
-    if (!id || agent !== chatState.agent) return;
-    const r = await fetchSessionApprovals(id);
-    if (!r || id !== chatState.sessionId || agent !== chatState.agent) return;
-    for (const message of messages) delete (message as AssistantWork).work?.pendingApprovals;
-    attachPendingApprovals(messages, r.approvals ?? [], transcriptModel());
+    if (!id || agent !== chatState.agent) return false;
+    const r = await (pending ?? fetchSessionApprovals(id));
+    if (!r || id !== chatState.sessionId || agent !== chatState.agent || !isCurrent()) return false;
+    const target = messages ?? agent.state.messages;
+    for (const message of target) delete (message as AssistantWork).work?.pendingApprovals;
+    attachPendingApprovals(target, r.approvals ?? [], transcriptModel());
+    if (target === agent.state.messages) approvalsEpoch++;
+    return true;
   }
 
-  async function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
+  // A chat's first draw doesn't wait for its approvals. They attach when the
+  // request settles, unless a fresher approvals sync, a decision, a run, or a
+  // pending send got there first (each of those re-syncs approvals itself).
+  function attachApprovalsWhenLoaded(
+    sessionId: string,
+    pending: Promise<{ approvals: PendingApproval[] } | null>,
+  ): void {
+    const agent = chatState.agent;
+    if (!agent || chatState.sessionId !== sessionId) return;
+    const epoch = approvalsEpoch;
+    const isCurrent = (): boolean =>
+      epoch === approvalsEpoch &&
+      !agent.state.isStreaming &&
+      chatState.pendingSend === null &&
+      chatState.resolvingApprovals.size === 0;
+    // Wait out any refresh in flight: one that succeeds re-syncs approvals itself (and
+    // moves the epoch), and attaching mid-refresh would make it discard its transcript.
+    const nonEmpty = pending.then(async (r) => {
+      await transcriptRefreshesSettled();
+      return r?.approvals.length ? r : null;
+    });
+    void syncPendingApprovals(agent, undefined, nonEmpty, isCurrent).then((attached) => {
+      if (attached) drawActiveChat(agent);
+    });
+  }
+
+  let transcriptRefresh: Promise<void> = Promise.resolve();
+
+  function refreshTranscriptFromEntries(agent: Agent): Promise<void> {
+    const refresh = replaceTranscriptFromEntries(agent);
+    transcriptRefresh = refresh;
+    return refresh;
+  }
+
+  // Resolves once no transcript refresh is in flight, including ones that start while waiting.
+  async function transcriptRefreshesSettled(): Promise<void> {
+    let current: Promise<void>;
+    do {
+      current = transcriptRefresh;
+      await current.catch(() => undefined);
+    } while (current !== transcriptRefresh);
+  }
+
+  async function replaceTranscriptFromEntries(agent: Agent): Promise<void> {
     const sessionId = chatState.sessionId;
     if (!sessionId || agent !== chatState.agent || agent.state.isStreaming) return drawActiveChat(agent);
     const generation = ++transcriptRefreshGeneration;
@@ -928,6 +986,7 @@ export function createChatSurface(
       if (!isCurrent()) return;
       if (refreshedInherited) chatState.inheritedMessages = entriesToMessages(refreshedInherited, transcriptModel());
       agent.state.messages = messages;
+      approvalsEpoch++;
       const rawEarlier = page.earlierEntries ?? 0;
       chatState.earlierCount = currentEarlierCount(chatState.forkSession ?? {}, rawEarlier);
       chatState.transcriptAnchorSeq = rawEarlier > 0 ? (page.entries?.[0]?.seq ?? null) : null;
@@ -1607,7 +1666,7 @@ export function createChatSurface(
       content = assistantSidebar({
         context: ctx.inbox.context(),
         messages: html`${pinnedStrip()} ${inheritedHeader()} ${chatState.earlierCount > 0 ? earlierNotice() : nothing}
-        ${messageContent}
+        ${messageContent} ${waitingSteerRows(agent)}
         ${showStateError(messages, agent.state.errorMessage) ? html`<div class="composer-error inline">${agent.state.errorMessage}</div>` : nothing}`,
         status: liveWorkStatus(agent),
         busy: agent.state.isStreaming,
@@ -1650,7 +1709,7 @@ export function createChatSurface(
             ${pinnedStrip()}
             <div class="message-stack ${emptyChat ? "empty-stack" : ""}">
               ${showWelcome ? welcomeGreeting(!messages.length) : nothing} ${inheritedHeader()}
-              ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent}
+              ${chatState.earlierCount > 0 ? earlierNotice() : nothing} ${messageContent} ${waitingSteerRows(agent)}
               ${glanceTier ? nothing : liveWorkStatus(agent)}
               ${emptyChat && !isNewUser && !editingApp && !showWelcome ? html`<h1 class="chat-cta">${chatCta()}</h1>` : nothing}
               ${ctx.pane ? suggestions : nothing}
@@ -1960,7 +2019,7 @@ export function createChatSurface(
       const text = assistantDisplayText(messageText(msg), msg.stopReason).trim();
       const hasText = Boolean(text);
       const showWork =
-        shouldShowApprovalWork(msg, work, text) &&
+        (msg as AssistantWork & { approvalDecision?: string }).approvalDecision !== "denied" &&
         shouldShowWork(work, isStreaming || msg.stopReason === "error" || msg.stopReason === "aborted" ? "" : text);
       const steeringOnly =
         !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
@@ -2294,17 +2353,6 @@ export function createChatSurface(
 
   function shouldShowWork(work: WorkBlock | null | undefined, finalText: string): work is WorkBlock {
     return Boolean(work && (messageWorkTimeline(work, finalText).length || work.pendingApprovals?.length));
-  }
-
-  function shouldShowApprovalWork(
-    message: AssistantMessage,
-    work: WorkBlock | null | undefined,
-    text: string,
-  ): boolean {
-    if ((message as AssistantWork & { approvalDecision?: "denied" }).approvalDecision === "denied") return false;
-    if (text === "Denied." && work?.activity.some((a) => a.type === "tool_call" || a.type === "approval_request"))
-      return false;
-    return true;
   }
 
   let readonlyRedraw: (() => void) | null = null;
@@ -2909,6 +2957,8 @@ export function createChatSurface(
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
     if (item.kind === "approval") return `approval:${item.approval.requestId}`;
+    const step = item.kind === "thinking" ? thinkingStepKey(item.activity.payload) : null;
+    if (step) return `thinking:${step}`;
     return `${item.kind}:${item.activity.seq}`;
   }
 
@@ -2962,6 +3012,7 @@ export function createChatSurface(
                   [
                     work,
                     work.activity,
+                    work.reasoning,
                     work.status,
                     work.stale,
                     work.pendingApprovals,
@@ -3045,6 +3096,24 @@ export function createChatSurface(
     </div>`;
   }
 
+  function waitingSteerRows(agent: Agent): TemplateResult[] {
+    return ctx.composer.waitingSteers(agent).map(
+      (q) =>
+        html`<div class="inline-steer waiting-steer" aria-busy="true">
+          ${chatMessage(
+            {
+              role: "user",
+              content: q.text || (q.hasAttachments ? "(files)" : ""),
+              steered: true,
+            } as unknown as AgentMessage,
+            -1,
+            false,
+            true,
+          )}
+        </div>`,
+    );
+  }
+
   function renderTimelineItem(item: TimelineItem, work: WorkBlock): TemplateResult {
     const status = work.status;
     const stale = work.stale === true;
@@ -3056,7 +3125,15 @@ export function createChatSurface(
     }
     if (item.kind === "thinking") {
       const thought = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "");
-      return html`<details class="thinking-row">
+      const key = timelineKey(item);
+      return html`<details
+        class="thinking-row"
+        ?open=${openThinking.has(key)}
+        @toggle=${(event: Event) => {
+          if ((event.currentTarget as HTMLDetailsElement).open) openThinking.add(key);
+          else openThinking.delete(key);
+        }}
+      >
         <summary class="thinking-summary">
           <span class="tool-icon">${icon(Brain, 15)}</span><span class="thinking-title">${thought.title}</span>
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
@@ -3540,6 +3617,7 @@ export function createChatSurface(
     resetChatState,
     mountContinuable,
     mountReadOnly,
+    attachApprovalsWhenLoaded,
     mountLoadingPane,
     mountLoadError,
     scrollToBottom,

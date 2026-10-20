@@ -403,6 +403,20 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
+    name: "CAPABILITY_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "Signing key for scoped agent capabilities and egress grants; must differ from every other key.",
+    generate: MINT_LOCALLY,
+  },
+  {
+    name: "CORE_SIGNING_SECRET",
+    service: "egress-proxy",
+    required: true,
+    description: "HMAC key shared by core and surface plugins.",
+    generate: MINT_LOCALLY,
+  },
+  {
     name: "AUTH_SIGNING_JWK",
     service: "auth",
     required: true,

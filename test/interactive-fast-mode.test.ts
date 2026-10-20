@@ -12,9 +12,8 @@ test("interactive fast mode defaults off and persists across instances", async (
   assert.equal(first.getInteractiveFastMode(), false);
   assert.equal(await first.getInteractiveFastModeDurable(), false);
 
-  first.setInteractiveFastMode(true);
+  await first.setInteractiveFastMode(true);
   assert.equal(first.getInteractiveFastMode(), true);
-  await first.flushScope(scopeId("org", "org"));
 
   const second = createMemoryConfigStore("org", { interactiveFastMode });
   await second.hydrate!();

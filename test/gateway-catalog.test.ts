@@ -234,15 +234,15 @@ test("gateway namespace cannot be registered by custom providers even before dis
   );
 });
 
-test("removed gateway selections never fall back to a different org or direct model", () => {
+test("removed gateway selections never fall back to a different org or direct model", async () => {
   const store = createMemoryConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-5" };
-  store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
-  store.setRuntimeSelection(org, fallback);
-  store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, fallback);
+  await store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
 });
 

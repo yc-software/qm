@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
-import { canonicalJson } from "../../util/objects.ts";
+import { isAccountType } from "../../connectors/oauth.ts";
+import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
-import { type ApiCtx, type Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   canAdministerLoop,
@@ -299,7 +300,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   const expectedAt = typeof args.expectedProposalAt === "number" ? args.expectedProposalAt : undefined;
   const draftChanged = (): void =>
     sendJson(ctx.res, 409, {
-      error: "conflict",
+      error: "draft_changed",
       message: "the draft changed since you last saw it; review the new draft before sending",
     });
 
@@ -478,7 +479,10 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
     });
   }
   if (typeof body.expectedProposalAt === "number" && item.proposal?.at !== body.expectedProposalAt) {
-    return sendJson(ctx.res, 409, { error: "conflict", message: "the draft changed; review it before continuing" });
+    return sendJson(ctx.res, 409, {
+      error: "draft_changed",
+      message: "the draft changed; review it before continuing",
+    });
   }
   if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   try {
@@ -547,12 +551,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const accountType = body.accountType === undefined ? "default" : body.accountType;
   const to = addressList(body.to === undefined ? [] : [body.to]);
   const cc = addressList(body.cc === undefined ? [] : [body.cc]);
-  if (
-    typeof accountType !== "string" ||
-    !["default", "personal", "company"].includes(accountType) ||
-    to === null ||
-    cc === null
-  )
+  if (!isAccountType(accountType) || to === null || cc === null)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "invalid account or recipient headers" });
   const payload = {
     title: text("subject", 300),
@@ -678,22 +677,24 @@ function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: Api
 
 export const loopItemRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/loops/inbox/sent-chat", auth: "source", handle: ensureSentChat },
-  { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
-  { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
-  { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
-  { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
-  { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
   { method: "GET", path: "/v1/loops/:id/items/:itemId/image", auth: "source", handle: serveItemImage },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/action",
-    auth: "either",
-    handle: serializeItemAction(actOnItem),
-  },
-  {
-    method: "POST",
-    path: "/v1/loops/:id/items/:itemId/followup",
-    auth: "either",
-    handle: serializeItemAction(followUpOnItem),
-  },
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/inbox", auth: "either", handle: getInboxLoop },
+    { method: "POST", path: "/v1/loops/inbox/sync-cron", auth: "source", handle: ensureInboxSyncCron },
+    { method: "GET", path: "/v1/loops/:id/items", auth: "either", handle: listItems },
+    { method: "POST", path: "/v1/loops/:id/items", auth: "either", handle: ingestItems },
+    { method: "GET", path: "/v1/loops/:id/items/:itemId", auth: "either", handle: getItem },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/action",
+      auth: "either",
+      handle: serializeItemAction(actOnItem),
+    },
+    {
+      method: "POST",
+      path: "/v1/loops/:id/items/:itemId/followup",
+      auth: "either",
+      handle: serializeItemAction(followUpOnItem),
+    },
+  ]),
 ];

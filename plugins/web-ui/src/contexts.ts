@@ -27,10 +27,11 @@ import {
 import { UI_BASE } from "./deep-link";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
-import { groupDmTitle, openSession, refreshSessions, sessionsState, slackLogo } from "./sessions";
+import { groupDmTitle, openSession, refreshSessions, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
 import type { WebhookView } from "./webhooks";
 import type { CronView } from "./crons";
@@ -1387,7 +1388,7 @@ function contextSessionRow(s: CoreSession): TemplateResult {
     <button class="context-session-row" type="button" @click=${() => void openFromContext(s)}>
       <span class="context-session-title" dir="auto">${groupDmTitle(s)}</span>
       <span class="context-session-meta">
-        ${surface === "slack" ? html`<span class="surface surface-slack">${slackLogo(13)}</span>` : html`<span class="badge">${surface}</span>`}
+        ${surface === "slack" ? html`<span class="surface surface-slack">${slackMark(13, true)}</span>` : html`<span class="badge">${surface}</span>`}
         ${readOnly ? html`<span class="ro-lock" ${tip("Read-only. Replies happen on the original surface")}>${icon(Lock, 12)}</span>` : nothing}
         <span>${relTime(activityOf(s))}</span>
       </span>

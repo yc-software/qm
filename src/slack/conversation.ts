@@ -24,7 +24,7 @@ function compareSlackTimestamps(a: { ts: string }, b: { ts: string }): number {
 export function buildContextWindow(
   scanned: readonly RecentMessage[],
   opts: { count: number; match?: string; scanHasMore?: boolean; nameById?: ReadonlyMap<string, string> },
-): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string } {
+): { messages: ContextWireMessage[]; hasMore: boolean; nextBefore?: string; selfTs?: string[] } {
   const asc = [...scanned].sort(compareSlackTimestamps);
   const needle = opts.match?.trim().toLowerCase();
   const matched = needle ? asc.filter((m) => (m.text ?? "").toLowerCase().includes(needle)) : asc;
@@ -44,10 +44,12 @@ export function buildContextWindow(
   const droppedMatches = matched.length > kept.length;
   let nextBefore = opts.scanHasMore ? asc[0]?.ts : undefined;
   if (droppedMatches) nextBefore = kept[0]?.ts;
+  const selfTs = kept.filter((m) => m.isSelf).map((m) => m.ts);
   return {
     messages,
     hasMore: Boolean(opts.scanHasMore) || droppedMatches,
     ...(nextBefore ? { nextBefore } : {}),
+    ...(selfTs.length ? { selfTs } : {}),
   };
 }
 

@@ -18,6 +18,7 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
 import { installFakeAgent37 } from "./support/fake-agent37.ts";
+import { installFakeDocker } from "./support/fake-docker.ts";
 
 const workspace = () => createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "destroy-scope-")));
 
@@ -27,18 +28,34 @@ test("Local scope deletion removes deterministic resources without provisioning,
   const sandbox = createLocalSandbox(workspace(), {
     dockerExec: async (args) => {
       calls.push(args);
-      return { code: 1, stdout: "", stderr: fail ? "daemon unavailable" : "No such object" };
+      return fail ? { code: 1, stdout: "", stderr: "daemon unavailable" } : { code: 0, stdout: "", stderr: "" };
     },
   });
   await sandbox.destroyScope!("missing");
   assert.deepEqual(calls, [
     ["rm", "-f", localContainerName("missing")],
-    ["network", "rm", localNetworkName(localContainerName("missing"))],
-    ["volume", "rm", localVolumeName("missing")],
+    ["network", "rm", "-f", localNetworkName(localContainerName("missing"))],
+    ["volume", "rm", "-f", localVolumeName("missing")],
   ]);
   fail = true;
   await assert.rejects(sandbox.destroyScope!("missing"), /daemon unavailable/);
   assert.equal(calls.length, 4);
+});
+
+test("Local scope deletion fails a refused core disconnect only while the core is still attached", async () => {
+  const fake = installFakeDocker(0);
+  const network = localNetworkName(localContainerName("scope"));
+  const sandbox = createLocalSandbox(workspace(), {
+    coreContainer: "qm-core",
+    dockerExec: async (args) =>
+      args[1] === "disconnect" ? { code: 1, stdout: "", stderr: "is not connected" } : fake.dockerExec(args),
+  });
+  fake.connections.add(`other-net|qm-core`);
+  await sandbox.destroyScope!("scope");
+  fake.networks.add(network);
+  fake.connections.add(`${network}|qm-core`);
+  await assert.rejects(sandbox.destroyScope!("scope"), /network disconnect .*: is not connected/);
+  assert.equal(fake.networks.has(network), true);
 });
 
 test("Sprites scope deletion sends only DELETE, retries provider errors, and accepts missing bodies", async () => {

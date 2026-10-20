@@ -67,6 +67,7 @@ for (const status of ["active", "paused"] as const) {
     const entries = await built.sessions.getEntries(session.id);
     assert.deepEqual(entries.at(-1)?.payload, {
       kind: "goal_cancelled",
+      cause: "system",
       objective: "old outreach goal",
       cancelledBy: "U1",
     });

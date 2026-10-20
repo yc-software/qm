@@ -6,7 +6,7 @@ import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
@@ -40,6 +40,7 @@ export interface MonitorPollerDeps {
   directory?: TriggerDeps["directory"];
   currentScopeMembers?: CurrentScopeMembers;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
   maxFiresPerTick?: number;
   leaderLease?: LeaderLease;
@@ -140,6 +141,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
     ...(deps.sessions ? { sessions: deps.sessions } : {}),
+    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
   async function fire(
@@ -187,7 +189,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
         waitMs: 0,
       });
     } catch (e) {
-      if (processIsGone(e)) {
+      if (e instanceof ProcessSessionGoneError) {
         await reportLost(m);
         return true;
       }

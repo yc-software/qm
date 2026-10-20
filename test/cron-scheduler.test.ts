@@ -278,7 +278,6 @@ test("a personal cron with a principal destination delivers its real output to t
       audienceScopeId: scopeId("personal", "U-alice"),
       onBehalfOf: "U1",
     },
-    recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
@@ -293,11 +292,11 @@ test("a personal cron with a principal destination delivers its real output to t
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
-test("a recurring teammate-DM cron without current recipient consent is withheld", async () => {
-  const { crons, deliveries, scheduler } = harness();
+test("a recurring verbatim reminder to a teammate delivers to the teammate", async () => {
+  const { crons, deliveries, calls, scheduler } = harness();
   const cron = await crons.create({
-    schedule: { everyMs: 1000 },
-    action: "let Alice know the deploy is done",
+    schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
+    message: "daily standup notes are due",
     owner: "U1",
     createdBy: "U1",
     ownerScopeId: scopeId("personal", "U1"),
@@ -309,13 +308,13 @@ test("a recurring teammate-DM cron without current recipient consent is withheld
     },
   });
   await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.length, 0);
   const pending = await deliveries.pending("principal");
   assert.equal(pending.length, 1);
-  assert.equal(pending[0]?.destination.target, "U1");
-  assert.match(pending[0]?.text ?? "", /consent.*skipped/i);
+  assert.equal(pending[0]?.destination.target, "U-alice");
+  assert.equal(pending[0]?.text, "daily standup notes are due");
   const { runs: stored } = await crons.listFires(cron.id);
-  assert.equal(stored[0]?.status, "refused");
-  assert.match(stored[0]?.note ?? "", /consent/);
+  assert.equal(stored[0]?.status, "ok");
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
@@ -332,7 +331,6 @@ test("a teammate-DM cron created in a channel delivers its real output (§10 par
       audienceScopeId: scopeId("personal", "U-alice"),
       onBehalfOf: "U1",
     },
-    recipientConsent: { recipientId: "U-alice", status: "accepted" },
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal((await deliveries.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");

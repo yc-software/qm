@@ -46,7 +46,7 @@
       ]
     },
     "cli": {
-      "entry": ["bin/qm.ts"]
+      "entry": ["bin/qm.ts", "src/contract.ts"]
     },
     "plugins/*": {},
     "plugins/web-ui": {

@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@sentry/node": "10.75.0",
+    "emoji-datasource": "^16.0.0",
     "esbuild": "^0.28.1",
     "lit": "^3.3.3",
     "lucide": "^0.544.0"

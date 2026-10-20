@@ -38,6 +38,8 @@ interface FakeFlyOptions {
   createAppStatus?: number;
   createAppBody?: string;
   existingApp?: { name: string; network: string; organization: { slug: string } };
+  racingApp?: { name: string; network: string; organization: { slug: string } };
+  rereadAppStatus?: number;
   ips?: string[];
   ingressNetwork?: string;
   networkPolicies?: unknown[];
@@ -67,6 +69,7 @@ function fakeFly(opts: FakeFlyOptions = {}) {
   const cordoned = new Set<string>();
   let app = opts.existingApp;
   let created = 0;
+  let reread: number | undefined;
   const fetchImpl = (async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(String(input));
     const method = init.method ?? "GET";
@@ -85,8 +88,11 @@ function fakeFly(opts: FakeFlyOptions = {}) {
       if ((opts.createAppStatus ?? 201) < 300) {
         app = { name: body.app_name, network: body.network, organization: { slug: body.org_slug } };
       }
+      if (opts.racingApp) app = opts.racingApp;
+      reread = opts.rereadAppStatus;
       return new Response(opts.createAppBody ?? "{}", { status: opts.createAppStatus ?? 201 });
     }
+    if (method === "GET" && segments.length === 3 && reread) return json(reread, { error: "unavailable" });
     if (method === "GET" && segments.length === 3) return app ? json(200, app) : json(404, { error: "not found" });
     if (method === "DELETE" && segments.length === 3) {
       app = undefined;
@@ -285,7 +291,7 @@ test("apply: keeps an always-on deployment running under Fly managed lifecycle",
 });
 
 test("apply: refuses a pre-existing public IP before creating a machine", async () => {
-  const unsafe = fakeFly({ createAppStatus: 422, existingApp: OWNED_APP, ips: ["2a09:8280:1::1"] });
+  const unsafe = fakeFly({ existingApp: OWNED_APP, ips: ["2a09:8280:1::1"] });
   await assert.rejects(
     provider(unsafe.fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
     /public IP assignment; refusing to expose/,
@@ -293,23 +299,25 @@ test("apply: refuses a pre-existing public IP before creating a machine", async 
   assert.ok(!unsafe.calls.some((c) => c.path.endsWith("/machines")), "an unsafe app never gets a machine");
 });
 
-test("apply: an app that already exists is not an error", async () => {
+test("apply: an app created concurrently is reused whatever the create failure says", async () => {
   for (const over of [
-    { createAppStatus: 409, existingApp: OWNED_APP },
-    { createAppStatus: 422, createAppBody: '{"error":"Name has already been taken"}', existingApp: OWNED_APP },
+    { createAppStatus: 409 },
+    { createAppStatus: 422, createAppBody: '{"error":"Name has already been taken"}' },
+    { createAppStatus: 500, createAppBody: '{"error":"internal"}' },
   ]) {
-    const { fetchImpl } = fakeFly(over);
+    const { fetchImpl, calls } = fakeFly({ ...over, racingApp: OWNED_APP });
     const endpoint = await provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" })));
     assert.deepEqual(endpoint, { host: `${APP}.flycast`, port: 8080 });
+    assert.ok(calls.some((c) => c.method === "POST" && c.path === "/v1/apps"));
   }
 });
 
 test("apply: a name conflict is reused only when its organization and isolated network match", async () => {
-  for (const existingApp of [
+  for (const racingApp of [
     { ...OWNED_APP, network: "default" },
     { ...OWNED_APP, organization: { slug: "someone-else" } },
   ]) {
-    const { fetchImpl, calls } = fakeFly({ createAppStatus: 422, existingApp });
+    const { fetchImpl, calls } = fakeFly({ createAppStatus: 422, racingApp });
     await assert.rejects(
       provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
       /not the isolated app owned by this deployment/,
@@ -319,10 +327,27 @@ test("apply: a name conflict is reused only when its organization and isolated n
 });
 
 test("apply: a rejected app creation still surfaces", async () => {
-  const { fetchImpl } = fakeFly({ createAppStatus: 401, createAppBody: '{"error":"unauthorized"}' });
+  for (const [status, body] of [
+    [401, '{"error":"unauthorized"}'],
+    [422, '{"error":"Name has already been taken"}'],
+  ] as const) {
+    const { fetchImpl } = fakeFly({ createAppStatus: status, createAppBody: body });
+    await assert.rejects(
+      provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
+      new RegExp(`create app .*http ${status}`),
+    );
+  }
+});
+
+test("apply: a failed create whose app cannot be re-read reports the create failure", async () => {
+  const { fetchImpl } = fakeFly({ createAppStatus: 500, createAppBody: '{"error":"boom"}', rereadAppStatus: 503 });
   await assert.rejects(
     provider(fetchImpl).apply(deployment(ID), version(snapshot({ "index.html": "hi" }))),
-    /create app .*http 401.*unauthorized/,
+    (e: Error) => {
+      assert.match(e.message, /create app .*http 500.*boom/);
+      assert.match(String((e.cause as Error).message), /read app .*http 503/);
+      return true;
+    },
   );
 });
 
@@ -385,16 +410,6 @@ test("apply: an app bundle over the machine-file cap is refused with its actual 
     return true;
   });
   assert.deepEqual(calls, [], "nothing is created on Fly for a bundle that could never be injected");
-});
-
-test("apply: highly compressible source cannot bypass the unpacked-size cap", async () => {
-  const { fetchImpl, calls } = fakeFly();
-  const big = snapshot({ "zeros.bin": Buffer.alloc(20_000_001) });
-  await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(big)),
-    /app source is too large.*20000001 bytes, maximum 20000000 bytes/,
-  );
-  assert.deepEqual(calls, []);
 });
 
 test("apply: a machine that never starts reports its last state", async () => {
@@ -487,8 +502,11 @@ test("destroy: refuses a mismatched app and surfaces a failed deletion", async (
 
 test("profile: shared Flycast manages suspension while existing standalone apps retain idle cleanup", () => {
   const { fetchImpl } = fakeFly();
-  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: false });
-  assert.deepEqual(provider(fetchImpl, { sharedAppName: "company-app" }).profile, { managedScaleToZero: true });
+  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: false, maxAppBytes: 20_000_000 });
+  assert.deepEqual(provider(fetchImpl, { sharedAppName: "company-app" }).profile, {
+    managedScaleToZero: true,
+    maxAppBytes: 20_000_000,
+  });
 });
 
 test("missing fly configuration fails at the point of use with the env var that is missing", async () => {

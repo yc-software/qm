@@ -444,7 +444,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
 
   it("reads the caller's in-scope SOUL under a capability", async () => {
     const personalScope = scopeId("personal", "U7");
-    built.config.setSoul(personalScope, "Prefer precise, compact answers.");
+    await built.config.setSoul(personalScope, "Prefer precise, compact answers.");
 
     const res = await get("/v1/soul?scopeId=personal:U2", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
@@ -463,7 +463,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     const orgScope = scopeId("org", "default-org");
     const personalScope = scopeId("personal", "U7");
     const orgSoul = built.config.getSoul(orgScope)!;
-    built.config.setSoul(personalScope, ` ${orgSoul} `);
+    await built.config.setSoul(personalScope, ` ${orgSoul} `);
     const res = await get("/v1/soul", { "x-agent-capability": await capFor("U7") });
     assert.equal(res.status, 200);
     const got = (await res.json()) as any;
@@ -473,8 +473,8 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("reads channel SOUL for a channel-scoped token without exposing the actor's personal SOUL", async () => {
-    built.config.setSoul(scopeId("personal", "U8"), "Private U8 instruction.");
-    built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
+    await built.config.setSoul(scopeId("personal", "U8"), "Private U8 instruction.");
+    await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
 
     const res = await get("/v1/soul?scopeId=personal:U8", { "x-agent-capability": await capChannel("U8") });
     assert.equal(res.status, 200);

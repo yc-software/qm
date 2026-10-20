@@ -18,6 +18,8 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
+const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
+
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
     .update(JSON.stringify([org, principal]))
@@ -154,9 +156,10 @@ export async function request(
   path: string,
   body?: unknown,
   timeoutMs = 20_000,
+  method = body ? "POST" : "GET",
 ): Promise<Record<string, unknown>> {
   const response = await (ctx.deps.composioFetch ?? fetch)(`https://backend.composio.dev/api/v3.1${path}`, {
-    method: body ? "POST" : "GET",
+    method,
     headers: { "x-api-key": key, "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
     redirect: "error",
@@ -247,14 +250,13 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       toolkit,
       ...(callbackUrl ? { callback_url: callbackUrl } : {}),
     });
-    if (typeof link.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(link.connected_account_id))
+    if (typeof link.connected_account_id !== "string" || !ACCOUNT_ID.test(link.connected_account_id))
       throw new Error("Invalid account");
-    if (typeof callbackUrl === "string" && ctx.deps.composioReturns) {
-      await ctx.deps.composioReturns.put(`${userId}:${link.connected_account_id}`, {
-        url: callbackUrl,
-        expiresAt: Date.now() + 20 * 60_000,
-      });
-    }
+    await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
+      url: typeof callbackUrl === "string" ? callbackUrl : null,
+      toolkit,
+      expiresAt: Date.now() + 20 * 60_000,
+    });
     const url = new URL(String(link.redirect_url));
     if (
       !(
@@ -299,6 +301,52 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
   }
 }
 
+async function ownedAccount(
+  ctx: ApiCtx,
+  access: { key: string; principal: string },
+  accountId: string,
+): Promise<{ account: Record<string, unknown>; toolkit: string } | null> {
+  const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`);
+  const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
+  return account.id === accountId &&
+    typeof account.user_id === "string" &&
+    composioUserIds(access.principal).includes(account.user_id) &&
+    toolkit &&
+    toolkit !== "composio"
+    ? { account, toolkit }
+    : null;
+}
+
+const SCOPES_TTL_MS = 5 * 60_000;
+const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+
+async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
+  const cached = scopeCache.get(authConfigId);
+  if (cached && cached.expiresAt > Date.now()) return cached.scopes;
+  try {
+    const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
+    const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
+    const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
+    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    return scopes;
+  } catch (error) {
+    const mask = createExactSecretValueMasker([key]);
+    reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
+    return [];
+  }
+}
+
+function scopeName(scope: string): string {
+  return scope.slice(scope.lastIndexOf("/") + 1) || scope;
+}
+
+function missingScopes(account: { state?: { val?: { scope?: unknown } } }, configured: string[]): string[] {
+  const granted = account.state?.val?.scope;
+  if (typeof granted !== "string" || !granted.trim()) return [];
+  const held = new Set(granted.split(/[\s,]+/).map(scopeName));
+  return configured.filter((scope) => !held.has(scopeName(scope)));
+}
+
 async function connections(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
@@ -310,20 +358,33 @@ async function connections(ctx: ApiCtx): Promise<void> {
   try {
     const data = await request(ctx, access.key, `/connected_accounts?${query}`);
     if (!Array.isArray(data.items)) throw new Error("Invalid accounts");
-    const items = data.items.flatMap((item) => {
-      if (
-        !item ||
-        !userIds.includes(item.user_id) ||
-        item.status !== "ACTIVE" ||
-        item.is_disabled === true ||
-        typeof item.id !== "string" ||
-        !/^ca_[a-zA-Z0-9_-]+$/.test(item.id) ||
-        typeof item.toolkit?.slug !== "string" ||
-        !/^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug)
-      )
-        return [];
-      return [{ id: item.id, toolkit: item.toolkit.slug, userId: item.user_id }];
-    });
+    const accounts = data.items.filter(
+      (item) =>
+        item &&
+        userIds.includes(item.user_id) &&
+        item.status === "ACTIVE" &&
+        item.is_disabled !== true &&
+        typeof item.id === "string" &&
+        ACCOUNT_ID.test(item.id) &&
+        typeof item.toolkit?.slug === "string" &&
+        /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
+    );
+    const configIds = [
+      ...new Set(
+        accounts
+          .map((item) => item.auth_config?.id)
+          .filter((id): id is string => typeof id === "string" && /^ac_[a-zA-Z0-9_-]+$/.test(id)),
+      ),
+    ];
+    const scopes = new Map(
+      await Promise.all(configIds.map(async (id) => [id, await configuredScopes(ctx, access.key, id)] as const)),
+    );
+    const items = accounts.map((item) => ({
+      id: item.id,
+      toolkit: item.toolkit.slug,
+      userId: item.user_id,
+      missingScopes: missingScopes(item, scopes.get(item.auth_config?.id) ?? []),
+    }));
     ctx.res.setHeader("Cache-Control", "no-store");
     return sendJson(ctx.res, 200, {
       items,
@@ -333,6 +394,39 @@ async function connections(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 502, {
       error: "composio_unavailable",
       message: "Could not check connected apps. Please try again.",
+    });
+  }
+}
+
+async function disconnect(ctx: ApiCtx): Promise<void> {
+  if ((ctx.capability && !livePersonCapability(ctx.capability)) || ctx.actor?.imp)
+    return sendJson(ctx.res, 403, { error: "human_consent_required" });
+  const access = await credential(ctx);
+  if (!access) return;
+  const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
+  if (typeof accountId !== "string" || !ACCOUNT_ID.test(accountId))
+    return sendJson(ctx.res, 400, { error: "invalid_account" });
+  try {
+    const owned = await ownedAccount(ctx, access, accountId);
+    if (!owned) return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const { toolkit } = owned;
+    if (!(await activeRun(ctx))) return;
+    await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(accountId)}`, undefined, 20_000, "DELETE");
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.disconnected",
+      resource: `${toolkit}/${accountId}`,
+      scopeLabel: ctx.capability?.scopeId ?? scopeId("personal", access.principal),
+    });
+    return sendJson(ctx.res, 200, { disconnected: accountId, toolkit });
+  } catch (error) {
+    if (error instanceof ComposioHttpError && error.status === 404)
+      return sendJson(ctx.res, 404, { error: "connection_not_found" });
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: disconnect", new Error(mask(redactSecrets(errMessage(error)))));
+    return sendJson(ctx.res, 502, {
+      error: "composio_disconnect_failed",
+      message: "Could not disconnect the app. Please try again.",
     });
   }
 }
@@ -380,7 +474,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     !/^[A-Z][A-Z0-9_]{1,199}$/.test(body.tool) ||
     body.tool.startsWith("COMPOSIO_") ||
     typeof body.accountId !== "string" ||
-    !/^ca_[a-zA-Z0-9_-]+$/.test(body.accountId) ||
+    !ACCOUNT_ID.test(body.accountId) ||
     typeof body.version !== "string" ||
     !/^[a-zA-Z0-9_-]{1,100}$/.test(body.version) ||
     body.version === "latest" ||
@@ -394,18 +488,10 @@ async function execute(ctx: ApiCtx): Promise<void> {
     });
   const resource = `${body.accountId}/${body.tool}@${body.version}`;
   try {
-    const account = await request(ctx, access.key, `/connected_accounts/${encodeURIComponent(body.accountId)}`);
-    const toolkit = (account.toolkit as { slug?: string } | undefined)?.slug;
-    if (
-      account.id !== body.accountId ||
-      typeof account.user_id !== "string" ||
-      !composioUserIds(access.principal).includes(account.user_id) ||
-      account.status !== "ACTIVE" ||
-      account.is_disabled === true ||
-      !toolkit ||
-      toolkit === "composio"
-    )
+    const owned = await ownedAccount(ctx, access, body.accountId);
+    if (!owned || owned.account.status !== "ACTIVE" || owned.account.is_disabled === true)
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
+    const { account, toolkit } = owned;
     const tool = await request(
       ctx,
       access.key,
@@ -418,7 +504,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     )
       return sendJson(ctx.res, 403, { error: "tool_not_authorized" });
     if (!(await activeRun(ctx))) return;
-    if (!composioUserIds(access.principal).includes(account.user_id))
+    if (!composioUserIds(access.principal).includes(String(account.user_id)))
       return sendJson(ctx.res, 403, { error: "connection_not_authorized" });
     audit(ctx.deps, {
       principalId: access.principal,
@@ -476,31 +562,52 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 403, { error: "browser_identity_required" });
   const access = await credential(ctx);
   if (!access) return;
+  const connectFailed = () =>
+    audit(ctx.deps, {
+      principalId: access.principal,
+      action: "composio.connect_failed",
+      resource: "unknown",
+      scopeLabel: scopeId("personal", access.principal),
+    });
   const sessionUri = (ctx.body as { sessionUri?: unknown } | null)?.sessionUri;
-  if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192)
+  if (typeof sessionUri !== "string" || !sessionUri || sessionUri.length > 8192) {
+    connectFailed();
     return sendJson(ctx.res, 400, { error: "invalid_session" });
+  }
   const userId = composioUserId(orgId(), canonicalPerson(access.principal));
+  let accountId: string;
   try {
     const result = await request(ctx, access.key, "/connected_accounts/complete_auth", {
       session_uri: sessionUri,
       user_id: userId,
     });
-    if (typeof result.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(result.connected_account_id))
+    if (typeof result.connected_account_id !== "string" || !ACCOUNT_ID.test(result.connected_account_id))
       throw new Error("Invalid account");
-    const key = `${userId}:${result.connected_account_id}`;
-    const saved = await ctx.deps.composioReturns?.get(key);
-    await ctx.deps.composioReturns?.delete(key);
-    return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
-  } catch {
+    accountId = result.connected_account_id;
+  } catch (error) {
+    const mask = createExactSecretValueMasker([access.key]);
+    reportFailure("composio: complete-auth", new Error(mask(redactSecrets(errMessage(error)))));
+    connectFailed();
     return sendJson(ctx.res, 400, {
       error: "verification_failed",
       message: "Sign in to the QM account that started this connection and try connecting again.",
     });
   }
+  const key = `${userId}:${accountId}`;
+  const saved = await ctx.deps.composioReturns?.get(key);
+  await ctx.deps.composioReturns?.delete(key);
+  audit(ctx.deps, {
+    principalId: access.principal,
+    action: "composio.connected",
+    resource: saved?.toolkit ?? "unknown",
+    scopeLabel: scopeId("personal", access.principal),
+  });
+  return sendJson(ctx.res, 200, { returnTo: saved && saved.expiresAt > Date.now() ? saved.url : null });
 }
 
 export interface ComposioReturn {
-  url: string;
+  url: string | null;
+  toolkit: string;
   expiresAt: number;
 }
 
@@ -599,7 +706,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     typeof proof.exp !== "number" ||
     proof.exp <= Date.now() ||
     typeof proof.accountId !== "string" ||
-    !/^ca_[a-zA-Z0-9_-]+$/.test(proof.accountId)
+    !ACCOUNT_ID.test(proof.accountId)
   )
     return sendJson(res, 400, {
       error: "invalid_link",
@@ -760,5 +867,6 @@ export const composioRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/composio/connections", auth: "either", handle: connections },
   { method: "GET", path: "/v1/composio/toolkits", auth: "either", handle: catalog },
   { method: "POST", path: "/v1/composio/authorize", auth: "either", handle: authorize },
+  { method: "POST", path: "/v1/composio/disconnect", auth: "either", handle: disconnect },
   { method: "GET", path: "/v1/composio/identity", auth: "either", handle: identity },
 ];

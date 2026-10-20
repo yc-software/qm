@@ -237,7 +237,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     const beforeEdit = upstream.requests.length;
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
-    await built.config.setRuntimeSelectionLatest("personal:admin-alice@default-org", {
+    await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
       harnessId: "pi",
       modelId: spec.id,
     });

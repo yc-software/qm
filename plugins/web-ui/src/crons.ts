@@ -152,19 +152,8 @@ function clipWords(text: string, max = 64): string {
   return `${(wordCut.length >= max * 0.55 ? wordCut : cut).trim()}…`;
 }
 
-function suggestedCronTitle(text: string): string {
-  const clean = cleanCronText(text);
-  if (!clean) return "(untitled cron)";
-  const candidate = clean
-    .replace(/^(please\s+)?(run|generate|create|send|post|deliver|summarize|check)\s+(the\s+)?/i, "")
-    .replace(/\s*[:;.!?]\s+.*$/, "")
-    .trim();
-  const clipped = clipWords(candidate || clean, 58);
-  return clipped.replace(/^[a-z]/, (ch) => ch.toUpperCase());
-}
-
 function cronTitle(c: CronView): string {
-  return c.title?.trim() || suggestedCronTitle(cronText(c));
+  return c.title?.trim() || clipWords(cronText(c), 58) || "(untitled cron)";
 }
 
 function cronScopeLabel(c: CronView): string {

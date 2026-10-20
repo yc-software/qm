@@ -76,6 +76,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
     run: deps.run,
     ...(deps.directory ? { directory: deps.directory } : {}),
     ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
+    ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
   };
 
   return {
@@ -120,8 +121,6 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         fireKey,
         surface: "webhook",
         ...(destination ? { destination } : {}),
-        recipientConsentRequired: true,
-        ...(wh.recipientConsent ? { recipientConsent: wh.recipientConsent } : {}),
         errorNotice: (s) => `⚠️ Webhook did not complete: ${s}`,
       })
         .then(async (outcome) => {

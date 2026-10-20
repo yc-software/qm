@@ -50,7 +50,7 @@ export function createSurfaceContextFulfiller(deps: {
   ): Promise<void> {
     const token = viewerToken || userToken;
     if (!token) {
-      await post({ messages: [], note: "live-search-unconnected" });
+      await post({ messages: [], liveSearch: "unconnected" });
       return;
     }
     try {
@@ -69,7 +69,7 @@ export function createSurfaceContextFulfiller(deps: {
     } catch (err) {
       const msg = (err as Error).message;
       if (viewerToken && /invalid_auth|token_revoked|account_inactive|token_expired/.test(msg)) {
-        await post({ messages: [], note: "live-search-unconnected" });
+        await post({ messages: [], liveSearch: "unconnected" });
         return;
       }
       await post({ error: `Slack search failed: ${msg}` });

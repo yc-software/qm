@@ -137,7 +137,6 @@ export type EntryType =
   | "text"
   | "tool_call"
   | "tool_result"
-  | "soul"
   | "system"
   | "delivery"
   | "approval_request"
@@ -191,12 +190,6 @@ export interface GrantedHandle {
   permission: Permission;
 }
 
-export interface RecipientConsent {
-  recipientId: string;
-  status: "pending" | "accepted" | "declined";
-  decidedAt?: number;
-}
-
 export interface TriggerBase {
   id: string;
   ownerScopeId: ScopeId;
@@ -207,7 +200,6 @@ export interface TriggerBase {
   enabled: boolean;
   createdAt: number;
   lastFiredAt?: number;
-  recipientConsent?: RecipientConsent;
 }
 
 export interface Destination {
@@ -547,6 +539,8 @@ export interface SurfaceContextResult {
   hasMore?: boolean;
   nextBefore?: string;
   note?: string;
+  selfTs?: string[];
+  liveSearch?: "unconfigured" | "unconnected";
   file?: { blobId: string; name: string; mimetype?: string; sizeBytes: number; author?: string };
   group?: { groupId: string };
 }
@@ -800,7 +794,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied";
   adminUrl?: string;
   runId?: string;
   steered?: true;

@@ -1,3 +1,4 @@
+import type { GoalCreateInput } from "../harness/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { withPgTransaction, type PgPool } from "../persistence/pg-pool.ts";
 import type { RunStore, Run } from "../runs/run-store.ts";
@@ -44,6 +45,7 @@ export interface SwarmMessage {
   text: string;
   audience: string[];
   replyTo?: string;
+  goal?: GoalCreateInput;
   createdAt: number;
   notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;
 }

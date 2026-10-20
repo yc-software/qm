@@ -176,33 +176,41 @@ test("the deployment turn wall-clock reaches the harness and a per-turn cap repl
   assert.equal((await freshApp().app.turn(dm("!wallclock"))).reply, "wallclock:0");
 });
 
-test("inbound file problems ride a durable file_event entry — off the reply and the model context", async () => {
+test("inbound file problems reach the model in the environment footer, not a log entry", async () => {
   const { app, sessions } = freshApp();
   const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
   const res = await app.turn(dm("what's your favorite color", { inboundNotes: [note] }));
   assert.equal(res.status, "ok", res.reason);
 
-  assert.doesNotMatch(res.reply ?? "", /too many files|skipped|screenshot\.png/);
-
-  const found = await app.getSession(res.sessionId!);
-  const fileEvent = found!.entries.find(
-    (e) => e.type === "system" && (e.payload as { kind?: string } | null)?.kind === "file_event",
+  const entries = await sessions.getEntries(res.sessionId!);
+  assert.equal(
+    entries.some((e) => e.type === "system" && /screenshot\.png/.test(JSON.stringify(e.payload))),
+    false,
   );
-  assert.ok(fileEvent, "expected a durable file_event system entry");
-  const payload = fileEvent!.payload as { direction: string; issues: string[]; text: string };
-  assert.equal(payload.direction, "in");
-  assert.ok(
-    payload.issues.some((i) => i.includes("screenshot.png")),
-    "the dropped file is named in the durable record",
+  const user = entries.find((e) => e.type === "user");
+  assert.match(
+    String((user!.payload as { environment?: unknown }).environment),
+    /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
-  assert.match(payload.text, /screenshot\.png/);
 
   const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;
-  for (const r of reqs.filter((request) => request.model !== "mock-security")) {
-    assert.doesNotMatch(JSON.stringify(r.promptEnvelope), /too many files|screenshot\.png/);
-  }
+  assert.ok(
+    reqs
+      .filter((request) => request.model !== "mock-security")
+      .some((r) => /screenshot\.png/.test(JSON.stringify(r.promptEnvelope))),
+    "the model sees the dropped file",
+  );
 
   assert.equal((res as { fileNotes?: unknown }).fileNotes, undefined);
+});
+
+test("a failed turn still records which inbound files did not arrive", async () => {
+  const { app, sessions, errors } = freshApp();
+  const note = 'skipped "screenshot.png" — too many files in one message (max 10)';
+  await assert.rejects(app.turn(dm("!boom", { inboundNotes: [note] })), /boom/);
+  const { sessionId } = (await errors.list()).find((e) => e.category === "turn")!;
+  const user = (await sessions.getEntries(sessionId!)).find((e) => e.type === "user");
+  assert.match(String((user?.payload as { environment?: unknown } | undefined)?.environment), /screenshot\.png/);
 });
 
 test("a proactive-opener turn greets with no user text and records the seeding entry hidden", async () => {
@@ -300,6 +308,10 @@ test("a silent cron source run stays out of normal human chat history", async ()
 
 test("a cron-delivered digest lands as a delivery event with origin, not recipient transcript history", async () => {
   const built = freshApp();
+  await built.app.upsertDirectory([
+    { principalId: "U-carol", displayName: "Carol", type: "internal" },
+    { principalId: "U-alice", displayName: "Alice", type: "internal" },
+  ]);
   const cron = await built.app.createCron({
     schedule: { firstFireAt: Date.now() },
     action: "deploy digest ready",
@@ -610,10 +622,10 @@ test("Composio backend access is announced without delivering the project key", 
   const granted = await prompt("granted");
   assert.match(granted, /## Connected app access/);
   assert.match(granted, /Composio is configured in the backend/);
-  assert.doesNotMatch(granted, /service_composio/);
+  assert.doesNotMatch(granted, /`composio`/);
   await assert.rejects(
     app.turn(
-      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["service_composio"] })}`, {
+      dm(`!execute ${JSON.stringify({ command: "true", credentials: ["composio"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:composio-explicit" },
       }),
     ),
@@ -635,7 +647,7 @@ test("Composio backend access is announced without delivering the project key", 
     );
   const brokerDelivery = await prompt("backend-broker-delivery");
   assert.match(brokerDelivery, /Composio is configured in the backend/);
-  assert.doesNotMatch(brokerDelivery, /service_composio|Shared org credentials available to you/);
+  assert.doesNotMatch(brokerDelivery, /`composio`|Shared org credentials available to you/);
   serviceCreds.listServiceCredentials = listServiceCredentials;
   await acl.revoke(org, encodeRef(serviceCredRef("composio")), org, "admin@default-org");
   assert.doesNotMatch(await prompt("revoked"), /COMPOSIO_API_KEY/);
@@ -691,7 +703,7 @@ test("org credentials are delivered only when requested and read live after rota
     return realProvision(layers, opts);
   };
 
-  const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel", "service_browse-model-key"] })}`;
+  const request = `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel", "browse-model-key"] })}`;
   let res = await app.turn(dm(request, { conversation: { kind: "dm", threadRef: "dm:U1:env1" } }));
   assert.equal(res.status, "ok");
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
@@ -752,7 +764,7 @@ test("a disabled or broker-delivery credential never rides provision env", async
 
   const res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:env3" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   const env = captures.at(-1)?.env ?? {};
   assert.equal(env.STEEL_API_KEY, undefined, "disabled env credential stays home");
   assert.ok(
@@ -792,7 +804,7 @@ test("a credential flipped away from env between the metadata read and the secre
 
   await assert.rejects(
     app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+      dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
         conversation: { kind: "dm", threadRef: "dm:U1:env4" },
       }),
     ),
@@ -837,7 +849,7 @@ test("env-delivery credentials are not offered to an external audience", async (
     }),
   );
   assert.equal(externalRoom.status, "ok");
-  assert.doesNotMatch(externalRoom.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(externalRoom.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a room with externals gets no org env credentials");
 });
 
@@ -907,7 +919,7 @@ test("a channel cron receives env credentials only when the directory proves an 
         ownerScopeId: scopeId("channel", channelId),
         input:
           channelId === "C-internal"
-            ? `!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`
+            ? `!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`
             : "!sysprompt",
         fireKey: `cron:${channelId}:1`,
         surface: "cron",
@@ -916,7 +928,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     assert.equal(out.status, "ok", `the ${channelId} cron turn runs`);
     assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined);
     if (channelId !== "C-internal") {
-      assert.doesNotMatch(out.reply ?? "", /service_browse-steel/);
+      assert.doesNotMatch(out.reply ?? "", /browse-steel/);
       return undefined;
     }
     return executions.findLast((handle) => handle.env?.STEEL_API_KEY)?.env?.STEEL_API_KEY;
@@ -958,18 +970,18 @@ test("env-delivery credentials are gated by service-cred grants — no grant, no
 
   let res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate1" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "ungranted env credential stays home");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "somebody-else"));
   res = await app.turn(dm("!sysprompt", { conversation: { kind: "dm", threadRef: "dm:U1:gate2" } }));
   assert.equal(res.status, "ok");
-  assert.doesNotMatch(res.reply ?? "", /service_browse-steel/g);
+  assert.doesNotMatch(res.reply ?? "", /browse-steel/g);
   assert.equal(captures.at(-1)?.env?.STEEL_API_KEY, undefined, "a grant to someone else does not admit this actor");
 
   await grantCred(acl, org, "browse-steel", scopeId("personal", "U1"));
   res = await app.turn(
-    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["service_browse-steel"] })}`, {
+    dm(`!execute ${JSON.stringify({ command: "echo keys", credentials: ["browse-steel"] })}`, {
       conversation: { kind: "dm", threadRef: "dm:U1:gate3" },
     }),
   );
@@ -1010,8 +1022,8 @@ test("admin-configured browse step limit rides provision env (BROWSE_LAB_MAX_STE
   );
   assert.equal(captured?.env?.BROWSE_LAB_MODEL_PROVIDER, "managed", "the runner uses core model routing");
 
-  built.config.setBrowseMaxSteps("org:default-org", 120);
-  built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
+  await built.config.setBrowseMaxSteps("org:default-org", 120);
+  await built.config.setBrowseModel("org:default-org", "claude-sonnet-4-6");
   const res2 = await app.turn(dm("!run echo steps again"));
   assert.equal(res2.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MAX_STEPS, "120", "the configured limit rides the provision env");
@@ -1038,7 +1050,7 @@ test("a legacy browse-only model cannot strand managed default-model browsing", 
     return realProvision(layers, opts);
   };
 
-  built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
+  await built.config.setBrowseModel("org:acme", "claude-retired-by-pi-ai");
   const res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:stale1" } }));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -1068,7 +1080,7 @@ test("browse follows a live org base model change, not the process-start default
   assert.equal(res.status, "ok");
   assert.equal(captured?.env?.BROWSE_LAB_MODEL, "claude-opus-5", "starts on the deployment default");
 
-  built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
   res = await app.turn(dm("!run echo keys", { conversation: { kind: "dm", threadRef: "dm:U1:live2" } }));
   assert.equal(res.status, "ok");
   assert.equal(
@@ -1180,7 +1192,7 @@ for (const hours of [undefined, "72", "0", "none"]) {
     };
     const before = Date.now();
     const res = await app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["service_test-service"] })}`),
+      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["test-service"] })}`),
     );
     assert.equal(res.status, "ok", res.reason);
     const tokens = {
@@ -2671,7 +2683,7 @@ test("a session approval covers the whole rule: a different command matching it 
 test("an admin-registered rule grants by rule across turns; the approval is keyed on its pattern", async () => {
   const { app, config } = freshApp();
   const pattern = "\\bzz-tool\\s+\\S+";
-  config.setCommandPolicy(scopeId("org", "default-org"), {
+  await config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern, decision: "require_approval", reason: "ZZ tool" }],
   });
@@ -2694,7 +2706,7 @@ test("Dangerous posture keeps predeclared command approvals and hard denials", a
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
   await config.setSecurityPosture(org, "dangerous");
-  config.setCommandPolicy(org, {
+  await config.setCommandPolicy(org, {
     mode: "allowlist",
     rules: [
       { pattern: "printf", decision: "require_approval", reason: "test approval" },
@@ -2919,6 +2931,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   });
   assert.equal(denied.status, "refused");
   assert.match(denied.reason ?? "", /approval denied/);
+  assert.equal(denied.refusalKind, "approval_denied");
   assert.deepEqual(
     (await deniedApp.sessions.getEntries(deniedPending.sessionId!)).filter((e) => e.type === "user"),
     [],
@@ -3176,7 +3189,7 @@ test("a thread image is ingested into a session once; later turns that re-send i
 
 test("an approved automation replay preserves and re-screens its external event provenance", async () => {
   const built = freshApp();
-  built.config.setCommandPolicy(scopeId("org", "default-org"), {
+  await built.config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern: "printf", decision: "require_approval", reason: "confirm automation" }],
   });
@@ -3413,7 +3426,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
 
 test("allow once authorizes a single use of the rule, not the rest of the session", async () => {
   const { app, config } = freshApp();
-  config.setCommandPolicy(scopeId("org", "default-org"), {
+  await config.setCommandPolicy(scopeId("org", "default-org"), {
     mode: "denylist",
     rules: [{ pattern: "\\bzz-tool\\s+\\S+", decision: "require_approval", reason: "ZZ tool" }],
   });
@@ -3491,9 +3504,15 @@ test("accepted approval decisions are durably recorded in the conversation", asy
       (entry) => entry.type === "approval_resolved",
     );
     assert.equal(decisions.length, 1);
-    assert.deepEqual(decisions[0]!.payload, { requestId, command, approved, ...(approved ? { scope: "once" } : {}) });
     const replay = (await runs.list()).find((run) => run.request.approval?.requestId === requestId);
     assert.ok(replay);
+    assert.deepEqual(decisions[0]!.payload, {
+      requestId,
+      command,
+      approved,
+      runId: replay.id,
+      ...(approved ? { scope: "once" } : {}),
+    });
     const live = await app.getRun(replay.id);
     const liveDecisions = live?.activity?.filter((entry) => entry.type === "approval_resolved");
     assert.equal(liveDecisions?.length, 1);
@@ -3684,6 +3703,7 @@ test("denying a pending approval clears it and does not run the command", async 
   );
   assert.equal(denied.status, "refused");
   assert.match(denied.reason ?? "", /approval denied/);
+  assert.equal(denied.refusalKind, "approval_denied");
 });
 
 test("collect-mode: a turn that finished after skipping an approval-gated command keeps its reply", async () => {
@@ -3772,7 +3792,13 @@ test("thinking always reaches the run activity feed, with the model-bound signat
   const onView = await runViewFor("!think open plan");
   const published = (onView?.activity ?? []).filter((a) => a.type === "thinking");
   assert.equal(published.length, 1, "thinking is in the live feed");
-  assert.deepEqual(published[0]!.payload, { thinking: "open plan" }, "signature stripped from the published payload");
+  const step = (entries[0]!.payload as { step: { id: string; index: number } }).step;
+  assert.deepEqual(
+    published[0]!.payload,
+    { thinking: "open plan", step },
+    "signature stripped; the step identifies the live block it replaces",
+  );
+  assert.equal(onView?.reasoning, undefined, "the streamed block is settled once its entry is published");
 });
 
 test("channel session for an all-internal audience runs and is channel-scoped", async () => {
@@ -4278,8 +4304,32 @@ test("narration reaches the live activity feed before its tool call", async () =
     view?.activity?.map((entry) => entry.type),
     ["text", "tool_call", "tool_result", "text_start"],
   );
-  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item." });
+  assert.deepEqual(view?.activity?.[0]?.payload, { text: "I'll check the first item.", runId: run.id });
   assert.deepEqual(view?.activity?.at(-1)?.payload, { streamOffset: "I'll check the first item.\n\n".length });
+});
+
+test("public text phases reach run activity with exact stream offsets but are not stored in session history", async () => {
+  const { app, runs } = freshApp();
+  const result = await app.turn(dm("!phased-reply"));
+  assert.equal(result.status, "ok");
+  assert.equal(result.reply, "All clear.");
+  const run = (await runs.list()).find((entry) => entry.request.text === "!phased-reply");
+  assert.ok(run);
+  const view = await app.getRun(run.id);
+  const history = await app.getSession(result.sessionId!);
+  const expected = [
+    { phase: "commentary", streamOffset: 0 },
+    { phase: "final_answer", streamOffset: "Checking.\n\n".length },
+  ];
+  assert.deepEqual(
+    view?.activity?.filter((entry) => entry.type === "text_start").map((entry) => entry.payload),
+    expected,
+  );
+  assert.deepEqual(
+    history?.entries.filter((entry) => entry.type === "text_start"),
+    [],
+  );
+  assert.equal(view?.partial, "Checking.\n\nAll clear.");
 });
 
 function fixtureScreen(): SecurityScreener {

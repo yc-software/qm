@@ -47,6 +47,7 @@ export interface SteerIntake {
   ts?: string;
   attachments?: HarnessTurnInput["attachments"];
   images?: HarnessTurnInput["images"];
+  author?: string;
   acknowledge?: () => Promise<void>;
 }
 
@@ -72,6 +73,7 @@ export async function recordSteerIntake(turn: HarnessTurnInput, steer: SteerInta
       ...imageRefs(steer.images),
     },
     scopeLabel: turn.scopeLabel,
+    ...(steer.author ? { author: steer.author } : {}),
   });
   await steer.acknowledge?.().catch(swallowAs("steer acknowledge", undefined));
 }

@@ -1,13 +1,34 @@
 const LINK_RE = /https?:\/\/[^\s<>()[\]]+/gi;
 
-export const CONNECTOR_NAMES: Record<string, string> = {
-  google: "Google Workspace",
-  slack: "Slack",
-  notion: "Notion",
-  linear: "Linear",
-  github: "GitHub",
-  dropbox: "Dropbox",
-  x: "X",
+export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> = {
+  google: {
+    name: "Google Workspace",
+    hosts: "Gmail, Calendar, Drive, Sheets",
+  },
+  slack: {
+    name: "Slack",
+    hosts: "Channels & messages",
+  },
+  notion: {
+    name: "Notion",
+    hosts: "Pages & databases",
+  },
+  linear: {
+    name: "Linear",
+    hosts: "Issues & projects",
+  },
+  github: {
+    name: "GitHub",
+    hosts: "Repos, issues & PRs",
+  },
+  dropbox: {
+    name: "Dropbox",
+    hosts: "Files & folders",
+  },
+  x: {
+    name: "X (Twitter)",
+    hosts: "Posts & profile",
+  },
 };
 
 export interface ConnectorLink {
@@ -49,7 +70,7 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
     if (trustedOrigin && parsed.origin !== trustedOrigin) continue;
     if (!/^\/(?:connect\/redeem|v1\/connectors\/oauth\/consent\/redeem)\/[^/]+$/.test(parsed.pathname)) continue;
     const provider = parsed.searchParams.get("p") ?? "";
-    if (!CONNECTOR_NAMES[provider]) continue;
+    if (!CONNECTOR_LABELS[provider]) continue;
     if (!out.some((l) => l.url === url)) out.push({ provider, url });
   }
   return out;

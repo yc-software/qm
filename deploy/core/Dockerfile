@@ -18,13 +18,13 @@ COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-COPY .husky/install.mjs .husky/install.mjs
-RUN npm ci --omit=dev && npm run audit:prod \
+RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
 COPY src ./src
-COPY cli/src/credential-paths.ts cli/src/tool-descriptor.ts ./cli/src/
+COPY scripts/ops/items-copy.ts ./scripts/ops/items-copy.ts
+COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
 COPY plugins/onboarding ./plugins/onboarding

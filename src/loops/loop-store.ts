@@ -6,11 +6,10 @@ import type {
   LoopState,
   LoopTriageConfig,
   Destination,
-  RecipientConsent,
   ShipActionPolicy,
 } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -42,7 +41,6 @@ export interface LoopPatch {
   successCondition?: string;
   successChecks?: string[];
   destination?: Destination | null;
-  recipientConsent?: RecipientConsent | null;
   shipActions?: ShipActionPolicy[];
   caps?: LoopCaps;
   governor?: LoopGovernorConfig;
@@ -158,7 +156,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         contentPart(input.governor),
         contentPart(input.destination),
         contentPart(input.ownerConsentedAt),
-        contentPart(input.recipientConsent),
         contentPart(input.cronId),
         contentPart(input.schedule),
       ]);
@@ -205,7 +202,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         if (patch.successCondition !== undefined) fields.successCondition = patch.successCondition;
         if (patch.successChecks !== undefined) fields.successChecks = patch.successChecks;
         if (patch.destination !== undefined) fields.destination = patch.destination ?? undefined;
-        if (patch.recipientConsent !== undefined) fields.recipientConsent = patch.recipientConsent ?? undefined;
         if (patch.shipActions !== undefined) {
           const shipActions = normalizeShipActions(patch.shipActions);
           fields.shipActions = shipActions;

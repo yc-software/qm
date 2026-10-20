@@ -191,6 +191,25 @@ and listener precedence, including native blue/green weighted routing. Update
 vendored Terraform with the `public_paths` service attribute and
 `public_path_services` routing before enabling this setting.
 
+### Sandbox egress proxy
+
+Add `"egress-proxy"` to `services` to deploy the sandbox egress proxy
+(`deploy/egress-proxy`) with every `qm up`, from the same release as core. It
+receives `CAPABILITY_SECRET` and `CORE_SIGNING_SECRET` from the computed secret
+set and relays its audit records to core.
+
+On AWS the reference module puts it behind its own network load balancer, which
+terminates TLS on 443 with the module's `certificate_arn` (required) and forwards
+plain TCP to the proxy. The proxy runs in its own security group, outside the
+services' private network, so it relays audit records through `apiUrl` (or
+`publicUrl`). Point a hostname covered by the certificate at the
+`egress_proxy_hostname` output. On Fly it serves TLS on 443 at
+`<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
+port and leaves TLS to the operator. Then set the sandbox backend's proxy URL, for
+example `env.core.SPRITES_EGRESS_PROXY_URL` or `MODAL_EGRESS_PROXY_URL`, to
+`https://<proxy hostname>`. Update vendored Terraform from the current scaffold
+before enabling it on AWS.
+
 ### Shared AWS foundations
 
 Existing AWS deployments retain their company-owned resources by default. For a shared DynamoDB deployment table, set `aws.deploymentState` to `{ "table": "fleet-deploy-locks", "namespace": "acme" }`. Every lease, current pointer, label pointer and immutable manifest uses that namespace. Use a unique namespace for each company and scope its item IAM permissions with `dynamodb:LeadingKeys` to `acme/*`; grant `DescribeTable` separately. Changing an existing deployment's state location requires explicitly migrating its history while deployment operations are stopped.

@@ -54,5 +54,5 @@ async function ingestEgressAudit(ctx: ApiCtx): Promise<void> {
 }
 
 export const egressAuditRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/egress-audit", auth: "source", handle: ingestEgressAudit },
+  { method: "POST", path: "/v1/egress-audit", actor: "system", auth: "source", handle: ingestEgressAudit },
 ];

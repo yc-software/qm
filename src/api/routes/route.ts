@@ -31,11 +31,18 @@ export interface ApiCtx extends BaseCtx {
 
 export type RouteAuth = "either" | "source" | "public" | { aud: string };
 
+export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
+
 export type Route<C extends BaseCtx = ApiCtx> = {
   handle: (ctx: C) => void | Promise<void>;
   auth: RouteAuth;
+  actor?: RouteActor;
   maxBodyBytes?: number;
 } & ({ method: string; path: string } | { match: (method: string, pathname: string) => boolean });
+
+export function withActor<C extends BaseCtx>(actor: RouteActor, routes: Route<C>[]): Route<C>[] {
+  return routes.map((route) => ({ actor, ...route }));
+}
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;

@@ -165,6 +165,17 @@ test("app authorization accepts existing browser payloads and validates new retu
   assert.equal(calls.length, before);
 });
 
+test("app disconnection forwards only the chosen account to core", async () => {
+  const response = await fetch(`${base}/api/composio/disconnect`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ accountId: "ca_mine", user_id: "bob", principalId: "bob" }),
+  });
+  assert.equal(response.status, 200);
+  assert.ok(calls.at(-1)?.url.startsWith("/v1/composio/disconnect"));
+  assert.deepEqual(calls.at(-1)?.body, { accountId: "ca_mine" });
+});
+
 test("Composio verifier forwards only the opaque session and redirects safely", async () => {
   composioReturnTo = "http://localhost:8790//evil.example/path";
   const response = await fetch(`${base}/api/composio/callback?session_uri=opaque&user_id=bob`, {

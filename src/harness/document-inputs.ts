@@ -80,7 +80,11 @@ export async function documentBlocks(
           blocks.push({
             type: "document",
             title: document.name,
-            source: { type: "text", media_type: "text/plain", data: fitText(await documentText(document, signal)) },
+            source: {
+              type: "text",
+              media_type: "text/plain",
+              data: fitText((await documentText(document, signal)).text),
+            },
           });
         } catch {
           blocks.push({ type: "text", text: fitText(await documentFallbackText(document, signal)) });

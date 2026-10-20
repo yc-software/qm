@@ -2,7 +2,7 @@ import { scopeId } from "../../types.ts";
 import { sendJson, readRawBody, PayloadTooLargeError } from "../http.ts";
 import { loadAdministrable } from "./loops.ts";
 import { isObj } from "./shared.ts";
-import type { ApiCtx, BaseCtx, Route } from "./route.ts";
+import { withActor, type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import type { LoopIngress, IngressSetup } from "../../loops/ingress.ts";
 import { errMessage } from "../../util/errors.ts";
 
@@ -82,9 +82,11 @@ async function receive(ctx: BaseCtx) {
 }
 
 export const loopIngressRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
-  { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
-  { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
+  ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/loops/:id/ingestion", auth: "source", handle: list },
+    { method: "POST", path: "/v1/loops/:id/ingestion", auth: "source", handle: change },
+    { method: "PATCH", path: "/v1/loops/:id/ingestion/:sourceId", auth: "source", handle: change },
+  ]),
 ];
 
 export const loopIngressRawRoutes: ReadonlyArray<Route<BaseCtx>> = [

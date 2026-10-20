@@ -91,6 +91,7 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   );
   const self = w.messages[1]!;
   assert.equal(self.author, "you");
+  assert.deepEqual(w.selfTs, [self.ts]);
   assert.equal(self.threadTs, "1700000001.000100");
   assert.deepEqual(self.files, ["plan.pdf"]);
   assert.ok(self.text.startsWith("ping @Alice"), "mentions resolve to names");

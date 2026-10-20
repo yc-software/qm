@@ -102,7 +102,13 @@ export interface HarnessTurnInput {
   prepareSteer?(
     text: string,
     request?: TurnRequest,
-  ): Promise<{ text: string; attachments?: AttachmentMeta[]; images?: HarnessImage[]; documents?: DocumentInput[] }>;
+  ): Promise<{
+    text: string;
+    attachments?: AttachmentMeta[];
+    images?: HarnessImage[];
+    documents?: DocumentInput[];
+    author?: string;
+  }>;
   documents?: DocumentInput[];
   runtime?: Partial<RuntimeChoice>;
   runtimePurpose?: import("../resolution/config-store.ts").RuntimePurpose;
@@ -136,6 +142,7 @@ export interface HarnessTurnInput {
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
   onGapWork?(sink: (work: GapWork) => void): void;
   onDelta?(chunk: string): void;
+  onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;

@@ -128,3 +128,10 @@ export interface LeaseInfo {
   heartbeat: { pid: number; at: number; phase: string } | null;
   state: Record<string, unknown> | null;
 }
+
+export interface CanaryReply {
+  ok: boolean;
+  code?: "unconfigured";
+  rttMs?: number;
+  reason?: string;
+}

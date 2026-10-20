@@ -492,26 +492,41 @@ test("a hidden proactive-opener user entry never renders, but its assistant gree
   assert.equal((msgs[0] as { role?: string }).role, "assistant");
 });
 
-test("a materialized delivery entry (cron reply written into the thread) renders as an assistant reply", () => {
+test("a delivered cron reply renders as an assistant reply", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "remind me later" }, createdAt: 100 },
     { type: "assistant", payload: { text: "will do" }, createdAt: 110 },
     {
       type: "assistant",
-      payload: {
-        text: "Reminder: standup in 10 minutes",
-        deliveryKey: "agent:main:cron:c1:100",
-        via: "cron",
-      },
+      payload: { text: "Reminder: standup in 10 minutes", via: "cron" },
       createdAt: 200,
       seq: 2,
     },
   ];
   const msgs = entriesToMessages(entries, MODEL);
   assert.equal(msgs.length, 3, "user + reply + delivered reminder");
-  const delivered = msgs[2] as { role?: string; content?: Array<{ text?: string }> };
+  const delivered = msgs[2] as AssistantWork & { role?: string; content?: Array<{ text?: string }> };
   assert.equal(delivered.role, "assistant");
   assert.equal(delivered.content?.[0]?.text, "Reminder: standup in 10 minutes");
+  assert.equal(delivered.work, undefined, "a delivery is a reply, not tool activity");
+});
+
+test("a migrated reply and delivered-file entry render text and file chips", () => {
+  const entries: SessionEntry[] = [
+    { type: "user", payload: { text: "make gifs" }, createdAt: 100 },
+    { type: "assistant", payload: { text: "rsi.gif" }, createdAt: 120, seq: 1 },
+    {
+      type: "delivery",
+      payload: { files: [{ name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" }] },
+      createdAt: 121,
+      seq: 2,
+    },
+  ];
+  const msgs = entriesToMessages(entries, MODEL);
+  assert.equal(msgs.length, 2);
+  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
+    { name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" },
+  ]);
 });
 
 test("a durable turn_failure entry renders like the live inline error (survives reload)", () => {
@@ -676,26 +691,6 @@ test("a legacy user entry without artifactId keeps a metadata-only attachment (c
   assert.equal(att!.artifactId, undefined, "no fabricated artifact link");
 });
 
-test("delivery entries attach openable files to the preceding assistant message", () => {
-  const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "make gifs" }, createdAt: 100 },
-    { type: "assistant", payload: { text: "Here are the gifs." }, createdAt: 120 },
-    {
-      type: "delivery",
-      payload: {
-        text: "rsi.gif",
-        files: [{ name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" }],
-      },
-      createdAt: 121,
-    },
-  ];
-  const msgs = entriesToMessages(entries, MODEL);
-  assert.equal(msgs.length, 2);
-  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
-    { name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" },
-  ]);
-});
-
 test("an attach tool result attaches openable files to the turn's assistant message", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "make a report" }, createdAt: 100 },
@@ -759,27 +754,6 @@ test("a failed attach tool result attaches no files", () => {
   ];
   const msgs = entriesToMessages(entries, MODEL);
   assert.equal((msgs[1] as AssistantWork).deliveredFiles, undefined);
-});
-
-test("delivery-only turns still rebuild an assistant message for the file chips", () => {
-  const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "make gif only" }, createdAt: 100 },
-    {
-      type: "delivery",
-      payload: {
-        text: "rsi.gif",
-        files: [{ name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" }],
-      },
-      createdAt: 121,
-    },
-  ];
-  const msgs = entriesToMessages(entries, MODEL);
-  assert.equal(msgs.length, 2);
-  assert.equal((msgs[1] as { role?: string }).role, "assistant");
-  assert.equal(((msgs[1] as AssistantWork).content[0] as { text?: string }).text, "");
-  assert.deepEqual((msgs[1] as AssistantWork).deliveredFiles, [
-    { name: "rsi.gif", mimetype: "image/gif", sizeBytes: 42, artifactId: "art-1" },
-  ]);
 });
 
 test("tool entries from a prior turn don't leak into the next turn's assistant reply", () => {

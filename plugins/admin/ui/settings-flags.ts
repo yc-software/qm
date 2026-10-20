@@ -18,12 +18,11 @@ let redraw = () => {};
 export function configureFlags(options: any) {
   config = options;
 }
+function feature() {
+  return state.rows.find((row) => row.featureName === state.feature);
+}
 function selector() {
-  const choices = state.choices.filter(
-    (row) =>
-      !["persistent_subagents", "app_annotations", "ui_canvas"].includes(state.feature) ||
-      row.scopeId.startsWith("personal:"),
-  );
+  const choices = state.choices.filter((row) => !feature()?.personalOnly || row.scopeId.startsWith("personal:"));
   for (const id of state.selected) if (!choices.some((row) => row.scopeId === id)) state.selected.delete(id);
   state.selector = config.buildSelector(choices, state.selected, redraw);
   redraw();
@@ -128,20 +127,13 @@ function template() {
         <label
           >Feature<select
             id="feature-flag-name"
-            .value=${state.feature}
             ?disabled=${state.saving}
             @change=${(e: Event) => {
               state.feature = (e.target as HTMLSelectElement).value;
               selector();
             }}
           >
-            <option value="persistent_subagents">Persistent subagents</option>
-            <option value="app_annotations">App annotations</option>
-            <option value="inbox_loops">Inbox Loops</option>
-            <option value="slack_loading_indicator">Slack loading indicator (experimental)</option>
-            <option value="external_app_sharing">External app sharing (public links, outside emails)</option>
-            <option value="loop_triage">Loop triage (prioritize and consolidate)</option>
-            <option value="ui_canvas">UI canvas and UI state (agent code runs in the page)</option>
+            ${state.rows.map((row) => html`<option value=${row.featureName} .selected=${row.featureName === state.feature}>${row.label}</option>`)}
           </select></label
         >
         <div>
@@ -149,18 +141,7 @@ function template() {
           <div id="feature-flag-scopes" aria-labelledby="feature-flag-scope-label" ?inert=${state.saving}>
             ${state.selector || "Loading people and scopes…"}
           </div>
-          <span class="hint"
-            >${
-              {
-                app_annotations:
-                  "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
-                ui_canvas:
-                  "Lets the agent read the selected people's whole web UI and place live HTML/CSS/JS panels in their conversations. Canvas code runs unsandboxed in their page with their full session: it can do anything they can, including answering approvals. Personal scopes only. Turning it off stops canvases from loading on the next page load.",
-                slack_loading_indicator:
-                  "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
-              }[state.feature] ?? "Persistent subagents are available for personal scopes only."
-            }</span
-          >
+          <span class="hint">${feature()?.hint ?? ""}</span>
         </div>
       </div>
     </div>

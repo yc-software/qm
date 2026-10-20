@@ -39,6 +39,7 @@ const DATA_CREDS_REFRESH_MS = 45 * 60_000;
 const DATA_CREDS_RETRY_MS = 60_000;
 const failureBackoffStamp = (): number => Date.now() - DATA_CREDS_REFRESH_MS + DATA_CREDS_RETRY_MS;
 const MAX_DATA_TAR_BYTES = 180 * 1024 * 1024;
+const MAX_APP_BYTES = 100 * 1024 * 1024;
 const READY_PATH = `${APP_DIR}/.qm-ready`;
 const APP_READY_WINDOW_SEC = 60;
 const APP_PORT_RELEASE_TICKS = 40;
@@ -507,7 +508,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
           if (r.code === 24) {
             if (fresh) binariesMissingUntilMs = Date.now() + 10 * 60_000;
             msg =
-              "litestream/aws binaries missing from the MicroVM image — roll AWS_DEPLOY_IMAGE (aws/microvm-agent) before setting AWS_DEPLOY_DATA_ROLE_ARN";
+              "litestream/aws binaries missing from the MicroVM image — roll AWS_DEPLOY_IMAGE (cli/templates/aws/microvm-agent) before setting AWS_DEPLOY_DATA_ROLE_ARN";
           }
           if (fresh) {
             await store.delete(d.id).catch((e) => swallow("aws-deploy: litestream-fail clear pointer", e));
@@ -637,7 +638,12 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   };
 
   return {
-    profile: { managedScaleToZero: true, inPlaceReconcile: true, ...(s3 ? { dataDir: DATA_DIR } : {}) },
+    profile: {
+      managedScaleToZero: true,
+      inPlaceReconcile: true,
+      maxAppBytes: MAX_APP_BYTES,
+      ...(s3 ? { dataDir: DATA_DIR } : {}),
+    },
 
     apply: (d, version) => place(d, version),
 

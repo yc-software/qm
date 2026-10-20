@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { provisionTwinEnvironment, teardownTwinEnvironment } from "../../test/live-slack/arga-provision.ts";
-import { readEnvFile } from "./lib/util.ts";
+import { readEnvFile } from "../../cli/src/util.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const dir = join(root, ".twin-instance");
@@ -11,7 +11,7 @@ const envFile = join(dir, "env");
 const pumpPid = join(dir, "pump.pid");
 
 function loadEnvFile(): Record<string, string> {
-  return readEnvFile(envFile);
+  return Object.fromEntries(readEnvFile(envFile));
 }
 
 async function up(): Promise<void> {

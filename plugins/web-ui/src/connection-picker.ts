@@ -1,5 +1,5 @@
 import { html, nothing, render } from "lit";
-import { Search, ArrowUpRight, Check } from "lucide";
+import { Search, ArrowUpRight, Check, RefreshCw } from "lucide";
 import { connectorLogo } from "./connector-logo";
 import { icon } from "./icons";
 
@@ -10,6 +10,7 @@ export interface ConnectionService {
   popularity: number;
   logoUrl?: string;
   connected?: boolean;
+  stale?: boolean;
 }
 
 export function mountConnectionPicker(
@@ -58,20 +59,22 @@ export function mountConnectionPicker(
                 </div>`
         }
         <div class="connection-picker-grid">
-          ${shown.map(
-            (service) =>
-              html`<button
-                type="button"
-                class="connection-picker-app"
-                ?disabled=${service.connected}
-                aria-label=${service.connected ? `${service.name} connected` : `Connect ${service.name}`}
-                @click=${() => onSelect(service)}
-              >
-                ${connectorLogo(service.id, service.logoUrl)}
-                <span class="connection-picker-name">${service.name}</span>
-                <span class="connection-picker-trailing">${icon(service.connected ? Check : ArrowUpRight, 14)}</span>
-              </button>`,
-          )}
+          ${shown.map((service) => {
+            let action = { label: `Connect ${service.name}`, mark: ArrowUpRight };
+            if (service.stale) action = { label: `Reconnect ${service.name}`, mark: RefreshCw };
+            else if (service.connected) action = { label: `${service.name} connected`, mark: Check };
+            return html`<button
+              type="button"
+              class=${service.stale ? "connection-picker-app stale" : "connection-picker-app"}
+              ?disabled=${service.connected && !service.stale}
+              aria-label=${action.label}
+              @click=${() => onSelect(service)}
+            >
+              ${connectorLogo(service.id, service.logoUrl)}
+              <span class="connection-picker-name">${service.name}</span>
+              <span class="connection-picker-trailing">${icon(action.mark, 14)}</span>
+            </button>`;
+          })}
         </div>
         ${matches.length === 0 ? html`<p class="connection-picker-empty">No apps match “${query}”. Try another name.</p>` : nothing}
         ${

@@ -26,7 +26,7 @@ export interface Harness {
 }
 
 interface HarnessOptions {
-  api?: (path: string, init?: RequestInit) => Response | undefined;
+  api?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined;
   path: string;
   session?: CoreSession;
   messageLink?: boolean;
@@ -34,6 +34,7 @@ interface HarnessOptions {
   transcriptFailures?: number;
   holdTranscript?: boolean;
   holdApprovals?: boolean;
+  approvals?: (sessionId: string) => unknown[];
   holdRuntimeConfig?: boolean;
   holdRemoteSplit?: boolean;
   remoteCanvas?: unknown;
@@ -45,6 +46,7 @@ interface HarnessOptions {
   connectionReturn?: boolean;
   slackReturn?: "success" | "expired" | "cancelled" | "wrong-account";
   returnWidget?: string;
+  returnReplaces?: string;
   openNewChat?: boolean;
 }
 
@@ -106,6 +108,7 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         path: "/s/sess-deep",
         service: { id: "gmail", name: "Gmail" },
         accountId: "ca_test",
+        ...(opts.returnReplaces ? { replaces: opts.returnReplaces } : {}),
         widget: opts.returnWidget ?? "welcome",
         expiresAt: Date.now() + 60000,
         picker: { query: "mail", expanded: true },
@@ -167,7 +170,8 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
     }
     if (path.startsWith("/api/sessions/") && path.includes("/approvals")) {
       if (opts.holdApprovals) await approvalsHeld;
-      return Response.json({ approvals: [] });
+      const sessionId = decodeURIComponent(path.split("/")[3] ?? "");
+      return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
     if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;

@@ -1,6 +1,11 @@
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
-import { spawnDockerExec, type DockerExec } from "../sandbox/docker-exec.ts";
+import {
+  dockerContainerNetworks,
+  ensureDockerNetwork,
+  spawnDockerExec,
+  type DockerExec,
+} from "../sandbox/docker-exec.ts";
 import { errMessage } from "../util/errors.ts";
 import {
   appBoot,
@@ -16,7 +21,6 @@ import {
 const APP_PORT = 8080;
 const APP_READY_WINDOW_SEC = 60;
 const RUN_TIMEOUT_MS = 300_000;
-const LEGACY_NETWORK = "agent-deploynet";
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
 export interface DockerDeployProviderOptions {
@@ -75,54 +79,13 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
       dexec(["exec", name(d), "sh", "-c", script], timeoutSec * 1000);
   const checked = recentAppChecks();
   const network = (d: Deployment) => `${name(d)}-net`;
-  const ensureNetwork = async (net: string): Promise<string> => {
-    if ((await dexec(["network", "inspect", net])).code !== 0) {
-      const r = await dexec(["network", "create", net]);
-      if (r.code !== 0 && !/already exists/i.test(r.stderr)) {
-        throw new Error(`docker network create ${net} failed: ${r.stderr.trim()}`);
-      }
-    }
-    return net;
-  };
-
-  const migrateContainer = async (container: string): Promise<boolean> => {
-    const inspected = await dexec(["inspect", "--format", "{{json .NetworkSettings.Networks}}", container]);
-    if (inspected.code !== 0) {
-      if (/no such (?:object|container)|not found/i.test(inspected.stderr)) return false;
-      throw new Error(`docker inspect ${container} failed: ${inspected.stderr.trim()}`);
-    }
-    let attached: Record<string, unknown>;
-    try {
-      attached = JSON.parse(inspected.stdout) as Record<string, unknown>;
-    } catch {
-      throw new Error(`docker inspect ${container} returned invalid network state`);
-    }
-    const target = `${container}-net`;
-    await ensureNetwork(target);
-    if (!(target in attached)) {
-      const connected = await dexec(["network", "connect", target, container]);
-      if (connected.code !== 0) throw new Error(`docker network connect ${target} failed: ${connected.stderr.trim()}`);
-    }
-    if (LEGACY_NETWORK in attached) {
-      const disconnected = await dexec(["network", "disconnect", LEGACY_NETWORK, container]);
-      if (disconnected.code !== 0)
-        throw new Error(`docker network disconnect ${LEGACY_NETWORK} failed: ${disconnected.stderr.trim()}`);
-    }
-    return true;
-  };
-  const migrateTarget = async (container: string): Promise<boolean> => {
-    try {
-      return await migrateContainer(container);
-    } catch {
-      return migrateContainer(container);
-    }
-  };
+  const exists = async (d: Deployment): Promise<boolean> => (await dockerContainerNetworks(dexec, name(d))) !== null;
 
   return {
     profile: { managedScaleToZero: false },
 
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
-      const net = await ensureNetwork(network(d));
+      const net = await ensureDockerNetwork(dexec, network(d));
       await dexec(["rm", "-f", name(d)]);
       const hostPort = allocPort(name(d));
       const envArgs = Object.entries(version.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
@@ -175,7 +138,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
     },
 
     async logs(d: Deployment, opts: { tailLines: number }): Promise<string | null> {
-      if (!(await migrateTarget(name(d)))) return null;
+      if (!(await exists(d))) return null;
       return appLogs(execIn(d), opts.tailLines);
     },
 
@@ -187,7 +150,7 @@ export function createDockerDeployProvider(opts: DockerDeployProviderOptions = {
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       if (checked.has(d.id)) return d.endpoint;
-      if (!(await migrateTarget(name(d)))) return null;
+      if (!(await exists(d))) return null;
       const report = appReporter(opts.onError, d, version.env);
       if (await appGone(execIn(d), { appPort: APP_PORT, report })) return null;
       checked.set(d.id, true);

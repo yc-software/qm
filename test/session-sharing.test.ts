@@ -56,6 +56,16 @@ test("shared transcript allowlists visible message fields and published replies"
   );
 });
 
+test("a delivery into the conversation is shared as the assistant's message", () => {
+  assert.deepEqual(
+    sharedMessages([entry("user", { text: "remind me" }, 1), entry("assistant", { text: "Standup now" }, 2)]),
+    [
+      { role: "user", text: "remind me" },
+      { role: "assistant", text: "Standup now" },
+    ],
+  );
+});
+
 test("work phases and approval decisions remain outside the shared message snapshot", () => {
   assert.deepEqual(
     sharedMessages([
@@ -254,14 +264,13 @@ test("attachment projection includes only user and delivered attachments", () =>
     entry("tool_result", { tool: "attach", files: [{ artifactId: "old", name: "a" }] }, 4),
     entry("tool_result", { tool: "attach", files: [{ artifactId: "new", name: "a" }] }, 5),
     entry("assistant", { text: "Here" }, 6),
-    entry("delivery", { files: [{ artifactId: "new" }] }, 7),
     entry("tool_call", { action: "post", callId: "p", text: "Posted" }, 8),
     entry("tool_result", { callId: "p", files: [{ artifactId: "posted" }] }, 9),
     entry("assistant", { text: "private final" }, 10),
   ]);
   assert.deepEqual(messages, [
     { role: "user", text: "", attachmentIds: ["user"] },
-    { role: "assistant", text: "Here", attachmentIds: ["new"] },
+    { role: "assistant", text: "Here" },
     { role: "assistant", text: "Posted", attachmentIds: ["posted"] },
   ]);
 });

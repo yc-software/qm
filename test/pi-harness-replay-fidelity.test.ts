@@ -10,6 +10,7 @@ import { createMemoryRunSignalStore, type RunSignalStore } from "../src/runs/run
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { artifactImageLoader } from "../src/harness/replay-images.ts";
+import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 
 type Body = { messages?: unknown[]; input?: unknown[] };
 type Reply = Array<Record<string, unknown>>;
@@ -82,6 +83,13 @@ function openaiSse(items: Reply): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
+function jsonb(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonb);
+  if (!value || typeof value !== "object") return value;
+  const keys = Object.keys(value).sort((a, b) => a.length - b.length || Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  return Object.fromEntries(keys.map((key) => [key, jsonb((value as Record<string, unknown>)[key])]));
+}
+
 function withoutCacheControl(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutCacheControl);
   if (!value || typeof value !== "object") return value;
@@ -132,7 +140,7 @@ async function runTurn(
           seq: seq++,
           parentSeq: null,
           type: e.type,
-          payload: JSON.parse(JSON.stringify(e.payload ?? null)),
+          payload: jsonb(e.payload),
           scopeLabel: e.scopeLabel,
           createdAt: Date.now(),
         };
@@ -490,3 +498,163 @@ test("a replayed image is read from the file store once, not on every turn", asy
   const second = await load({ artifactId: "art-once", mimeType: "image/png" }, 10_000_000);
   assert.deepEqual([first, second, opens], [{ data: PNG_A, sizeBytes: 70 }, { data: PNG_A, sizeBytes: 70 }, 1]);
 });
+
+const PG_URL = process.env.DATABASE_URL;
+
+async function withPgSession(
+  fn: (ctx: {
+    emit: HarnessTurnInput["emit"];
+    history: () => Promise<SessionEntry[]>;
+    toolOutput: ToolOutputStore;
+  }) => Promise<void>,
+): Promise<void> {
+  const { randomUUID } = await import("node:crypto");
+  const { createPostgresSessionStore } = await import("../src/sessions/postgres-session-store.ts");
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: PG_URL });
+  const schema = `replay_pg_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const url = new globalThis.URL(PG_URL!);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  const store = createPostgresSessionStore(url.toString());
+  const raw = new pg.Pool({ connectionString: url.toString() });
+  try {
+    const session = await store.getOrCreateByThread(
+      "web:replay",
+      "dm",
+      "personal:tester" as SessionEntry["scopeLabel"],
+    );
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
+    await fn({
+      toolOutput: createPostgresToolOutputStore({
+        pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },
+        bytesFor: () => createMemoryDurableByteStore(),
+      }),
+      emit: (entry) => store.append({ ...lease, turnId: "run-pg" }, entry),
+      history: async () => forModelContext(await store.getEntries(session.id)),
+    });
+    await store.releaseLease(lease);
+  } finally {
+    await raw.end();
+    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    await admin.end();
+  }
+}
+
+const bigResult = "row ünï 🚀 ".repeat(4_000);
+const pgTools = {
+  async history() {
+    return [bigResult];
+  },
+} as unknown as ToolContext;
+
+test(
+  "after a round trip through Postgres items, the next anthropic request replays a cut result and a delivery byte-for-byte",
+  { skip: PG_URL ? false : "set DATABASE_URL" },
+  async () => {
+    await withPgSession(async ({ emit, history, toolOutput }) => {
+      const step1: Reply = [
+        { type: "thinking", thinking: "I should search history.", signature: "sig-one" },
+        { type: "text", text: "Checking." },
+        {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "history",
+          input: { query: "budget", type: "dm", nested: { a: [1] } },
+        },
+        { type: "tool_use", id: "toolu_2", name: "history", input: { limit: "many" } },
+      ];
+      const step2: Reply = [
+        { type: "thinking", thinking: "Found it.", signature: "sig-two" },
+        { type: "text", text: "Done." },
+      ];
+      const tools = { ...pgTools, toolOutput } as ToolContext;
+      const first = await runTurn(
+        "where is the budget doc?",
+        [],
+        [() => anthropicSse(step1, "tool_use"), () => anthropicSse(step2, "end_turn")],
+        { emit, tools },
+      );
+      const scopeLabel = "personal:tester" as SessionEntry["scopeLabel"];
+      await emit({ type: "assistant", payload: { text: "Daily digest", via: "cron" }, scopeLabel });
+      const second = await runTurn(
+        "and Q3?",
+        await history(),
+        [() => anthropicSse([{ type: "text", text: "None." }], "end_turn")],
+        { emit, tools },
+      );
+      const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+      const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+      assert.ok(!JSON.stringify(before).includes(bigResult.trim()));
+      assert.match(JSON.stringify(before), /tool-output\/toolu_1/);
+      assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+      assert.deepEqual(after.slice(before.length), [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Found it.", signature: "sig-two" },
+            { type: "text", text: "Done." },
+          ],
+        },
+        { role: "assistant", content: [{ type: "text", text: "Daily digest" }] },
+        { role: "user", content: [{ type: "text", text: "and Q3?" }] },
+      ]);
+    });
+  },
+);
+
+test(
+  "after a round trip through Postgres items, the next OpenAI Responses request replays the previous turn exactly",
+  { skip: PG_URL ? false : "set DATABASE_URL" },
+  async () => {
+    await withPgSession(async ({ emit, history }) => {
+      const reasoning = (id: string, text: string) => ({
+        type: "reasoning",
+        id,
+        summary: [{ type: "summary_text", text }],
+        encrypted_content: `enc-${id}`,
+      });
+      const message = (id: string, text: string) => ({
+        type: "message",
+        id,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      });
+      const overrides: Partial<HarnessTurnInput> = {
+        runtime: { modelId: "gpt-5.4" },
+        providerKeys: { openai: "sk-openai" },
+        emit,
+        tools: pgTools,
+      };
+      const step1: Reply = [
+        reasoning("rs_1", "Search history."),
+        {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "history",
+          arguments: '{"type":"dm","query":"budget"}',
+        },
+      ];
+      const first = await runTurn(
+        "where is the budget doc?",
+        [],
+        [() => openaiSse(step1), () => openaiSse([reasoning("rs_2", ""), message("msg_2", "Done.")])],
+        overrides,
+      );
+      const second = await runTurn(
+        "and Q3?",
+        await history(),
+        [() => openaiSse([message("msg_3", "None.")])],
+        overrides,
+      );
+      const before = first.bodies[1]!.input!;
+      const after = second.bodies[0]!.input!;
+      assert.ok(JSON.stringify(before).includes(bigResult.trim()));
+      assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+    });
+  },
+);

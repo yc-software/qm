@@ -2,7 +2,9 @@ import { SignatureV4 } from "@smithy/signature-v4";
 import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { fetchWithRetry, sleep } from "../util/async.ts";
-import { errMessage, swallow, withRequestId } from "../util/errors.ts";
+import { errMessage, execFailure, swallow, withRequestId } from "../util/errors.ts";
+import { randomBytes } from "node:crypto";
+import { shq } from "../util/shell.ts";
 
 type CredentialProvider = () => Promise<{
   accessKeyId: string;
@@ -63,7 +65,7 @@ export interface AwsMicrovmApiOptions {
 }
 
 export interface AwsMicrovmApi {
-  listImages(): Promise<MicrovmImageSummary[]>;
+  listImages(nameFilter?: string): Promise<MicrovmImageSummary[]>;
   findImage(name: string): Promise<MicrovmImageSummary | null>;
   createImage(input: {
     name: string;
@@ -100,8 +102,14 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
   const credentials = opts.credentials ?? defaultProvider(opts.profile ? { profile: opts.profile } : {});
   const signer = new SignatureV4({ service: "lambda", region, sha256: Sha256, credentials });
 
-  async function call<T>(method: string, path: string, body?: unknown): Promise<{ status: number; json: T }> {
+  async function call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query: Record<string, string> = {},
+  ): Promise<{ status: number; json: T }> {
     const payload = body === undefined ? "" : JSON.stringify(body);
+    const search = new URLSearchParams(query).toString();
     const signed = await signer.sign({
       method,
       protocol: "https:",
@@ -109,11 +117,11 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
       path,
       headers: { host, "content-type": "application/json" },
       body: payload,
-      query: {},
+      query,
     });
     const res = await fetchWithRetry(
       (signal) =>
-        doFetch(`https://${host}${path}`, {
+        doFetch(`https://${host}${path}${search ? `?${search}` : ""}`, {
           method,
           headers: signed.headers as Record<string, string>,
           signal,
@@ -143,12 +151,23 @@ export function createMicrovmApi(opts: AwsMicrovmApiOptions): AwsMicrovmApi {
   }
 
   const api: AwsMicrovmApi = {
-    async listImages() {
-      const { json } = await call<{ items?: MicrovmImageSummary[] }>("GET", `${API}/microvm-images`);
-      return json.items ?? [];
+    async listImages(nameFilter?: string) {
+      const items: MicrovmImageSummary[] = [];
+      let next: string | undefined;
+      do {
+        const { json } = await call<{ items?: MicrovmImageSummary[]; nextToken?: string }>(
+          "GET",
+          `${API}/microvm-images`,
+          undefined,
+          { ...(nameFilter ? { nameFilter } : {}), ...(next ? { nextToken: next } : {}) },
+        );
+        items.push(...(json.items ?? []));
+        next = json.nextToken;
+      } while (next);
+      return items;
     },
     async findImage(name) {
-      return (await api.listImages()).find((i) => i.name === name) ?? null;
+      return (await api.listImages(name)).find((i) => i.name === name) ?? null;
     },
     async createImage({ name, s3Uri, baseImageArn, buildRoleArn, clientToken }) {
       const { json } = await call<MicrovmImageSummary>("POST", `${API}/microvm-images`, {
@@ -273,6 +292,7 @@ export async function vmFetch(
 export interface MicrovmClientOptions {
   agentPort: number;
   tokenTtlMinutes: number;
+  writeChunkBytes?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -301,6 +321,7 @@ export interface MicrovmClient {
 
 export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptions): MicrovmClient {
   const { agentPort, tokenTtlMinutes } = opts;
+  const writeChunkBytes = opts.writeChunkBytes ?? 32 * 1024 * 1024;
   const fetchOpt = opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {};
   const tokenById = new Map<string, { token: string; expMs: number }>();
 
@@ -342,10 +363,34 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
     return { stdout: j.stdout ?? "", stderr: j.stderr ?? "", code: j.code, timedOut: !!j.timedOut };
   }
 
-  async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
+  async function writeOnce(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
     const res = await daemon(id, endpoint, "/write", { path: absPath, b64: Buffer.from(data).toString("base64") });
     if (res.status !== 200)
       throw new Error(`microVM write ${absPath} failed (${res.status}): ${res.text.slice(0, 200)}`);
+  }
+
+  async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
+    if (data.byteLength <= writeChunkBytes) return writeOnce(id, endpoint, absPath, data);
+    const stem = `${absPath}.qm-${randomBytes(6).toString("hex")}`;
+    const parts: string[] = [];
+    try {
+      for (let offset = 0; offset < data.byteLength; offset += writeChunkBytes) {
+        parts.push(`${stem}.part-${parts.length}`);
+        await writeOnce(id, endpoint, parts[parts.length - 1]!, data.subarray(offset, offset + writeChunkBytes));
+      }
+      const joined = `${stem}.joined`;
+      const r = await execRaw(
+        id,
+        endpoint,
+        `cat ${parts.map(shq).join(" ")} > ${shq(joined)} && [ "$(wc -c < ${shq(joined)})" -eq ${data.byteLength} ] && { chmod --reference=${shq(absPath)} ${shq(joined)} 2>/dev/null || true; } && mv -fT ${shq(joined)} ${shq(absPath)}`,
+        300,
+      );
+      if (r.code !== 0) throw execFailure(`microVM write ${absPath} (joining ${parts.length} parts)`, r);
+    } finally {
+      await execRaw(id, endpoint, `rm -f ${shq(stem)}.part-* ${shq(stem)}.joined`, 60).catch((e) =>
+        swallow("microvm: remove write parts", e),
+      );
+    }
   }
 
   async function waitDaemon(id: string, endpoint: string): Promise<void> {

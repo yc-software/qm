@@ -1,5 +1,4 @@
 import { composeSoul } from "../resolution/resolution-service.ts";
-import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
@@ -14,7 +13,7 @@ import { cancelGoal, goalCancelledPayload, openGoal } from "../harness/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
@@ -26,7 +25,14 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { toFileItem, type ScopeDeployment, type SessionPinView, type SessionSearchHit } from "./app-types.ts";
+import {
+  SoulUpdateDeniedError,
+  SoulVersionConflictError,
+  toFileItem,
+  type ScopeDeployment,
+  type SessionPinView,
+  type SessionSearchHit,
+} from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 const MAX_SESSION_PINS = 50;
@@ -161,7 +167,7 @@ export function createSessionMethods(
 
   const storedEntryAt = async (sessionId: string, seq: number) => {
     const entry = await deps.sessions.getEntry(sessionId, seq);
-    return entry && entry.type !== "soul" ? entry : undefined;
+    return entry;
   };
 
   const viewerStoredEntryAt = async (sessionId: string, principalId: string, seq: number) => {
@@ -439,7 +445,10 @@ export function createSessionMethods(
       const all = await sessionsForViewer(principalId);
       const visibleById = new Map(all.map((session) => [session.id, session]));
       const approvalRows: PendingApprovalRecord[] = [];
-      for (const [, record] of (await deps.approvals?.entries()) ?? []) {
+      const approvals = visibleById.size
+        ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: [...visibleById.keys()] } })
+        : [];
+      for (const [, record] of approvals ?? []) {
         const session = visibleById.get(record.sessionId);
         if (session && (await approvalRecordIsCurrent(record, session))) approvalRows.push(record);
       }
@@ -544,19 +553,9 @@ export function createSessionMethods(
           ),
         ),
       );
-      const teamIds = [...new Set(hits.map((hit) => hit.entryScopeLabel))]
-        .map(parseScopeId)
-        .filter((label) => label.kind === "team")
-        .map((label) => label.ref);
-      const memberships = await Promise.all(
-        teamIds.map(async (id) => ((await deps.teams?.isMember(principalId, id)) ? id : null)),
-      );
-      const principal = { ...deps.identity.classify(principalId), teamIds: memberships.filter((id) => id !== null) };
       const terms = searchTerms(query);
       const entryHits: SessionSearchHit[] = hits.flatMap((hit) => {
         if (!allowed.get(hit.scopeId)) return [];
-        if (!principalEntitledToScope(principal, hit.entryScopeLabel, hit.scopeId, scopeId("org", orgIdOf())))
-          return [];
         const session = hit;
         return [
           {
@@ -641,7 +640,7 @@ export function createSessionMethods(
           ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
         };
       } catch (e) {
-        if (processIsGone(e)) return { chunk: "", cursor: sinceCursor, state: "exited" };
+        if (e instanceof ProcessSessionGoneError) return { chunk: "", cursor: sinceCursor, state: "exited" };
         throw e;
       } finally {
         await sandbox.teardown(handle, { keepWarm: true }).catch(() => {});
@@ -1210,7 +1209,7 @@ export function createSessionMethods(
       const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
-        throw new Error("not authorized to update SOUL for this scope");
+        throw new SoulUpdateDeniedError();
       }
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
@@ -1219,9 +1218,9 @@ export function createSessionMethods(
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
-              ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
+              ? await deps.config.setSoul(scopeIdValue, content, actorId)
               : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
-          if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
+          if (version === null) throw new SoulVersionConflictError();
           deps.auditLog.record({
             at: Date.now(),
             principalId: actorId,

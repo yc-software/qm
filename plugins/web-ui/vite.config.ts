@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
+import emojiSource from "emoji-datasource/emoji.json" with { type: "json" };
+import { emojiTableModule } from "./src/emoji-source.ts";
 
 const SERVER = process.env.WEB_UI_SERVER_URL ?? "http://localhost:8096";
 
@@ -50,9 +52,19 @@ export function precompressStaticAssets(): Plugin {
   };
 }
 
+function emojiTablePlugin(): Plugin {
+  return {
+    name: "qm-emoji-table",
+    enforce: "pre",
+    load(id) {
+      if (id === here("src/emoji-table.ts")) return emojiTableModule(emojiSource);
+    },
+  };
+}
+
 export default defineConfig({
   base: process.env.WEB_UI_BASE ?? "/",
-  plugins: [precompressStaticAssets()],
+  plugins: [emojiTablePlugin(), precompressStaticAssets()],
   resolve: {
     alias: [
       { find: /^katex$/, replacement: here("src/lazy-katex.ts") },

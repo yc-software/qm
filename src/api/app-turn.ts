@@ -722,8 +722,8 @@ export function createTurnMethods(
       );
     },
 
-    syncRunStream(runId, offset) {
-      deps.runStreamEvents?.emit({ runId, kind: "sync", offset });
+    syncRunStream(runId, offset, reasoning) {
+      deps.runStreamEvents?.emit({ runId, kind: "sync", offset, reasoning });
     },
 
     async getRun(runId, viewer) {
@@ -739,11 +739,13 @@ export function createTurnMethods(
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
+      const reasoning = deps.turnStream?.reasoning(runId) ?? [];
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
+        attempt: run.attempts,
         result: run.result ? await withAdminLink(run.result) : run.result,
         ...(run.request.surface === "web" &&
         !run.request.approval &&
@@ -782,6 +784,7 @@ export function createTurnMethods(
         ...(replying ? { replying: true } : {}),
         ...(replyComplete ? { replyComplete: true } : {}),
         ...(activity && activity.length ? { activity } : {}),
+        ...(reasoning.length ? { reasoning } : {}),
       };
     },
 

@@ -159,6 +159,33 @@ not wake oneself. There are no automatic reply-to-reply notifications: agents
 explicitly decide whether a response warrants another turn. When `notifications`
 is set, every generated turn consumes that budget.
 
+### Worker goals
+
+A worker turn normally ends when the worker replies, and the worker then waits
+for its next message. To keep a worker working, its parent can attach a goal to
+`spawn` or `send`:
+
+```json
+{
+  "action": "send",
+  "requestId": "lane-goal",
+  "audience": ["member-id"],
+  "text": "Work through every archive for your lane.",
+  "goal": { "objective": "Exhaust the lane's archives", "floor": { "minMs": 3600000 }, "token_cap": 2000000 }
+}
+```
+
+The goal is installed as the worker session's goal when that turn starts, and the
+turn runs under the normal goal loop: the worker is prompted to continue until the
+goal's governor approves completion or pauses it, or an optional `token_cap` is
+spent. A turn that carries a goal runs without the swarm `turnMs` deadline; other
+turns keep it. `floor` and `token_cap` take the same keys as the goal tool, and
+neither is required. Only a parent can assign goals, and
+only to its own workers; a goal needs `notify`. The worker treats its parent as
+the user for the goal and messages it when it needs a decision. Each goal message
+installs a fresh goal once (a retried delivery does not reinstall it), so sending
+a goal again replaces a paused or finished one and starts a new token budget.
+
 ### Ask, read, and tail
 
 `GET /v1/swarm?read=1&after=0&waitMs=0` returns at most 32 messages. Advance `after`

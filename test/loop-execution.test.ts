@@ -57,7 +57,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
             ...req,
             text:
               stage === "intake"
-                ? `!execute ${JSON.stringify({ command, credentials: ["service_error-source"] })}`
+                ? `!execute ${JSON.stringify({ command, credentials: ["error-source"] })}`
                 : `!run ${command}`,
           });
           assert.equal(result.status, "ok");

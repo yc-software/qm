@@ -332,7 +332,11 @@ test("the anchor is the last conversation entry, skipping system entries such as
   await sleep(5);
   await recordMessageRevisions(sessions, [edit()], NO_WAIT);
   const { lease } = await sessions.acquireLease(session.id, "turn");
-  await sessions.append(lease!, { type: "system", payload: { kind: "note" }, scopeLabel: SCOPE });
+  await sessions.append(lease!, {
+    type: "system",
+    payload: { kind: "wake", cause: "cron", text: "a fresh marker" },
+    scopeLabel: SCOPE,
+  });
   await sessions.releaseLease(lease!);
   assert.equal(await revisionAnchorAt(sessions, session.id), conversationAt);
   assert.equal(await revisionAnchorAt(createMemorySessionStore(), "nope"), undefined);

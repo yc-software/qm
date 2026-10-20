@@ -11,7 +11,7 @@ import {
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import {
   createMemoryMap,
-  selectValues,
+  selectEntries,
   type DurableMap,
   type DurableMapSelect,
 } from "../src/persistence/durable-map.ts";
@@ -295,7 +295,12 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
     async select<K extends Extract<keyof KeychainCredential, string> = never>(
       query: DurableMapSelect<KeychainCredential, K>,
     ) {
-      return selectValues([...store.values()], query);
+      return selectEntries([...store.entries()], query).map(([, value]) => value);
+    },
+    async selectEntries<K extends Extract<keyof KeychainCredential, string> = never>(
+      query: DurableMapSelect<KeychainCredential, K>,
+    ) {
+      return selectEntries([...store.entries()], query);
     },
     async get(k: string) {
       rejectNul(k);
