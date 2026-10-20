@@ -114,8 +114,6 @@ test(
         checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
         "a waiting checkout is kept",
       );
-      const ids = new Set([run.contexts.trace.span_id, ...spans.map((span) => span.span_id)]);
-      for (const span of spans) assert.ok(ids.has(span.parent_span_id), "every sent span's parent is sent");
     } finally {
       await pool.end();
     }
@@ -123,28 +121,19 @@ test(
 );
 
 test("a truncated run keeps every sent span's parent even when parent and child start together", async () => {
-  const start = 1_700_000_000;
-  const traceId = "0123456789abcdef0123456789abcdef";
-  const span = (id: number, parent: number, offset: number) => ({
-    span_id: id.toString(16).padStart(16, "0"),
-    parent_span_id: parent.toString(16).padStart(16, "0"),
-    trace_id: traceId,
-    op: "db",
-    description: "pg.connect",
-    start_timestamp: start + offset,
-    timestamp: start + offset + 0.5,
-    status: "ok",
-    data: {},
-  });
-  const earlier = Array.from({ length: 499 }, (_, i) => span(i + 2, 1, i / 1000));
-  const tied = [span(1002, 1001, 1), span(1003, 1002, 1), span(1001, 1, 1)];
-  Sentry.captureEvent({
-    type: "transaction",
-    transaction: "tied-run",
-    start_timestamp: start,
-    timestamp: start + 2,
-    contexts: { trace: { trace_id: traceId, span_id: (1).toString(16).padStart(16, "0"), op: "queue.process" } },
-    spans: [...tied, ...earlier],
+  await traceQueued(undefined, "tied-run", {}, async () => {
+    const start = Date.now() / 1000;
+    for (let i = 0; i < 499; i++) {
+      Sentry.startInactiveSpan({ name: "early", op: "task", startTime: start + i / 1000 }).end(
+        start + i / 1000 + 0.0005,
+      );
+    }
+    const tied = start + 1;
+    Sentry.startSpan({ name: "parent", op: "task", startTime: tied }, () => {
+      Sentry.startSpan({ name: "child", op: "task", startTime: tied }, () => {
+        Sentry.startInactiveSpan({ name: "grandchild", op: "task", startTime: tied }).end(tied + 0.001);
+      });
+    });
   });
   for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "tied-run"); i++) {
     await flushErrorReporting();
