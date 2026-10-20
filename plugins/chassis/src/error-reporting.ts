@@ -37,7 +37,8 @@ const SQL_VERBS = new Set(
     " ",
   ),
 );
-const POOL_SPANS = new Set(["pg.connect", "pg-pool.connect"]);
+const POOL_CHECKOUT = "pg-pool.connect";
+const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
 const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
@@ -110,7 +111,7 @@ function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T
 
 function idleCheckout(span: SpanJSON, parents: Set<string | undefined>): boolean {
   return (
-    span.description === "pg-pool.connect" &&
+    span.description === POOL_CHECKOUT &&
     (span.timestamp ?? Infinity) - span.start_timestamp < IDLE_CHECKOUT_SECONDS &&
     !parents.has(span.span_id)
   );
