@@ -1284,7 +1284,7 @@ test("AWS up scales services to the configured desired count and live check flag
     process.env.AWS_FAKE_CANARY_EXIT = "1";
     await assert.rejects(
       () => awsCheckLive(scaled(), { report: false }),
-      /core: private live session smoke failed: AWS canary task exited 1/,
+      /core: private live session smoke failed: AWS canary task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: Essential container in task exited/,
     );
     if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
@@ -3276,7 +3276,7 @@ test("AWS migration failure deregisters the candidate task and releases the depl
   try {
     await assert.rejects(
       () => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath),
-      /migration task exited 1: migration failed/,
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: migration failed; Essential container in task exited/,
     );
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /ecs deregister-task-definition/);
@@ -3309,7 +3309,7 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: candidatePath }),
-      /migration task exited 1: migration failed/,
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: migration failed; Essential container in task exited/,
     );
     const calls = readFileSync(fake.log, "utf8");
     assert.doesNotMatch(calls, /ecs (?:deregister-task-definition|update-service)/);

@@ -1242,7 +1242,7 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
   await awaitEcsTaskExit(aws, taskArn, "canary");
 }
 
-async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, label: string): Promise<void> {
+async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 5_000);
   const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
   for (;;) {
@@ -1257,20 +1257,20 @@ async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, label: string):
     const task = described.tasks?.[0];
     const failures = (described.failures ?? []).map((failure) => failure.reason ?? "unknown");
     if (failures.some((reason) => reason !== "MISSING")) {
-      throw new CliError(`AWS ${label} task ${taskArn} failed (${failures.join(", ")})`);
+      throw new CliError(`AWS ${kind} task ${taskArn} failed (${failures.join(", ")})`);
     }
     if (task?.lastStatus === "STOPPED") {
       const core = task.containers?.find((container) => container.name === "core");
       if (core?.exitCode === 0) return;
       throw new CliError(
-        `AWS ${label} task exited ${core?.exitCode ?? "without a code"}: ${core?.reason ?? task.stoppedReason ?? "unknown reason"}`,
+        `AWS ${kind} task ${taskArn} exited ${core?.exitCode ?? "without a code"}: ${[core?.reason, task.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
       );
     }
     if (Date.now() > deadline) {
       throw new CliError(
         task
-          ? `timed out waiting for the AWS ${label} task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`
-          : `timed out waiting for the AWS ${label} task; ECS still does not list ${taskArn}`,
+          ? `timed out waiting for the AWS ${kind} task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`
+          : `timed out waiting for the AWS ${kind} task; ECS still does not list ${taskArn}`,
       );
     }
     await sleep(pollMs);
