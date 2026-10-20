@@ -16,6 +16,7 @@ import {
   type DurableMapSelect,
 } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
+import { createGmailPushClient } from "../src/loops/gmail-push.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -473,4 +474,47 @@ test("operator token fallback: an empty per-user secret falls through to the hos
     },
   });
   assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1"), "host-wide");
+});
+
+test("operator fallback does not replace an explicitly selected named account", async () => {
+  const keychain = makeKeychain();
+  const host = "gmail.googleapis.com";
+  let secretReads = 0;
+  const tokens = withOperatorTokenFallback(keychain, [host], {
+    get: async () => {
+      secretReads++;
+      return "operator-account";
+    },
+  });
+  for (const accountType of ["personal", "company"]) {
+    assert.equal(await tokens.connectorAccessToken(host, "U1", accountType), null);
+    await keychain.setConnectorToken(host, "U1", { accessToken: "selected-account" }, accountType);
+    assert.equal(await tokens.connectorAccessToken(host, "U1", accountType), "selected-account");
+    await keychain.deleteConnectorToken(host, "U1", accountType);
+    assert.equal(await tokens.connectorAccessToken(host, "U1", accountType), null);
+  }
+  assert.equal(secretReads, 0);
+  for (const accountType of [undefined, "default", ""])
+    assert.equal(await tokens.connectorAccessToken(host, "U1", accountType), "operator-account");
+  assert.equal(secretReads, 3);
+});
+
+test("Gmail intake refuses a missing personal connection rather than querying an operator account", async () => {
+  let requests = 0;
+  const tokens = withOperatorTokenFallback(makeKeychain(), ["gmail.googleapis.com"], {
+    get: async () => "operator-account",
+  });
+  const client = createGmailPushClient(
+    tokens,
+    { topic: "fixture-topic", audience: "fixture-audience", serviceAccount: "fixture-service" },
+    async () => {
+      requests++;
+      return Response.json({ emailAddress: "reader@example.com", historyId: "1" });
+    },
+  );
+  await assert.rejects(
+    client.changes("U1", "fixture-loop", { email: "reader@example.com", historyId: "1", expiresAt: 1 }, async () => {}),
+    /Connect a personal Gmail account/,
+  );
+  assert.equal(requests, 0);
 });
