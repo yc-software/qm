@@ -93,7 +93,9 @@ default), and a turn cut off there resumes on the new tasks. Core images older
 than this release protect their task while a turn runs, so the first `qm up`
 that replaces them cannot finish before their longest in-flight turn ends
 (protection expires after 60 minutes at most); run that one deploy with a
-longer deadline or when no long turn is in flight.
+longer deadline or when no long turn is in flight. The candidate migration task
+gets the same deadline (default 30 minutes); a migration still running then is
+left to finish and `up` fails without changing services.
 
 AWS deployments can opt into durable background ownership with
 `aws.backgroundWorkControl: true`. The CLI allocates a unique

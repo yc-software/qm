@@ -429,7 +429,9 @@ else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) conso
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
 else if (a.includes("ecs wait tasks-stopped")) console.log("");
-else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
+else if (a.includes("ecs describe-tasks") && s.taskMissing) console.log(JSON.stringify({ tasks: [], failures: [{ arn: "arn:aws:ecs:us-west-2:123456789012:task/canary", reason: "MISSING" }] }));
+else if (a.includes("ecs describe-tasks") && s.runningPolls > 0) { s.runningPolls--; save(); console.log(JSON.stringify({ tasks: [{ lastStatus: "RUNNING", containers: [{ name: "core" }] }], failures: [] })); }
+else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ lastStatus: "STOPPED", stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
 else if (a.includes("ecs describe-task-definition")) {
   const id = after("--task-definition");
   console.log(JSON.stringify({ taskDefinition: s.definitions[id] }));
@@ -2837,7 +2839,7 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.match(calls, /ecs run-task .*--launch-type FARGATE/);
     assert.match(calls, /subnet-a/);
     assert.match(calls, /src\/migrate-main\.ts/);
-    assert.match(calls, /ecs wait tasks-stopped/);
+    assert.doesNotMatch(calls, /ecs wait/);
     assert.match(calls, /ecs deregister-task-definition/);
     assert.ok(calls.indexOf("dynamodb put-item") < calls.indexOf("ecs run-task"));
     assert.ok(calls.indexOf("rds describe-db-instances") < calls.indexOf("ecs run-task"));
@@ -2849,6 +2851,57 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.equal(registered.at(-1)?.containerDefinitions[0]?.image, image);
     assert.equal(registered.at(-1)?.containerDefinitions[0]?.healthCheck, undefined);
   } finally {
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS migration polls a long-running task to its deadline without stopping it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-wait-"));
+  const candidatePath = join(dir, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    JSON.stringify({
+      contract: 1,
+      accountId: "123456789012",
+      region: "us-west-2",
+      label: "candidate-deadbeef",
+      images: { core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}` },
+      imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
+    }),
+  );
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
+  const setState = (patch: Record<string, unknown>): void => {
+    writeFileSync(fake.state, JSON.stringify({ ...JSON.parse(readFileSync(fake.state, "utf8")), ...patch }));
+    writeFileSync(fake.log, "");
+  };
+  const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+  try {
+    setState({ runningPolls: 3 });
+    await awsMigrateCandidate(single, dir, candidatePath);
+    assert.equal(readFileSync(fake.log, "utf8").match(/ecs describe-tasks/g)?.length, 4);
+
+    setState({ runningPolls: 1e9 });
+    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "50";
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /task\/canary is still RUNNING and was left running/,
+    );
+    let calls = readFileSync(fake.log, "utf8");
+    assert.doesNotMatch(calls, /ecs stop-task/);
+    assert.match(calls, /ecs deregister-task-definition/);
+    assert.match(calls, /dynamodb delete-item/);
+
+    setState({ runningPolls: 0, taskMissing: true });
+    await assert.rejects(() => awsMigrateCandidate(single, dir, candidatePath), /migration task failed \(MISSING\)/);
+    calls = readFileSync(fake.log, "utf8");
+    assert.equal(calls.match(/ecs describe-tasks/g)?.length, 1);
+    assert.match(calls, /dynamodb delete-item/);
+  } finally {
+    if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }

@@ -916,20 +916,37 @@ async function runAwsCandidateMigration(
       throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
     }
     step(`migration task: ${taskArn}`);
-    awsText(aws, ["ecs", "wait", "tasks-stopped", "--cluster", aws.cluster, "--tasks", taskArn]);
-    const stopped = awsJson<{
-      tasks?: Array<{
-        stoppedReason?: string;
-        containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
-      }>;
-      failures?: Array<{ arn?: string; reason?: string }>;
-    }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
-    const task = stopped.tasks?.[0];
-    const core = task?.containers?.find((container) => container.name === "core");
-    if (stopped.failures?.length || core?.exitCode !== 0) {
-      throw new CliError(
-        `AWS migration task failed (${core?.reason ?? task?.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
-      );
+    const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 5_000);
+    const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+    for (;;) {
+      const described = awsJson<{
+        tasks?: Array<{
+          lastStatus?: string;
+          stoppedReason?: string;
+          containers?: Array<{ name?: string; exitCode?: number; reason?: string }>;
+        }>;
+        failures?: Array<{ arn?: string; reason?: string }>;
+      }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", taskArn]);
+      const task = described.tasks?.[0];
+      const core = task?.containers?.find((container) => container.name === "core");
+      if (described.failures?.length || !task) {
+        const failures = described.failures?.map((failure) => failure.reason ?? "unknown").join(", ");
+        throw new CliError(`AWS migration task failed (${failures || "task not found"})`);
+      }
+      if (task.lastStatus === "STOPPED") {
+        if (core?.exitCode !== 0) {
+          throw new CliError(
+            `AWS migration task failed (${core?.reason ?? task.stoppedReason ?? `exit ${core?.exitCode ?? "unknown"}`})`,
+          );
+        }
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new CliError(
+          `timed out waiting for the AWS migration task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`,
+        );
+      }
+      await sleep(pollMs);
     }
     ok(`candidate ${label} migrations applied`);
   } finally {
