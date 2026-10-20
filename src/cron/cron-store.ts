@@ -143,7 +143,7 @@ export function createCronStore(
       const wanted = (c: Cron): boolean =>
         (c.destination?.target !== undefined && refs.has(c.destination.target)) ||
         (c.sessionRef !== undefined && refs.has(c.sessionRef));
-      return backing.allMatching ? backing.allMatching(wanted) : (await backing.all()).filter(wanted);
+      return backing.allMatching(wanted);
     },
     async update(id, patch) {
       const before = await backing.get(id);

@@ -10,6 +10,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { assertLateJoinerScopes } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 
@@ -3152,4 +3153,8 @@ test("pg session lists leave out spawn metadata and group scopes per participant
   assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.sessionCount, 0);
   assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.lastActivityAt, null);
   assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.channelName, "eng");
+});
+
+test("pg participantScopes leaves out sessions whose content predates the participant", { skip }, async () => {
+  await assertLateJoinerScopes(createPostgresSessionStore(URL!), "pg-late");
 });

@@ -67,7 +67,7 @@ export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMa
     async enabledFor(threadRefs, now = Date.now()) {
       const refs = new Set(threadRefs);
       const wanted = (m: Monitor): boolean => m.enabled && m.expiresAt > now && refs.has(m.threadRef);
-      return backing.allMatching ? backing.allMatching(wanted) : (await backing.all()).filter(wanted);
+      return backing.allMatching(wanted);
     },
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);

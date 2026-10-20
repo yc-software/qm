@@ -203,7 +203,6 @@ const TENANT = "qm_tenant_id()";
 // nothing that lists sessions reads them, and spawn metadata alone is most of a large list's bytes.
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
   s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
-const HAS_CONTENT = "(COALESCE(s.messages, 0) > 0 OR NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL)";
 const tsOf = (ms: string): string => `to_timestamp((${ms})::double precision / 1000)`;
 
 function rowToSpendRow(r: Record<string, unknown>): SpendRow {
@@ -279,6 +278,18 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ),
     )
     .join(" UNION ALL ");
+  // Whether the participant sees anything in the session: a title, or an item inside their window. An open
+  // window that starts at a sequence number sees an item exactly when the session has stored past that number,
+  // so the message count answers it without touching items.
+  const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR
+    CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
+         THEN COALESCE(s.messages, 0) > p.valid_from_seq
+         ELSE EXISTS (${participantPresenceSql}) END)`;
+  // When the person last wrote in the session, or its creation: the newest user or steering item, one index seek each.
+  const latestUserItem = (kind: string): string =>
+    `(SELECT ${msOf("e.created_at")} FROM items e WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id
+       AND e.kind = '${kind}' ORDER BY e.created_at DESC LIMIT 1)`;
+  const USER_ACTIVITY = `GREATEST(s.created_at, ${latestUserItem("UserMessage")}, ${latestUserItem("SteeringMessage")})`;
   const participantSessionsSql = (extraWhere: string, columns = "s.*"): string =>
     `SELECT ${columns}, p.title AS p_title, p.archived AS p_archived, p.pinned AS p_pinned, p.color AS p_color,
             p.read_at AS p_read_at,
@@ -303,7 +314,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const rows = await q(
       `SELECT s.scope_id, MAX(s.channel_name) AS channel_name,
               COUNT(*) FILTER (WHERE ${HAS_CONTENT}) AS session_count,
-              MAX(${lastActivityExpr("s")}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
+              MAX(${USER_ACTIVITY}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
          FROM sessions s
          JOIN participants p ON p.session_id = s.id
         WHERE p.principal_id = $1

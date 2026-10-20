@@ -14,6 +14,7 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import type { SpawnMeta } from "../src/types.ts";
+import { assertLateJoinerScopes } from "./support/participant-scopes.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const spawnMeta = {
@@ -62,6 +63,10 @@ test("participantScopes counts sessions with content per scope and keeps scopes 
   assert.equal(scopes.get("channel:C1")?.sessionCount, 0);
   assert.equal(scopes.get("channel:C1")?.lastActivityAt, null);
   assert.equal(scopes.get("channel:C1")?.channelName, "eng");
+});
+
+test("participantScopes leaves out sessions whose content predates the participant", async () => {
+  await assertLateJoinerScopes(createMemorySessionStore(), "mem");
 });
 
 test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag", async () => {
@@ -140,7 +145,7 @@ test("allMatching returns only the matching values", async () => {
   const map = createMemoryMap<{ n: number; tags: string[] }>();
   await map.put("a", { n: 1, tags: [] });
   await map.put("b", { n: 2, tags: [] });
-  const [match] = await map.allMatching!((value) => value.n === 2);
+  const [match] = await map.allMatching((value) => value.n === 2);
   assert.equal(match?.n, 2);
-  assert.equal((await map.allMatching!(() => false)).length, 0);
+  assert.equal((await map.allMatching(() => false)).length, 0);
 });
