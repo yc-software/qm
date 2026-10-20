@@ -2,7 +2,8 @@ import { SignatureV4 } from "@smithy/signature-v4";
 import { Sha256 } from "@aws-crypto/sha256-js";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { fetchWithRetry, sleep } from "../util/async.ts";
-import { errMessage, swallow, withRequestId } from "../util/errors.ts";
+import { errMessage, execFailure, swallow, withRequestId } from "../util/errors.ts";
+import { randomBytes } from "node:crypto";
 import { shq } from "../util/shell.ts";
 
 type CredentialProvider = () => Promise<{
@@ -353,18 +354,26 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
 
   async function writeAbs(id: string, endpoint: string, absPath: string, data: Uint8Array): Promise<void> {
     if (data.byteLength <= writeChunkBytes) return writeOnce(id, endpoint, absPath, data);
+    const stem = `${absPath}.qm-${randomBytes(6).toString("hex")}`;
     const parts: string[] = [];
-    for (let offset = 0; offset < data.byteLength; offset += writeChunkBytes) {
-      const part = `${absPath}.qm-part-${parts.length}`;
-      await writeOnce(id, endpoint, part, data.subarray(offset, offset + writeChunkBytes));
-      parts.push(part);
-    }
-    const quoted = parts.map(shq).join(" ");
-    const r = await execRaw(id, endpoint, `cat ${quoted} > ${shq(absPath)}; rc=$?; rm -f ${quoted}; exit $rc`, 300);
-    if (r.code !== 0)
-      throw new Error(
-        `microVM write ${absPath} failed joining ${parts.length} parts (code ${r.code}): ${r.stderr.slice(0, 200)}`,
+    try {
+      for (let offset = 0; offset < data.byteLength; offset += writeChunkBytes) {
+        parts.push(`${stem}.part-${parts.length}`);
+        await writeOnce(id, endpoint, parts[parts.length - 1]!, data.subarray(offset, offset + writeChunkBytes));
+      }
+      const joined = `${stem}.joined`;
+      const r = await execRaw(
+        id,
+        endpoint,
+        `cat ${parts.map(shq).join(" ")} > ${shq(joined)} && [ "$(wc -c < ${shq(joined)})" -eq ${data.byteLength} ] && mv -f ${shq(joined)} ${shq(absPath)}`,
+        300,
       );
+      if (r.code !== 0) throw execFailure(`microVM write ${absPath} (joining ${parts.length} parts)`, r);
+    } finally {
+      await execRaw(id, endpoint, `rm -f ${shq(stem)}.part-* ${shq(stem)}.joined`, 60).catch((e) =>
+        swallow("microvm: remove write parts", e),
+      );
+    }
   }
 
   async function waitDaemon(id: string, endpoint: string): Promise<void> {

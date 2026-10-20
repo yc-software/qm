@@ -410,12 +410,6 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
 
   async function bundleBase64(version: DeploymentVersion): Promise<string> {
     const tree = await readTree(version.snapshotDir, { tolerateMissing: true });
-    const sourceBytes = tree.reduce((total, file) => total + file.data.byteLength, 0);
-    if (sourceBytes > MAX_BUNDLE_SOURCE_BYTES) {
-      throw new Error(
-        `the app source is too large for the Fly deploy provider: ${sourceBytes} bytes, maximum ${MAX_BUNDLE_SOURCE_BYTES} bytes`,
-      );
-    }
     const encoded = gzipSync(await makeTar(tree)).toString("base64");
     if (encoded.length > MAX_BUNDLE_BASE64_BYTES) {
       throw new Error(
@@ -509,7 +503,11 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
   }
 
   return {
-    profile: { managedScaleToZero: !!opts.sharedAppName, ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}) },
+    profile: {
+      managedScaleToZero: !!opts.sharedAppName,
+      maxAppBytes: MAX_BUNDLE_SOURCE_BYTES,
+      ...(opts.dataVolumeSizeGb ? { dataDir: "/data" } : {}),
+    },
 
     async resolveEndpoint(d, version) {
       if (!checked.has(d.id)) {

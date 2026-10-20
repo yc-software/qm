@@ -387,16 +387,6 @@ test("apply: an app bundle over the machine-file cap is refused with its actual 
   assert.deepEqual(calls, [], "nothing is created on Fly for a bundle that could never be injected");
 });
 
-test("apply: highly compressible source cannot bypass the unpacked-size cap", async () => {
-  const { fetchImpl, calls } = fakeFly();
-  const big = snapshot({ "zeros.bin": Buffer.alloc(20_000_001) });
-  await assert.rejects(
-    provider(fetchImpl).apply(deployment(ID), version(big)),
-    /app source is too large.*20000001 bytes, maximum 20000000 bytes/,
-  );
-  assert.deepEqual(calls, []);
-});
-
 test("apply: a machine that never starts reports its last state", async () => {
   const { fetchImpl, machines } = fakeFly({ existingMachines: ["machine-old"], states: ["created"] });
   await assert.rejects(
@@ -487,8 +477,11 @@ test("destroy: refuses a mismatched app and surfaces a failed deletion", async (
 
 test("profile: shared Flycast manages suspension while existing standalone apps retain idle cleanup", () => {
   const { fetchImpl } = fakeFly();
-  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: false });
-  assert.deepEqual(provider(fetchImpl, { sharedAppName: "company-app" }).profile, { managedScaleToZero: true });
+  assert.deepEqual(provider(fetchImpl).profile, { managedScaleToZero: false, maxAppBytes: 20_000_000 });
+  assert.deepEqual(provider(fetchImpl, { sharedAppName: "company-app" }).profile, {
+    managedScaleToZero: true,
+    maxAppBytes: 20_000_000,
+  });
 });
 
 test("missing fly configuration fails at the point of use with the env var that is missing", async () => {
