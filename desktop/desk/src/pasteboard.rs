@@ -79,7 +79,7 @@ The app may have pasted that instead of your text. Observe the app and check wha
 
 fn uncertain(board: &NSPasteboard, ours: isize, why: &str) -> Failure {
     if board.changeCount() != ours {
-        return fail(ErrorCode::PasteConflict, CONFLICT);
+        return fail(ErrorCode::PasteConflict, &format!("{why}. {CONFLICT}"));
     }
     fail(
         ErrorCode::ActionFailed,
