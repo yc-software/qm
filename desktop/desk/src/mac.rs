@@ -431,7 +431,6 @@ fn source() -> Result<CGEventSource, Failure> {
 }
 
 fn post(e: CGEvent, pid: i32) {
-    crate::intervention::include_target(pid);
     e.set_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID, std::process::id() as i64);
     e.post_to_pid(pid);
     std::thread::sleep(Duration::from_millis(8));
@@ -474,6 +473,8 @@ fn validate_input_window(at: &Press) -> Result<(), Failure> {
 fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, clicks: i64, flags: CGEventFlags) -> Result<(), Failure> {
     let release = matches!(ty, CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp);
     if !release {
+        crate::intervention::include_target(pid);
+        active()?;
         validate_input_window(at)?;
     }
     let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
@@ -526,6 +527,7 @@ fn key(pid: i32, code: u16, flags: CGEventFlags, text: Option<&str>, hold: u32) 
 }
 
 fn send_key_events(pid: i32, steps: Vec<crate::keys::Event>, text: Option<&str>, hold: u32) -> Result<(), Failure> {
+    crate::intervention::include_target(pid);
     active()?;
     let prepared = steps.into_iter().map(|step| key_event(step, text)).collect::<Result<Vec<_>, _>>()?;
     let mut failure = None;
@@ -569,6 +571,8 @@ fn key_event(step: crate::keys::Event, text: Option<&str>) -> Result<(crate::key
 }
 
 fn with_modifiers(pid: i32, flags: CGEventFlags, action: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
+    crate::intervention::include_target(pid);
+    active()?;
     let prepared = crate::keys::events(0, flags.bits())
         .into_iter()
         .filter(|e| e.modifier)

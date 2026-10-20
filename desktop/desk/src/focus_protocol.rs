@@ -125,6 +125,13 @@ impl Scope {
         Decision::Pass
     }
 
+    pub fn observe_user_event(&mut self, kind: u32, source: i32, destination: i32) -> Decision {
+        match self.user_event(kind, source, destination) {
+            Decision::Redirect(_) => Decision::Pass,
+            decision => decision,
+        }
+    }
+
     pub fn keyboard(&self, source: i32, destination: i32) -> Decision {
         if !self.yielded && source != self.owner {
             if let Some(lease) = self.lease {
@@ -143,6 +150,21 @@ mod tests {
 
     fn scope() -> Scope {
         Scope::new(100, 200, 200, 300)
+    }
+
+    #[test]
+    fn global_observer_preserves_keys_for_process_local_forwarding() {
+        let mut s = scope();
+        s.notification(200, KEY_FOCUS_TAKEN, 300, 0);
+        for kind in 10..=12 {
+            assert_eq!(s.observe_user_event(kind, 0, 300), Decision::Pass);
+            assert_eq!(s.keyboard(0, 300), Decision::Redirect(200));
+            assert_eq!(s.observe_user_event(kind, 0, 200), Decision::Pass);
+            assert_eq!(s.keyboard(0, 200), Decision::Pass);
+            assert_eq!(s.keyboard(100, 300), Decision::Pass);
+        }
+        assert_eq!(s.observe_user_event(1, 0, 300), Decision::Intervened);
+        assert_eq!(s.keyboard(0, 300), Decision::Pass);
     }
 
     #[test]

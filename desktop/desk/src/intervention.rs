@@ -2,10 +2,11 @@ use crate::focus_protocol::{Decision, Scope, PROCESS_NOTIFICATION};
 use crate::protocol::{ErrorCode, Failure};
 use core_foundation::base::TCFType;
 use core_foundation::mach_port::CFMachPort;
-use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
+use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
 };
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,6 +65,84 @@ struct Context {
     scope: Mutex<Scope>,
     failure: Mutex<Option<String>>,
     release: ReleaseKeyFocus,
+    registered: Mutex<HashSet<i32>>,
+    registrations: mpsc::Sender<(i32, mpsc::SyncSender<Result<(), String>>)>,
+}
+
+#[derive(Clone, Copy)]
+enum TapKind {
+    Notifications,
+    Intervention,
+    Keyboard(i32),
+}
+
+struct TapContext {
+    context: Arc<Context>,
+    kind: TapKind,
+}
+
+struct Tap {
+    port: objc2_core_foundation::CFRetained<objc2_core_foundation::CFMachPort>,
+    source: CFRunLoopSource,
+    runloop: CFRunLoop,
+    _context: Box<TapContext>,
+}
+
+impl Tap {
+    fn new(context: Arc<Context>, kind: TapKind) -> Result<Self, String> {
+        let mut callback = Box::new(TapContext { context, kind });
+        let info = (&mut *callback as *mut TapContext).cast();
+        let keys = (1 << 10) | (1 << 11) | (1 << 12);
+        let port = unsafe {
+            match kind {
+                TapKind::Keyboard(pid) => CGEvent::tap_create_for_pid(
+                    pid,
+                    CGEventTapPlacement::TailAppendEventTap,
+                    CGEventTapOptions::Default,
+                    keys,
+                    Some(receive),
+                    info,
+                ),
+                _ => CGEvent::tap_create(
+                    CGEventTapLocation::AnnotatedSessionEventTap,
+                    CGEventTapPlacement::TailAppendEventTap,
+                    if matches!(kind, TapKind::Intervention) { CGEventTapOptions::ListenOnly } else { CGEventTapOptions::Default },
+                    if matches!(kind, TapKind::Notifications) {
+                        1 << PROCESS_NOTIFICATION
+                    } else {
+                        keys | (1 << 1) | (1 << 3) | (1 << 25) | (1 << 22)
+                    },
+                    Some(receive),
+                    info,
+                ),
+            }
+        }
+        .ok_or_else(|| "Could not create a focus-protection event tap".to_string())?;
+        let legacy = unsafe { CFMachPort::wrap_under_get_rule((&*port as *const objc2_core_foundation::CFMachPort).cast_mut().cast()) };
+        let source = match legacy.create_runloop_source(0) {
+            Ok(source) => source,
+            Err(()) => {
+                port.invalidate();
+                return Err("Could not create the focus-protection run-loop source".into());
+            }
+        };
+        let runloop = CFRunLoop::get_current();
+        runloop.add_source(&source, unsafe { kCFRunLoopDefaultMode });
+        CGEvent::tap_enable(&port, true);
+        let tap = Self { port, source, runloop, _context: callback };
+        if !CGEvent::tap_is_enabled(&tap.port) {
+            return Err("Focus-protection event tap did not become enabled".into());
+        }
+        Ok(tap)
+    }
+}
+
+impl Drop for Tap {
+    fn drop(&mut self) {
+        CGEvent::tap_enable(&self.port, false);
+        self.runloop.remove_source(&self.source, unsafe { kCFRunLoopDefaultMode });
+        self.port.invalidate();
+    }
 }
 
 impl Context {
@@ -77,7 +156,8 @@ impl Context {
 }
 
 unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event: NonNull<CGEvent>, info: *mut c_void) -> *mut CGEvent {
-    let context = unsafe { &*(info as *const Context) };
+    let callback = unsafe { &*(info as *const TapContext) };
+    let context = &callback.context;
     let original = event.as_ptr();
     if kind.0 >= u32::MAX - 1 {
         context.fail("Focus protection event tap was disabled; stopped");
@@ -97,15 +177,19 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
     if crate::cancellation::cancelled() {
         scope.yield_to_user();
     }
-    let decision = if kind.0 == PROCESS_NOTIFICATION {
+    let decision = if matches!(callback.kind, TapKind::Notifications) && kind.0 == PROCESS_NOTIFICATION {
         scope.notification(
             destination,
             field(NOTIFICATION_SUBTYPE),
             i32::try_from(field(FOCUS_SUBJECT_PID)).unwrap_or(-1),
             field(FOCUS_THEFT_ID),
         )
+    } else if matches!(callback.kind, TapKind::Intervention) {
+        scope.observe_user_event(kind.0, source, destination)
+    } else if matches!(callback.kind, TapKind::Keyboard(pid) if pid == destination) && matches!(kind.0, 10..=12) {
+        scope.keyboard(source, destination)
     } else {
-        scope.user_event(kind.0, source, destination)
+        Decision::Pass
     };
     match decision {
         Decision::Pass => original,
@@ -135,12 +219,20 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
 }
 
 pub fn include_target(pid: i32) {
-    if let Ok(active) = ACTIVE.lock() {
-        if let Some(context) = active.as_ref() {
-            if let Ok(mut scope) = context.scope.lock() {
-                scope.include(pid);
-            }
-        }
+    let context = ACTIVE.lock().ok().and_then(|active| active.clone());
+    let Some(context) = context else { return };
+    if context.registered.lock().map(|registered| registered.contains(&pid)).unwrap_or(false) {
+        return;
+    }
+    let (send, receive) = mpsc::sync_channel(1);
+    if context.registrations.send((pid, send)).is_err() {
+        context.fail("Focus protection stopped before target registration");
+        return;
+    }
+    match receive.recv_timeout(Duration::from_millis(350)) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => context.fail(error),
+        Err(_) => context.fail("Focus protection target registration did not complete within 350 ms"),
     }
 }
 
@@ -157,48 +249,58 @@ impl Intervention {
             return Err(Failure::new(ErrorCode::ActionFailed, "Key-focus lease release is unavailable; input was not started"));
         }
         let release = unsafe { std::mem::transmute::<*mut c_void, ReleaseKeyFocus>(pointer) };
+        let (registrations, requests) = mpsc::channel();
         let context = Arc::new(Context {
             scope: Mutex::new(Scope::new(std::process::id() as i32, foreground, keyboard_owner, target)),
             failure: Mutex::new(None),
             release,
+            registered: Mutex::new(HashSet::new()),
+            registrations,
         });
         let stop = Arc::new(AtomicBool::new(false));
         let quit = Arc::clone(&stop);
         let callback_context = Arc::clone(&context);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
-            let mask = (1 << PROCESS_NOTIFICATION) | (1 << 1) | (1 << 3) | (1 << 25) | (1 << 22) | (1 << 10) | (1 << 11) | (1 << 12);
-            let tap = unsafe {
-                CGEvent::tap_create(
-                    CGEventTapLocation::AnnotatedSessionEventTap,
-                    CGEventTapPlacement::TailAppendEventTap,
-                    CGEventTapOptions::Default,
-                    mask,
-                    Some(receive),
-                    Arc::as_ptr(&callback_context) as *mut c_void,
-                )
-            };
-            let Some(tap) = tap else {
-                let _ = ready_tx.send(Err("Could not create the focus-protection event tap"));
-                return;
-            };
-            let port = unsafe { CFMachPort::wrap_under_get_rule((&*tap as *const objc2_core_foundation::CFMachPort).cast_mut().cast()) };
-            let Ok(source) = port.create_runloop_source(0) else {
-                tap.invalidate();
-                let _ = ready_tx.send(Err("Could not create the focus-protection run-loop source"));
-                return;
-            };
-            let runloop = CFRunLoop::get_current();
-            runloop.add_source(&source, unsafe { kCFRunLoopDefaultMode });
-            CGEvent::tap_enable(&tap, true);
+            let mut taps = Vec::new();
+            for kind in [TapKind::Notifications, TapKind::Intervention, TapKind::Keyboard(target)] {
+                match Tap::new(Arc::clone(&callback_context), kind) {
+                    Ok(tap) => taps.push(tap),
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
+                        return;
+                    }
+                }
+            }
+            if let Ok(mut registered) = callback_context.registered.lock() {
+                registered.insert(target);
+            }
             if ready_tx.send(Ok(())).is_ok() {
                 while !quit.load(Ordering::Acquire) {
+                    while let Ok((pid, acknowledgement)) = requests.try_recv() {
+                        let result: Result<(), String> = (|| {
+                            let mut registered =
+                                callback_context.registered.lock().map_err(|_| "Focus target state is unavailable".to_string())?;
+                            if registered.contains(&pid) {
+                                return Ok(());
+                            }
+                            if pid <= 0 || registered.len() >= 32 {
+                                return Err("Focus target registration limit reached or PID invalid".into());
+                            }
+                            let tap = Tap::new(Arc::clone(&callback_context), TapKind::Keyboard(pid))?;
+                            callback_context.scope.lock().map_err(|_| "Focus protection state is unavailable".to_string())?.include(pid);
+                            registered.insert(pid);
+                            taps.push(tap);
+                            Ok(())
+                        })();
+                        if let Err(error) = &result {
+                            callback_context.fail(error.clone());
+                        }
+                        let _ = acknowledgement.send(result);
+                    }
                     CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(30), false);
                 }
             }
-            CGEvent::tap_enable(&tap, false);
-            runloop.remove_source(&source, unsafe { kCFRunLoopDefaultMode });
-            tap.invalidate();
         });
         let ready = ready_rx.recv_timeout(Duration::from_millis(350));
         if matches!(ready, Ok(Ok(()))) {
@@ -208,10 +310,11 @@ impl Intervention {
             return Ok(Self { stop, thread: Some(thread), context });
         }
         stop.store(true, Ordering::Release);
+        let _ = thread.join();
         let message = match ready {
             Ok(Err(message)) => message,
-            Err(mpsc::RecvTimeoutError::Timeout) => "Focus protection did not start within 350 ms",
-            _ => "Focus protection stopped before initialization",
+            Err(mpsc::RecvTimeoutError::Timeout) => "Focus protection did not start within 350 ms".into(),
+            _ => "Focus protection stopped before initialization".into(),
         };
         Err(Failure::new(ErrorCode::ActionFailed, message))
     }
