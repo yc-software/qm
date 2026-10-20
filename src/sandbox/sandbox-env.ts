@@ -32,8 +32,8 @@ const SUDO_KEPT_ENV = ["DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT", ...DROPPED_PROX
 const SUDOERS_KEEP_ENV = shq(`Defaults env_keep += "${SUDO_KEPT_ENV.join(" ")}"`);
 
 const SUDO_KEEPS_ENV =
-  `[ ! -d /etc/sudoers.d ] || grep -qxF ${SUDOERS_KEEP_ENV} /etc/sudoers.d/qm-env 2>/dev/null || ` +
-  `printf '%s\\n' ${SUDOERS_KEEP_ENV} | sudo -n sh -c 'umask 333; cat > /etc/sudoers.d/qm-env' 2>/dev/null || true`;
+  `[ ! -d /etc/sudoers.d ] || [ -e /etc/sudoers.d/qm-env ] || ` +
+  `printf '%s\\n' ${SUDOERS_KEEP_ENV} | sudo -n sh -c 'umask 337; cat > /etc/sudoers.d/qm-env' 2>/dev/null || true`;
 
 export function provisionPrepScript(workspaceDir: string, credLinks: string | null): string {
   return `mkdir -p ${shq(workspaceDir)}${credLinks ? ` && ${credLinks}` : ""} && { ${SUDO_KEEPS_ENV}; }`;
