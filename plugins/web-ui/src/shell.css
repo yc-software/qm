@@ -1052,7 +1052,6 @@ a.chat-row-open {
   border-top: 1px solid var(--border);
 }
 .user-pill {
-  cursor: default;
   user-select: none;
   display: flex;
   align-items: center;
@@ -1862,12 +1861,7 @@ a.chat-row-open {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 260px;
-  padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--muted);
-  color: var(--foreground);
   font: inherit;
   font-size: var(--font-12-5);
   line-height: 1.3;
@@ -4152,11 +4146,6 @@ summary.stopped-head:focus-visible {
   letter-spacing: 0;
   margin: 0;
 }
-.pane-subtitle {
-  margin-top: 3px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
 .pane-head-actions {
   display: flex;
   align-items: center;
@@ -4216,17 +4205,6 @@ summary.stopped-head:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-}
-.connector-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-sm);
-  background: var(--secondary);
-  color: var(--foreground);
 }
 .card-title {
   font-size: var(--font-14);
@@ -4922,22 +4900,11 @@ a.connector-widget:focus-visible {
   background: color-mix(in srgb, var(--warning) 14%, var(--background));
 }
 .deploy-edit {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 .deploy-edit-input {
-  font: inherit;
-  font-size: var(--font-13);
   flex: 1;
-  min-width: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--background);
-  color: var(--foreground);
 }
 .deploy-edit .icon-btn {
   width: 28px;
@@ -5159,22 +5126,6 @@ a.connector-widget:focus-visible {
   padding: 24px;
   box-sizing: border-box;
 }
-.signin form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 340px;
-  max-width: 100%;
-}
-.signin-brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: var(--font-17);
-  font-weight: 600;
-  letter-spacing: 0;
-  margin-bottom: 4px;
-}
 .signin-brand .brand-mark {
   width: 22px;
   height: 22px;
@@ -5213,25 +5164,13 @@ a.connector-widget:focus-visible {
     position: relative;
   }
   .sidebar {
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: min(var(--sidebar-w), calc(100vw - 48px));
     padding-top: calc(10px + var(--surface-safe-top));
     padding-bottom: calc(10px + env(safe-area-inset-bottom));
     padding-left: max(8px, env(safe-area-inset-left));
-    z-index: 10;
   }
   .layout {
     /* left safe-area inset + the 44px touch-size toggle + its 8px right padding */
     --rail-w: calc(max(8px, env(safe-area-inset-left)) + 52px);
-  }
-  .sidebar {
-    /* Open is an absolute overlay, closed is a static rail — animating width across
-       that position flip would squeeze the main pane mid-transition. Snap instead. */
-    transition: none;
-  }
-  .layout.sidebar-closed .sidebar {
-    position: static;
   }
   .sidebar-resize-handle {
     display: none;
@@ -5245,9 +5184,6 @@ a.connector-widget:focus-visible {
     border: 0;
     border-radius: 0;
     background: color-mix(in srgb, var(--scrim) 24%, transparent);
-  }
-  .layout.sidebar-closed .sidebar-scrim {
-    display: none;
   }
   .sidebar .icon-btn,
   .session-menu-btn,
@@ -5264,12 +5200,6 @@ a.connector-widget:focus-visible {
   .archived-toggle {
     min-height: 44px;
   }
-  .session,
-  .session-row:hover .session,
-  .session-row:focus-within .session,
-  .session-row.menu-open .session {
-    padding-right: 136px;
-  }
   .session-menu {
     right: 0;
     margin-top: -22px;
@@ -5280,7 +5210,6 @@ a.connector-widget:focus-visible {
     margin-top: 0;
   }
   .chat-topbar {
-    height: calc(54px + var(--surface-safe-top));
     padding: var(--surface-safe-top) max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
   }
   .session-tool span {
@@ -5300,9 +5229,6 @@ a.connector-widget:focus-visible {
   .pane {
     padding: calc(28px + var(--surface-safe-top)) max(28px, env(safe-area-inset-right))
       calc(40px + env(safe-area-inset-bottom)) max(28px, env(safe-area-inset-left));
-  }
-  .message-bubble {
-    max-width: 88%;
   }
   .composer-approval .approval-actions {
     justify-content: flex-start;
@@ -5356,12 +5282,10 @@ a.connector-widget:focus-visible {
   }
   .composer-approval .approval-actions {
     display: grid;
-    grid-template-columns: 1fr;
     width: 100%;
   }
   .composer-approval .approval-btn {
     width: 100%;
-    min-height: 44px;
   }
   .composer-toolbar {
     flex-wrap: wrap;
@@ -5396,9 +5320,6 @@ a.connector-widget:focus-visible {
   }
   .menu-popover {
     max-height: 42vh;
-  }
-  .message-bubble {
-    max-width: 94%;
   }
 }
 
@@ -5648,7 +5569,6 @@ a.connector-widget:focus-visible {
   color: var(--foreground);
 }
 .files-page .file-drop {
-  width: min(960px, 100%);
   margin-top: 10px;
   font: inherit;
   cursor: pointer;
@@ -5676,8 +5596,6 @@ a.connector-widget:focus-visible {
 .file-row,
 .deploy-row {
   position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) auto;
   align-items: center;
   gap: 12px;
 }
@@ -5726,14 +5644,6 @@ a.connector-widget:focus-visible {
   width: min(960px, 100%);
   margin: 14px auto;
   text-align: center;
-}
-.deploy-row {
-  grid-template-columns: minmax(220px, 1fr) auto auto;
-}
-.deploy-row-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 .deploy-slug {
   display: inline-flex;
@@ -5836,10 +5746,6 @@ a.connector-widget:focus-visible {
 }
 
 @media (max-width: 700px) {
-  .file-row,
-  .deploy-row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
   .file-row .list-row-meta,
   .deploy-row .list-row-meta {
     grid-column: 2;
@@ -8074,11 +7980,6 @@ h3.ambient-field-label {
     margin-right: max(28px, calc(22px + env(safe-area-inset-right)));
     margin-left: max(28px, calc(22px + env(safe-area-inset-left)));
   }
-  .goal-strip {
-    width: auto;
-    margin-right: max(24px, calc(18px + env(safe-area-inset-right)));
-    margin-left: max(24px, calc(18px + env(safe-area-inset-left)));
-  }
 }
 @container chat (max-width: 470px) {
   .custom-chat-shell {
@@ -8096,10 +7997,6 @@ h3.ambient-field-label {
   .chat-bottom-dock > .bg-activity {
     margin-right: calc(22px + env(safe-area-inset-right));
     margin-left: calc(22px + env(safe-area-inset-left));
-  }
-  .goal-strip {
-    margin-right: calc(18px + env(safe-area-inset-right));
-    margin-left: calc(18px + env(safe-area-inset-left));
   }
 }
 [data-density="card"] .live-work-status,
@@ -9261,7 +9158,6 @@ h3.ambient-field-label {
   .inbox-item-aside {
     grid-area: 1 / 2 / span 2;
     position: sticky;
-    top: 0;
     align-self: start;
     width: 100%;
   }
@@ -10365,16 +10261,10 @@ h3.ambient-field-label {
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
   }
-  :root {
-    --meta-lane: 30px;
-  }
   .message-meta {
-    height: 30px;
     gap: 2px;
   }
   .msg-copy {
-    width: 34px;
-    height: 30px;
     border-radius: 8px;
   }
   .assistant-body,
@@ -10679,9 +10569,6 @@ h3.ambient-field-label {
   .composer-approval .approval-actions {
     grid-template-columns: 1fr 1fr;
     gap: 8px;
-  }
-  .composer-approval .approval-btn {
-    min-height: 48px;
   }
 }
 
