@@ -535,7 +535,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
     const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
     const stale = new Set<string>();
-    for (const path of await deps.sandbox.listDir(handle, SKILLS_ROOT)) {
+    const listed = await deps.sandbox
+      .listDir(handle, SKILLS_ROOT)
+      .catch(swallowAs("orchestrator: list skills to prune", [] as string[]));
+    for (const path of listed) {
       const [root, conversation, identity] = path.split("/");
       if (root === SKILLS_ROOT && conversation && identity && !keep.has(identity))
         stale.add(`${SKILLS_ROOT}/${conversation}/${identity}`);
@@ -552,7 +555,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ? await deps.sandbox.removeDirAndList(handle, turnSessionDir, TURN_FILES_DIR)
       : await (async () => {
           await deps.sandbox.removeDir(handle, turnSessionDir);
-          return deps.sandbox.listDir(handle, TURN_FILES_DIR);
+          return deps.sandbox
+            .listDir(handle, TURN_FILES_DIR)
+            .catch(swallowAs("orchestrator: list stale turn files", [] as string[]));
         })();
     const stale = new Set<string>();
     for (const path of paths) {

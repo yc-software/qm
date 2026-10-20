@@ -197,11 +197,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       if (stored?.nativePause) {
         if (!stored.recoverySnapshotId)
           throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
-        try {
-          onStatus?.("Restoring the sandbox from its recovery snapshot…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Restoring the sandbox from its recovery snapshot…");
         let session: E2bSession;
         try {
           session = await client.create({
@@ -225,11 +221,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         });
         return adopt(session);
       }
-      try {
-        onStatus?.("Creating the sandbox…");
-      } catch (error) {
-        void error;
-      }
+      onStatus?.("Creating the sandbox…");
       const session = await client.create({ metadata: { name }, autoPause: true });
       sessionByName.set(name, session);
       await store.put(scope, {

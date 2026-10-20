@@ -4,7 +4,7 @@ import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-l
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import type { ProcessSandbox, SandboxHandle } from "../sandbox/sandbox.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallow } from "../util/errors.ts";
 
 const PROCESS_REAPER_LEASE_KEY = "processes:reaper";
 
@@ -74,7 +74,8 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
       if (opts.kill) {
         try {
           await opts.kill(rec);
-        } catch {
+        } catch (error) {
+          swallow(`process reaper: kill ${rec.processId}`, error);
           continue;
         }
       }

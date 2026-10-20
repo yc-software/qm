@@ -350,11 +350,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
       }
     }
 
-    try {
-      onStatus?.("Creating the sandbox…");
-    } catch (error) {
-      void error;
-    }
+    onStatus?.("Creating the sandbox…");
     const session = await client.create({
       name,
       metadata: await scopeMetadata(name),

@@ -24,14 +24,14 @@ export interface ModalSession {
   terminate(): Promise<void>;
 }
 export class ModalSandboxGoneError extends Error {
-  constructor(sandboxId: string, detail: string) {
-    super(`modal sandbox ${sandboxId} is gone: ${detail}`);
+  constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
+    super(`modal sandbox ${sandboxId} is gone: ${detail}`, options);
     this.name = "ModalSandboxGoneError";
   }
 }
 export class ModalNameConflictError extends Error {
-  constructor(name: string, detail: string) {
-    super(`modal sandbox name ${name} already taken: ${detail}`);
+  constructor(name: string, detail: string, options?: ErrorOptions) {
+    super(`modal sandbox name ${name} already taken: ${detail}`, options);
     this.name = "ModalNameConflictError";
   }
 }
@@ -188,7 +188,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
         return { stdout, stderr, exitCode };
       } catch (err) {
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         if (err instanceof sdk.TimeoutError || Date.now() >= deadlineAt)
           return { stdout: "", stderr: errText(err), exitCode: 124 };
         throw err;
@@ -204,7 +204,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
             `modal read ${absPath}: the file exceeds Modal's filesystem read limit; move it with blob staging or split it`,
             { cause: err },
           );
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -212,7 +212,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       try {
         await sbx.filesystem.writeBytes(data, absPath);
       } catch (err) {
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err));
+        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -251,7 +251,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         return wrap(sdk, sbx);
       } catch (err) {
         if (err instanceof sdk.AlreadyExistsError)
-          throw new ModalNameConflictError(createOpts.name ?? "(unnamed)", errText(err));
+          throw new ModalNameConflictError(createOpts.name ?? "(unnamed)", errText(err), { cause: err });
         throw err;
       }
     },
@@ -264,7 +264,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         return wrap(sdk, sbx);
       } catch (err) {
         if (err instanceof ModalSandboxGoneError) throw err;
-        if (isSandboxIdLookupGone(sdk, err)) throw new ModalSandboxGoneError(sandboxId, errText(err));
+        if (isSandboxIdLookupGone(sdk, err)) throw new ModalSandboxGoneError(sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -282,6 +282,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         if (exited !== null) return null;
       } catch (err) {
         if (isSandboxGoneError(sdk, err)) return null;
+        throw err;
       }
       return wrap(sdk, sbx);
     },
