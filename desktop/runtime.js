@@ -67,9 +67,14 @@
   async function jpeg(shot) {
     const bytes = Uint8Array.from(atob(shot.png_base64), (c) => c.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-    const ratio = Math.min(1, IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
-    const canvas = new OffscreenCanvas(Math.round(bitmap.width * ratio), Math.round(bitmap.height * ratio));
-    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    let canvas;
+    try {
+      const ratio = Math.min(1, IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+      canvas = new OffscreenCanvas(Math.round(bitmap.width * ratio), Math.round(bitmap.height * ratio));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    } finally {
+      bitmap.close();
+    }
     const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 });
     const raw = new Uint8Array(await blob.arrayBuffer());
     let binary = "";

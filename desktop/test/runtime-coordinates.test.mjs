@@ -37,7 +37,7 @@ test("coordinate actions require a screenshot of the current process, window and
     Blob,
     atob,
     btoa,
-    createImageBitmap: async () => ({ width: 400, height: 200 }),
+    createImageBitmap: async () => ({ width: 400, height: 200, close() {} }),
     OffscreenCanvas: class {
       constructor(width, height) { this.width = width; this.height = height; }
       getContext() { return { drawImage() {} }; }
@@ -73,5 +73,34 @@ test("coordinate actions require a screenshot of the current process, window and
     await app.getScreenshot({ emit: false });
     await app.click([20, 10]);
     assert.deepEqual(calls.at(-1).actions[0].target.point, { x: 0, y: 5 });
+  }
+});
+
+test("screenshot conversion releases decoded pixels after drawing and on drawing failure", async () => {
+  for (const fail of [false, true]) {
+    const events = [];
+    const window = { deskHost: { async request() {
+      return { type: "observation", app: "Fixture", window: "Document", pid: 1, window_id: 2,
+        frame: { x: 0, y: 0, w: 2000, h: 1000 }, elements: 0, tree: "", diffed: false, removed: [],
+        screenshot: { png_base64: "" } };
+    } } };
+    vm.runInNewContext(source, {
+      window, console: {}, Blob, atob, btoa,
+      createImageBitmap: async () => ({ width: 2000, height: 1000, close() { events.push("close"); } }),
+      OffscreenCanvas: class {
+        constructor(width, height) { this.width = width; this.height = height; }
+        getContext() { return { drawImage() { events.push("draw"); if (fail) throw new Error("draw failed"); } }; }
+        async convertToBlob() { events.push("encode"); return new Blob(["fixture"]); }
+      },
+    });
+    const pending = window.computer.getApp("Fixture", { emit: false });
+    if (fail) {
+      await assert.rejects(pending, /draw failed/);
+      assert.deepEqual(events, ["draw", "close"]);
+    } else {
+      const app = await pending;
+      assert.deepEqual(events, ["draw", "close", "encode"]);
+      assert.deepEqual(JSON.parse(JSON.stringify(await app.getScreenshot({ emit: false }))), { width: 1568, height: 784 });
+    }
   }
 });
