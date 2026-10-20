@@ -1568,6 +1568,9 @@ impl Desk {
             }
             slot.insert(Enablement { prior, ready: false });
         }
+        if required && str_attr(w, "AXRole").as_deref() == Some("AXSheet") {
+            return Ok(());
+        }
         for attempt in 0..=10 {
             if cancellation::cancelled() {
                 return Err(fail(ErrorCode::ActionFailed, "Accessibility enablement cancelled"));
