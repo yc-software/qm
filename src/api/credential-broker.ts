@@ -88,6 +88,18 @@ export function brokerCredentialAuthHeader(rec: DecryptedServiceCredential): [st
   return [injHeader, `${injScheme}${rec.secret}`];
 }
 
+export function brokerRequestHeaders(
+  rec: DecryptedServiceCredential,
+  caller: Record<string, string>,
+): Record<string, string> {
+  const fixed = rec.injection?.headers ?? {};
+  const [authHeader, authValue] = brokerCredentialAuthHeader(rec);
+  const owned = new Set([...Object.keys(fixed), authHeader].map((name) => name.toLowerCase()));
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(caller)) if (!owned.has(name.toLowerCase())) headers[name] = value;
+  return { ...headers, ...fixed, [authHeader]: authValue };
+}
+
 type CredentialGrant =
   | { rec: DecryptedServiceCredential }
   | { rec?: undefined; status: number; code: string; message: string; host: string };
@@ -217,14 +229,13 @@ export async function brokerCredentialCall(opts: {
       );
   }
 
-  const headers: Record<string, string> = {};
+  const caller: Record<string, string> = {};
   if (body.headers && typeof body.headers === "object") {
     for (const [k, v] of Object.entries(body.headers as Record<string, unknown>)) {
-      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) headers[k] = v;
+      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
     }
   }
-  const [injHeader, injValue] = brokerCredentialAuthHeader(rec);
-  headers[injHeader] = injValue;
+  const headers = brokerRequestHeaders(rec, caller);
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 
   let resp: BrokerFetchResponse;

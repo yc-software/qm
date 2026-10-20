@@ -29,6 +29,39 @@ export interface CredentialInjection {
   header?: string;
   scheme?: string;
   actor?: boolean;
+  headers?: Record<string, string>;
+}
+
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const RESERVED_FIXED_HEADERS = new Set([
+  "authorization",
+  "connection",
+  "content-length",
+  "cookie",
+  "host",
+  "proxy-authorization",
+  "transfer-encoding",
+  "x-qm-actor",
+]);
+const MAX_FIXED_HEADERS = 8;
+const MAX_FIXED_HEADER_VALUE = 256;
+
+function fixedHeadersError(headers: unknown, authHeader: string): string | undefined {
+  if (headers === undefined) return undefined;
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) return "injection.headers must be an object";
+  const entries = Object.entries(headers);
+  if (entries.length > MAX_FIXED_HEADERS) return `injection.headers allows at most ${MAX_FIXED_HEADERS} headers`;
+  const seen = new Set<string>();
+  for (const [name, value] of entries) {
+    const lower = name.toLowerCase();
+    if (!HEADER_NAME.test(name)) return `injection.headers: "${name}" is not a valid HTTP header name`;
+    if (RESERVED_FIXED_HEADERS.has(lower) || lower === authHeader) return `injection.headers cannot set ${lower}`;
+    if (seen.has(lower)) return `injection.headers lists ${lower} more than once`;
+    seen.add(lower);
+    if (typeof value !== "string" || !value || value.length > MAX_FIXED_HEADER_VALUE || /[\r\n\0]/.test(value))
+      return `injection.headers.${name} must be a single line of 1-${MAX_FIXED_HEADER_VALUE} characters`;
+  }
+  return undefined;
 }
 
 export function credentialInjectionError(value: unknown): string | undefined {
@@ -36,15 +69,12 @@ export function credentialInjectionError(value: unknown): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "injection must be an object";
   const injection = value as CredentialInjection;
   if (injection.actor !== undefined && typeof injection.actor !== "boolean") return "injection.actor must be boolean";
-  if (
-    injection.header !== undefined &&
-    (typeof injection.header !== "string" || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(injection.header))
-  )
+  if (injection.header !== undefined && (typeof injection.header !== "string" || !HEADER_NAME.test(injection.header)))
     return "authentication header must be a valid HTTP header name";
   if (injection.header?.toLowerCase() === "x-qm-actor") return "x-qm-actor is reserved for broker actor attestation";
   if (injection.scheme !== undefined && (typeof injection.scheme !== "string" || /[\r\n]/.test(injection.scheme)))
     return "authentication value prefix must be a single line";
-  return undefined;
+  return fixedHeadersError(injection.headers, (injection.header || "authorization").toLowerCase());
 }
 
 interface BrokerDelivery {
