@@ -200,8 +200,6 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const availabilityListeners = new Map<() => boolean | void, number>();
   let availabilityOff: (() => void) | undefined;
   let wakeCursor = 0;
-  // Offer one availability signal to this process's idle workers one at a time, stopping at the first that takes it.
-  // A successful claim offers it again (see claim), so a backlog still fans out across idle workers.
   function wakeOne(): void {
     const listeners = [...availabilityListeners.keys()];
     for (let i = 0; i < listeners.length; i++) {
@@ -296,8 +294,6 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     return { requeued: false, applied: rowCount > 0 };
   }
 
-  // OFFSET 0 keeps the sibling check a per-candidate subplan instead of an anti-join. Pending candidates are few, so
-  // execution is unchanged, but planning the anti-join over the runs table's many indexes cost about 3ms per claim.
   const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
       SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
