@@ -3018,6 +3018,7 @@ export function createChatSurface(
                   [
                     work,
                     work.activity,
+                    work.reasoning,
                     work.status,
                     work.stale,
                     work.pendingApprovals,

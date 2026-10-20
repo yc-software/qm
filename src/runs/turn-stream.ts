@@ -10,11 +10,20 @@ export interface GoalView {
   updatedAt: number;
 }
 
+export interface ReasoningBlock {
+  step: string;
+  index: number;
+  text: string;
+}
+
 export interface TurnStream {
   begin(runId: string): void;
   replying(runId: string): boolean;
   publish(runId: string, delta: string): void;
   publishBlockStart(runId: string): void;
+  publishReasoning(runId: string, step: string, index: number, delta: string): void;
+  settleReasoning(runId: string, step: string, index: number): void;
+  reasoning(runId: string): ReasoningBlock[];
   noteToolCall(runId: string): void;
   noteGoal(runId: string, goal: GoalView): void;
   goal(runId: string): GoalView | null;
@@ -44,6 +53,7 @@ interface Entry {
   firstBlock: string;
   firstBlockOpen: boolean;
   firstBlockClosed: boolean;
+  reasoning: ReasoningBlock[];
   surfacePosted: boolean;
   replying: boolean;
   replyDone: boolean;
@@ -54,6 +64,7 @@ export interface TurnStreamOptions {
   maxChars?: number;
   graceMs?: number;
   onDelta?(runId: string, text: string, offset: number, startOffset: number): void;
+  onReasoning?(runId: string, block: Omit<ReasoningBlock, "text">, text: string, offset: number): void;
   onChange?(runId: string): void;
 }
 
@@ -61,6 +72,8 @@ const DEFAULT_MAX_CHARS = 200_000;
 const DEFAULT_GRACE_MS = 30_000;
 const FIRST_BLOCK_MAX_CHARS = 20_000;
 const BLOCK_JOIN = "\n\n";
+const REASONING_MAX_BLOCKS = 8;
+const REASONING_MAX_CHARS = 20_000;
 
 function makeEntry(partial: Partial<Entry> = {}): Entry {
   return {
@@ -71,6 +84,7 @@ function makeEntry(partial: Partial<Entry> = {}): Entry {
     firstBlock: "",
     firstBlockOpen: true,
     firstBlockClosed: false,
+    reasoning: [],
     surfacePosted: false,
     replying: true,
     replyDone: false,
@@ -134,6 +148,29 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       if (entry.firstBlock) entry.firstBlockOpen = false;
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
       append(runId, entry, BLOCK_JOIN);
+    },
+
+    publishReasoning(runId, step, index, delta) {
+      const entry = ensure(runId);
+      let block = entry.reasoning.find((b) => b.step === step && b.index === index);
+      if (!block) {
+        block = { step, index, text: "" };
+        entry.reasoning = [...entry.reasoning, block].slice(-REASONING_MAX_BLOCKS);
+      }
+      const piece = delta.slice(0, Math.max(0, REASONING_MAX_CHARS - block.text.length));
+      if (!piece) return;
+      const offset = block.text.length;
+      block.text += piece;
+      opts.onReasoning?.(runId, { step, index }, piece, offset);
+    },
+
+    settleReasoning(runId, step, index) {
+      const entry = runs.get(runId);
+      if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
+    },
+
+    reasoning(runId) {
+      return (runs.get(runId)?.reasoning ?? []).map((b) => ({ ...b }));
     },
 
     noteToolCall(runId) {

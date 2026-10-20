@@ -1932,6 +1932,11 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
+            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+              const { contentIndex, delta, partial } = event.assistantMessageEvent;
+              const block = partial.content[contentIndex];
+              if (block?.type === "thinking" && !block.redacted)
+                turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
               const u = (event.message as { usage?: Partial<Usage> }).usage;

@@ -640,18 +640,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             })
             .catch(swallowAs("orchestrator: run-activity append", undefined));
         } else if (input.runId && deps.runActivity && appended.type === "thinking") {
-          const block = appended.payload as { thinking?: string; redacted?: boolean };
+          const block = appended.payload as {
+            thinking?: string;
+            redacted?: boolean;
+            step?: { id?: unknown; index?: unknown };
+          };
+          const step =
+            typeof block.step?.id === "string" && typeof block.step.index === "number"
+              ? { id: block.step.id, index: block.step.index }
+              : undefined;
           if (!block.redacted && block.thinking?.trim()) {
             await deps.runActivity
               .append(input.runId, {
                 seq: appended.seq,
                 parentSeq: appended.parentSeq,
                 type: appended.type,
-                payload: { thinking: block.thinking },
+                payload: { thinking: block.thinking, ...(step ? { step } : {}) },
                 createdAt: appended.createdAt,
               })
               .catch(swallowAs("orchestrator: run-activity append", undefined));
           }
+          if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
         }
       };
       if (!(await managedRosterIsCurrent())) {
@@ -3640,6 +3649,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publish(input.runId, chunk);
               if (input.surfaceTools && spineFirstBlockOpen && spineFirstBlock.length < FIRST_BLOCK_CAPTURE_MAX_CHARS)
                 spineFirstBlock += chunk;
+            },
+            onReasoningDelta: (step: string, index: number, chunk: string) => {
+              if (input.runId && deps.turnStream && !input.surfaceTools)
+                deps.turnStream.publishReasoning(input.runId, step, index, chunk);
             },
             onToolCallStart: (name: string) => {
               if (!earlyTaskAck || name === surfaceName) return;

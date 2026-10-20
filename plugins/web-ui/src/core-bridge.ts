@@ -445,9 +445,16 @@ export interface WorkBlock {
   finishedAt?: number;
   stale?: boolean;
   activity: ToolActivity[];
+  reasoning?: LiveReasoning[];
   pendingApprovals?: PendingApproval[];
   goal?: GoalStripState;
   runtime?: TurnRuntime;
+}
+
+export interface LiveReasoning {
+  step: string;
+  index: number;
+  text: string;
 }
 
 export interface TurnRuntime {
@@ -527,6 +534,7 @@ export interface RunPoll {
   stale?: boolean;
   replyComplete?: boolean;
   activity?: unknown[];
+  reasoning?: LiveReasoning[];
   startedAt?: number | null;
   finishedAt?: number | null;
 }
@@ -1455,6 +1463,20 @@ function parseActivity(raw: unknown): ToolActivity[] {
   return out;
 }
 
+function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offset = 0): boolean {
+  if (!work || typeof block.step !== "string" || !Number.isSafeInteger(block.index) || typeof block.text !== "string")
+    return false;
+  const blocks = work.reasoning ?? [];
+  const at = blocks.findIndex((b) => b.step === block.step && b.index === block.index);
+  const current = at >= 0 ? blocks[at]!.text : "";
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > current.length) return false;
+  const text = current.slice(0, offset) + block.text;
+  if (text.length <= current.length) return false;
+  const next = { step: block.step, index: block.index, text };
+  work.reasoning = at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks, next];
+  return true;
+}
+
 function setWorkStale(work: WorkBlock | undefined, stale: boolean, notify?: () => void): void {
   if (!work || (work.stale ?? false) === stale) return;
   work.stale = stale;
@@ -1493,6 +1515,8 @@ function applyRun(
     if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
     notify?.();
   }
+  if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
+    notify?.();
   setWorkStale(work, run.stale === true, notify);
   if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
     work.goal = run.goal;
@@ -1688,6 +1712,13 @@ async function streamRunViaSse(
           return "fallback";
         if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
         applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
+      } else if (event.name === "reasoning") {
+        const value = event.value as { step: string; index: number; offset: number; delta: string };
+        const work = (partial as AssistantWork).work;
+        if (mergeReasoning(work, { step: value.step, index: value.index, text: value.delta }, value.offset)) {
+          st.lastProgressAt = now();
+          notify?.();
+        }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
         // Completion must carry the final result, including files and approvals.

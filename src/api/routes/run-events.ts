@@ -1,4 +1,5 @@
 import { sendJson } from "../http.ts";
+import { reasoningKey } from "../../runs/run-stream-events.ts";
 import type { SessionEntry } from "../../types.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -43,6 +44,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
   let refreshing = false;
   let refreshAgain = false;
   const sentToolEvents = new Set<string>();
+  const sentReasoning: Record<string, number> = {};
   let toolCursor: number | undefined;
   const cleanup = (): void => {
     closed = true;
@@ -71,7 +73,7 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     if (syncing || closed) return;
     syncing = true;
     queueMicrotask(() => {
-      if (!closed) app.syncRunStream(runId, offset);
+      if (!closed) app.syncRunStream(runId, offset, { ...sentReasoning });
     });
   };
   const sendDrained = async (data: unknown, id?: string): Promise<void> => {
@@ -82,6 +84,8 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
     const toolEntries = await app.getRunToolEntries(runId, actor?.p, toolCursor);
     if (closed) return;
     offset = Math.max(offset, (run.partialStartOffset ?? 0) + (run.partial?.length ?? 0));
+    for (const block of run.reasoning ?? [])
+      sentReasoning[reasoningKey(block)] = Math.max(sentReasoning[reasoningKey(block)] ?? 0, block.text.length);
     for (const entry of toolEntries) {
       const event = toolEvent(entry);
       if (event && !sentToolEvents.has(event.id)) {
@@ -133,6 +137,24 @@ async function streamRun(ctx: ApiCtx): Promise<void> {
       if (closed) return;
       if (event.kind === "refresh") {
         void refresh();
+        return;
+      }
+      if (event.kind === "reasoning") {
+        const key = reasoningKey(event);
+        const sent = sentReasoning[key] ?? 0;
+        if (event.offset > sent) {
+          sync();
+          return;
+        }
+        const delta = event.text.slice(sent - event.offset);
+        if (!delta) return;
+        syncing = false;
+        send({
+          type: "CUSTOM",
+          name: "reasoning",
+          value: { step: event.step, index: event.index, offset: sent, delta },
+        });
+        sentReasoning[key] = sent + delta.length;
         return;
       }
       if (event.kind !== "delta" || refreshing) return;

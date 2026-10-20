@@ -67,6 +67,7 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
   const executing = new Map<string, RecordedEntry>();
   let pending: { step: ReplayStep; parts: Positioned[] } | null = null;
   let last: ReplayStep | undefined;
+  let streamingStep: string | undefined;
   const write = (entry: RecordedEntry) => persist(() => turn.emit(entry as TurnEntry));
   const flush = (): void => {
     if (!pending) return;
@@ -122,7 +123,8 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
     assistant(message: AssistantMessage): void {
       flush();
       const { api, provider, model, stopReason } = message;
-      const step: ReplayStep = { id: randomUUID(), api, provider, model, stopReason };
+      const step: ReplayStep = { id: streamingStep ?? randomUUID(), api, provider, model, stopReason };
+      streamingStep = undefined;
       last = step;
       const parts: Positioned[] = [];
       message.content.forEach((block, index) => {
@@ -135,6 +137,9 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
       });
       pending = { step, parts };
       if (message.content.some((block) => block.type === "toolCall")) flush();
+    },
+    streamingStepId(): string {
+      return (streamingStep ??= randomUUID());
     },
     toolReturned: recordResult,
     toolResult(message: ToolResultMessage): void {

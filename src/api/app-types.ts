@@ -34,7 +34,7 @@ import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
-import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
+import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
@@ -283,7 +283,7 @@ export interface App {
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
-  syncRunStream(runId: string, offset: number): void;
+  syncRunStream(runId: string, offset: number, reasoning?: Record<string, number>): void;
   getRun(
     runId: string,
     viewer?: string,
@@ -309,6 +309,7 @@ export interface App {
     firstBlockClosed?: boolean;
     surfacePosted?: boolean;
     activity?: RunActivityEntry[];
+    reasoning?: ReasoningBlock[];
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
