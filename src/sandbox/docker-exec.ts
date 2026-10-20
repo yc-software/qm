@@ -35,8 +35,11 @@ export async function ensureDockerNetwork(dexec: DockerExec, net: string): Promi
 }
 
 export async function dockerContainerNetworks(dexec: DockerExec, container: string): Promise<string[] | null> {
-  const listed = await dexec(["ps", "-a", "--filter", `name=^/${container}$`, "--format", "{{.ID}} {{.Networks}}"]);
+  const listed = await dexec(["ps", "-a", "--filter", `name=${container}`, "--format", "{{.Names}}\t{{.Networks}}"]);
   if (listed.code !== 0) throw new Error(`docker ps ${container} failed: ${listed.stderr.trim()}`);
-  const [id, networks = ""] = listed.stdout.trim().split(" ");
-  return id ? networks.split(",").filter(Boolean) : null;
+  const row = listed.stdout
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .find(([name]) => name === container);
+  return row ? (row[1] ?? "").split(",").filter(Boolean) : null;
 }

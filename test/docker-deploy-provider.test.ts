@@ -59,11 +59,9 @@ test("a transient docker failure does not report the deployment missing", async 
   await assert.rejects(provider.resolveEndpoint!(running, running.versions[0]!), /daemon unavailable/);
 });
 
-test("a deployment whose container docker does not list is missing", async () => {
-  const calls: string[][] = [];
+test("a deployment is missing unless docker lists a container with exactly its name", async () => {
   const dockerExec: DockerExec = async (args) => {
-    calls.push(args);
-    if (args[0] === "ps") return { code: 0, stdout: "", stderr: "" };
+    if (args[0] === "ps") return { code: 0, stdout: "agent-deploy-other\tbridge\n", stderr: "" };
     return { code: 1, stdout: "", stderr: "daemon unavailable" };
   };
   const store = createDeployStore();
@@ -79,8 +77,6 @@ test("a deployment whose container docker does not list is missing", async () =>
 
   assert.equal(await provider.resolveEndpoint!(running, running.versions[0]!), null);
   assert.equal(await provider.logs!(running, { tailLines: 10 }), null);
-  const name = `agent-deploy-${deployment.id.slice(0, 12)}`;
-  assert.ok(calls.every((args) => args.join(" ") === `ps -a --filter name=^/${name}$ --format {{.ID}} {{.Networks}}`));
 });
 
 test("a deployment network created concurrently is reused, and a create that leaves none fails", async () => {

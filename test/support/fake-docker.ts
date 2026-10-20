@@ -86,8 +86,8 @@ export function installFakeDocker(daemonPort: number): FakeDocker {
         return ok(`${c.running} ${c.imageId}`);
       }
       case "ps": {
-        const name = rest.find((a) => a.startsWith("name=^/"))!.slice("name=^/".length, -1);
-        return ok(exists(name) ? `${name}-id ${networksOf(name).join(",")}\n` : "");
+        const name = rest.find((a) => a.startsWith("name="))!.slice("name=".length);
+        return ok(exists(name) ? `${name}\t${networksOf(name).join(",")}\n` : "");
       }
       case "network": {
         const [sub, name, container] = positional(rest);

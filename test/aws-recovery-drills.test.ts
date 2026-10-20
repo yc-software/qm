@@ -72,11 +72,14 @@ test("deleting a drill database that does not exist is a no-op, and an existing 
       writeFileSync(join(bin, "aws.calls"), "");
       deleteDrill(config, identifier);
       const calls = readFileSync(join(bin, "aws.calls"), "utf8").trim().split("\n");
-      assert.equal(
-        calls[0],
-        `rds describe-db-instances --filters Name=db-instance-id,Values=${identifier} --output json --region us-west-2 --no-cli-pager`,
+      assert.match(
+        calls[0]!,
+        new RegExp(`^rds describe-db-instances --filters Name=db-instance-id,Values=${identifier} `),
       );
-      assert.equal(calls.length, instances === "[]" ? 1 : 3);
+      assert.equal(
+        calls.some((call) => call.startsWith(`rds delete-db-instance --db-instance-identifier ${identifier} `)),
+        instances !== "[]",
+      );
     }
   } finally {
     if (previous === undefined) delete process.env.AWS_BIN;

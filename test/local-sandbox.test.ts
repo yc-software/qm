@@ -336,19 +336,3 @@ test("core attachment trusts the core's actual networks, not docker's connect er
   });
   await assert.rejects(refusing.provision(layers), /network connect .* failed: endpoint already exists/);
 });
-
-test("a sandbox network created concurrently is reused, and a create that leaves none fails", async () => {
-  const fake = installFakeDocker(daemonPort);
-  let createLeavesNetwork = true;
-  const sb = makeSandbox(fake, {
-    dockerExec: async (args: string[]) => {
-      if (args[0] !== "network" || args[1] !== "create") return fake.dockerExec(args);
-      if (createLeavesNetwork) fake.networks.add(args[2]!);
-      return { code: 1, stdout: "", stderr: `network with name ${args[2]} already exists` };
-    },
-  });
-  const h = await sb.provision(rw(scopeId("personal", "U43")));
-  assert.equal(fake.networks.has(localNetworkName(h.id)), true);
-  createLeavesNetwork = false;
-  await assert.rejects(sb.provision(rw(scopeId("personal", "U44"))), /network create .* failed: .*already exists/);
-});
