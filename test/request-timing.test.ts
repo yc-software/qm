@@ -36,8 +36,11 @@ after(async () => {
   await new Promise<void>((resolve) => collector.close(() => resolve()));
 });
 
-async function settle(predicate: () => boolean): Promise<void> {
-  for (let i = 0; i < 60 && !predicate(); i++) {
+// A queued run finishes asynchronously; on a loaded CI runner its transaction can
+// take well over a few seconds to reach the collector, so wait on a deadline.
+async function settle(predicate: () => boolean, timeoutMs = 20_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
     await flushErrorReporting();
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
