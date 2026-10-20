@@ -3246,7 +3246,7 @@ test(
         ids,
       ]);
       await raw.query("UPDATE sessions SET last_user_activity = NULL WHERE id = ANY($1)", [ids]);
-      await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0042-last-user-activity-backfill'");
+      await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0044-last-user-activity-backfill'");
       await applyPgMigrations(raw, registeredPgMigrations(URL!));
       assert.deepEqual(
         (await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [ids])).rows,
