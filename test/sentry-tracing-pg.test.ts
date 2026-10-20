@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { gunzipSync } from "node:zlib";
 import * as Sentry from "@sentry/node";
-import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
+import {
+  flushErrorReporting,
+  initializeErrorReporting,
+  markFirstToken,
+  traceQueued,
+} from "../plugins/chassis/src/error-reporting.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres tracing test";
@@ -13,7 +19,8 @@ const captured: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
-  const lines = Buffer.concat(chunks).toString().split("\n");
+  const body = Buffer.concat(chunks);
+  const lines = (req.headers["content-encoding"] === "gzip" ? gunzipSync(body) : body).toString().split("\n");
   for (let i = 1; i + 1 < lines.length; i += 2) {
     if (JSON.parse(lines[i]!).type === "transaction") captured.push(JSON.parse(lines[i + 1]!));
   }
@@ -77,3 +84,49 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
     await pool.end();
   }
 });
+
+test(
+  "a long run keeps its earliest spans, contended checkouts and first-token time within Sentry's event size",
+  { skip },
+  async () => {
+    const pg = (await import("pg")).default;
+    const pool = new pg.Pool({ connectionString: URL, max: 1 });
+    try {
+      await traceQueued(undefined, "long-run", {}, async () => {
+        await Promise.all([pool.query("SELECT pg_sleep(0.02)"), pool.query("SELECT 'contended'")]);
+        for (let i = 0; i < 700; i++) await pool.query("SELECT $1::int", [i]);
+        markFirstToken();
+        await pool.query("SELECT pg_sleep(0.02)");
+      });
+      for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "long-run"); i++) {
+        await flushErrorReporting();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const run = captured.find((event) => event.transaction === "long-run");
+      assert.ok(run, "the transaction arrived");
+      assert.ok(run.measurements.time_to_first_token.value > 0, "first-token time survives a late first token");
+      const spans: {
+        span_id: string;
+        parent_span_id: string;
+        description: string;
+        start_timestamp: number;
+        timestamp: number;
+      }[] = run.spans;
+      assert.ok(spans.length <= 500, `sent ${spans.length} spans`);
+      const queries = spans.filter((span) => span.description === "SELECT");
+      assert.ok(queries.length >= 450, `kept ${queries.length} queries`);
+      const checkouts = spans.filter((span) => span.description === "pg-pool.connect");
+      assert.ok(checkouts.length >= 2, "the first checkout and the contended one are kept");
+      assert.ok(
+        checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
+        "a waiting checkout is kept",
+      );
+      const ids = new Set([run.contexts.trace.span_id, ...spans.map((span) => span.span_id)]);
+      for (const span of spans) assert.ok(ids.has(span.parent_span_id), "every sent span's parent is sent");
+      const first = Math.min(...spans.map((span) => span.start_timestamp));
+      assert.ok(first - run.start_timestamp < 1, "the earliest work is kept");
+    } finally {
+      await pool.end();
+    }
+  },
+);
