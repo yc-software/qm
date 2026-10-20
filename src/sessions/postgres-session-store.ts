@@ -219,7 +219,6 @@ function parsedPayload(raw: unknown): unknown {
 export function createPostgresSessionStore(connectionString: string, opts: StoreOptions = {}): SessionStore {
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
-  let savedDaysWithoutCronIdsQueued = false;
 
   const notOverheard = (col: string): string =>
     `(${col}.payload IS NULL OR ${col}.payload NOT LIKE '%"overheard":true%')`;
@@ -1970,14 +1969,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async refreshSpendRollup() {
       const started = Date.now();
-      if (!savedDaysWithoutCronIdsQueued) {
-        await q(
-          `INSERT INTO session_spend_dirty(day)
-           SELECT day FROM session_spend_days WHERE rows @? '$[*] ? (!exists(@.cron_id))'
-           ON CONFLICT DO NOTHING`,
-        );
-        savedDaysWithoutCronIdsQueued = true;
-      }
       await withPgTransaction(await pool(), async (client) => {
         const changed = await client.query(
           "DELETE FROM session_spend_dirty WHERE session_id IS NOT NULL RETURNING session_id",

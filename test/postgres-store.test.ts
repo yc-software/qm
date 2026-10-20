@@ -325,44 +325,6 @@ test("pg spend refresh keeps concurrent writes pending and failures preserve the
   }
 });
 
-test("pg spend refresh recomputes saved days whose rows predate cron ids", { skip }, async () => {
-  const day = 86_400_000;
-  const base = Date.UTC(2024, 6, 1);
-  const store = createPostgresSessionStore(URL!, { now: () => base + 3_600_000 });
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  const scope = scopeId("personal", `cron-shape-${randomUUID()}`);
-  const cronId = `shape-${randomUUID().slice(0, 8)}`;
-  const session = await store.getOrCreateByThread(`agent:main:cron:${cronId}`, "dm", scope);
-  const range = { from: base, to: base + day };
-  try {
-    await store.recordLlmRequest(session.id, {
-      turnSeq: null,
-      step: 0,
-      model: "shape",
-      scopeLabel: scope,
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
-    });
-    await store.refreshSpendRollup!();
-    await raw.query(
-      "UPDATE session_spend_days SET rows = (SELECT jsonb_agg(r - 'cron_id') FROM jsonb_array_elements(rows) r) WHERE day = $1",
-      [base / day],
-    );
-    assert.deepEqual(
-      (await store.spendReport!(range)).rows.map((r) => r.cronId),
-      [null],
-    );
-    await createPostgresSessionStore(URL!, { now: () => base + 3_600_000 }).refreshSpendRollup!();
-    assert.deepEqual(
-      (await store.spendReport!(range)).rows.map((r) => r.cronId),
-      [cronId],
-    );
-  } finally {
-    await store.deleteSession(session.id);
-    await raw.end();
-  }
-});
-
 test(
   "pg spend refresh takes the newest dirty day, then the stalest days, at least two per pass",
   { skip },
