@@ -27,6 +27,12 @@ export interface MemoryCaptureMetadata {
 
 export const UNTRACKED_PROVENANCE: MemoryProvenance = { sensitivity: "unknown", sources: [], sourceUnknown: true };
 
+export class MemoryFactInvalid extends Error {
+  constructor() {
+    super("Every fact needs non-empty text after formatting is removed. Nothing was changed.");
+  }
+}
+
 export class MemoryFactsMissing extends Error {
   readonly ids: readonly string[];
   constructor(ids: readonly string[]) {

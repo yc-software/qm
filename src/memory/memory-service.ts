@@ -4,6 +4,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import type { MemoryDisclosure } from "./disclosure.ts";
 import {
   MemoryFactsMissing,
+  MemoryFactInvalid,
   captureProvenance,
   factLine,
   mergeProvenance,
@@ -173,6 +174,7 @@ export function createNotebookMemory(store: FactStore): MemoryService {
         );
         for (const [index, fact] of targets.entries()) {
           const text = editedText(edits[index]!.text);
+          if (!text) throw new MemoryFactInvalid();
           await tx.update(
             fact.id,
             { text, ...(exposure ? mergeProvenance([fact, exposure], fact.sensitivity) : {}) },

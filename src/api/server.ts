@@ -1,6 +1,6 @@
 import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
-import { MemoryFactsMissing } from "../memory/facts.ts";
+import { MemoryFactInvalid, MemoryFactsMissing } from "../memory/facts.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
 import { traceStatus } from "../../plugins/chassis/src/timing.ts";
 import {
@@ -380,6 +380,11 @@ function baseCtx(req: IncomingMessage, res: ServerResponse, wiring: Wiring): Bas
 }
 
 function respondError(req: IncomingMessage, res: ServerResponse, err: unknown): void {
+  if (err instanceof MemoryFactInvalid) {
+    if (!res.headersSent) sendJson(res, 400, { error: "bad_request", message: err.message });
+    else res.destroy();
+    return;
+  }
   if (err instanceof MemoryDisclosureDenied || err instanceof MemoryFactsMissing) {
     const status = err instanceof MemoryFactsMissing ? 404 : 403;
     if (!res.headersSent)
