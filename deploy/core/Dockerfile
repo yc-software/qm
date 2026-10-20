@@ -11,7 +11,7 @@ RUN npm ci --prefix deploy/connector-sdk --ignore-scripts --no-audit --no-fund \
 
 FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
 
-RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli
+RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli libstdc++
 
 COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 
@@ -19,7 +19,10 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY .husky/install.mjs .husky/install.mjs
-RUN npm ci --omit=dev && npm run audit:prod \
+# tree-sitter and tree-sitter-bash ship glibc prebuilds only, so Alpine compiles them.
+RUN apk add --no-cache --virtual .native-build python3 make g++ \
+  && npm ci --omit=dev && npm run audit:prod \
+  && apk del .native-build \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
