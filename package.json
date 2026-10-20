@@ -52,8 +52,8 @@
     "livetest": "node scripts/api-livetest.ts",
     "bench:memory": "node --env-file-if-exists=.env scripts/memory-bench.ts",
     "prepare": "node .husky/install.mjs",
-    "typecheck": "tsc --noEmit",
-    "typecheck:contract": "tsc -p tsconfig.contract.json",
+    "typecheck": "tsrs --noEmit",
+    "typecheck:contract": "tsrs -p tsconfig.contract.json",
     "format": "prettier --write --ignore-unknown .",
     "format:check": "prettier --check --ignore-unknown .",
     "lint": "eslint .",
@@ -143,6 +143,7 @@
     "lint-staged": "17.0.1",
     "oxlint": "^1.74.0",
     "prettier": "3.9.1",
+    "tsrs": "0.14.1-ts7.1.0-dev.20260929",
     "typescript": "^5.8.2",
     "typescript-eslint": "^8.61.0"
   }

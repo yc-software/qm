@@ -588,8 +588,9 @@ test("the personal-account picker preserves composer choices and saves context d
       input.focus();
       input.value = query;
       input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-      assert.equal(document.activeElement, contextHost.querySelector(".loadout-search input"));
-      assert.equal((document.activeElement as HTMLInputElement).value, query);
+      const focused = contextHost.querySelector<HTMLInputElement>(".loadout-search input");
+      assert.equal(document.activeElement, focused);
+      assert.equal(focused?.value, query);
     }
     contextButton('[aria-label="Add Delta to presets"]').click();
     await tick();
