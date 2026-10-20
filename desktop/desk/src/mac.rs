@@ -474,7 +474,7 @@ fn mouse(pid: i32, at: &Press, ty: CGEventType, p: CGPoint, b: CGMouseButton, cl
         crate::intervention::include_target(pid);
         active()?;
         validate_input_window(at)?;
-        crate::focus::activate_current()?;
+        crate::focus::activate_target(at.owner, at.win)?;
     }
     let e = CGEvent::new_mouse_event(source()?, ty, p, b).map_err(|_| fail(ErrorCode::ActionFailed, "mouse event"))?;
     e.set_flags(flags);
@@ -1335,7 +1335,7 @@ fn busy(e: &El, depth: usize, seen: &mut usize) -> bool {
 }
 
 fn select(
-    ax: &El,
+    focus: impl FnOnce() -> Result<(), Failure>,
     e: &El,
     observed: Option<&text::ObservedText>,
     text: &str,
@@ -1351,16 +1351,7 @@ fn select(
         .ok_or_else(|| fail(ErrorCode::ActionFailed, "The element's text value could not be read"))?;
     let range = text::observed_selection_range(&value, observed, text, prefix, suffix, selection)
         .map_err(|message| fail(ErrorCode::ActionFailed, message))?;
-    input::register_target(ax, e)?;
-    if bool_attr(e, "AXFocused") != Some(true) {
-        let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
-        if status != 0 || bool_attr(e, "AXFocused") != Some(true) {
-            return Err(fail(
-                ErrorCode::ActionFailed,
-                format!("Focusing the element failed (AXError {status}); its selection was not changed"),
-            ));
-        }
-    }
+    focus()?;
     if attr(e, "AXValue").and_then(|v| text_of(&v)).as_ref() != Some(&value) {
         return Err(fail(ErrorCode::ActionFailed, "The element's text changed while focusing it; observe it again before selecting"));
     }
@@ -1771,6 +1762,18 @@ impl Desk {
         )
     }
 
+    fn focus_field(&self, pid: i32, ax: &El, element: &El, index: u32) -> Result<(), Failure> {
+        input::focus_field(ax, element, || {
+            let snapshot = self.cache.get(&pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
+            if input::menu_open(ax, &snapshot.popups)? {
+                return Err(fail(ErrorCode::ActionFailed, input::MENU_OPEN));
+            }
+            let point = self.point(pid, Target::Index(index))?;
+            let (owner, press) = self.pointer(ax, point)?;
+            click_at(owner, press, point, Button::Left, 1, &[], 0)
+        })
+    }
+
     fn pointer(&self, ax: &El, p: CGPoint) -> Result<(i32, Press), Failure> {
         let (owner, anchor, win, _) = input::service_at(ax, p)?;
         Ok((owner, prepare_window(owner, ax, anchor, win, p)?))
@@ -1832,9 +1835,10 @@ impl Desk {
                         "This element exposes text markers without a numeric text value; selection by text is unavailable",
                     ));
                 }
+                let element = self.element(pid, *index)?;
                 select(
-                    ax,
-                    &self.element(pid, *index)?,
+                    || self.focus_field(pid, ax, &element, *index),
+                    &element,
                     self.cache.get(&pid).and_then(|snapshot| snapshot.text.get(index)),
                     text,
                     prefix,
@@ -1923,7 +1927,10 @@ impl Desk {
                 let released = mouse(pid, &press, CGEventType::LeftMouseUp, last, CGMouseButton::Left, 1, none);
                 dragged.and(released)
             }
-            Action::SetValue { index, value, submit } => input::set_value(pid, &self.element(pid, *index)?, *index, value, *submit),
+            Action::SetValue { index, value, submit } => {
+                let element = self.element(pid, *index)?;
+                input::set_value(pid, &element, *index, value, *submit, || self.focus_field(pid, ax, &element, *index))
+            }
             Action::Perform { index, action } => {
                 let name = if action.starts_with("AX") { action.clone() } else { format!("AX{action}") };
                 let element = self.element(pid, *index)?;

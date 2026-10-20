@@ -168,11 +168,35 @@ pub(super) fn related_windows(pid: i32, window: &El, outer: Rect, extras: &[El])
     found
 }
 
+fn prepare_destination<T: PartialEq>(
+    mut resolve: impl FnMut() -> Result<T, Failure>,
+    activate: impl FnOnce(&T) -> Result<(), Failure>,
+) -> Result<T, Failure> {
+    let destination = resolve()?;
+    activate(&destination)?;
+    if resolve()? != destination {
+        return Err(fail(ErrorCode::ActionFailed, "The keyboard destination changed while preparing input; observe again"));
+    }
+    Ok(destination)
+}
+
+fn prepare_keyboard(host: &El, element: &El) -> Result<i32, Failure> {
+    let (owner, _, _) =
+        prepare_destination(|| resolved_window(host, element), |(owner, window, _)| crate::focus::activate_target(*owner, *window))?;
+    Ok(owner)
+}
+
 pub(super) fn keyboard_target(ax: &El) -> Result<(i32, El), Failure> {
-    let focused = attr(ax, "AXFocusedUIElement")
+    let focused = attr(ax, "AXFocusedUIElement");
+    let element = focused
+        .clone()
         .or_else(|| window_of(ax))
         .ok_or_else(|| fail(ErrorCode::NoWindow, "Cannot identify the keyboard target; observe again"))?;
-    Ok((register_target(ax, &focused)?, ax.clone()))
+    let owner = prepare_keyboard(ax, &element)?;
+    if focused.is_some() && attr(ax, "AXFocusedUIElement") != focused {
+        return Err(fail(ErrorCode::ActionFailed, "The focused element changed while preparing keyboard input; observe again"));
+    }
+    Ok((owner, ax.clone()))
 }
 
 pub(super) fn check_menu_action(
@@ -413,7 +437,34 @@ fn date_value(before: &core_foundation::date::CFDate, value: &str, mask: u64, ca
     Some(core_foundation::date::CFDate::new(date.timeIntervalSinceReferenceDate()).as_CFType())
 }
 
-pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Option<bool>) -> Result<(), Failure> {
+pub(super) fn focus_field(host: &El, element: &El, click: impl FnOnce() -> Result<(), Failure>) -> Result<(), Failure> {
+    register_target(host, element)?;
+    if bool_attr(element, "AXFocused") == Some(true) {
+        return Ok(());
+    }
+    if settable(element, "AXFocused") {
+        let status = set_attr(element, "AXFocused", &CFBoolean::true_value().as_CFType());
+        if status != 0 {
+            return Err(fail(ErrorCode::ActionFailed, format!("Focusing the element failed (AXError {status})")));
+        }
+    } else {
+        click()?;
+    }
+    if bool_attr(element, "AXFocused") != Some(true) {
+        return Err(fail(ErrorCode::ActionFailed, "The element did not acquire keyboard focus; observe again"));
+    }
+    register_target(host, element)?;
+    Ok(())
+}
+
+pub(super) fn set_value(
+    pid: i32,
+    e: &El,
+    index: u32,
+    value: &str,
+    submit: Option<bool>,
+    focus: impl FnOnce() -> Result<(), Failure>,
+) -> Result<(), Failure> {
     if !settable(e, "AXValue") {
         return Err(fail(
             ErrorCode::ActionFailed,
@@ -455,16 +506,11 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
             Err(fail(ErrorCode::ActionFailed, format!("element {index} does not have keyboard focus; observe it before continuing")))
         }
     };
-    register_target(&host, e)?;
     if texty {
-        let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
-        if status != 0 {
-            return Err(fail(
-                ErrorCode::ActionFailed,
-                format!("focusing element {index} failed (AXError {status}); its value was not changed"),
-            ));
-        }
+        focus()?;
         require_focus()?;
+    } else {
+        register_target(&host, e)?;
     }
     active()?;
     match set_attr(e, "AXValue", &new) {
@@ -486,7 +532,7 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         if actions(e).iter().any(|a| a == "AXConfirm") {
             perform(&host, e, "AXConfirm")?;
         } else {
-            let target = register_target(&host, e)?;
+            let target = prepare_keyboard(&host, e)?;
             require_focus()?;
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
@@ -496,6 +542,29 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keyboard_preparation_preserves_destination_and_propagates_detachment() {
+        let mut resolutions = [Ok((7, 81)), Ok((7, 81))].into_iter();
+        let mut activated = None;
+        assert_eq!(
+            prepare_destination(
+                || resolutions.next().unwrap(),
+                |destination| {
+                    activated = Some(*destination);
+                    Ok(())
+                }
+            )
+            .unwrap(),
+            (7, 81)
+        );
+        assert_eq!(activated, Some((7, 81)));
+        let mut resolutions = [Ok((7, 81)), Ok((9, 92))].into_iter();
+        assert!(prepare_destination(|| resolutions.next().unwrap(), |_| Ok(())).is_err());
+        let mut resolutions = [Ok((7, 81)), Err(fail(ErrorCode::NoWindow, "detached"))].into_iter();
+        assert!(prepare_destination(|| resolutions.next().unwrap(), |_| Ok(())).is_err());
+        assert!(prepare_destination::<(i32, u32)>(|| Err(fail(ErrorCode::NoWindow, "detached")), |_| panic!("unresolved target")).is_err());
+    }
+
     #[test]
     fn input_window_uses_nearest_ancestor_only_after_proving_host_link() {
         let parent = |node: &u32| (*node > 0).then(|| node - 1);
