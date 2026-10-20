@@ -494,11 +494,11 @@ test("a spend floor cannot be registered on a model without price data", async (
   assert.deepEqual(saved()?.floor, { minMs: 60_000 });
 });
 
-test("goal get says when a spend floor is not being enforced", async () => {
+test("goal get says when a spend floor is waived", async () => {
   const { ref, create, get } = toolbox();
   ref.modelHasPrices = () => true;
   await create.execute("c1", { objective: "spend", floor: { minUsd: 1 } });
   ref.goalMeter!.unpricedCalls = 1;
   const report = await get.execute("c2", {});
-  assert.match(textOf(report as never), /Work floor .*not enforced.* — met/);
+  assert.match(textOf(report as never), /Work floor .*spend floor waived.* — met/);
 });

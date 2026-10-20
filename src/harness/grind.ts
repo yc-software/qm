@@ -54,7 +54,7 @@ export function grindState(grind: GrindBudget, meter: GrindMeter, now = Date.now
   }
   if (grind.minUsd !== undefined && meter.unpricedCalls > 0) {
     values.push(
-      `$${meter.usd.toFixed(4)}/$${grind.minUsd} (not enforced: a model call during this goal had no price data, so spend cannot be measured)`,
+      `$${grind.minUsd} spend floor waived: a model call during this goal had no price data, so spend cannot be measured`,
     );
   } else if (grind.minUsd !== undefined) {
     met &&= Math.round(meter.usd * 1_000_000) >= Math.round(grind.minUsd * 1_000_000);

@@ -215,13 +215,13 @@ test("the goal spend floor counts the cost each call's usage record reports, wha
   assert.equal(grindState({ minUsd: 0.76 }, meter).met, false);
 });
 
-test("a spend floor is not enforced once a call used tokens without a recorded price", () => {
+test("a spend floor is waived once a call used tokens without a recorded price", () => {
   const meter = createGrindMeter();
   meterGrindCall(meter, { input: 10, output: 10, costUsd: 0.01 } as never);
   meterGrindCall(meter, { input: 500, output: 500, costUsd: 0 } as never);
   const spend = grindState({ minUsd: 5 }, meter);
   assert.equal(spend.met, true);
-  assert.match(spend.text, /not enforced/);
+  assert.match(spend.text, /spend floor waived/);
   assert.equal(grindState({ minUsd: 5, minTurns: 3 }, meter).met, false, "other floors still hold");
 });
 
