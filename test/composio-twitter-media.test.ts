@@ -11,7 +11,15 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { orgId } from "../src/config.ts";
 
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
+const PNG = Buffer.concat([
+  Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),
+  Buffer.alloc(32, 7),
+]);
+const JPEG = Buffer.from(
+  "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+  "base64",
+);
+const WEBP = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
 const cap: CapabilityClaims = {
   runId: "test-run",
   sessionId: "test-session",
@@ -130,12 +138,11 @@ test("uploads an image through the caller's own X connection and returns only th
 
 test("images larger than one proxy request are appended in ordered segments", async () => {
   const f = await fixture();
-  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(5 * 1024 * 1024 - 3, 1)]);
+  const big = Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024 - PNG.length, 1)]);
   f.replies.push(xAccount, proxied({ data: { id: "1002" } }), proxied({}), proxied({}), proxied({}));
   f.replies.push(proxied({ data: { id: "1002" } }));
-  const result = await f.upload({ accountId: "ca_alice", data: jpeg.toString("base64") });
+  const result = await f.upload({ accountId: "ca_alice", data: big.toString("base64") });
   assert.equal(result.status, 200);
-  assert.equal(result.data.mediaType, "image/jpeg");
   const appends = f.calls.filter((call) => String(call.body?.endpoint).endsWith("/append"));
   assert.deepEqual(
     appends.map((call) => (call.body!.body as { segment_index: number }).segment_index),
@@ -143,7 +150,7 @@ test("images larger than one proxy request are appended in ordered segments", as
   );
   assert.deepEqual(
     Buffer.concat(appends.map((call) => Buffer.from((call.body!.body as { media: string }).media, "base64"))),
-    jpeg,
+    big,
   );
 });
 
@@ -169,7 +176,8 @@ test("the agent cannot choose the endpoint, identity or media type, and only rea
     [{ accountId: "ca_alice", data: PNG.toString("base64"), user_id: "bob" }, 400],
     [{ accountId: "../connected_accounts", data: PNG.toString("base64") }, 400],
     [{ accountId: "ca_alice", data: "not base64!" }, 400],
-    [{ accountId: "ca_alice", data: Buffer.from("GIF89a-animated").toString("base64") }, 415],
+    [{ accountId: "ca_alice", data: Buffer.from("474946383961010001000000", "hex").toString("base64") }, 415],
+    [{ accountId: "ca_alice", data: PNG.subarray(0, 12).toString("base64") }, 415],
     [{ accountId: "ca_alice", data: Buffer.from("<svg/>").toString("base64") }, 415],
     [{ accountId: "ca_alice", data: Buffer.alloc(5 * 1024 * 1024 + 1, 0xff).toString("base64") }, 413],
   ];
@@ -215,4 +223,43 @@ test("an X refusal stops the upload and points the agent at reconnecting", async
   assert.match(result.data.message, /reconnect X/);
   assert.equal(f.calls.length, 2);
   assert.deepEqual(f.audits, ["composio.twitter_media.started", "composio.twitter_media.failed"]);
+});
+
+test("JPEG and WebP images are typed from their bytes", async () => {
+  for (const [image, mediaType] of [
+    [JPEG, "image/jpeg"],
+    [WEBP, "image/webp"],
+  ] as const) {
+    const f = await fixture();
+    f.replies.push(xAccount, proxied({ data: { id: "1003" } }), proxied({}), proxied({ data: { id: "1003" } }));
+    const result = await f.upload({ accountId: "ca_alice", data: image.toString("base64") });
+    assert.equal(result.status, 200);
+    assert.equal(result.data.mediaType, mediaType);
+    assert.equal((f.calls[1]!.body!.body as { media_type: string }).media_type, mediaType);
+  }
+});
+
+test("ending the run partway through stops sending segments", async () => {
+  const f = await fixture();
+  const original = f.deps.composioFetch!;
+  f.deps.composioFetch = async (...args) => {
+    const response = await original(...args);
+    if (f.calls.length === 2) f.deps.runs = { get: async () => ({ status: "done" }) } as unknown as ServerDeps["runs"];
+    return response;
+  };
+  f.replies.push(xAccount, proxied({ data: { id: "1004" } }));
+  const result = await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") });
+  assert.equal(result.status, 403);
+  assert.equal(result.data.error, "inactive_run");
+  assert.equal(f.calls.length, 2);
+});
+
+test("provider details are masked before they reach the agent", async () => {
+  const f = await fixture();
+  f.replies.push(xAccount, proxied({ detail: "rejected key private-key for this request" }, 400));
+  const result = await f.upload({ accountId: "ca_alice", data: PNG.toString("base64") });
+  assert.equal(result.status, 502);
+  assert.equal(result.data.providerStatus, 400);
+  assert.doesNotMatch(result.text, /private-key/);
+  assert.match(result.data.providerDetail, /rejected key/);
 });
