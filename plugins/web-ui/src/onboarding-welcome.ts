@@ -6,6 +6,7 @@ import {
   saveConnectionAttempt,
   clearConnectionAttempt,
   type ConnectionAttempt,
+  ACCOUNT_ID,
 } from "./connection-return";
 import { LitElement, html, nothing } from "lit";
 import { Check, TriangleAlert } from "lucide";
@@ -415,7 +416,7 @@ export class OnboardingWelcome extends LitElement {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message ?? "Could not open authorization. Please try again.");
-      if (typeof result.accountId !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(result.accountId))
+      if (typeof result.accountId !== "string" || !ACCOUNT_ID.test(result.accountId))
         throw new Error("Could not start authorization. Please try again.");
       saveConnectionAttempt({ ...attempt, accountId: result.accountId });
       window.location.assign(result.url);

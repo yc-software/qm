@@ -12,6 +12,7 @@ export interface ConnectionAttempt {
   picker: PickerState;
   scrollTop: number;
 }
+export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 const key = (user: string) => `qm-connection-return:${user}`;
 
 export function saveConnectionAttempt(attempt: ConnectionAttempt): void {
@@ -29,9 +30,9 @@ export function readConnectionAttempt(user: string, state: string, path: string)
       !Number.isFinite(attempt.expiresAt) ||
       attempt.expiresAt <= Date.now() ||
       typeof attempt.accountId !== "string" ||
-      !/^ca_[a-zA-Z0-9_-]+$/.test(attempt.accountId) ||
+      !ACCOUNT_ID.test(attempt.accountId) ||
       (attempt.replaces !== undefined &&
-        (typeof attempt.replaces !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(attempt.replaces))) ||
+        (typeof attempt.replaces !== "string" || !ACCOUNT_ID.test(attempt.replaces))) ||
       typeof attempt.widget !== "string" ||
       typeof attempt.service?.id !== "string" ||
       typeof attempt.service.name !== "string" ||

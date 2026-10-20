@@ -312,6 +312,12 @@ test("connections report scopes the app's configuration grants that an older con
     ["/api/v3.1/auth_configs/ac_x", "/api/v3.1/auth_configs/ac_gone"],
   );
   assert.doesNotMatch(r.text, /secret-token|s3|private-key/);
+  f.replies.push({ items: [account("ca_old", "tweet.read"), account("ca_unreadable", "tweet.read", "ac_gone")] }, {});
+  await f.invoke("/v1/composio/connections");
+  assert.deepEqual(
+    f.calls.slice(3).map((call) => new URL(call.url).pathname),
+    ["/api/v3.1/connected_accounts", "/api/v3.1/auth_configs/ac_gone"],
+  );
 });
 
 test("scopes granted in URL form match their short configured names", async () => {

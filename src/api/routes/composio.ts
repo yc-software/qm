@@ -18,6 +18,8 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
+const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
+
 export function composioUserId(org: string, principal: string): string {
   return `qm_${createHash("sha256")
     .update(JSON.stringify([org, principal]))
@@ -248,7 +250,7 @@ async function authorize(ctx: ApiCtx, linkSlack = false): Promise<void> {
       toolkit,
       ...(callbackUrl ? { callback_url: callbackUrl } : {}),
     });
-    if (typeof link.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(link.connected_account_id))
+    if (typeof link.connected_account_id !== "string" || !ACCOUNT_ID.test(link.connected_account_id))
       throw new Error("Invalid account");
     await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
       url: typeof callbackUrl === "string" ? callbackUrl : null,
@@ -315,11 +317,18 @@ async function ownedAccount(
     : null;
 }
 
+const SCOPES_TTL_MS = 5 * 60_000;
+const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
+
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
+  const cached = scopeCache.get(authConfigId);
+  if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
-    const scopes = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
-    return Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === "string") : [];
+    const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
+    const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
+    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);
     reportFailure("composio: auth config scopes", new Error(mask(redactSecrets(errMessage(error)))), authConfigId);
@@ -356,7 +365,7 @@ async function connections(ctx: ApiCtx): Promise<void> {
         item.status === "ACTIVE" &&
         item.is_disabled !== true &&
         typeof item.id === "string" &&
-        /^ca_[a-zA-Z0-9_-]+$/.test(item.id) &&
+        ACCOUNT_ID.test(item.id) &&
         typeof item.toolkit?.slug === "string" &&
         /^[a-zA-Z0-9_-]{1,100}$/.test(item.toolkit.slug),
     );
@@ -395,7 +404,7 @@ async function disconnect(ctx: ApiCtx): Promise<void> {
   const access = await credential(ctx);
   if (!access) return;
   const accountId = (ctx.body as { accountId?: unknown } | null)?.accountId;
-  if (typeof accountId !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(accountId))
+  if (typeof accountId !== "string" || !ACCOUNT_ID.test(accountId))
     return sendJson(ctx.res, 400, { error: "invalid_account" });
   try {
     const owned = await ownedAccount(ctx, access, accountId);
@@ -465,7 +474,7 @@ async function execute(ctx: ApiCtx): Promise<void> {
     !/^[A-Z][A-Z0-9_]{1,199}$/.test(body.tool) ||
     body.tool.startsWith("COMPOSIO_") ||
     typeof body.accountId !== "string" ||
-    !/^ca_[a-zA-Z0-9_-]+$/.test(body.accountId) ||
+    !ACCOUNT_ID.test(body.accountId) ||
     typeof body.version !== "string" ||
     !/^[a-zA-Z0-9_-]{1,100}$/.test(body.version) ||
     body.version === "latest" ||
@@ -572,7 +581,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
       session_uri: sessionUri,
       user_id: userId,
     });
-    if (typeof result.connected_account_id !== "string" || !/^ca_[a-zA-Z0-9_-]+$/.test(result.connected_account_id))
+    if (typeof result.connected_account_id !== "string" || !ACCOUNT_ID.test(result.connected_account_id))
       throw new Error("Invalid account");
     accountId = result.connected_account_id;
   } catch (error) {
@@ -697,7 +706,7 @@ async function completeSlack(ctx: ApiCtx): Promise<void> {
     typeof proof.exp !== "number" ||
     proof.exp <= Date.now() ||
     typeof proof.accountId !== "string" ||
-    !/^ca_[a-zA-Z0-9_-]+$/.test(proof.accountId)
+    !ACCOUNT_ID.test(proof.accountId)
   )
     return sendJson(res, 400, {
       error: "invalid_link",
