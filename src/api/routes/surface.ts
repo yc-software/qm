@@ -487,12 +487,7 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(res, 200, { sessions: (await app.listSessions(principalId)).map(sidebarRow) });
-}
-
-function sidebarRow(session: Session): Omit<Session, "hasEntries"> {
-  const { hasEntries: _hasEntries, ...row } = session;
-  return row;
+  return sendJson(res, 200, { sessions: await app.listSessions(principalId) });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {

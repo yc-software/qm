@@ -45,7 +45,6 @@ export interface ProcessRegistry {
   listByScope(scopeId: string): Promise<ProcessRecord[]>;
   liveByScope(scopeId: string, now?: number): Promise<ProcessRecord[]>;
   listLive(now?: number): Promise<ProcessRecord[]>;
-  liveForSessions(sessionRefs: readonly string[], now?: number): Promise<ProcessRecord[]>;
   markStatus(processId: string, status: ProcessStatus): Promise<boolean>;
   credentialFiles(processId: string): Promise<ProcessCredentialFiles | null>;
   setCredentialFiles(processId: string, files: ProcessCredentialFiles | null): Promise<void>;
@@ -106,14 +105,6 @@ export function createMemoryProcessRegistry(): ProcessRegistry {
     },
     async listLive(now = Date.now()) {
       return [...rows.values()].filter((r) => r.status === "running" && r.expiresAt > now).map((r) => ({ ...r }));
-    },
-    async liveForSessions(sessionRefs, now = Date.now()) {
-      const refs = new Set(sessionRefs);
-      return [...rows.values()]
-        .filter(
-          (r) => r.status === "running" && r.expiresAt > now && r.sessionRef !== undefined && refs.has(r.sessionRef),
-        )
-        .map((r) => ({ ...r }));
     },
     async markStatus(processId, status) {
       const row = rows.get(processId);
@@ -237,14 +228,6 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     },
     async listLive(now = Date.now()) {
       const rows = await q("SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1", [now]);
-      return rows.map(pgRowToRecord);
-    },
-    async liveForSessions(sessionRefs, now = Date.now()) {
-      if (!sessionRefs.length) return [];
-      const rows = await q(
-        "SELECT * FROM process_sessions WHERE status = 'running' AND expires_at > $1 AND session_ref = ANY($2::text[])",
-        [now, [...sessionRefs]],
-      );
       return rows.map(pgRowToRecord);
     },
     async markStatus(processId, status) {

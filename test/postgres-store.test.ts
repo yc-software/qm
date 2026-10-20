@@ -10,7 +10,7 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { scopeId, type Principal, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
-import { assertLateJoinerScopes } from "./support/participant-scopes.ts";
+import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 
@@ -3123,36 +3123,7 @@ test("desktop tool definitions survive a store restart without changing on later
 });
 
 test("pg session lists leave out spawn metadata and group scopes per participant", { skip }, async () => {
-  const store = createPostgresSessionStore(URL!);
-  const personal = scopeId("personal", "lean-U1");
-  const child = await store.getOrCreateByThread("subagent:lean-root:1", "dm", personal, undefined, "web", [
-    { name: "screenshot", description: "Take a screenshot", inputSchema: { type: "object" } },
-  ]);
-  await store.setSpawnMeta(child.id, {
-    surface: "web",
-    conversation: { kind: "dm", threadRef: "web:lean-U1:root", audience: [] },
-    actor: { id: "lean-U1", type: "internal" },
-  } as unknown as Parameters<typeof store.setSpawnMeta>[1]);
-  await store.addParticipant(child.id, "lean-U1", "Child task");
-  const empty = await store.getOrCreateByThread("web:lean-U1:empty", "dm", personal);
-  await store.addParticipant(empty.id, "lean-U1");
-  const channel = await store.getOrCreateByThread("slack:lean-C1:1", "channel", scopeId("channel", "lean-C1"), "eng");
-  await store.addParticipant(channel.id, "lean-U1");
-
-  const listed = (await store.listByParticipant("lean-U1")).find((session) => session.id === child.id);
-  assert.ok(listed);
-  assert.equal(listed.spawnMeta, undefined);
-  assert.equal(listed.clientTools, undefined);
-  assert.equal(listed.title, "Child task");
-  assert.ok((await store.getForParticipant(child.id, "lean-U1"))?.spawnMeta);
-
-  const scopes = new Map((await store.participantScopes("lean-U1")).map((scope) => [scope.scopeId, scope]));
-  assert.deepEqual([...scopes.keys()].sort(), [scopeId("channel", "lean-C1"), personal].sort());
-  assert.equal(scopes.get(personal)?.sessionCount, 1);
-  assert.equal(typeof scopes.get(personal)?.lastActivityAt, "number");
-  assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.sessionCount, 0);
-  assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.lastActivityAt, null);
-  assert.equal(scopes.get(scopeId("channel", "lean-C1"))?.channelName, "eng");
+  await assertLeanListing(createPostgresSessionStore(URL!), "pg-lean");
 });
 
 test("pg participantScopes leaves out sessions whose content predates the participant", { skip }, async () => {

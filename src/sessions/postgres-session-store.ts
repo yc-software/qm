@@ -276,10 +276,10 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       ),
     )
     .join(" UNION ALL ");
-  const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR
-    CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
+  const SEES_ITEMS = `CASE WHEN p.valid_to IS NULL AND p.valid_to_seq IS NULL AND p.valid_from_seq IS NOT NULL
          THEN COALESCE(s.messages, 0) > p.valid_from_seq
-         ELSE EXISTS (${participantPresenceSql}) END)`;
+         ELSE EXISTS (${participantPresenceSql}) END`;
+  const HAS_CONTENT = `(NULLIF(btrim(COALESCE(p.title, s.title)), '') IS NOT NULL OR ${SEES_ITEMS})`;
   const latestUserItem = (kind: string): string =>
     `(SELECT ${msOf("e.created_at")} FROM items e WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id
        AND e.kind = '${kind}' ORDER BY e.created_at DESC LIMIT 1)`;
@@ -291,7 +291,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
               WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND ${AGENT_REPLY_ITEM("e")}) AS agent_last_reply,
             COALESCE((SELECT ${msOf("MAX(e.created_at)")} FROM items e
                        WHERE e.tenant_id = ${TENANT} AND e.session_id = s.id AND e.kind IN ${USER_KINDS}), s.created_at) AS user_last_activity,
-            EXISTS (${participantPresenceSql}) AS has_entries
+            ${SEES_ITEMS} AS has_entries
        FROM sessions s
        JOIN participants p ON p.session_id = s.id
       WHERE p.principal_id = $1${extraWhere}`;

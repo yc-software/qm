@@ -442,22 +442,27 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function mayWriteSession(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
-    sharedAccess = new Map<ScopeId, Promise<boolean>>(),
+    sharedAccess = new Map<string, Promise<boolean>>(),
   ): Promise<boolean> {
     const actor = deps.identity.classify(principalId);
     if (!deps.identity.isInternal(actor)) return false;
     const { kind, ref } = parseScopeId(session.scopeId);
     if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
     if (kind !== "channel" && kind !== "group") return false;
-    if (isSubagentThreadRef(session.threadRef)) return principalCanWriteScope(actor.id, session.scopeId);
-    if (!sharedAccess.has(session.scopeId)) sharedAccess.set(session.scopeId, mayUseSharedScope(kind, ref, actor));
-    return sharedAccess.get(session.scopeId)!;
+    const subagent = isSubagentThreadRef(session.threadRef);
+    const key = subagent ? `subagent ${session.scopeId}` : session.scopeId;
+    if (!sharedAccess.has(key))
+      sharedAccess.set(
+        key,
+        subagent ? principalCanWriteScope(actor.id, session.scopeId) : mayUseSharedScope(kind, ref, actor),
+      );
+    return sharedAccess.get(key)!;
   }
 
   async function canContinueOnWeb(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
-    sharedAccess?: Map<ScopeId, Promise<boolean>>,
+    sharedAccess?: Map<string, Promise<boolean>>,
   ): Promise<boolean> {
     if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
     return mayWriteSession(principalId, session, sharedAccess);

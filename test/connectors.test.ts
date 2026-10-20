@@ -289,9 +289,6 @@ test("connector token keys are Postgres-safe (no NUL byte) — round-trip throug
     async all() {
       return [...store.values()];
     },
-    async allMatching(predicate) {
-      return [...store.values()].filter(predicate);
-    },
     async entries() {
       return [...store.entries()];
     },

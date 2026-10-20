@@ -54,7 +54,6 @@ export interface CronStore {
   create(input: CreateCronInput): Promise<Cron>;
   get(id: string): Promise<Cron | null>;
   list(): Promise<Cron[]>;
-  tiedTo(threadRefs: readonly string[]): Promise<Cron[]>;
   update(id: string, patch: CronPatch): Promise<Cron | null>;
   delete(id: string): Promise<void>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -137,13 +136,6 @@ export function createCronStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
-    async tiedTo(threadRefs) {
-      const refs = new Set(threadRefs);
-      const wanted = (c: Cron): boolean =>
-        (c.destination?.target !== undefined && refs.has(c.destination.target)) ||
-        (c.sessionRef !== undefined && refs.has(c.sessionRef));
-      return backing.allMatching(wanted);
-    },
     async update(id, patch) {
       const before = await backing.get(id);
       if (!before) return null;
