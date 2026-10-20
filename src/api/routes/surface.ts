@@ -19,7 +19,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
-import { SoulUpdateDeniedError } from "../app-types.ts";
+import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { parsePinnedSkills } from "../../skills/materialize.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
@@ -492,14 +492,16 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const n = Number(url.searchParams.get("limit") ?? DEFAULT_SESSION_PAGE);
   const before = parseSessionCursor(url.searchParams.get("before"));
-  if (!Number.isInteger(n) || n < 1 || before === null)
-    return sendJson(res, 400, { error: "bad_request", message: "limit must be a positive integer; before a cursor" });
-  const flag = (name: string): boolean => url.searchParams.get(name) === "1";
+  const status = url.searchParams.get("status") ?? "active";
+  if (!Number.isInteger(n) || n < 1 || before === null || !isSessionPageStatus(status))
+    return sendJson(res, 400, {
+      error: "bad_request",
+      message: "limit must be a positive integer, before a cursor, status active, archived or waiting",
+    });
   const page = await app.listSessionPage(principalId, {
     limit: n,
     ...(before ? { before } : {}),
-    archived: flag("archived"),
-    waiting: flag("waiting"),
+    status,
     ...(url.searchParams.get("surface") ? { surface: url.searchParams.get("surface")! } : {}),
     ...(url.searchParams.get("scope") ? { scopeId: url.searchParams.get("scope")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { titleQuery: url.searchParams.get("q")!.trim() } : {}),
@@ -510,6 +512,10 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(page.hasArchived !== undefined ? { hasArchived: page.hasArchived } : {}),
     nextCursor: page.next ? `${page.next.activity}.${page.next.id}` : null,
   });
+}
+
+function isSessionPageStatus(value: string): value is SessionPageStatus {
+  return value === "active" || value === "archived" || value === "waiting";
 }
 
 function parseSessionCursor(raw: string | null): { activity: number; id: string } | undefined | null {

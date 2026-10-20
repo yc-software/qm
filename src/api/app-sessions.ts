@@ -576,21 +576,21 @@ export function createSessionMethods(
     async listSessionPage(principalId, query) {
       const filter: ParticipantPageQuery = {
         limit: Math.max(1, Math.min(query.limit, 200)),
-        archived: query.archived === true,
+        archived: query.status === "archived",
         ...(query.before ? { before: query.before } : {}),
         ...(query.surface ? { surface: query.surface } : {}),
         ...(query.scopeId ? { scopeId: query.scopeId } : {}),
         ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
       };
-      if (query.waiting) {
+      if (query.status === "waiting") {
         const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
         filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
       }
-      const firstPage = !query.before && !query.archived;
+      const firstPage = !query.before && query.status !== "archived";
       const [page, pinned, archived] = await Promise.all([
         deps.sessions.listParticipantPage(principalId, {
           ...filter,
-          ...(query.archived ? {} : { pinned: false }),
+          ...(query.status === "archived" ? {} : { pinned: false }),
         }),
         firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, pinned: true, limit: 200 }) : null,
         firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, archived: true, limit: 1 }) : null,
@@ -603,7 +603,7 @@ export function createSessionMethods(
       };
       const rows = await viewable([...(pinned?.sessions ?? []), ...page.sessions]);
       let decorated = await decorateSessions(principalId, rows);
-      if (query.waiting) decorated = decorated.filter((s) => s.awaitingInput);
+      if (query.status === "waiting") decorated = decorated.filter((s) => s.awaitingInput);
       const pinnedIds = new Set(pinned?.sessions.map((s) => s.id) ?? []);
       return {
         sessions: decorated.filter((s) => !pinnedIds.has(s.id)),

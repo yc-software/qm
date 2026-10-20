@@ -91,12 +91,13 @@ test("the session list pages top-level chats newest first and keeps pinned, arch
     );
     for (const row of seen) assert.equal("hasEntries" in row, false);
 
-    const archivedPage = (await get("/v1/sessions?principalId=U1&archived=1")).body as Page;
+    const archivedPage = (await get("/v1/sessions?principalId=U1&status=archived")).body as Page;
     assert.deepEqual(
       archivedPage.sessions.map((s) => s.id),
       [archived.id],
     );
     assert.equal((await get("/v1/sessions?principalId=U1&before=nonsense")).status, 400);
+    assert.equal((await get("/v1/sessions?principalId=U1&status=deleted")).status, 400);
   });
 });
 

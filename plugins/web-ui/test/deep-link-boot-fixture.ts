@@ -277,14 +277,14 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
 
 function sessionPage(all: CoreSession[], params: URLSearchParams) {
   const activity = (row: CoreSession): number => row.lastActivityAt ?? row.createdAt ?? 0;
-  const archived = params.get("archived") === "1";
+  const archived = params.get("status") === "archived";
   const before = params.get("before");
   const limit = Number(params.get("limit") ?? 50);
   let rows = all
     .filter((row) => !row.parentSessionId && Boolean(row.archived) === archived)
     .filter((row) => !params.get("q") || (row.title ?? "").toLowerCase().includes(params.get("q")!.toLowerCase()))
     .filter((row) => !params.get("scope") || row.scopeId === params.get("scope"))
-    .filter((row) => params.get("waiting") !== "1" || row.awaitingInput)
+    .filter((row) => params.get("status") !== "waiting" || row.awaitingInput)
     .sort((a, b) => activity(b) - activity(a) || (b.id < a.id ? -1 : 1));
   const pinned = !before && !archived ? rows.filter((row) => row.pinned) : undefined;
   if (!archived) rows = rows.filter((row) => !row.pinned);

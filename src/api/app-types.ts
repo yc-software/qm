@@ -800,12 +800,13 @@ export const STALE_LEASE_GRACE_MS = 30_000;
 export interface SessionPageQuery {
   limit: number;
   before?: { activity: number; id: string };
-  archived?: boolean;
+  status?: SessionPageStatus;
   surface?: string;
   scopeId?: ScopeId;
   titleQuery?: string;
-  waiting?: boolean;
 }
+
+export type SessionPageStatus = "active" | "archived" | "waiting";
 
 export interface SessionPageResult {
   sessions: Session[];

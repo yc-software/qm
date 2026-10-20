@@ -5,6 +5,7 @@ import { streamedAnswer } from "./timeline.ts";
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
+import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
@@ -157,8 +158,7 @@ export interface CoreSession {
 export interface SessionPageQuery {
   limit: number;
   before?: string | null;
-  archived?: boolean;
-  waiting?: boolean;
+  status?: ChatBrowseStatus;
   surface?: string;
   scope?: string | null;
   q?: string;
@@ -174,8 +174,7 @@ export interface SessionPage {
 export function fetchSessionPage(query: SessionPageQuery): Promise<SessionPage> {
   const qs = new URLSearchParams({ limit: String(query.limit) });
   if (query.before) qs.set("before", query.before);
-  if (query.archived) qs.set("archived", "1");
-  if (query.waiting) qs.set("waiting", "1");
+  if (query.status && query.status !== "active") qs.set("status", query.status);
   if (query.surface) qs.set("surface", query.surface);
   if (query.scope) qs.set("scope", query.scope);
   if (query.q?.trim()) qs.set("q", query.q.trim());

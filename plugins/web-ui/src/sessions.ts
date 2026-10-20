@@ -612,8 +612,7 @@ async function loadChatsPage(append: boolean): Promise<void> {
     const page = await fetchSessionPage({
       limit: SESSION_BATCH_SIZE,
       before: append ? chatsPageCursor : null,
-      archived: chatsPageStatus === "archived",
-      waiting: chatsPageStatus === "waiting",
+      status: chatsPageStatus,
       scope: chatsPageScope,
       q: chatsPageQuery,
       ...(chatsPageSurface === "all" ? {} : { surface: chatsPageSurface }),
@@ -1330,7 +1329,7 @@ async function loadMoreSessions(kind: "active" | "archived"): Promise<void> {
     const page = await fetchSessionPage({
       limit: SESSION_BATCH_SIZE,
       before,
-      archived,
+      status: kind,
       ...(sessionsState.webOnly ? { surface: "web" } : {}),
     });
     if (epoch !== sessionPatchEpoch) return;
