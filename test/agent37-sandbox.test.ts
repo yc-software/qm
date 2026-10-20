@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
+import { SandboxProvisionCleanupError, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
@@ -365,4 +365,40 @@ test("a refusal on exec parks the turn instead of failing it generically", async
     assert.match(e.message, /suspended for non-payment/);
     return true;
   });
+});
+
+test("overlapping scratch leases share one instance until the last release", async () => {
+  const first = await sandbox.provision(layers, { scratch: { key: "job-shared" } });
+  const second = await sandbox.provision(layers, { scratch: { key: "job-shared" } });
+  assert.equal(second.id, first.id);
+  assert.equal(first.coldStart, true);
+  assert.equal(second.coldStart, false);
+  assert.equal(fake.names().filter((n) => n === first.id).length, 1);
+  await sandbox.teardown(first);
+  assert.ok(fake.instance(first.id));
+  await sandbox.teardown(second);
+  assert.equal(fake.instance(first.id), null);
+});
+
+test("a scratch whose create and cleanup both fail reports both failures for a later retry", async () => {
+  const isList = (c: { method: string; path: string }) => c.method === "GET" && c.path === "/v1/instances";
+  fake.failNext(400, { body: "stale list failed", match: isList });
+  fake.failNext(400, { body: "create failed", match: (c) => c.method === "POST" && c.path === "/v1/instances" });
+  fake.failNext(400, { body: "cleanup list failed", match: isList });
+  const failure = await sandbox.provision(layers, { scratch: { key: "job-broken" } }).then(
+    () => assert.fail("provision should fail"),
+    (e: unknown) => e,
+  );
+  assert.ok(failure instanceof SandboxProvisionCleanupError);
+  const [initError, cleanupError] = failure.errors as Error[];
+  assert.match(initError!.message, /create failed/);
+  assert.match(cleanupError!.message, /cleanup list failed/);
+  assert.equal(failure.handle.scratch, true);
+  assert.equal(failure.handle.id, sandboxScopeName("qmt-scratch", "job-broken"));
+
+  const retried = await sandbox.provision(layers, { scratch: { key: "job-broken" } });
+  assert.equal(retried.id, failure.handle.id);
+  assert.equal(retried.coldStart, true);
+  await sandbox.teardown(retried);
+  assert.equal(fake.instance(retried.id), null);
 });

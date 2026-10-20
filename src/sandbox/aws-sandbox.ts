@@ -1,3 +1,4 @@
+import { createHandleFileOps } from "./exec-sandbox-base.ts";
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { orgId as configOrgId } from "../config.ts";
@@ -16,7 +17,6 @@ import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
-  posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "./aws-microvm-api.ts";
@@ -477,19 +477,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       return execRaw(handle.id, script, timeoutSec);
     },
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
+    ...createHandleFileOps({ writeAbsBytes, readAbsBytes }),
 
     exportFiles: execExport.exportFiles,
 

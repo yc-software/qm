@@ -1,40 +1,19 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { createKeyedQueue, fetchWithRetry, sleep } from "../util/async.ts";
-import { withRequestId, swallowAs, errMessage } from "../util/errors.ts";
+import { fetchWithRetry, sleep } from "../util/async.ts";
+import { withRequestId, swallowAs } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
-import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
-import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import { createExecExport, createBackendBlobStaging, createExecFileOps } from "./exec-file-ops.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
-import type {
-  AgentComputerProfile,
-  ExecOptions,
-  ExecResult,
-  ProvisionOptions,
-  Sandbox,
-  SandboxHandle,
-  TeardownOptions,
-} from "./sandbox.ts";
+import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
+import type { AgentComputerProfile, ExecResult, Sandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/home/node";
-const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const INLINE_LIMIT = 128 * 1024;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 const READ_CHUNK = 256 * 1024;
@@ -136,13 +115,8 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
-  const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
-  const provisionQueue = createKeyedQueue<string>();
 
   const idByName = new Map<string, string>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
 
   function send(
     method: string,
@@ -406,13 +380,22 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     return out;
   }
 
-  async function ensureInstance(
-    key: string,
-    name: string,
-    onStatus?: (text: string) => void,
-  ): Promise<{ coldStart: boolean }> {
-    return provisionQueue(key, () =>
-      advisoryLock.withLock(`agent37-provision:${key}`, async () => {
+  const base = createExecSandboxBase({
+    workspace,
+    label: "agent37",
+    prefix,
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    egressProxyUrl: opts.egressProxyUrl,
+    deleteFailureCode: "instance_delete_failed",
+    onError: opts.onError,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+    ensureResident(name, onStatus) {
+      const scope = base.scopeFor(name) ?? "default";
+      return advisoryLock.withLock(`agent37-provision:${scope}`, async () => {
         if (idByName.has(name)) return { coldStart: false };
         const existing = await findInstance(name);
         if (existing) {
@@ -424,24 +407,16 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
         const info = await createInstance(name);
         idByName.set(name, info.id);
         return { coldStart: true };
-      }),
-    );
-  }
-
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !idByName.has(name)) {
-        await deleteInstance(name).catch(swallowAs("agent37-sandbox: stale scratch delete", undefined));
-        const info = await createInstance(name);
-        idByName.set(name, info.id);
-      }
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
-    });
-  }
+      });
+    },
+    isProvisioned: (name) => idByName.has(name),
+    async recreateScratch(name) {
+      await deleteInstance(name).catch(swallowAs("agent37-sandbox: stale scratch delete", undefined));
+      const info = await createInstance(name);
+      idByName.set(name, info.id);
+    },
+    deleteInstance,
+  });
 
   const profile: AgentComputerProfile = {
     backend: "agent37",
@@ -461,7 +436,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       memoryMb: resources.memory * 1024,
       diskGb: resources.disk,
       homeDir: HOME_DIR,
-      workdir: workspaceDir,
+      workdir: base.workspaceDir,
     },
   };
 
@@ -499,129 +474,20 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     ...execFileOps,
     ...blobStaging,
 
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
-      let name: string;
-      let coldStart: boolean;
-      if (scratch) {
-        ({ name, coldStart } = await ensureScratch(scratch.key));
-      } else {
-        name = sandboxScopeName(prefix, scope);
-        scopeByName.set(name, scope);
-        ({ coldStart } = await ensureInstance(scope, name, provOpts?.onStatus));
-      }
-
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`agent37 provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "agent37" },
-        );
-
-        return handle;
-      } catch (err) {
-        await cleanupFailedProvision(sandbox, handle, err);
-        throw err;
-      }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("agent37-sandbox: kill in-flight exec", undefined));
-      };
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        signal.throwIfAborted();
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
-
+    provision: base.provision,
+    run: base.run,
+    writeFileBytes: base.writeFileBytes,
+    writeFile: base.writeFile,
+    readFileBytes: base.readFileBytes,
+    readFile: base.readFile,
+    teardown: base.teardown,
     exportFiles: execBackup.exportFiles,
 
     async destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, async () => {
+      return base.provisionQueue(scopeId, async () => {
         await advisoryLock.withLock(`agent37-provision:${scopeId}`, () =>
           deleteInstance(sandboxScopeName(prefix, scopeId)),
         );
-      });
-    },
-
-    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      if (handle.scratch) {
-        const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
-          }
-          activeScratch.delete(handle.id);
-          if (tdOpts?.destroy) await deleteInstance(handle.id);
-          else await deleteInstance(handle.id).catch(swallowAs("agent37-sandbox: scratch delete", undefined));
-          scratchKeyByName.delete(handle.id);
-        });
-      }
-      if (!tdOpts?.destroy) return;
-      await deleteInstance(handle.id).catch((e) => {
-        const scope = scopeByName.get(handle.id);
-        opts.onError?.({
-          category: "sandbox_teardown",
-          code: "instance_delete_failed",
-          message: errMessage(e),
-          ...(scope ? { scopeLabel: scope } : {}),
-        });
       });
     },
   };

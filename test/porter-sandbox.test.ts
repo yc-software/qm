@@ -95,6 +95,15 @@ test("egress proxy mode pins allowlist and injects proxy env; the pin is sticky"
   assert.equal(still[0]!.tags["qm-egress"], "proxy");
 });
 
+test("a proxy url without a hostname leaves both allocation and turn env open", async () => {
+  const hostless = make({ egressProxyUrl: "file:///egress" });
+  const h = await hostless.provision(layers, { egressToken: "tok", env: { FOO: "bar" } });
+  assert.deepEqual(h.env, { FOO: "bar" });
+  const bodies = fake.bodies().filter((b) => b.phase === "running" && b.tags["qm-scope"] === slug);
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0]!.tags["qm-egress"], "open");
+});
+
 test("a tokened turn on an open body rotates it into the proxy pin", async () => {
   const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
   const h = await proxied.provision(layers);

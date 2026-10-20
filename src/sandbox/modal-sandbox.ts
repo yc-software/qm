@@ -1,4 +1,3 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -9,9 +8,8 @@ import { orgId as configOrgId } from "../config.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
@@ -19,17 +17,12 @@ import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
-  posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createHandleFileOps, prepareExecHandle, sandboxScopeName } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -51,8 +44,6 @@ import type {
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 const HYDRATED_MARKER = `${HOME_DIR}/.qm-hydrated`;
 const ACTIVITY_TOUCH_INTERVAL_MS = 10 * 60_000;
@@ -672,6 +663,20 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     return reaped;
   }
 
+  const execIo = {
+    workspace,
+    label: "modal",
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    egressProxyUrl: opts.egressProxyUrl,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+    installLayerTools,
+    combineLayerToolPrep: true,
+  };
+
   const sandbox: Sandbox = {
     destroyScope(scopeId: string): Promise<void> {
       return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
@@ -700,47 +705,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        await installLayerTools(
-          {
-            exec: (script, t) => execRaw(name, script, t),
-            writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
-          },
-          `mkdir -p ${shq(workspaceDir)}${credLinks}`,
-        );
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "modal" },
-        );
-
-        return handle;
-      } catch (err) {
-        await cleanupFailedProvision(sandbox, handle, err);
-        throw err;
-      }
+      return prepareExecHandle(execIo, layers, { id: name, coldStart, scratch: !!scratch }, provOpts, sandbox);
     },
 
     async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
@@ -762,19 +727,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       }
     },
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
+    ...createHandleFileOps(execIo),
 
     exportFiles: execExport.exportFiles,
 

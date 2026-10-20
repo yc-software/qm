@@ -13,7 +13,7 @@ import { posixJoin } from "./exec-file-ops.ts";
 import { ephemeralCredLinkScript, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { execFailureDetail } from "./sandbox.ts";
-import type { ExecOptions, ExecResult, ProvisionOptions, SandboxHandle, TeardownOptions } from "./sandbox.ts";
+import type { ExecOptions, ExecResult, ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "./sandbox.ts";
 
 const WORKSPACE_BASENAME = "workspace";
 const RO_LAYERS_TAR = ".ro-layers.tar";
@@ -78,8 +78,125 @@ export interface ExecSandboxBase {
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
 }
 
+type HandleFileIo = Pick<ExecSandboxBaseDeps, "writeAbsBytes" | "readAbsBytes">;
+
+export function createHandleFileOps(io: HandleFileIo) {
+  async function writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void> {
+    await io.writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
+  }
+
+  async function writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void> {
+    await writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
+  }
+
+  async function readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null> {
+    return io.readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
+  }
+
+  async function readFile(handle: SandboxHandle, relPath: string): Promise<string | null> {
+    const bytes = await readFileBytes(handle, relPath);
+    return bytes === null ? null : Buffer.from(bytes).toString("utf8");
+  }
+
+  return { writeFileBytes, writeFile, readFileBytes, readFile };
+}
+
+type ExecRunIo = Pick<ExecSandboxBaseDeps, "label" | "defaultTimeoutSec" | "exec">;
+
+export function createExecRun({ label, defaultTimeoutSec, exec }: ExecRunIo) {
+  return async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
+    const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
+    const exports = Object.entries(handle.env ?? {})
+      .map(([k, v]) => `export ${k}=${shq(v)}`)
+      .join("; ");
+    const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
+    const signal = execOpts?.signal;
+    if (!signal) return exec(handle.id, script, timeoutSec);
+    const killUid = randomUUID();
+    const fireKill = () => {
+      exec(handle.id, killScript(killUid), 15).catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
+    };
+    signal.throwIfAborted();
+    const onAbort = () => fireKill();
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await exec(handle.id, killableScript(script, killUid), timeoutSec);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  };
+}
+
+type ExecHandleIo = Pick<
+  ExecSandboxBaseDeps,
+  | "workspace"
+  | "label"
+  | "homeDir"
+  | "credentialPaths"
+  | "egressProxyUrl"
+  | "exec"
+  | "writeAbsBytes"
+  | "readAbsBytes"
+  | "ensureEgress"
+  | "installLayerTools"
+  | "combineLayerToolPrep"
+>;
+
+export async function prepareExecHandle(
+  io: ExecHandleIo,
+  layers: WorkspaceLayer[],
+  target: { id: string; coldStart: boolean; scratch: boolean },
+  provOpts: ProvisionOptions | undefined,
+  owner: Pick<Sandbox, "teardown">,
+): Promise<SandboxHandle> {
+  const { id: name, scratch } = target;
+  const workspaceDir = `${io.homeDir}/${WORKSPACE_BASENAME}`;
+  const handle: SandboxHandle = {
+    id: name,
+    rootDir: workspaceDir,
+    homeDir: io.homeDir,
+    coldStart: target.coldStart,
+    ...(scratch ? { scratch: true } : {}),
+  };
+  try {
+    const forceEgress = !!io.egressProxyUrl && !!provOpts?.egressToken;
+    if (forceEgress) await io.ensureEgress?.(name);
+    const turnEnv = Object.fromEntries(Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)));
+    const env = forceEgress ? forceThroughProxyEnv(io.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
+    if (Object.keys(env).length) handle.env = env;
+    const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(io.homeDir, io.credentialPaths)}`;
+    const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
+    const toolIo = {
+      exec: (script: string, t: number) => io.exec(name, script, t),
+      writeAbs: (abs: string, data: Uint8Array) => io.writeAbsBytes(name, abs, data),
+    };
+    if (io.combineLayerToolPrep && io.installLayerTools) {
+      await io.installLayerTools(toolIo, prepare);
+    } else {
+      const prep = await io.exec(name, prepare, PREP_TIMEOUT_SEC);
+      if (prep.code !== 0)
+        throw new Error(
+          `${io.label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`,
+        );
+    }
+    const files = createHandleFileOps(io);
+    await materializeRoLayers(
+      io.workspace,
+      layers,
+      handle,
+      { ...files, exec: (script, t) => io.exec(name, script, t) },
+      { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: io.label },
+    );
+    if (!io.combineLayerToolPrep) await io.installLayerTools?.(toolIo);
+    return handle;
+  } catch (err) {
+    await cleanupFailedProvision(owner, handle, err);
+    throw err;
+  }
+}
+
 export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBase {
-  const { workspace, label, prefix, homeDir, defaultTimeoutSec } = deps;
+  const { label, prefix, homeDir } = deps;
   if (deps.egressProxyUrl && !new URL(deps.egressProxyUrl).hostname) {
     throw new Error(`${label}-sandbox: egress proxy url has no hostname: ${deps.egressProxyUrl}`);
   }
@@ -113,22 +230,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     });
   }
 
-  async function writeFileBytes(handle: SandboxHandle, relPath: string, data: Uint8Array): Promise<void> {
-    await deps.writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-  }
-
-  async function writeFile(handle: SandboxHandle, relPath: string, data: string): Promise<void> {
-    await writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-  }
-
-  async function readFileBytes(handle: SandboxHandle, relPath: string): Promise<Uint8Array | null> {
-    return deps.readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-  }
-
-  async function readFile(handle: SandboxHandle, relPath: string): Promise<string | null> {
-    const bytes = await readFileBytes(handle, relPath);
-    return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-  }
+  const { writeFileBytes, writeFile, readFileBytes, readFile } = createHandleFileOps(deps);
 
   async function teardown(handle: SandboxHandle, tdOpts?: TeardownOptions): Promise<void> {
     if (handle.scratch) {
@@ -173,79 +275,10 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, provOpts?.onStatus)));
     }
 
-    const handle: SandboxHandle = {
-      id: name,
-      rootDir: workspaceDir,
-      homeDir,
-      coldStart,
-      ...(scratch ? { scratch: true } : {}),
-    };
-
-    try {
-      const forceEgress = !!deps.egressProxyUrl && !!provOpts?.egressToken;
-      if (forceEgress) await deps.ensureEgress?.(name);
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(deps.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      if (Object.keys(env).length) handle.env = env;
-      const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, deps.credentialPaths)}`;
-      const prepare = `mkdir -p ${shq(workspaceDir)}${credLinks}`;
-      const toolIo = {
-        exec: (script: string, t: number) => deps.exec(name, script, t),
-        writeAbs: (abs: string, data: Uint8Array) => deps.writeAbsBytes(name, abs, data),
-      };
-      if (deps.combineLayerToolPrep && deps.installLayerTools) {
-        await deps.installLayerTools(toolIo, prepare);
-      } else {
-        const prep = await deps.exec(name, prepare, PREP_TIMEOUT_SEC);
-        if (prep.code !== 0)
-          throw new Error(`${label} provision prep failed: ${execFailureDetail(prep, PREP_TIMEOUT_SEC).slice(0, 200)}`);
-      }
-
-      await materializeRoLayers(
-        workspace,
-        layers,
-        handle,
-        {
-          readFile,
-          writeFileBytes,
-          exec: (script, t) => deps.exec(name, script, t),
-        },
-        { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label },
-      );
-      if (!deps.combineLayerToolPrep) await deps.installLayerTools?.(toolIo);
-
-      return handle;
-    } catch (err) {
-      await cleanupFailedProvision({ teardown }, handle, err);
-      throw err;
-    }
+    return prepareExecHandle(deps, layers, { id: name, coldStart, scratch: !!scratch }, provOpts, { teardown });
   }
 
-  async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
-    const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-    const exports = Object.entries(handle.env ?? {})
-      .map(([k, v]) => `export ${k}=${shq(v)}`)
-      .join("; ");
-    const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-    const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec);
-    const killUid = randomUUID();
-    const fireKill = () => {
-      deps
-        .exec(handle.id, killScript(killUid), 15)
-        .catch(swallowAs(`${label}-sandbox: kill in-flight exec`, undefined));
-    };
-    signal.throwIfAborted();
-    const onAbort = () => fireKill();
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
+  const run = createExecRun(deps);
 
   return {
     workspaceDir,

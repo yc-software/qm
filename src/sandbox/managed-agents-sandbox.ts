@@ -1,4 +1,3 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -7,26 +6,18 @@ import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
 import { createLayerToolInstaller } from "./layer-tool-install.ts";
 import type { LayerInstallFile } from "../deployment/load-layer.ts";
 import {
   createBackendBlobStaging,
   createExecExport,
   createExecFileOps,
-  posixJoin,
   type BlobStagingOptions,
 } from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
+import { ephemeralCredLinkPaths, type CredentialPathSpec } from "../credentials/resident-paths.ts";
 import { hasParentPathSegment, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { createExecRun, createHandleFileOps, prepareExecHandle, sandboxScopeName } from "./exec-sandbox-base.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -44,7 +35,6 @@ import {
 import type {
   AgentComputerProfile,
   ComputerStatus,
-  ExecOptions,
   ExecResult,
   ProvisionOptions,
   Sandbox,
@@ -56,8 +46,6 @@ const WORKSPACE_ROOT = "/workspace";
 const HOME_DIR = `${WORKSPACE_ROOT}/home`;
 const TRANSFER_RELAY_BASENAME = ".qm-transfer.";
 const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
 const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 
 const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
@@ -357,7 +345,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
       );
     }
   };
-  const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : null;
+  const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : undefined;
 
   const execFileOps = createExecFileOps({
     label: "do-managed-agents",
@@ -393,6 +381,19 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
     scopeByName.delete(name);
   }
 
+  const execIo = {
+    workspace,
+    label: "do-managed-agents",
+    homeDir: HOME_DIR,
+    defaultTimeoutSec,
+    credentialPaths: opts.credentialPaths ?? [],
+    egressProxyUrl: opts.egressProxyUrl,
+    exec: execRaw,
+    writeAbsBytes,
+    readAbsBytes,
+    installLayerTools,
+  };
+
   const sandbox: Sandbox = {
     destroyScope(scopeId: string): Promise<void> {
       return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
@@ -421,86 +422,12 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
         ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
       }
 
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`do-managed-agents provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "do-managed-agents" },
-        );
-        await installLayerTools?.({
-          exec: (script, t) => execRaw(name, script, t),
-          writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
-        });
-
-        return handle;
-      } catch (err) {
-        await cleanupFailedProvision(sandbox, handle, err);
-        throw err;
-      }
+      return prepareExecHandle(execIo, layers, { id: name, coldStart, scratch: !!scratch }, provOpts, sandbox);
     },
 
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = (): void => {
-        execRaw(handle.id, killScript(killUid), 15).catch(
-          swallowAs("managed-agents-sandbox: kill in-flight exec", undefined),
-        );
-      };
-      signal.throwIfAborted();
-      const onAbort = (): void => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
+    run: createExecRun({ ...execIo, label: "managed-agents" }),
 
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
+    ...createHandleFileOps(execIo),
 
     exportFiles: execExport.exportFiles,
 
