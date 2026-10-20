@@ -199,10 +199,19 @@ fn popup_menu_open<T>(
 }
 
 fn menu_unavailable() -> Failure {
-    fail(
-        ErrorCode::ActionFailed,
-        "Popup menu state is unavailable or exceeds the 128-check inspection limit; pointer input cannot be verified",
-    )
+    fail(ErrorCode::ActionFailed, "Popup menu inspection exceeded the 128-check limit; pointer input cannot be verified")
+}
+
+fn menu_attribute(element: &El, name: &str) -> Result<CFType, Failure> {
+    let mut value = std::ptr::null();
+    let status = unsafe { AXUIElementCopyAttributeValue(element.as_CFTypeRef(), cfs(name).as_concrete_TypeRef(), &mut value) };
+    ax_result(status, value).ok_or_else(|| {
+        fail(ErrorCode::ActionFailed, format!("Cannot read popup {name} (AXError {status}); pointer input cannot be verified"))
+    })
+}
+
+fn menu_attribute_type(name: &str, expected: &str) -> Failure {
+    fail(ErrorCode::ActionFailed, format!("Popup {name} is not {expected}; pointer input cannot be verified"))
 }
 
 pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
@@ -216,16 +225,20 @@ pub(super) fn menu_open(ax: &El, popups: &[El]) -> Result<bool, Failure> {
     popup_menu_open(
         popups,
         |popup| {
-            let value = attr(popup, "AXChildren").ok_or_else(menu_unavailable)?;
+            let value = menu_attribute(popup, "AXChildren")?;
             if value.downcast::<CFArray>().is_none() {
-                return Err(menu_unavailable());
+                return Err(menu_attribute_type("AXChildren", "an array"));
             }
             Ok(list(value))
         },
-        |child| match str_attr(child, "AXRole").as_deref() {
-            Some("AXMenu") => bool_attr(child, "AXHidden").map(|hidden| !hidden).ok_or_else(menu_unavailable),
-            Some(_) => Ok(false),
-            None => Err(menu_unavailable()),
+        |child| {
+            let role = menu_attribute(child, "AXRole")?.downcast::<CFString>().ok_or_else(|| menu_attribute_type("AXRole", "a string"))?;
+            if role != "AXMenu" {
+                return Ok(false);
+            }
+            let hidden =
+                menu_attribute(child, "AXHidden")?.downcast::<CFBoolean>().ok_or_else(|| menu_attribute_type("AXHidden", "a boolean"))?;
+            Ok(!bool::from(hidden))
         },
     )
 }
