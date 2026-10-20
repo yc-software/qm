@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";

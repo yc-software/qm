@@ -76,7 +76,7 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "mock" | "pi" | "claude";
+  harness: "pi" | "claude";
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
@@ -1020,10 +1020,10 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
 }
 
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
-  if (value === undefined || value.trim() === "") return "mock";
+  if (value === undefined || value.trim() === "") return "pi";
   const harness = value.trim();
-  if (harness === "mock" || harness === "pi" || harness === "claude") return harness;
-  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, or claude, or unset it.`);
+  if (harness === "pi" || harness === "claude") return harness;
+  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
 }
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
@@ -1263,11 +1263,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.SMOLMACHINES_TOKEN && !env.SMOLMACHINES_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
-    );
-  }
-  if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
-    console.warn(
-      `[config] HARNESS is ${env.HARNESS?.trim() ? '"mock"' : "unset, which means mock"} in production — this deployment answers every message with canned text and calls no model provider. Set HARNESS=pi to run real agent turns.`,
     );
   }
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {

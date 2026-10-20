@@ -85,6 +85,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "FLY_DEPLOY_API_TOKEN",
       "FLY_API_TOKEN",
       "PORTAL_IDENTITY_SECRET",
+      "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
     ]
@@ -115,7 +116,7 @@ else console.log("ok");
     plugins: [],
     skills: [],
     env: {
-      core: { HARNESS: "mock", SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
+      core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
     },
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes" },

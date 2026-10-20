@@ -324,7 +324,6 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
-import { createMockHarness } from "./harness/mock-harness.ts";
 import {
   fileCompanyChatGPTAuth,
   keychainCompanyChatGPTAuth,
@@ -588,6 +587,7 @@ export function buildApp(
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
+    harnesses?: Partial<Record<HarnessId, Harness>>;
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
@@ -1478,32 +1478,33 @@ export function buildApp(
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
-      createPiHarness({
-        ...piHarnessConfigOptions(config),
-        modelGateway: gatewayTransport,
-        resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
-        resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-        resolveProviderKeys: resolvePiProviderKeys,
-        ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-        signals: runSignals,
-      }),
+      overrides.harnesses?.pi ??
+        createPiHarness({
+          ...piHarnessConfigOptions(config),
+          modelGateway: gatewayTransport,
+          resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+          resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+          resolveProviderKeys: resolvePiProviderKeys,
+          ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+          signals: runSignals,
+        }),
     ],
     [
       "claude",
-      createClaudeHarness({
-        ...claudeHarnessConfigOptions(config),
-        ...(config.claudeAuthCredential && keychain
-          ? {
-              authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "ANTHROPIC_AUTH_TOKEN",
-              ]),
-            }
-          : {}),
-        signals: runSignals,
-      }),
+      overrides.harnesses?.claude ??
+        createClaudeHarness({
+          ...claudeHarnessConfigOptions(config),
+          ...(config.claudeAuthCredential && keychain
+            ? {
+                authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
+                  "CLAUDE_CODE_OAUTH_TOKEN",
+                  "ANTHROPIC_AUTH_TOKEN",
+                ]),
+              }
+            : {}),
+          signals: runSignals,
+        }),
     ],
-    ["mock", createMockHarness()],
   ]);
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {

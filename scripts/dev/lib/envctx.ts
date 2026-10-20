@@ -12,7 +12,7 @@ export interface AssembledEnv {
   anthropicKeySource: string;
   openaiKeySource: string;
   codexAuthSource: string;
-  harness: "pi" | "mock" | "claude";
+  harness: "pi" | "claude";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -93,7 +93,6 @@ async function anthropicKeyFromLoginShell(): Promise<string> {
 export async function assembleEnv(opts: {
   worktree: string;
   callerEnv: Record<string, string>;
-  allowMock: boolean;
   log: (msg: string) => void;
   probeLoginShell?: () => Promise<string>;
 }): Promise<AssembledEnv> {
@@ -137,7 +136,7 @@ export async function assembleEnv(opts: {
     codexAuthSource = codexAuthCandidate;
   }
 
-  let harness: "pi" | "mock" | "claude";
+  let harness: "pi" | "claude";
   if (opts.callerEnv.HARNESS === "claude") {
     harness = "claude";
     env.HARNESS = harness;
@@ -146,13 +145,9 @@ export async function assembleEnv(opts: {
     env.HARNESS = harness;
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
-  } else if (opts.allowMock) {
-    harness = "mock";
-    env.HARNESS = "mock";
-    warnings.push("mock turns explicitly allowed by DEV_INSTANCE_ALLOW_MOCK=1 -- no anthropic key found");
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key, add one to ${liveEnvFile}, or set DEV_INSTANCE_ALLOW_MOCK=1 for a deliberate mock-only wiring check.`,
+      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
     );
   }
 

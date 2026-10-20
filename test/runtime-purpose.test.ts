@@ -95,10 +95,6 @@ test("configured purpose fails closed for unapproved or incompatible merged choi
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { harnessId: "mock" }, "cron"),
-    /not approved/,
-  );
-  assert.throws(
     () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, "cron"),
     /not supported/,
   );

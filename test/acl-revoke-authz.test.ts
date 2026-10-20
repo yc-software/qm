@@ -10,7 +10,7 @@ import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/fi
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 

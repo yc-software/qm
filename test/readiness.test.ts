@@ -4,7 +4,8 @@ import { once } from "node:events";
 import { createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { test } from "node:test";
 import { createServer } from "../src/api/server.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
 

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";

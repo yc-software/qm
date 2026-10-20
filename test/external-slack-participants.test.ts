@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";

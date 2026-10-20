@@ -2476,9 +2476,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union(
-                HARNESS_IDS.filter((harnessId) => harnessId !== "mock").map((harnessId) => Type.Literal(harnessId)),
-              ),
+              harnessId: Type.Union(HARNESS_IDS.map((harnessId) => Type.Literal(harnessId))),
               modelId: Type.String(),
               effortLevel: Type.Optional(Type.String()),
               fastMode: Type.Optional(Type.Boolean()),

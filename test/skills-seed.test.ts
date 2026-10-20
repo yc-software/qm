@@ -11,7 +11,7 @@ import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skill
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";

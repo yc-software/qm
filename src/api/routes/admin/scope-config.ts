@@ -393,10 +393,9 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter(
       (id) =>
-        id !== "mock" &&
-        (approvedHarnesses.includes(id) ||
-          runtime?.harnessId === id ||
-          purposeRuntimes.some((runtime) => runtime.harnessId === id)),
+        approvedHarnesses.includes(id) ||
+        runtime?.harnessId === id ||
+        purposeRuntimes.some((runtime) => runtime.harnessId === id),
     ),
     modelsByHarness,
     modelCatalog: modelCatalogFor(

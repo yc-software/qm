@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createGoalRecord, openGoal, type GoalRecord } from "../src/harness/goal.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";

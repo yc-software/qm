@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -988,8 +989,8 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
-  const runtime = { harnessId: "mock" as const, modelId: "claude-sonnet-5" };
+  await built.config.setApprovedHarnesses(["pi"]);
+  const runtime = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
     claims("U1"),
@@ -1013,7 +1014,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
@@ -1022,7 +1023,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
-      harness: "mock",
+      harness: "pi",
       model: "claude-sonnet-5",
     });
     assert.equal(result.status, "refused", JSON.stringify(result));
@@ -1032,12 +1033,12 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["pi"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
-    assert.equal(result.run.request.harness, "mock");
+    assert.equal(result.run.request.harness, "pi");
     assert.equal(result.run.request.fastMode, false);
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
@@ -1049,7 +1050,7 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
-      harness: "mock",
+      harness: "pi",
       model: "claude-sonnet-5",
       fastMode: false,
     }),

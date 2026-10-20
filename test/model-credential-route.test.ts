@@ -367,7 +367,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     assert.equal(persisted.status, "queued");
 
     await srv.built.config.setRuntimeSelection("personal:alice", {
-      harnessId: "mock",
+      harnessId: "pi",
       modelId: "openai/gpt-oss-20b:free",
     });
     const arbitrary = await turn("web:alice:arbitrary-openrouter-model", "openai/gpt-oss-20b:free");
@@ -406,7 +406,7 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
 });
 
 test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
-  const srv = start({ harness: "mock" });
+  const srv = start();
   try {
     await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-5" });
     const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
@@ -586,10 +586,10 @@ test("admin model credentials survive a second app instance on the same durable 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
     await srv.built.config.setRuntimeSelection("personal:alice", {
-      harnessId: "mock",
+      harnessId: "pi",
       modelId: "claude-haiku-4-5",
     });
     const turn = (threadRef: string, model?: string) =>
@@ -619,7 +619,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
 test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "mock", modelId: "claude-opus-4-8" });
+    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
     await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
     const rejected = await srv.built.app.turn({
       surface: "loop",
@@ -627,7 +627,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
       conversation: { kind: "dm", threadRef: "loop:test:item:runtime" },
       text: "Make it shorter",
       model: "claude-haiku-4-5",
-      harness: "mock",
+      harness: "pi",
       triggered: true,
       async: true,
     });

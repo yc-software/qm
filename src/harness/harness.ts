@@ -214,8 +214,8 @@ export interface HarnessModelUtilities {
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 
-type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";
-type HarnessToolTransport = "mock" | "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
+type HarnessControlTransport = "in-process" | "sdk" | "http" | "json-rpc" | "api";
+type HarnessToolTransport = "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
 type HarnessCapability =
   "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "goal-enforcement";
 

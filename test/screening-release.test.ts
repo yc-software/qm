@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -9,7 +9,7 @@ import { testConfig } from "./support/test-config.ts";
 
 let executions = 0;
 let observedRelease = "";
-mock.module("../src/harness/mock-harness.ts", {
+mock.module("./support/mock-harness.ts", {
   namedExports: {
     createMockHarness() {
       const harness = createMockHarness();
@@ -68,7 +68,7 @@ mock.module("../src/harness/mock-harness.ts", {
   },
 });
 let callSeq = 0;
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/build-app.ts");
 
 function request(threadRef = "fixture-thread"): TurnRequest {
   return { surface: "test", actor: { externalId: "U1" }, conversation: { kind: "dm", threadRef }, text: "run fixture" };

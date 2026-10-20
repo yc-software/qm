@@ -6,17 +6,17 @@ import {
   type HarnessDetectResult,
   type HarnessTurnInput,
   type HarnessTurnResult,
-} from "./harness.ts";
-import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
-import { NeedsApproval } from "../tools/primitives.ts";
-import { deterministicCompactSummary, estimateHistoryTokens } from "./context-compaction.ts";
-import { countTokens } from "../util/tokens.ts";
-import { recordStoppedTurn } from "./harness-shared.ts";
+} from "../../src/harness/harness.ts";
+import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
+import { NeedsApproval } from "../../src/tools/primitives.ts";
+import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
+import { countTokens } from "../../src/util/tokens.ts";
+import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,
   type ToolResultScreen,
-} from "../security/security-posture.ts";
+} from "../../src/security/security-posture.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -105,8 +105,8 @@ export function createMockHarness(): Harness {
   return defineHarness(
     {
       id: "mock",
-      controlTransport: "mock",
-      toolTransport: "mock",
+      controlTransport: "in-process",
+      toolTransport: "in-process",
       transcriptFormat: "qm",
       capabilities: new Set(),
     },

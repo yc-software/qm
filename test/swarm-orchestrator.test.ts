@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as modalClient from "../src/sandbox/modal-client.ts";
-import * as mockHarness from "../src/harness/mock-harness.ts";
+import * as mockHarness from "./support/mock-harness.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
@@ -23,7 +23,7 @@ const fake = installFakeModal({ native: true });
 mock.module("../src/sandbox/modal-client.ts", {
   namedExports: { ...modalClient, createSdkModalClient: () => fake.client },
 });
-mock.module("../src/harness/mock-harness.ts", {
+mock.module("./support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
     createMockHarness: () => {
@@ -47,7 +47,7 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const wiring = await import("../src/wiring.ts");
+const wiring = await import("./support/build-app.ts");
 const { orgId } = await import("../src/config.ts");
 const buildApp = (...args: Parameters<typeof wiring.buildApp>): ReturnType<typeof wiring.buildApp> => {
   const built = wiring.buildApp(...args);

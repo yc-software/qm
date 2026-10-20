@@ -7,7 +7,7 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
 
 const SCOPE = "user:U1";

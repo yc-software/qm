@@ -8,7 +8,8 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
 

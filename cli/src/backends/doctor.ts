@@ -4,7 +4,6 @@ import {
   MODEL_PROVIDER_KEYS,
   effectiveModelProvider,
   localSandboxActive,
-  mockHarnessWarning,
   validatePortalTrust,
   type ModelProvider,
   type QmConfig,
@@ -166,7 +165,7 @@ export async function doctorCommon(
   } else if (config.sandbox) {
     step("sandbox: sprites boot the platform's stock image");
   } else {
-    step("sandbox: not configured — agents cannot execute commands (HARNESS=mock turns only)");
+    step("sandbox: not configured — agents cannot execute commands");
   }
 
   if (config.services.includes("slack")) {
@@ -216,8 +215,6 @@ export async function doctorCommon(
 }
 
 async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
-  const mockHarness = mockHarnessWarning(config);
-  if (mockHarness) warn(mockHarness);
   const provider = effectiveModelProvider(config);
   if (!provider) {
     step("base model: no modelProvider set — an administrator supplies the key from the Admin page");

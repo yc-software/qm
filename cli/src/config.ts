@@ -130,9 +130,9 @@ export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
-  anthropic: ["pi", "claude", "mock"],
-  openai: ["pi", "mock"],
-  openrouter: ["pi", "mock"],
+  anthropic: ["pi", "claude"],
+  openai: ["pi"],
+  openrouter: ["pi"],
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>
@@ -820,13 +820,7 @@ function validate(raw: unknown, path: string): QmConfig {
 }
 
 function configuredHarness(config: QmConfig): string {
-  return config.env.core?.HARNESS?.trim() || TARGET_ENV_DEFAULTS[config.target](config, "core", "HARNESS") || "mock";
-}
-
-export function mockHarnessWarning(config: QmConfig): string | undefined {
-  if (configuredHarness(config) !== "mock") return undefined;
-  const unset = !config.env.core?.HARNESS?.trim();
-  return `env.core.HARNESS is ${unset ? "unset, which means" : "set to"} "mock": this deployment answers every message with canned text and calls no model provider. Set it to "pi" for a deployment that runs real agent turns.`;
+  return config.env.core?.HARNESS?.trim() || TARGET_ENV_DEFAULTS[config.target](config, "core", "HARNESS") || "pi";
 }
 
 export function effectiveModelProvider(config: QmConfig): ModelProvider | undefined {
@@ -834,7 +828,7 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
-const HARNESSES = ["mock", "pi", "claude"];
+const HARNESSES = ["pi", "claude"];
 
 function validateModelProvider(config: QmConfig, path: string): void {
   const harness = configuredHarness(config);
@@ -1029,7 +1023,7 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
   }
   const harness = configuredHarness(config);
-  if (protocol !== "https:" && harness !== "mock") {
+  if (protocol !== "https:") {
     throw new CliError(
       `${path}: AWS HARNESS=${harness} requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
     );

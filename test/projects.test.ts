@@ -20,7 +20,7 @@ import {
   createIsCurrentSharedScopeMember,
   createMembershipControlsScope,
 } from "../src/resolution/scope-membership.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

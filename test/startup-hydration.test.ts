@@ -40,7 +40,7 @@ mock.module("../src/resolution/config-store.ts", {
   },
 });
 
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/build-app.ts");
 
 test("eager hydration failures are contained while explicit startup hydration remains fail-closed", async (t) => {
   const errors = t.mock.method(console, "error", () => {});

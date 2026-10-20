@@ -93,7 +93,10 @@ printf 'git cli ok: git=%s gh=%s glab=%s git_version=%s gh_version=%s glab_versi
 }
 
 export async function main(): Promise<void> {
-  const [{ loadConfig }, { buildApp }] = await Promise.all([import("../src/config.ts"), import("../src/wiring.ts")]);
+  const [{ loadConfig }, { buildApp }] = await Promise.all([
+    import("../src/config.ts"),
+    import("../test/support/build-app.ts"),
+  ]);
   const config = loadConfig();
   const actorProvided = Boolean(process.env.GIT_CLI_SMOKE_ACTOR_ID);
   const actorId = process.env.GIT_CLI_SMOKE_ACTOR_ID ?? `qm-git-cli-smoke-${Date.now()}`;
@@ -106,7 +109,6 @@ export async function main(): Promise<void> {
   const built = buildApp({
     ...config,
     dataDir: process.env.DATA_DIR ?? mkdtempSync(join(tmpdir(), "qm-git-cli-smoke-")),
-    harness: "mock",
     sessionStore: "memory",
     runStore: "memory",
   });

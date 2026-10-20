@@ -5,7 +5,7 @@ import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp as buildAppRaw } from "../src/wiring.ts";
+import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";

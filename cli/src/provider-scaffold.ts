@@ -83,8 +83,7 @@ ${values.providerFields}
   "skills": [],
 
   // Non-secret env overrides, per service. HARNESS "pi" runs real agent turns
-  // against the base model selected by "modelProvider" above. "mock" runs the
-  // whole stack with fake turns and no model calls.
+  // against the base model selected by "modelProvider" above.
   "env": ${values.env}${values.secretEnv}${values.sandbox}
 }
 `;

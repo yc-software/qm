@@ -81,7 +81,7 @@ export async function parseAutoFlaggerDraft(
   deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
   body: { harnessId?: unknown; modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
-  if (typeof body.harnessId !== "string" || !isHarnessId(body.harnessId) || body.harnessId === "mock") {
+  if (typeof body.harnessId !== "string" || !isHarnessId(body.harnessId)) {
     return { error: "auto-flagger requires a valid harnessId" };
   }
   if (typeof body.modelId !== "string" || !body.modelId.trim()) {

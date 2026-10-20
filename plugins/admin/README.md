@@ -34,7 +34,7 @@ action is authorized in the core and audited.
 
 ```bash
 
-HARNESS=mock PORT=8080 ORG_ID=acme npm start
+PORT=8080 ORG_ID=acme npm start
 
 
 cd plugins/admin
