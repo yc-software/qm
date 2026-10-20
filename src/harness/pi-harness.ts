@@ -2419,7 +2419,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ).trim();
           return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
         } catch {
-          return { respond: false };
+          return { respond: true, reason: "detection failed" };
         }
       },
 
