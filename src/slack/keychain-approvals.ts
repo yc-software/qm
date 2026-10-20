@@ -1,11 +1,10 @@
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
-import type { KeychainApprovalView } from "../credentials/keychain-approval.ts";
+import { standingCredentialAccess, type KeychainApprovalView } from "../credentials/keychain-approval.ts";
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { parseScopeId } from "../types.ts";
 
 const ACTIONS = ["keychain_allow_once", "keychain_allow_always", "keychain_deny"] as const;
 const escape = (text: string): string => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -21,11 +20,7 @@ export function keychainApprovalMessage(
       ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
       : place;
   const pending = ask.status === "pending";
-  const { kind } = parseScopeId(ask.requesterScopeId);
-  let audience = "this group";
-  if (kind === "personal") audience = "your personal conversations";
-  if (kind === "channel") audience = "this channel";
-  const standing = `ongoing access across ${audience}`;
+  const standing = standingCredentialAccess(ask.requesterScopeId);
   const duration = pending ? ` (${ask.requestedMode === "once" ? "one-time access" : standing})` : "";
   const summary = `Use your *${escape(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
   let status = "This request expired.";

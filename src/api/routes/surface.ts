@@ -1,3 +1,4 @@
+import { standingCredentialAccess } from "../../credentials/keychain-approval.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
@@ -242,7 +243,7 @@ async function credentialApprovals(ctx: ApiCtx, sessionId: string, viewer: strin
     out.push({
       requestId: `keychain:${ask.id}`,
       command: view.accountLabel ? `${view.service} (${view.accountLabel})` : view.service,
-      summary: `Use your ${view.service} credential in ${view.conversation}`,
+      summary: `Use your ${view.service} credential in ${view.conversation}. Allow always grants ${standingCredentialAccess(ask.requesterScopeId)} until revoked.`,
       reason: "Credential approval",
       grantModes: { session: false, always: true },
       blocksInput: false,
