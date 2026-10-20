@@ -25,7 +25,7 @@ export function timePoolWait(pool: Pool): void {
 }
 
 export function timeClientQueries(client: PoolClient): void {
-  const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+  const query = (...args: unknown[]) => Reflect.apply(Object.getPrototypeOf(client).query, client, args) as unknown;
   client.query = ((...args: unknown[]) => {
     const timing = requestTiming();
     if (!timing) return query(...args);
