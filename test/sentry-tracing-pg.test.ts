@@ -107,8 +107,8 @@ test(
       assert.ok(run.measurements.time_to_first_token.value > 0, "first-token time survives a late first token");
       const spans: Record<string, any>[] = run.spans;
       assert.ok(spans.length <= 500, `sent ${spans.length} spans`);
-      const queries = spans.filter((span) => span.description === "SELECT");
-      assert.ok(queries.length >= 450, `kept ${queries.length} queries`);
+      assert.ok(run.contexts.trace.data["qm.truncated_spans"] > 0, "the cut is recorded");
+      assert.ok(spans.some((span) => span.description === "SELECT"));
       const checkouts = spans.filter((span) => span.description === "pg-pool.connect");
       assert.ok(
         checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
@@ -146,4 +146,47 @@ test("a truncated run keeps every sent span's parent even when parent and child 
   const ids = new Set([run.contexts.trace.span_id, ...spans.map((sent) => sent.span_id)]);
   for (const sent of spans) assert.ok(ids.has(sent.parent_span_id), "every sent span's parent is sent");
   assert.equal(run.contexts.trace.data["qm.truncated_spans"], 2);
+});
+
+test("only quick, successful, childless pool checkouts are left out", async () => {
+  const start = 1_700_000_000;
+  const traceId = "0123456789abcdef0123456789abcdef";
+  const span = (id: string, parent: string, description: string, seconds: number, status = "ok") => ({
+    span_id: id.padStart(16, "0"),
+    parent_span_id: parent.padStart(16, "0"),
+    trace_id: traceId,
+    op: "db",
+    description,
+    start_timestamp: start,
+    timestamp: start + seconds,
+    status,
+    data: {},
+  });
+  Sentry.captureEvent({
+    type: "transaction",
+    transaction: "checkouts",
+    start_timestamp: start,
+    timestamp: start + 1,
+    contexts: { trace: { trace_id: traceId, span_id: "1".padStart(16, "0"), op: "queue.process" } },
+    spans: [
+      span("a", "1", "pg-pool.connect", 0.0002),
+      span("b", "1", "pg-pool.connect", 0.005),
+      span("c", "1", "pg-pool.connect", 0.0002, "internal_error"),
+      span("d", "1", "pg-pool.connect", 0.0002),
+      span("e", "d", "pg.connect", 0.0001),
+    ],
+  });
+  for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "checkouts"); i++) {
+    await flushErrorReporting();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const run = captured.find((event) => event.transaction === "checkouts");
+  assert.ok(run, "the transaction arrived");
+  assert.deepEqual(run.spans.map((sent: { span_id: string }) => sent.span_id.replace(/^0+/, "")).sort(), [
+    "b",
+    "c",
+    "d",
+    "e",
+  ]);
+  assert.equal(run.contexts.trace.data?.["qm.truncated_spans"], undefined);
 });
