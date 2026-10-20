@@ -3,7 +3,15 @@
     "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["esnext"],
+    "lib": [
+      "es2024",
+      "esnext.array",
+      "esnext.iterator",
+      "esnext.promise",
+      "esnext.disposable",
+      "esnext.float16",
+      "esnext.error"
+    ],
     "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,

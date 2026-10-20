@@ -3,7 +3,17 @@
     "target": "esnext",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["esnext", "DOM", "DOM.Iterable"],
+    "lib": [
+      "es2024",
+      "esnext.array",
+      "esnext.iterator",
+      "esnext.promise",
+      "esnext.disposable",
+      "esnext.float16",
+      "esnext.error",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "types": [],
     "strict": true,
     "noEmit": true,
