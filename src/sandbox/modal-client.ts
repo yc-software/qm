@@ -188,7 +188,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
         const [stdout, stderr, exitCode] = await Promise.all([p.stdout.readText(), p.stderr.readText(), p.wait()]);
         return { stdout, stderr, exitCode };
       } catch (err) {
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+        if (await hasExited(sdk, sbx, err))
+          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         if (err instanceof sdk.TimeoutError || Date.now() >= deadlineAt)
           return { stdout: "", stderr: errText(err), exitCode: 124 };
         throw err;
@@ -204,7 +205,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
             `modal read ${absPath}: the file exceeds Modal's filesystem read limit; move it with blob staging or split it`,
             { cause: err },
           );
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+        if (await hasExited(sdk, sbx, err))
+          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
@@ -212,7 +214,8 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       try {
         await sbx.filesystem.writeBytes(data, absPath);
       } catch (err) {
-        if (await hasExited(sdk, sbx, err)) throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
+        if (await hasExited(sdk, sbx, err))
+          throw new ModalSandboxGoneError(sbx.sandboxId, errText(err), { cause: err });
         throw err;
       }
     },
