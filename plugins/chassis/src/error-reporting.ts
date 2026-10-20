@@ -112,6 +112,7 @@ function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T
 function idleCheckout(span: SpanJSON, parents: Set<string | undefined>): boolean {
   return (
     span.description === POOL_CHECKOUT &&
+    span.status === "ok" &&
     (span.timestamp ?? Infinity) - span.start_timestamp < IDLE_CHECKOUT_SECONDS &&
     !parents.has(span.span_id)
   );

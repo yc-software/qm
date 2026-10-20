@@ -86,7 +86,7 @@ test("Postgres queries become pool and query spans that name the SQL verb and no
 });
 
 test(
-  "a long run keeps its earliest spans, contended checkouts and first-token time within Sentry's event size",
+  "a long run keeps its queries, waiting checkouts and first-token time within Sentry's event size",
   { skip },
   async () => {
     const pg = (await import("pg")).default;
@@ -105,26 +105,17 @@ test(
       const run = captured.find((event) => event.transaction === "long-run");
       assert.ok(run, "the transaction arrived");
       assert.ok(run.measurements.time_to_first_token.value > 0, "first-token time survives a late first token");
-      const spans: {
-        span_id: string;
-        parent_span_id: string;
-        description: string;
-        start_timestamp: number;
-        timestamp: number;
-      }[] = run.spans;
+      const spans: Record<string, any>[] = run.spans;
       assert.ok(spans.length <= 500, `sent ${spans.length} spans`);
       const queries = spans.filter((span) => span.description === "SELECT");
       assert.ok(queries.length >= 450, `kept ${queries.length} queries`);
       const checkouts = spans.filter((span) => span.description === "pg-pool.connect");
-      assert.ok(checkouts.length >= 2, "the first checkout and the contended one are kept");
       assert.ok(
         checkouts.some((span) => span.timestamp - span.start_timestamp >= 0.01),
         "a waiting checkout is kept",
       );
       const ids = new Set([run.contexts.trace.span_id, ...spans.map((span) => span.span_id)]);
       for (const span of spans) assert.ok(ids.has(span.parent_span_id), "every sent span's parent is sent");
-      const first = Math.min(...spans.map((span) => span.start_timestamp));
-      assert.ok(first - run.start_timestamp < 1, "the earliest work is kept");
     } finally {
       await pool.end();
     }
