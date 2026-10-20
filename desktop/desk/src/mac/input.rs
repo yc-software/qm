@@ -287,8 +287,15 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
         _ => cfs(value).as_CFType(),
     };
     let host = app_element(pid);
-    register_target(&host, e)?;
     let texty = has_role(e, TEXT_ROLES);
+    let require_focus = || {
+        if bool_attr(e, "AXFocused") == Some(true) {
+            Ok(())
+        } else {
+            Err(fail(ErrorCode::ActionFailed, format!("element {index} does not have keyboard focus; observe it before continuing")))
+        }
+    };
+    register_target(&host, e)?;
     if texty {
         let status = set_attr(e, "AXFocused", &CFBoolean::true_value().as_CFType());
         if status != 0 {
@@ -297,7 +304,9 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
                 format!("focusing element {index} failed (AXError {status}); its value was not changed"),
             ));
         }
+        require_focus()?;
     }
+    active()?;
     match set_attr(e, "AXValue", &new) {
         0 => {}
         n => return Err(fail(ErrorCode::ActionFailed, format!("setting element {index}'s value failed (AXError {n})"))),
@@ -318,6 +327,7 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
             perform(&host, e, "AXConfirm")?;
         } else {
             let target = register_target(&host, e)?;
+            require_focus()?;
             key(target, chord("return")?.0, CGEventFlags::empty(), None, 0)?;
         }
     }
