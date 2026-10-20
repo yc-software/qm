@@ -1,6 +1,7 @@
 use crate::cancellation;
 
 mod input;
+mod markers;
 use crate::protocol::*;
 use crate::text::{self, Key as TextKey, Stroke};
 use crate::tree::{self, Item, Key, Locator, Props, ROOT};
@@ -259,6 +260,7 @@ struct Snapshot {
     frame: Rect,
     elements: Vec<(u32, El)>,
     text: HashMap<u32, text::ObservedText>,
+    markers: HashMap<u32, (El, String)>,
     lines: HashMap<Key, String>,
     ids: tree::Ids<El>,
 }
@@ -1043,6 +1045,7 @@ struct Walk {
     ids: tree::Ids<El>,
     elements: Vec<(u32, El)>,
     text: HashMap<u32, text::ObservedText>,
+    markers: HashMap<u32, (El, String)>,
     text_budget: usize,
     notes: HashMap<u32, u32>,
     truncated: bool,
@@ -1096,10 +1099,46 @@ impl Walk {
             return;
         }
         let locator = at.child(&n.props);
+        let mut marker_source = None;
+        let mut marker_note = None;
+        if n.props.value.is_none()
+            && n.children.is_empty()
+            && matches!(n.props.role.as_str(), "AXStaticText" | "AXTextArea" | "AXTextField")
+            && n.frame.is_some_and(|frame| frame.w > 0.0 && frame.h > 0.0 && tree::intersect(frame, clip) == Some(frame))
+        {
+            match markers::read(e) {
+                Some(markers::Read::Text { range, raw, attributed }) => {
+                    let retained = raw.capacity() * 3 + std::mem::size_of::<(El, String)>();
+                    if let Some(remaining) = self.text_budget.checked_sub(retained) {
+                        self.text_budget = remaining;
+                        n.rendered = attributed_runs(&attributed, &raw).and_then(|runs| text::attributed_text(&runs, false));
+                        n.props.rich_text = n.rendered.as_ref().map(|rendered| rendered.markdown.clone());
+                        n.props.value = Some(raw.clone());
+                        n.raw = Some(raw.clone());
+                        marker_note = Some(format!(
+                            "Text from element marker range: {} UTF-16 units; text selection unavailable",
+                            raw.encode_utf16().count()
+                        ));
+                        marker_source = Some((range, raw));
+                    } else {
+                        self.truncated = true;
+                        marker_note = Some("… marker text omitted; observation text budget reached".into());
+                    }
+                }
+                Some(markers::Read::Omitted(length)) => {
+                    self.truncated = true;
+                    marker_note = Some(format!(
+                        "… element marker range length is {length}; text not read because it exceeds the {}-unit limit",
+                        tree::MAX_TEXT
+                    ));
+                }
+                None => {}
+            }
+        }
         let prefetched = self.fold(&mut n);
         n.limit_text(&mut self.text_budget);
         let (s, keep) = n.props.describe();
-        let keep = keep || force;
+        let keep = keep || force || marker_note.is_some();
         let clip = narrow(clip, &n.props.role, n.frame);
         let drawn = n.props.role == "AXWebArea" || n.children.is_empty();
         let (anchor, mut kids) = if keep { (self.id(e, locator), vec![]) } else { (anchor, vec![]) };
@@ -1115,7 +1154,12 @@ impl Walk {
             kids.push(self.note(anchor, note.into()));
         }
         if keep {
-            if let (Some(value), Some(rendered)) = (n.raw, n.rendered) {
+            if let Some(note) = marker_note {
+                kids.push(self.note(anchor, note));
+            }
+            if let Some(source) = marker_source {
+                self.markers.insert(anchor, source);
+            } else if let (Some(value), Some(rendered)) = (n.raw, n.rendered) {
                 self.text.insert(anchor, text::ObservedText::new(&value, rendered));
             }
             out.push(Item { key: Key::Element(anchor), text: s, kids });
@@ -1166,7 +1210,7 @@ impl Walk {
             }
             let mut n = if loaded { n } else { complete(c, n, self.cache.as_mut()) };
             n.props.list_item = list;
-            if n.props.plain_text() && n.children.is_empty() {
+            if n.props.plain_text() && n.props.value.is_some() && n.children.is_empty() {
                 run.push((c.clone(), n));
                 continue;
             }
@@ -1431,6 +1475,7 @@ impl Desk {
             ids: prev.as_mut().map(|p| std::mem::take(&mut p.ids)).unwrap_or_default(),
             elements: vec![],
             text: HashMap::new(),
+            markers: HashMap::new(),
             text_budget: 1024 * 1024,
             notes: HashMap::new(),
             truncated: false,
@@ -1464,6 +1509,7 @@ impl Desk {
         let moved = walk.ids.rebind(dead);
         items.iter_mut().for_each(|i| i.renumber(&moved));
         walk.text = rebind_text(walk.text, &moved);
+        walk.markers = walk.markers.into_iter().map(|(id, source)| (*moved.get(&id).unwrap_or(&id), source)).collect();
         for (id, _) in walk.elements.iter_mut() {
             *id = *moved.get(id).unwrap_or(id);
         }
@@ -1509,6 +1555,7 @@ impl Desk {
                 frame: f,
                 elements: walk.elements,
                 text: walk.text.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
+                markers: walk.markers.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 lines,
                 ids: walk.ids.carry(),
             },
@@ -1731,15 +1778,23 @@ impl Desk {
                 let (to, target) = input::keyboard_target(ax)?;
                 paste(to, &target, text, *format)
             }
-            Action::SelectText { index, text, prefix, suffix, selection } => select(
-                ax,
-                &self.element(pid, *index)?,
-                self.cache.get(&pid).and_then(|snapshot| snapshot.text.get(index)),
-                text,
-                prefix,
-                suffix,
-                *selection,
-            ),
+            Action::SelectText { index, text, prefix, suffix, selection } => {
+                if self.cache.get(&pid).is_some_and(|snapshot| snapshot.markers.contains_key(index)) {
+                    return Err(fail(
+                        ErrorCode::ActionFailed,
+                        "This element exposes text markers without a numeric text value; selection by text is unavailable",
+                    ));
+                }
+                select(
+                    ax,
+                    &self.element(pid, *index)?,
+                    self.cache.get(&pid).and_then(|snapshot| snapshot.text.get(index)),
+                    text,
+                    prefix,
+                    suffix,
+                    *selection,
+                )
+            }
             Action::PressKey { key: k, hold_ms } => {
                 let mut chord = crate::keys::parse(k).ok_or_else(|| fail(ErrorCode::UnknownKey, format!("unknown key {k}")))?;
                 if let Some(c) = chord.character {
