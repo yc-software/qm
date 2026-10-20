@@ -654,14 +654,10 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   const ref: ToolContextRef = { current: pressured, emit: () => {}, scopeLabel: "personal:U1" };
   const [execute] = createAgentTools(ref);
   const hot = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
-  assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%.*sequence heavy work/);
-  assert.doesNotMatch(hot.content[0]!.text!, /scratch/, "never recommend a scope this deployment has disabled");
-
-  const [scratchExecute] = createAgentTools(ref, { scratchExec: true });
-  const hotScratch = (await call(scratchExecute, { command: "echo ok", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.match(hotScratch.content[0]!.text!, /\[pressure\] .*move self-contained runs to scope:"scratch"/);
+  assert.match(
+    hot.content[0]!.text!,
+    /\[pressure\] .*io 62\.4%.*sequence heavy work, move self-contained runs to scope:"scratch"/,
+  );
 
   ref.current = {
     ...pressured,
@@ -1543,8 +1539,8 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
 
 test("readOnly exposes observation and constrained session coordination without execution tools", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
-  const full = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true });
-  const readOnly = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
+  const full = createAgentTools(ref, { controlTools: true, reachExec: true });
+  const readOnly = createAgentTools(ref, { controlTools: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
@@ -1741,7 +1737,7 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
   await call(execute, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
   assert.deepEqual(sink.lastExecOpts, { ownerAuth: true });
 
-  const unavailable = createAgentTools({ current: fakeToolContext() }, { scratchExec: true })[0]!;
+  const unavailable = createAgentTools({ current: fakeToolContext() })[0]!;
   const result = await call(unavailable, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
   assert.match((result as { content: Array<{ text: string }> }).content[0]?.text ?? "", /invalid execute arguments/);
 });
@@ -2769,7 +2765,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       throw new Error("must not start");
     },
   };
-  for (const options of [{}, { scratchExec: true }, { ownerAuthExec: true }, { reachExec: true }]) {
+  for (const options of [{}, { ownerAuthExec: true }, { reachExec: true }]) {
     const tools = createAgentTools({ current }, { ...options, sandboxResources: true });
     const execute = tools.find((t) => t.name === "execute")!;
     const sandbox = tools.find((t) => t.name === "sandbox")!;
@@ -2826,7 +2822,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     },
     {
       sandboxResources: true,
-      scratchExec: true,
       ownerAuthExec: true,
       reachExec: true,
       commandCredentialHandles: ["git"],

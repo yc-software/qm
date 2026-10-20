@@ -164,7 +164,6 @@ export interface ServerDeps {
   workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  filesDirectUploadsEnabled?: boolean;
   memory?: MemoryService;
   sandboxBackend?: string;
   egressDeclaredEnforcement?: EgressEnforcement;

@@ -80,30 +80,11 @@ const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, par
 };
 const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
   Object.keys((tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters.properties);
-const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
-  (tool as unknown as { parameters: { required?: string[] } }).parameters.required ?? [];
 
-test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), [
-    "command",
-    "background",
-    "sandbox_id",
-    "purpose",
-    "timeout_seconds",
-    "credentials",
-    "retrySafe",
-  ]);
-  assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
-  await call(execute, { command: "echo hi", purpose: "Run test command" });
-  assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
-});
-
-test("flag ON: scope defaults to the durable scoped box; scratch is an explicit opt-in", async () => {
+test("scope defaults to the durable scoped box; scratch is an explicit opt-in", async () => {
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
-  const [execute] = createAgentTools(ref, { scratchExec: true });
+  const [execute] = createAgentTools(ref);
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -139,9 +120,9 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
 });
 
-test("flag ON: unsupported scope/durable pairings return a crisp [error] without executing", async () => {
+test("unsupported scope/durable pairings return a crisp [error] without executing", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
+  const [execute] = createAgentTools({ current: tc });
 
   const e1 = textOf(
     await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
@@ -156,7 +137,7 @@ test("flag ON: unsupported scope/durable pairings return a crisp [error] without
   assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
 });
 
-test("flag ON: the tool_call/tool_result entries record which box ran the command", async () => {
+test("the tool_call/tool_result entries record which box ran the command", async () => {
   const emitted: Array<{ type: string; payload: { tool?: string; scope?: string } }> = [];
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
@@ -166,7 +147,7 @@ test("flag ON: the tool_call/tool_result entries record which box ran the comman
     },
     scopeLabel: scopeId("personal", "U1"),
   };
-  const [execute] = createAgentTools(ref, { scratchExec: true });
+  const [execute] = createAgentTools(ref);
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
@@ -175,10 +156,9 @@ test("flag ON: the tool_call/tool_result entries record which box ran the comman
   );
 });
 
-test("flag ON: the description advertises the routing policy truthfully", () => {
+test("the description advertises the routing policy truthfully", () => {
   const { tc } = sinkToolContext();
-  const [legacy] = createAgentTools({ current: tc });
-  const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
+  const [execute] = createAgentTools({ current: tc });
   const desc = (execute as unknown as { description: string }).description;
   assert.match(desc, /"scoped" \(DEFAULT\)/);
   assert.match(desc, /Use it for self-contained commands and API work/);
@@ -187,7 +167,6 @@ test("flag ON: the description advertises the routing policy truthfully", () => 
   assert.match(desc, /including Files/);
   assert.match(desc, /local files are discarded after the turn/);
   assert.match(desc, /Use scope:"scoped" when you need existing workspace files/);
-  assert.doesNotMatch((legacy as unknown as { description: string }).description, /scratch/i);
 });
 
 async function freshApp(extra: Partial<Config> = {}) {
@@ -348,6 +327,8 @@ test("execute schema lists exact command credential handles", async () => {
     "purpose",
     "timeout_seconds",
     "credentials",
+    "scope",
+    "durable",
     "retrySafe",
   ]);
 

@@ -123,7 +123,7 @@ for (const kind of ["command", "security-screen"] as const) {
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(
     testConfig({
-      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret", nativeSnapshotsEnabled: true },
+      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
     }),
   );
   try {

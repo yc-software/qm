@@ -42,7 +42,6 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     ...singleProcessDeps(),
     client,
     snapshots: snapshotStore.store,
-    nativeSnapshotsEnabled: true,
     namePrefix: "swarm-test",
   });
   const fixture = await swarmFixture({ backend });

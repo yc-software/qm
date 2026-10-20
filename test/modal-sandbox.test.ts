@@ -34,7 +34,6 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
-    nativeSnapshotsEnabled: true,
     ...extra,
   });
 }
@@ -713,40 +712,6 @@ test("maintenance checkpoints an idle scope with a live background job without r
   assert.notEqual((await store.get(scope))?.nativeSnapshotId, checkpoint);
 });
 
-test("native capture requires activation and adopted native scopes remain native after flag rollback", async () => {
-  fake.cleanup();
-  fake = installFakeModal({ native: true });
-  const store = createMemoryMap<StoredModalSandbox>();
-  const portable = instrumentedSnapshotStore();
-  const first = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: undefined });
-  const handle = await first.provision(layers);
-  await first.writeFile(handle, "working.txt", "portable generation");
-  await first.teardown(handle);
-  assert.equal((await store.get(scope))?.nativeSnapshotId, undefined);
-  assert.equal(portable.puts(), 1);
-
-  const activated = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: true });
-  const active = await activated.provision(layers);
-  await activated.writeFile(active, "working.txt", "native generation");
-  await store.merge(scope, { lastSnapshotMs: 0 });
-  await activated.teardown(active);
-  assert.ok((await store.get(scope))?.nativeSnapshotId);
-  assert.equal(portable.puts(), 1);
-  fake.terminate(scopeName());
-
-  const rollback = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
-  const recovered = await rollback.provision(layers);
-  assert.equal(await rollback.readFile(recovered, "working.txt"), "native generation");
-  await rollback.writeFile(recovered, "working.txt", "reader rollback generation");
-  await store.merge(scope, { lastSnapshotMs: 0 });
-  await rollback.teardown(recovered);
-  assert.equal(portable.puts(), 1);
-  fake.terminate(scopeName());
-  const restarted = make({ store, snapshots: portable.store, nativeSnapshotsEnabled: false });
-  const restored = await restarted.provision(layers);
-  assert.equal(await restarted.readFile(restored, "working.txt"), "reader rollback generation");
-});
-
 test("interrupted hydration cannot expose a partially restored home through stored adoption", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   const first = make({ store });
@@ -772,7 +737,7 @@ test("explicit restart of interrupted hydration retains the checkpoint and retri
   const checkpoint = (await store.get(scope))!.nativeSnapshotId;
   await first.writeFile(handle, "working.txt", "incomplete replacement content");
   await store.merge(scope, { hydrationPending: true });
-  const restarted = make({ store, nativeSnapshotsEnabled: false });
+  const restarted = make({ store });
   await restarted.restartComputer!(scope);
   assert.equal((await store.get(scope))!.nativeSnapshotId, checkpoint);
   const restored = await restarted.provision(layers);

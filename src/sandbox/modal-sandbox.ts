@@ -76,7 +76,6 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   namePrefix?: string;
   defaultTimeoutSec?: number;
   snapshotIntervalMs?: number;
-  nativeSnapshotsEnabled?: boolean;
   nativeSnapshotIntervalMs?: number;
   rotateAfterMs?: number;
   reapIdleMs?: number;
@@ -100,7 +99,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const usesNativeSnapshots = (stored?: StoredModalSandbox | null): boolean =>
-    !!stored?.nativeSnapshotId || !!(client.nativeSnapshots && opts.nativeSnapshotsEnabled);
+    !!stored?.nativeSnapshotId || !!client.nativeSnapshots;
   const snapshotIntervalMs = (stored?: StoredModalSandbox | null): number =>
     usesNativeSnapshots(stored) ? (opts.nativeSnapshotIntervalMs ?? 5 * 60_000) : (opts.snapshotIntervalMs ?? 0);
   const lastSnapshotAttemptMs = (stored?: StoredModalSandbox | null): number =>
