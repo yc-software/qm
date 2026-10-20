@@ -410,33 +410,36 @@ impl Locator {
     }
 }
 
-pub fn path_locator<T: PartialEq + Clone>(
+pub fn path_locator<T: PartialEq>(
     element: &T,
     roots: &[(T, Locator)],
     max_depth: usize,
-    expected_path: Option<&[T]>,
-    mut read: impl FnMut(&T) -> Option<(Props, Option<T>)>,
+    expected_path: &[T],
+    mut read: impl FnMut(&T) -> Option<(Props, Vec<T>)>,
 ) -> Option<Locator> {
-    let mut current = element.clone();
-    let mut path = vec![];
-    let mut expected = expected_path.map(|path| path.iter().rev());
-    for _ in 0..=max_depth {
-        if expected.as_mut().is_some_and(|expected| expected.next() != Some(&current)) {
+    if expected_path.last() != Some(element) || expected_path.len() > max_depth + 2 {
+        return None;
+    }
+    let (root_at, mut locator) = expected_path
+        .iter()
+        .enumerate()
+        .find_map(|(at, element)| roots.iter().find(|(root, _)| root == element).map(|(_, locator)| (at, *locator)))?;
+    if root_at > 1 {
+        return None;
+    }
+    for (at, current) in expected_path.iter().enumerate() {
+        if expected_path[..at].contains(current) {
             return None;
         }
-        let (props, parent) = read(&current)?;
-        path.push(props);
-        if let Some((_, root)) = roots.iter().find(|(element, _)| *element == current) {
-            if let Some(expected) = expected.as_mut() {
-                if expected.next() != parent.as_ref() || expected.next().is_some() {
-                    return None;
-                }
-            }
-            return Some(path.iter().rev().fold(*root, |at, props| at.child(props)));
+        let (props, children) = read(current)?;
+        if expected_path.get(at + 1).is_some_and(|next| !children.contains(next)) {
+            return None;
         }
-        current = parent?;
+        if at >= root_at {
+            locator = locator.child(&props);
+        }
     }
-    None
+    Some(locator)
 }
 
 const PARK_OBSERVATIONS: u32 = 30;
@@ -1012,42 +1015,47 @@ mod tests {
     }
 
     #[test]
-    fn live_locator_detects_identity_changes_and_detached_or_cyclic_paths() {
+    fn live_locator_validates_the_observed_child_path() {
         let group = Props { role: "AXGroup".into(), identifier: Some("toolbar".into()), ..Default::default() };
         let button = Props { role: "AXButton".into(), title: Some("Send".into()), ..Default::default() };
-        let mut nodes = HashMap::from([(1, (group.clone(), None)), (2, (button.clone(), Some(1)))]);
+        let mut nodes = HashMap::from([(0, (Props::default(), vec![1])), (1, (group.clone(), vec![2, 99])), (2, (button.clone(), vec![]))]);
         let roots = [(1, Locator::ROOT)];
+        let ancestry = [0, 1, 2];
         let expected = Locator::ROOT.child(&group).child(&button);
-        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
+        assert_eq!(path_locator(&2, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), Some(expected));
+        assert_eq!(path_locator(&2, &roots, 10, &[1, 2], |id| nodes.get(id).cloned()), Some(expected));
         nodes.get_mut(&2).unwrap().0.title = Some("Delete".into());
-        assert_ne!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
+        assert_ne!(path_locator(&2, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), Some(expected));
         nodes.get_mut(&2).unwrap().0 = button;
-        nodes.insert(3, (Props { role: "AXToolbar".into(), ..Default::default() }, Some(1)));
-        nodes.get_mut(&2).unwrap().1 = Some(3);
-        assert_ne!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
-        nodes.get_mut(&2).unwrap().1 = None;
-        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), None);
-        nodes.get_mut(&2).unwrap().1 = Some(2);
-        assert_eq!(path_locator(&2, &roots, 10, None, |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&1).unwrap().1 = vec![99];
+        assert_eq!(path_locator(&2, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&1).unwrap().1 = vec![2];
+        assert_eq!(path_locator(&2, &[], 10, &ancestry, |id| nodes.get(id).cloned()), None);
+        assert_eq!(path_locator(&2, &roots, 0, &ancestry, |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&1).unwrap().1.push(1);
+        assert_eq!(path_locator(&2, &roots, 10, &[0, 1, 1, 2], |id| nodes.get(id).cloned()), None);
+        nodes.get_mut(&0).unwrap().1.clear();
+        assert_eq!(path_locator(&2, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), None);
     }
 
     #[test]
     fn live_locator_rejects_identical_container_reparenting() {
         let group = Props { role: "AXGroup".into(), ..Default::default() };
         let button = Props { role: "AXButton".into(), title: Some("Delete".into()), ..Default::default() };
-        let mut nodes = HashMap::from([(1, (group.clone(), Some(0))), (2, (group.clone(), Some(0))), (3, (button.clone(), Some(1)))]);
+        let mut nodes = HashMap::from([
+            (0, (Props::default(), vec![1, 2])),
+            (1, (group.clone(), vec![3])),
+            (2, (group.clone(), vec![])),
+            (3, (button.clone(), vec![])),
+        ]);
         let roots = [(1, Locator::ROOT), (2, Locator::ROOT)];
         let expected = Locator::ROOT.child(&group).child(&button);
         let ancestry = [0, 1, 3];
-        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), Some(expected));
-        nodes.get_mut(&3).unwrap().1 = Some(2);
-        assert_eq!(path_locator(&3, &roots, 10, None, |id| nodes.get(id).cloned()), Some(expected));
-        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), None);
-        nodes.get_mut(&3).unwrap().1 = Some(1);
-        nodes.get_mut(&1).unwrap().1 = Some(9);
-        assert_eq!(path_locator(&3, &roots, 10, Some(&ancestry), |id| nodes.get(id).cloned()), None);
-        nodes.get_mut(&1).unwrap().1 = Some(0);
-        assert_eq!(path_locator(&3, &roots, 10, Some(&[0, 2, 1, 3]), |id| nodes.get(id).cloned()), None);
+        assert_eq!(path_locator(&3, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), Some(expected));
+        nodes.get_mut(&1).unwrap().1.clear();
+        nodes.get_mut(&2).unwrap().1.push(3);
+        assert_eq!(path_locator(&3, &roots, 10, &[0, 2, 3], |id| nodes.get(id).cloned()), Some(expected));
+        assert_eq!(path_locator(&3, &roots, 10, &ancestry, |id| nodes.get(id).cloned()), None);
     }
 
     #[test]

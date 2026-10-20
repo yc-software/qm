@@ -1747,14 +1747,23 @@ impl Desk {
         let target = s.ids.locator(index).ok_or_else(gone)?;
         let mut roots: Vec<(El, Locator)> =
             attr(&s.window_element, "AXChildren").map(list).unwrap_or_default().into_iter().map(|c| (c, Locator::ROOT)).collect();
-        roots.extend(extras(&app_element(pid), &s.window_element).into_iter().map(|o| (o, Locator::ROOT)));
+        let extra_roots = extras(&app_element(pid), &s.window_element);
+        roots.extend(extra_roots.iter().cloned().map(|o| (o, Locator::ROOT)));
         if !dead(&e) {
-            let ancestry = s.ancestry.get(&index).ok_or_else(gone)?;
-            let current = tree::path_locator(&e, &roots, MAX_DEPTH, Some(ancestry), |element| {
+            let mut ancestry = s.ancestry.get(&index).ok_or_else(gone)?.as_slice();
+            if let Some(at) = ancestry.iter().take(2).position(|element| extra_roots.contains(element)) {
+                let parent = attr(&ancestry[at], "AXParent");
+                if parent.as_ref() != at.checked_sub(1).map(|parent| &ancestry[parent]) {
+                    return Err(gone());
+                }
+                ancestry = &ancestry[at..];
+            }
+            let current = tree::path_locator(&e, &roots, MAX_DEPTH, ancestry, |element| {
                 if cancellation::cancelled() {
                     return None;
                 }
-                Some((fetch(element).props, attr(element, "AXParent")))
+                let node = fetch(element);
+                Some((node.props, node.children))
             });
             return if current == Some(target) { Ok(e) } else { Err(gone()) };
         }
