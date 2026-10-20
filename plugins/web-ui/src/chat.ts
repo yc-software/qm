@@ -590,6 +590,7 @@ export function createChatSurface(
     clearLiveWork();
     resetBackgroundPanel();
     chatState.resolvingApprovals.clear();
+    openThinking.clear();
     const onWork = observeLiveWork(agent);
     const onSendIssues = (issues: string[], retryable: Attachment[]): void => {
       if (agent !== chatState.agent || !issues.length) return;
