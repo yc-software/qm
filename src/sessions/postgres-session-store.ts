@@ -1,6 +1,7 @@
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
 import { jsonbStringify } from "../persistence/durable-map.ts";
+import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -60,6 +61,7 @@ import {
   AGENT_REPLY_ITEM,
   SEARCHABLE_ITEM,
   searchTypeExpr,
+  USER_ITEM_KINDS,
   USER_KINDS,
 } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
@@ -366,7 +368,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     if (query.scopeId !== undefined) where.push(`s.scope_id = ${param(query.scopeId)}`);
     if (query.sessionIds !== undefined) where.push(`s.id = ANY(${param([...query.sessionIds])}::text[])`);
     if (query.titleQuery?.trim()) {
-      const pattern = param(`%${query.titleQuery.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+      const pattern = param(likeContains(query.titleQuery.trim()));
       where.push(`(COALESCE(p.title, s.title) ILIKE ${pattern} OR s.channel_name ILIKE ${pattern})`);
     }
     if (query.before)
@@ -1180,7 +1182,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         startSeq,
         firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
         lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
-        items.some((item) => item.kind === "UserMessage" || item.kind === "SteeringMessage"),
+        items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
       ],
     );
     return full;

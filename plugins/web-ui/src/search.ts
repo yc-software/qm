@@ -10,7 +10,7 @@ import { destinations } from "./browse";
 import { UI_BASE } from "./deep-link";
 import { resourceResults, matchResources, type ResourceHit, type ResourceSearchResponse } from "./search-resources";
 import { icon } from "./icons";
-import { swallow } from "../../chassis/src/errors.ts";
+import { swallow, swallowAs } from "../../chassis/src/errors.ts";
 
 interface ChatSearchHit {
   sessionId: string;
@@ -258,7 +258,8 @@ function scrollSelectedIntoView(): void {
 
 async function openHit(hit: ChatSearchHit): Promise<void> {
   const find = (): CoreSession | undefined => sessionsState.list.find((s) => s.id === hit.sessionId);
-  const session = find() ?? (await fetchSessionRow({ id: hit.sessionId }).catch(() => null));
+  const session =
+    find() ?? (await fetchSessionRow({ id: hit.sessionId }).catch(swallowAs("web-ui: open search hit", null)));
   if (!session) return;
   closeChatSearch();
   await openSession(session);

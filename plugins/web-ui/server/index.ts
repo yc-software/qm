@@ -1535,7 +1535,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, url, user } = c;
       const qs = new URLSearchParams({ principalId: user });
-      for (const p of ["limit", "before", "archived", "waiting", "pinned", "surface", "scope", "q"] as const) {
+      for (const p of ["limit", "before", "archived", "waiting", "surface", "scope", "q"] as const) {
         const v = url.searchParams.get(p);
         if (v !== null) qs.set(p, v.slice(0, 500));
       }

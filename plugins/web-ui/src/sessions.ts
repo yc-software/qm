@@ -371,7 +371,7 @@ export function renderList(): void {
               ?disabled=${pageLoading === "active"}
               @click=${() => void loadMoreSessions("active")}
             >
-              ${pageLoading === "active" ? "Loading…" : "Show more conversations"}
+              Show more conversations
             </button>`
           : nothing
       }
@@ -394,7 +394,7 @@ export function renderList(): void {
                               ?disabled=${pageLoading === "archived"}
                               @click=${() => void loadMoreSessions("archived")}
                             >
-                              ${pageLoading === "archived" ? "Loading…" : "Show more archived conversations"}
+                              Show more archived conversations
                             </button>`
                           : nothing
                       }
@@ -619,9 +619,9 @@ async function loadChatsPage(append: boolean): Promise<void> {
       ...(chatsPageSurface === "all" ? {} : { surface: chatsPageSurface }),
     });
     if (seq !== chatsPageSeq) return;
-    chatsPageRows = append ? [...chatsPageRows, ...page.sessions] : page.sessions;
+    chatsPageRows = append ? [...chatsPageRows, ...page.sessions] : [...(page.pinned ?? []), ...page.sessions];
     chatsPageCursor = page.nextCursor;
-    sessionsState.list = upsertSessions(sessionsState.list, page.sessions);
+    sessionsState.list = upsertSessions(sessionsState.list, [...(page.pinned ?? []), ...page.sessions]);
     sessionsNotice = "";
   } catch (e) {
     if (seq !== chatsPageSeq) return;
@@ -656,7 +656,7 @@ export function drawChatsPage(): void {
     rows.push(
       html`<div class="list-footer">
         <button class="btn" type="button" ?disabled=${chatsPageLoading} @click=${() => void loadChatsPage(true)}>
-          ${chatsPageLoading ? "Loading…" : "Show more conversations"}
+          Show more conversations
         </button>
       </div>`,
     );
@@ -1790,7 +1790,7 @@ async function runSessionsRefresh(
     const surface = sessionsState.webOnly ? "web" : undefined;
     const roots = [...new Set(openConversationIds())];
     const [page, children] = await Promise.all([
-      fetchSessionPage({ limit: SESSION_BATCH_SIZE, pinned: true, ...(surface ? { surface } : {}) }),
+      fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
       Promise.all(
         roots.map(
           async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
@@ -1808,7 +1808,6 @@ async function runSessionsRefresh(
       page,
       {
         archived: false,
-        pinnedSeparately: true,
         ...(surface ? { surface } : {}),
         floor: page.nextCursor && last ? activityOf(last) : null,
       },
@@ -1852,7 +1851,9 @@ async function loadSessionNeighbors(s: CoreSession): Promise<void> {
       ? fetchSessionRow({ id: parentId }).catch(swallowAs("web-ui: load parent chat", null))
       : Promise.resolve(null),
   ]);
-  let list = sessionsState.list;
+  let list = sessionsState.list.some((row) => row.id === s.id)
+    ? sessionsState.list
+    : upsertSessions(sessionsState.list, [s]);
   if (children) list = mergeChildren(list, s.id, children);
   if (parent) list = upsertSessions(list, [parent]);
   if (list === sessionsState.list) return;

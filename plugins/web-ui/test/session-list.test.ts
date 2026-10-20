@@ -112,7 +112,7 @@ test("re-adding the same threadRef dedupes rather than duplicating", () => {
 function at(id: string, threadRef: string, lastActivityAt: number, extra: Partial<CoreSession> = {}): CoreSession {
   return { ...saved(id, threadRef), lastActivityAt, ...extra };
 }
-const firstPage = { archived: false, pinnedSeparately: true, floor: null };
+const firstPage = { archived: false, floor: null };
 
 test("a first page keeps unsent pending chats and replaces one once the server knows its thread", () => {
   const prev = [pending("web:u:a"), pending("web:u:b"), at("1", "web:u:x", 5)];

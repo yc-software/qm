@@ -65,7 +65,7 @@ test("the session list pages top-level chats newest first and keeps pinned, arch
     await chat(built, "web:U2:theirs", "Someone else's", "U2");
 
     const seen: Session[] = [];
-    let page = (await get("/v1/sessions?principalId=U1&limit=2&pinned=1")).body as Page;
+    let page = (await get("/v1/sessions?principalId=U1&limit=2")).body as Page;
     assert.deepEqual(
       page.pinned?.map((s) => s.id),
       [pinned.id],

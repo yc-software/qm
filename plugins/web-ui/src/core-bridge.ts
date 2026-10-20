@@ -159,7 +159,6 @@ export interface SessionPageQuery {
   before?: string | null;
   archived?: boolean;
   waiting?: boolean;
-  pinned?: boolean;
   surface?: string;
   scope?: string | null;
   q?: string;
@@ -177,7 +176,6 @@ export function fetchSessionPage(query: SessionPageQuery): Promise<SessionPage> 
   if (query.before) qs.set("before", query.before);
   if (query.archived) qs.set("archived", "1");
   if (query.waiting) qs.set("waiting", "1");
-  if (query.pinned) qs.set("pinned", "1");
   if (query.surface) qs.set("surface", query.surface);
   if (query.scope) qs.set("scope", query.scope);
   if (query.q?.trim()) qs.set("q", query.q.trim());

@@ -805,7 +805,6 @@ export interface SessionPageQuery {
   scopeId?: ScopeId;
   titleQuery?: string;
   waiting?: boolean;
-  pinnedSeparately?: boolean;
 }
 
 export interface SessionPageResult {

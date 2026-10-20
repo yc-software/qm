@@ -500,7 +500,6 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
     ...(before ? { before } : {}),
     archived: flag("archived"),
     waiting: flag("waiting"),
-    pinnedSeparately: flag("pinned"),
     ...(url.searchParams.get("surface") ? { surface: url.searchParams.get("surface")! } : {}),
     ...(url.searchParams.get("scope") ? { scopeId: url.searchParams.get("scope")! } : {}),
     ...(url.searchParams.get("q")?.trim() ? { titleQuery: url.searchParams.get("q")!.trim() } : {}),

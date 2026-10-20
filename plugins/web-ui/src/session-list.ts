@@ -160,7 +160,6 @@ export function upsertSessions(prev: CoreSession[], rows: readonly CoreSession[]
 
 export interface PageWindow {
   archived: boolean;
-  pinnedSeparately: boolean;
   surface?: string;
   floor: number | null;
 }
@@ -182,7 +181,7 @@ export function mergeFirstPage(
   const open = new Set(openIds);
   const kept = prev.filter((row) => {
     if (served.has(row.id) || open.has(row.id) || !inPageClass(row, window)) return true;
-    if (window.pinnedSeparately && row.pinned && !window.archived) return false;
+    if (row.pinned && !window.archived) return false;
     return window.floor !== null && activityOf(row) < window.floor;
   });
   return upsertSessions(kept, [...(page.pinned ?? []), ...page.sessions]);

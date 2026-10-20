@@ -253,13 +253,10 @@ export function createSessionMethods(
       }));
   };
 
-  async function decorateSessions(
-    principalId: string,
-    all: Session[],
-    opts: { rollup?: boolean } = {},
-  ): Promise<Session[]> {
+  async function decorateSessions(principalId: string, all: Session[]): Promise<Session[]> {
     const visibleById = new Map(all.map((session) => [session.id, session]));
-    const descendants = opts.rollup && all.length ? await deps.sessions.descendantsOf([...visibleById.keys()]) : [];
+    const roots = all.filter((session) => !session.parentSessionId).map((session) => session.id);
+    const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
     const descendantIds = new Set(descendants.map((d) => d.id));
     const approvalRows: PendingApprovalRecord[] = [];
     const approvalIds = [...visibleById.keys(), ...descendantIds];
@@ -589,18 +586,14 @@ export function createSessionMethods(
         const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
         filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
       }
-      const firstSidebarPage = query.pinnedSeparately === true && !query.before && !query.archived;
+      const firstPage = !query.before && !query.archived;
       const [page, pinned, archived] = await Promise.all([
         deps.sessions.listParticipantPage(principalId, {
           ...filter,
-          ...(query.pinnedSeparately ? { pinned: false } : {}),
+          ...(query.archived ? {} : { pinned: false }),
         }),
-        firstSidebarPage
-          ? deps.sessions.listParticipantPage(principalId, { ...filter, pinned: true, limit: 200 })
-          : null,
-        firstSidebarPage
-          ? deps.sessions.listParticipantPage(principalId, { ...filter, archived: true, limit: 1 })
-          : null,
+        firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, pinned: true, limit: 200 }) : null,
+        firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, archived: true, limit: 1 }) : null,
       ]);
       const viewable = async (rows: Session[]) => {
         const allowed = await Promise.all(
@@ -609,7 +602,7 @@ export function createSessionMethods(
         return rows.filter((_, index) => allowed[index]);
       };
       const rows = await viewable([...(pinned?.sessions ?? []), ...page.sessions]);
-      let decorated = await decorateSessions(principalId, rows, { rollup: true });
+      let decorated = await decorateSessions(principalId, rows);
       if (query.waiting) decorated = decorated.filter((s) => s.awaitingInput);
       const pinnedIds = new Set(pinned?.sessions.map((s) => s.id) ?? []);
       return {
@@ -633,7 +626,7 @@ export function createSessionMethods(
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
       const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...row } = session;
-      const [decorated] = await decorateSessions(principalId, [row], { rollup: !row.parentSessionId });
+      const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },
 

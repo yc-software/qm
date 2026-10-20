@@ -240,7 +240,8 @@ export function entryFromItem(
   };
 }
 
-export const USER_KINDS = "('UserMessage', 'SteeringMessage')";
+export const USER_ITEM_KINDS: readonly string[] = ["UserMessage", "SteeringMessage"];
+export const USER_KINDS = `(${USER_ITEM_KINDS.map((kind) => `'${kind}'`).join(", ")})`;
 export const AGENT_REPLY_ITEM = (col: string): string => `${col}.kind = 'AgentMessage'`;
 export const SEARCHABLE_ITEM = (col: string): string =>
   `(${col}.kind IN ('UserMessage','SteeringMessage','AgentMessage') AND ${col}.variant IS DISTINCT FROM 'files_delivered' AND ${col}.text IS NOT NULL)`;

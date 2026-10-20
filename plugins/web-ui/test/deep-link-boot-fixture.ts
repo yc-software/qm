@@ -174,7 +174,26 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       const sessionId = decodeURIComponent(path.split("/")[3] ?? "");
       return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
-    if (path.startsWith("/api/sessions/") && path.endsWith("/children")) return Response.json({ sessions: [] });
+    if (path.startsWith("/api/sessions/") && path.endsWith("/children")) {
+      const all = opts.listSessions ?? [];
+      const below = new Set([decodeURIComponent(path.split("/")[3] ?? "")]);
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const row of all)
+          if (row.parentSessionId && below.has(row.parentSessionId) && !below.has(row.id)) {
+            below.add(row.id);
+            grew = true;
+          }
+      }
+      return Response.json({ sessions: all.filter((row) => row.parentSessionId && below.has(row.id)) });
+    }
+    if (path.startsWith("/api/sessions/row?")) {
+      const params = new URL(path, "http://test").searchParams;
+      const row = (opts.listSessions ?? []).find(
+        (candidate) => candidate.id === params.get("id") || candidate.threadRef === params.get("threadRef"),
+      );
+      return row ? Response.json({ session: row }) : Response.json({ error: "not_found" }, { status: 404 });
+    }
     if (path.startsWith(`/api/sessions/${session.id}`)) {
       if (opts.holdTranscript) await transcriptHeld;
       if (failuresLeft > 0) {
@@ -259,7 +278,6 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
 function sessionPage(all: CoreSession[], params: URLSearchParams) {
   const activity = (row: CoreSession): number => row.lastActivityAt ?? row.createdAt ?? 0;
   const archived = params.get("archived") === "1";
-  const pinnedSeparately = params.get("pinned") === "1";
   const before = params.get("before");
   const limit = Number(params.get("limit") ?? 50);
   let rows = all
@@ -268,8 +286,8 @@ function sessionPage(all: CoreSession[], params: URLSearchParams) {
     .filter((row) => !params.get("scope") || row.scopeId === params.get("scope"))
     .filter((row) => params.get("waiting") !== "1" || row.awaitingInput)
     .sort((a, b) => activity(b) - activity(a) || (b.id < a.id ? -1 : 1));
-  const pinned = pinnedSeparately && !before && !archived ? rows.filter((row) => row.pinned) : undefined;
-  if (pinnedSeparately) rows = rows.filter((row) => !row.pinned);
+  const pinned = !before && !archived ? rows.filter((row) => row.pinned) : undefined;
+  if (!archived) rows = rows.filter((row) => !row.pinned);
   if (before) {
     const dot = before.indexOf(".");
     const [at, id] = [Number(before.slice(0, dot)), before.slice(dot + 1)];
