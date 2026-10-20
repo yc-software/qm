@@ -1402,6 +1402,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const ownerAuthAvailable = isolateOwnerKeychain;
       const connectorEnv: Record<string, string> = {};
       const credsStart = Date.now();
+      // A one-time grant covers the run that claims it, including a worker retry of that run (LAB-188).
+      const credentialRunId = input.runId ?? randomUUID();
       const commandCredentials: CommandCredential[] = [];
       const credentialDescriptions: NonNullable<KeychainManifestInput["execution"]> = [];
       const credentialIdentities = new Map<string, string>();
@@ -1457,13 +1459,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const registerKeychainCredentials = async (addCredential: typeof addCredentialToCatalog): Promise<void> => {
         if (external || strictReadOnly || !deps.keychain) return;
         const keychain = deps.keychain;
-        for (const { grant, credential } of await keychain.grantsForScope(scopeId)) {
+        for (const { grant, credential } of await keychain.grantsForScope(scopeId, credentialRunId)) {
           if (credential.kind === "broker" || isBackendCredential(credential)) continue;
           addCredential(
             {
               handle: credentialHandle(credential),
               resolve: async () => {
-                const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
+                const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id, credentialRunId);
                 return {
                   ...resolvedCredential(prepared.materialized),
                   commit: prepared.commit,
@@ -2295,7 +2297,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const [entriesByOwner, connectorsByOwner, scopeGrants, scopeAsks] = await Promise.all([
             !external ? (deps.keychain?.listByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
             !external ? (deps.keychain?.listConnectorsByOwners(members.map((m) => m.id)) ?? new Map()) : new Map(),
-            !external ? (deps.keychain?.grantsForScope(scopeId) ?? []) : [],
+            !external ? (deps.keychain?.grantsForScope(scopeId, credentialRunId) ?? []) : [],
             !external ? (deps.keychain?.listAsks({ requesterScopeId: scopeId }) ?? []) : [],
           ]);
           const keychainBlock = renderKeychainManifest({

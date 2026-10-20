@@ -185,6 +185,8 @@ export interface KeychainGrant {
   revokedAt?: number;
   usedAt?: number;
   usedBy?: string;
+  /** Run that claimed a "once" grant; that run may keep using it (LAB-188). */
+  usedInRun?: string;
   askId?: string;
 }
 
@@ -479,7 +481,11 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   getGrant(id: string): Promise<KeychainGrant | null>;
   listGrants(filter: GrantListFilter): Promise<KeychainGrant[]>;
   revokeGrant(ownerId: string, grantId: string): Promise<boolean>;
-  grantsForScope(scopeId: ScopeId): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
+  /** `runId` keeps a "once" grant listed for the run that claimed it. */
+  grantsForScope(
+    scopeId: ScopeId,
+    runId?: string,
+  ): Promise<Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }>>;
 
   createAsk(input: CreateAskInput): Promise<{ ask: KeychainAsk; existing: boolean }>;
   getAsk(id: string): Promise<KeychainAsk | null>;
@@ -494,6 +500,7 @@ export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
     grantId: string,
     scopeId: ScopeId,
     usedBy: string,
+    runId?: string,
   ): Promise<{
     materialized: MaterializedCred;
     singleUse: boolean;
@@ -558,7 +565,13 @@ function legacyUsernameEnvKey(passwordEnvKey: string): string {
   return `${base || passwordEnvKey}_USERNAME`;
 }
 
-function consumedGrant(grant: KeychainGrant): boolean {
+/**
+ * A "once" grant covers the run that first claims it: that run may retry and
+ * re-materialize it (revocation, expiry and rotation are still checked every
+ * time). Callers without a run id get strict one-use.
+ */
+function consumedGrant(grant: KeychainGrant, runId?: string): boolean {
+  if (runId && grant.mode === "once" && grant.status === "used" && grant.usedInRun === runId) return false;
   return grant.status === "used" || (grant.mode === "once" && grant.usedAt !== undefined);
 }
 
@@ -671,10 +684,10 @@ export function createKeychain(deps: {
     }
   }
 
-  async function activeGrantsFor(scopeId: ScopeId): Promise<KeychainGrant[]> {
+  async function activeGrantsFor(scopeId: ScopeId, runId?: string): Promise<KeychainGrant[]> {
     const t = now();
     return (await deps.grants.all()).filter(
-      (g) => g.audienceScopeId === scopeId && g.status === "active" && !consumedGrant(g) && !expired(g, t),
+      (g) => g.audienceScopeId === scopeId && g.status !== "revoked" && !consumedGrant(g, runId) && !expired(g, t),
     );
   }
 
@@ -1022,26 +1035,27 @@ export function createKeychain(deps: {
     return materialized;
   }
 
-  async function claimOnceGrant(grant: KeychainGrant, scopeId: ScopeId, usedBy: string): Promise<void> {
+  async function claimOnceGrant(grant: KeychainGrant, scopeId: ScopeId, usedBy: string, runId?: string): Promise<void> {
     if (grant.mode !== "once") return;
     if (!deps.grants.update) throw new KeychainError(503, "grant store does not support atomic one-time use");
     const usedAt = now();
     const claimed = await deps.grants.update(grant.id, (current) => {
       if (current.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
       if (current.status === "revoked") throw new KeychainError(410, "grant was revoked");
-      if (consumedGrant(current)) throw new KeychainError(410, "one-time grant already used");
+      if (consumedGrant(current, runId)) throw new KeychainError(410, "one-time grant already used");
       if (expired(current, usedAt)) throw new KeychainError(410, "grant is expired");
-      return { ...current, status: "used", usedAt, usedBy };
+      if (consumedGrant(current)) return current; // this run's earlier claim stands
+      return { ...current, status: "used", usedAt, usedBy, ...(runId ? { usedInRun: runId } : {}) };
     });
     if (!claimed) throw new KeychainError(404, "unknown grant");
   }
 
-  async function authorizedGrant(grantId: string, scopeId: ScopeId) {
+  async function authorizedGrant(grantId: string, scopeId: ScopeId, runId?: string) {
     const grant = await deps.grants.get(grantId);
     if (!grant) throw new KeychainError(404, "unknown grant");
     if (grant.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
     if (grant.status === "revoked") throw new KeychainError(410, "grant was revoked");
-    if (consumedGrant(grant)) throw new KeychainError(410, "one-time grant already used");
+    if (consumedGrant(grant, runId)) throw new KeychainError(410, "one-time grant already used");
     if (expired(grant, now())) throw new KeychainError(410, "grant is expired");
     const cred = await deps.creds.get(grant.credentialId);
     if (!cred) throw new KeychainError(404, "credential no longer exists");
@@ -1054,8 +1068,8 @@ export function createKeychain(deps: {
     return { grant, cred };
   }
 
-  async function prepareMaterialize(grantId: string, scopeId: ScopeId, usedBy: string) {
-    const { grant, cred } = await authorizedGrant(grantId, scopeId);
+  async function prepareMaterialize(grantId: string, scopeId: ScopeId, usedBy: string, runId?: string) {
+    const { grant, cred } = await authorizedGrant(grantId, scopeId, runId);
     const extra = { grantId: grant.id, purpose: grant.purpose };
     const materialized =
       cred.managed === "connector" ? await materializeConnectorEnv(cred, extra) : materializeDecrypted(cred, extra);
@@ -1070,11 +1084,11 @@ export function createKeychain(deps: {
       materialized,
       singleUse: grant.mode === "once",
       commit: async () => {
-        const current = await authorizedGrant(grantId, scopeId);
+        const current = await authorizedGrant(grantId, scopeId, runId);
         if (current.cred.updatedAt !== version.updatedAt || current.cred.secretEnc !== version.secretEnc) {
           throw new KeychainError(409, "credential changed while preparing execution; request it again");
         }
-        await claimOnceGrant(current.grant, scopeId, usedBy);
+        await claimOnceGrant(current.grant, scopeId, usedBy, runId);
       },
     };
   }
@@ -1117,7 +1131,7 @@ export function createKeychain(deps: {
 
   async function deleteCredential(id: string): Promise<void> {
     for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
+      if (grant.credentialId === id && grant.status !== "revoked") {
         await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
       }
     }
@@ -1247,13 +1261,13 @@ export function createKeychain(deps: {
     async revokeGrant(ownerId, grantId) {
       const g = await deps.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      if (g.status !== "revoked") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
       return true;
     },
 
-    async grantsForScope(scopeId) {
+    async grantsForScope(scopeId, runId) {
       const out: Array<{ grant: KeychainGrant; credential: KeychainCredentialMeta }> = [];
-      for (const grant of await activeGrantsFor(scopeId)) {
+      for (const grant of await activeGrantsFor(scopeId, runId)) {
         const cred = await deps.creds.get(grant.credentialId);
         if (cred && (cred.managed === "connector" || !credExpired(cred, now())))
           out.push({ grant, credential: toMeta(cred) });
