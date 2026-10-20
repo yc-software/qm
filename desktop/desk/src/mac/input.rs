@@ -9,7 +9,11 @@ const TEXT_ROLES: &[&str] = &["AXTextField", "AXTextArea", "AXComboBox"];
 fn element_at(root: &El, p: CGPoint) -> Option<El> {
     let mut v: CFTypeRef = std::ptr::null();
     let status = unsafe { AXUIElementCopyElementAtPosition(root.as_CFTypeRef(), p.x as f32, p.y as f32, &mut v) };
-    (status == 0 && !v.is_null()).then(|| unsafe { CFType::wrap_under_create_rule(v) })
+    if v.is_null() {
+        return None;
+    }
+    let element = unsafe { CFType::wrap_under_create_rule(v) };
+    (status == 0).then_some(element)
 }
 
 pub(super) fn within(e: &El, ancestor: &El) -> bool {
@@ -37,27 +41,28 @@ fn describe(e: &El) -> String {
     }
 }
 
-pub(super) fn clickable(ax: &El, e: &El, index: u32, visible: Rect) -> Result<CGPoint, Failure> {
-    let mut fallback = None;
-    let mut cover = None;
+fn clickable_point<T>(
+    visible: Rect,
+    mut hit: impl FnMut(CGPoint) -> Option<T>,
+    mut is_target: impl FnMut(&T) -> bool,
+) -> Result<CGPoint, Option<T>> {
+    let mut obstruction = None;
     for (fx, fy) in [(0.5, 0.5), (0.25, 0.5), (0.75, 0.5), (0.5, 0.25), (0.5, 0.75)] {
         let p = pt(visible.x + visible.w * fx, visible.y + visible.h * fy);
-        match element_at(ax, p) {
-            Some(h) if within(&h, e) => return Ok(p),
-            Some(h) if within(e, &h) => {
-                fallback.get_or_insert(p);
+        if let Some(element) = hit(p) {
+            if is_target(&element) {
+                return Ok(p);
             }
-            Some(h) => {
-                cover.get_or_insert(h);
-            }
-            None => {
-                fallback.get_or_insert(p);
-            }
+            obstruction.get_or_insert(element);
         }
     }
-    fallback.ok_or_else(|| {
-        let by = cover.map(|c| describe(&c)).unwrap_or_default();
-        fail(ErrorCode::ActionFailed, format!("element {index} is covered by {by}; close or move what covers it, or observe again"))
+    Err(obstruction)
+}
+
+pub(super) fn clickable(ax: &El, e: &El, index: u32, visible: Rect) -> Result<CGPoint, Failure> {
+    clickable_point(visible, |p| element_at(ax, p), |hit| within(hit, e)).map_err(|hit| {
+        let detail = hit.map(|element| format!("; hit testing found {} instead", describe(&element))).unwrap_or_default();
+        fail(ErrorCode::ActionFailed, format!("Cannot verify a clickable point for element {index}{detail}; reveal it and observe again"))
     })
 }
 
@@ -326,6 +331,20 @@ pub(super) fn set_value(pid: i32, e: &El, index: u32, value: &str, submit: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_click_requires_a_positive_target_hit() {
+        let rect = Rect { x: 10.0, y: 20.0, w: 100.0, h: 80.0 };
+        for hits in [vec![None; 5], vec![Some("ancestor"); 5], vec![None, Some("cover"), Some("ancestor"), None, Some("cover")]] {
+            let mut hits = hits.into_iter();
+            assert!(clickable_point(rect, |_| hits.next().flatten(), |hit| *hit == "target" || *hit == "descendant").is_err());
+        }
+        let mut hits = [Some("cover"), None, Some("descendant")].into_iter();
+        let descendant = clickable_point(rect, |_| hits.next().flatten(), |hit| *hit == "target" || *hit == "descendant").unwrap();
+        assert_eq!((descendant.x, descendant.y), (85.0, 60.0));
+        let target = clickable_point(rect, |_| Some("target"), |hit| *hit == "target").unwrap();
+        assert_eq!((target.x, target.y), (60.0, 60.0));
+    }
 
     #[test]
     fn page_wheel_fallback_uses_the_scroll_pane_viewport() {
