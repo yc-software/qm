@@ -38,8 +38,11 @@ const DEFAULT_AUTH_HEADER = "Authorization";
 const RESERVED_FIXED_HEADERS = new Set([
   ...HOP_BY_HOP,
   "authorization",
+  "content-encoding",
   "content-length",
+  "content-type",
   "cookie",
+  "expect",
   "host",
   "x-qm-actor",
 ]);

@@ -88,6 +88,11 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     ],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x api": "1" } } }], /not a valid HTTP header name/],
     [[{ ...entry, injection: { ...entry.injection, headers: { Host: "evil.example" } } }], /cannot set host/],
+    [
+      [{ ...entry, injection: { ...entry.injection, headers: { "Content-Type": "text/plain" } } }],
+      /cannot set content-type/,
+    ],
+    [[{ ...entry, injection: { ...entry.injection, headers: { Expect: "100-continue" } } }], /cannot set expect/],
     [[{ ...entry, injection: { ...entry.injection, headers: { Upgrade: "websocket" } } }], /cannot set upgrade/],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "a\u0001b" } } }], /valid HTTP header value/],
     [[{ ...entry, injection: { ...entry.injection, headers: { "x-api-key": "1" } } }], /cannot set x-api-key/],
