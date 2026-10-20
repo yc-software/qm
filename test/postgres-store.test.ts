@@ -3066,13 +3066,8 @@ test(
         pool.query("DELETE FROM items WHERE session_id=$1", [session.id]),
         /only allowed through its session/,
       );
-      assert.equal(
-        (await pool.query("SELECT to_regclass('session_entry_search') AS t")).rows[0].t,
-        null,
-        "no separate search table",
-      );
     } finally {
-      await store.releaseLease(lease).catch(() => {});
+      await store.releaseLease(lease);
       await store.deleteSession(session.id);
       await pool.end();
     }

@@ -30,7 +30,6 @@ export function tsPrefixQuery(query: string): string | null {
   return terms.map((t) => (t.length >= MIN_PREFIX_LEN ? `${t}:*` : t)).join(" & ");
 }
 
-/** The searchable text of an entry payload. */
 export function entrySearchText(payload: unknown): string | null {
   if (typeof payload === "string") return payload;
   const text = (payload as { text?: unknown } | null)?.text;

@@ -1,11 +1,5 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-// Released migrations that moved session history off session_tape and session_entries into items.
-// They are kept verbatim so a deployment upgrading from an older release still copies its history
-// on startup before sessions/store/0037-drop-legacy-history removes the old tables. Already-migrated
-// databases skip them by id. Their checksums are pinned: never edit these statements. Delete this
-// file once every supported deployment has applied sessions/store/0036-items-cutover.
-
 export const LEGACY_TAPE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
     id: "sessions/store/0029-legacy-tape-steps",

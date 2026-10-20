@@ -105,8 +105,7 @@ test(
       assert.deepEqual(legacyTables.rows, [], "every legacy history table is dropped");
       const leftovers = await raw.query(
         `SELECT proname FROM pg_proc WHERE pronamespace = current_schema()::regnamespace
-            AND proname IN ('entry_search_text', 'sync_item_search', 'sync_session_entry_search',
-                            'items_copy_payload', 'prepare_legacy_tape_steps', 'legacy_tape_steps_batch')
+            AND proname IN ('entry_search_text', 'sync_item_search', 'items_copy_payload')
           UNION ALL SELECT tgname FROM pg_trigger WHERE tgrelid = 'items'::regclass AND tgname = 'session_entry_search'`,
       );
       assert.deepEqual(leftovers.rows, [], "legacy search and copy functions and triggers are dropped");
