@@ -5,6 +5,7 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
 use core_graphics::event::CGEvent;
+use core_graphics::geometry::{CGPoint, CGRect};
 use foreign_types::ForeignType;
 use objc2::msg_send;
 use objc2::rc::autoreleasepool;
@@ -105,8 +106,9 @@ impl Drop for Updates {
     }
 }
 
-fn activate_window(target: i32, window: u32) -> Result<(), Failure> {
-    let (frame, point) = crate::mac::focus_activation_window(target, window)
+fn activate_window(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
+    let (frame, point) = geometry
+        .or_else(|| crate::mac::focus_activation_window(target, window))
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target window has no valid activation point"))?;
     synthetic_focus(target, window, 1)?;
     let pointer = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGEventSetWindowLocation".as_ptr()) };
@@ -188,7 +190,7 @@ fn restore_order(target: i32, original: i32, window: u32) -> Result<(), Failure>
     Err(Failure::new(ErrorCode::ActionFailed, "Original focused window disappeared during activation"))
 }
 
-fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure> {
+fn enforce_window(target: i32, window: u32, original: i32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
     let original_window = crate::mac::focused_window_id(original);
     let original_app = NSRunningApplication::runningApplicationWithProcessIdentifier(original)
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Original foreground app exited before activation"))?;
@@ -196,7 +198,7 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     let mut updates = Updates::freeze()?;
     let activation = (|| {
         check_current()?;
-        activate_window(target, window)?;
+        activate_window(target, window, geometry)?;
         let until = Instant::now() + Duration::from_millis(80);
         while Instant::now() < until {
             check_current()?;
@@ -262,13 +264,17 @@ impl Activation {
 }
 
 pub fn activate_target(target: i32, window: u32) -> Result<(), Failure> {
+    activate_target_with_geometry(target, window, None)
+}
+
+pub fn activate_target_with_geometry(target: i32, window: u32, geometry: Option<(CGRect, CGPoint)>) -> Result<(), Failure> {
     check_current()?;
     let activation = ACTIVATION
         .with(|current| current.borrow().upgrade())
         .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Target activation requires protected input"))?;
     crate::intervention::include_target(target);
     check_current()?;
-    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original))?;
+    activation.ensure(target, window, |target, window, _| enforce_window(target, window, activation.original, geometry))?;
     check_current()
 }
 
