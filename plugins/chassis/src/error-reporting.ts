@@ -118,12 +118,22 @@ function idleCheckout(span: SpanJSON, parents: Set<string | undefined>): boolean
   );
 }
 
-function sentSpans(spans: SpanJSON[]): SpanJSON[] {
+function orderedSpans(spans: SpanJSON[]): SpanJSON[] {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
   const parents = new Set(spans.map((span) => span.parent_span_id));
+  const depths = new Map<SpanJSON, number>();
+  const depth = (span: SpanJSON): number => {
+    let found = depths.get(span);
+    if (found === undefined) {
+      const parent = byId.get(span.parent_span_id ?? "");
+      found = parent ? depth(parent) + 1 : 0;
+      depths.set(span, found);
+    }
+    return found;
+  };
   return spans
     .filter((span) => !idleCheckout(span, parents))
-    .sort((a, b) => a.start_timestamp - b.start_timestamp)
-    .slice(0, MAX_SENT_SPANS);
+    .sort((a, b) => a.start_timestamp - b.start_timestamp || depth(a) - depth(b));
 }
 
 function scrubTransaction(event: TransactionEvent): TransactionEvent | null {
@@ -133,7 +143,12 @@ function scrubTransaction(event: TransactionEvent): TransactionEvent | null {
   delete event.user;
   delete event.breadcrumbs;
   scrubData(trace?.data as SpanData | undefined);
-  if (event.spans) event.spans = sentSpans(event.spans);
+  if (event.spans) {
+    const spans = orderedSpans(event.spans);
+    if (spans.length > MAX_SENT_SPANS)
+      trace!.data = { ...trace!.data, "qm.truncated_spans": spans.length - MAX_SENT_SPANS };
+    event.spans = spans.slice(0, MAX_SENT_SPANS);
+  }
   for (const span of event.spans ?? []) {
     const { statement } = scrubData(span.data);
     span.description = scrubDescription(span.op, span.description, statement);

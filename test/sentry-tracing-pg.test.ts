@@ -121,3 +121,39 @@ test(
     }
   },
 );
+
+test("a truncated run keeps every sent span's parent even when parent and child start together", async () => {
+  const start = 1_700_000_000;
+  const traceId = "0123456789abcdef0123456789abcdef";
+  const span = (id: number, parent: number, offset: number) => ({
+    span_id: id.toString(16).padStart(16, "0"),
+    parent_span_id: parent.toString(16).padStart(16, "0"),
+    trace_id: traceId,
+    op: "db",
+    description: "pg.connect",
+    start_timestamp: start + offset,
+    timestamp: start + offset + 0.5,
+    status: "ok",
+  });
+  const earlier = Array.from({ length: 499 }, (_, i) => span(i + 2, 1, i / 1000));
+  const tied = [span(1002, 1001, 1), span(1003, 1002, 1), span(1001, 1, 1)];
+  Sentry.captureEvent({
+    type: "transaction",
+    transaction: "tied-run",
+    start_timestamp: start,
+    timestamp: start + 2,
+    contexts: { trace: { trace_id: traceId, span_id: (1).toString(16).padStart(16, "0"), op: "queue.process" } },
+    spans: [...tied, ...earlier],
+  });
+  for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "tied-run"); i++) {
+    await flushErrorReporting();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const run = captured.find((event) => event.transaction === "tied-run");
+  assert.ok(run, "the transaction arrived");
+  const spans: Record<string, any>[] = run.spans;
+  assert.equal(spans.length, 500);
+  const ids = new Set([run.contexts.trace.span_id, ...spans.map((sent) => sent.span_id)]);
+  for (const sent of spans) assert.ok(ids.has(sent.parent_span_id), "every sent span's parent is sent");
+  assert.equal(run.contexts.trace.data["qm.truncated_spans"], 2);
+});
