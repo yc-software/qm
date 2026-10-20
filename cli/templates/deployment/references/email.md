@@ -1,16 +1,9 @@
 # Email transport for sign-in links
 
-Ordinary sign-in uses the built-in `auth` broker, which emails a one-time link.
-Administrators can start without email: leave the sender and selected transport's
-credentials unset, then run `qm admin-login` after deployment. It prints a private,
-single-use login link valid for five minutes. The selected account must already
-have `org_admin` access. Other users need email or an external identity provider.
-
-A deployment can also start with password sign-in: hash a password with
-`node plugins/auth/src/hash-password.ts admin@example.com` and store the result
-with `qm secrets set AUTH_PASSWORD_USERS ...`. The address must also be allowed
-to sign in. Treat this as an onboarding aid and move to email links or an
-identity provider once the deployment is running (see `plugins/auth/README.md`).
+This reference is only for email-link sign-in. For email and password without
+an email transport, follow `sign-in.md` instead. Administrators can also defer
+email setup and use `qm admin-login`, which prints a private, single-use link
+valid for five minutes for an account that already has `org_admin` access.
 
 Email sign-in needs one transport. SMTP is the default recommendation: any existing mail account or
 relay works and there is no DNS wait. Pick Resend only when the operator

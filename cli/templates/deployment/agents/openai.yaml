@@ -1,4 +1,4 @@
 interface:
   display_name: "Deploy QM"
-  short_description: "Deploy and onboard QM in your cloud"
-  default_prompt: "Use $deploy-qm to deploy this repository into my AWS or Fly.io account."
+  short_description: "Deploy QM locally or in your cloud"
+  default_prompt: "Use $deploy-qm to deploy this repository locally with Docker or into my Fly.io, AWS, or Porter account."
