@@ -14,7 +14,7 @@ import { cancelGoal, goalCancelledPayload, openGoal } from "../harness/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
@@ -644,7 +644,7 @@ export function createSessionMethods(
           ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
         };
       } catch (e) {
-        if (processIsGone(e)) return { chunk: "", cursor: sinceCursor, state: "exited" };
+        if (e instanceof ProcessSessionGoneError) return { chunk: "", cursor: sinceCursor, state: "exited" };
         throw e;
       } finally {
         await sandbox.teardown(handle, { keepWarm: true }).catch(() => {});

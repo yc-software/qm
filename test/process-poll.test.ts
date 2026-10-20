@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pollProcess, processIsGone } from "../src/sandbox/process-poll.ts";
+import { pollProcess } from "../src/sandbox/process-poll.ts";
 import type { ProcessSandbox, ReadProcessResult, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace" };
@@ -21,15 +21,6 @@ const running = (chunks: string, cursor: number): ReadProcessResult => ({
   chunks,
   cursor,
   status: { state: "running" },
-});
-
-test("processIsGone: the bare-string sentinel counts as gone", () => {
-  assert.equal(processIsGone("no such process session: p-1"), true);
-  assert.equal(processIsGone(new Error("no such process session: p-1")), true);
-});
-
-test("processIsGone: an embedded phrase in a wrapped error does NOT confirm a kill", () => {
-  assert.equal(processIsGone(new Error("fly api 500: upstream said 'no such process' while restarting")), false);
 });
 
 test("pollProcess stops when `until` fires, returning the output and cursor so far", async () => {

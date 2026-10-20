@@ -24,6 +24,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { writableMemoryScope } from "../src/memory/policy.ts";
 import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -77,7 +78,7 @@ function fakeProcessSandbox() {
     },
     async readProcess(_h, id, opts) {
       const p = procs.get(id);
-      if (!p) throw new Error(`no such process session: ${id}`);
+      if (!p) throw new ProcessSessionGoneError(id);
       const cur = opts?.sinceCursor ?? 0;
       return {
         chunks: p.output.slice(cur),

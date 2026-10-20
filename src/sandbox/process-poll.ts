@@ -1,8 +1,5 @@
 import type { ProcessSandbox, ProcessState, ReadProcessResult, SandboxHandle } from "./sandbox.ts";
-import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-
-export const processIsGone = (e: unknown): boolean => /^no such process/i.test(errMessage(e));
 
 export interface PollProcessOptions {
   deadlineMs: number;

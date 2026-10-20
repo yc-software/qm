@@ -5,6 +5,7 @@ import { createProcessReaper, createReaperKillHook } from "../src/processes/proc
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceLayer } from "../src/types.ts";
+import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -12,7 +13,7 @@ const ID = "00000000-0000-0000-0000-000000000abc";
 
 const FAST_GRACE = { termGraceMs: 20, killGraceMs: 20 };
 
-function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: boolean | "string-throw" }) {
+function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: boolean }) {
   const diesOn = opts?.diesOn ?? "TERM";
   const provisions: Array<{ layers: WorkspaceLayer[]; opts?: ProvisionOptions }> = [];
   const signals: Array<{ processId: string; signal: string }> = [];
@@ -26,8 +27,7 @@ function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: 
       return handle;
     },
     async readProcess(_h: SandboxHandle, processId: string) {
-      if (opts?.vanished === "string-throw") throw `no such process session: ${processId}`;
-      if (opts?.vanished) throw new Error(`no such process session: ${processId}`);
+      if (opts?.vanished) throw new ProcessSessionGoneError(processId);
       return {
         chunks: "",
         cursor: 0,
@@ -335,23 +335,6 @@ test("a vanished process session counts as a confirmed kill", async () => {
   assert.equal((await reaper.sweep()).reaped, 1);
   assert.equal((await reg.get(ID))!.status, "reaped");
   assert.equal(teardowns[0]!.opts?.keepWarm, true, "the box is still released keep-warm");
-});
-
-test("a non-Error 'no such process' rejection also counts as a confirmed kill", async () => {
-  const reg = createMemoryProcessRegistry();
-  await reg.register({
-    processId: ID,
-    scopeId: "s",
-    sandboxId: "sandbox-1",
-    kind: "background",
-    command: "bg: x",
-    ttlMs: -1,
-  });
-  const { sandbox } = killSpySandbox({ vanished: "string-throw" });
-  const reaper = createProcessReaper(reg, { intervalMs: 60_000, kill: createReaperKillHook(sandbox, FAST_GRACE) });
-
-  assert.equal((await reaper.sweep()).reaped, 1);
-  assert.equal((await reg.get(ID))!.status, "reaped");
 });
 
 test("an expired job with no recorded computer is retired without touching the scope's current computer", async () => {
