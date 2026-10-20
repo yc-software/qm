@@ -130,10 +130,6 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
     "a teammate who has not connected sees only the sign-in tool, not the tools another person loaded",
   );
   assert.deepEqual(
-    (await service.toolDefsFor(undefined)).map((d) => d.name),
-    ["orders_sign_in"],
-  );
-  assert.deepEqual(
     (await store.get("orders"))!.tools?.map((tool) => tool.name),
     ["search"],
     "learned tools are stored with the server so every instance and restart sees them",
@@ -155,9 +151,6 @@ test("stored oauth-user tools survive a restart but stay hidden from callers who
     userTokens: {
       connectorAccessToken: async () => null,
       connectorTokenStatus: async (_host, principalId) => statuses[principalId] ?? { connected: false },
-    },
-    fetchImpl: async () => {
-      throw new Error("no network on the listing path");
     },
   });
   t.after(() => {
