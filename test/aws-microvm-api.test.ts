@@ -260,7 +260,7 @@ test("writeAbs splits writes above the chunk size into parts, joins them in the 
     { path: `${stem}.part-2`, bytes: 2 },
   ]);
   assert.deepEqual(execs, [
-    `cat '${stem}.part-0' '${stem}.part-1' '${stem}.part-2' > '${stem}.joined' && [ "$(wc -c < '${stem}.joined')" -eq 10 ] && mv -f '${stem}.joined' '/app/big'`,
+    `cat '${stem}.part-0' '${stem}.part-1' '${stem}.part-2' > '${stem}.joined' && [ "$(wc -c < '${stem}.joined')" -eq 10 ] && { chmod --reference='/app/big' '${stem}.joined' 2>/dev/null || true; } && mv -fT '${stem}.joined' '/app/big'`,
     `rm -f '${stem}'.part-* '${stem}'.joined`,
   ]);
   execs.length = 0;

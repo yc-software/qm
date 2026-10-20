@@ -365,7 +365,7 @@ export function createMicrovmClient(api: AwsMicrovmApi, opts: MicrovmClientOptio
       const r = await execRaw(
         id,
         endpoint,
-        `cat ${parts.map(shq).join(" ")} > ${shq(joined)} && [ "$(wc -c < ${shq(joined)})" -eq ${data.byteLength} ] && mv -f ${shq(joined)} ${shq(absPath)}`,
+        `cat ${parts.map(shq).join(" ")} > ${shq(joined)} && [ "$(wc -c < ${shq(joined)})" -eq ${data.byteLength} ] && { chmod --reference=${shq(absPath)} ${shq(joined)} 2>/dev/null || true; } && mv -fT ${shq(joined)} ${shq(absPath)}`,
         300,
       );
       if (r.code !== 0) throw execFailure(`microVM write ${absPath} (joining ${parts.length} parts)`, r);

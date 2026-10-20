@@ -627,10 +627,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           ownerScopeId = before.ownerScopeId;
           const pushed = await deps.deployStore.refOf(id, deployCurrentGitRef);
           if (!pushed) return result;
+          const tree = await deps.deployStore.commitTreeOf(id, pushed);
+          assertAppSize(
+            tree.map((f) => f.size),
+            deps.provider.profile.maxAppBytes,
+          );
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
-          const tree = await deps.deployStore.treeOf(id, v.version);
-          assertAppSize(tree?.map((f) => f.size) ?? [], deps.provider.profile.maxAppBytes);
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
           void deps.appPublished?.(before.createdBy, id, v.version).catch(() => {});

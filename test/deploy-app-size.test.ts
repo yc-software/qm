@@ -12,8 +12,9 @@ import { scopeId } from "../src/types.ts";
 function service(maxAppBytes?: number) {
   const dir = mkdtempSync(join(tmpdir(), "deploy-app-size-"));
   let applies = 0;
+  const store = createDeployStore({ git: { repoRoot: join(dir, "repos") } });
   const deploy = createDeployService({
-    deployStore: createDeployStore({ git: { repoRoot: join(dir, "repos") } }),
+    deployStore: store,
     provider: {
       profile: { managedScaleToZero: false, ...(maxAppBytes ? { maxAppBytes } : {}) },
       apply: async () => {
@@ -26,7 +27,7 @@ function service(maxAppBytes?: number) {
     acl: createAclStore(),
     deployDir: join(dir, "deploy"),
   });
-  return { deploy, applies: () => applies };
+  return { deploy, store, applies: () => applies };
 }
 
 const owner = { ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "node server.js" };
@@ -54,7 +55,7 @@ test("a provider's app size cap rejects oversized publishes and redeploys before
 });
 
 test("the cap also blocks an oversized version pushed to the deployment's git repo", async () => {
-  const { deploy, applies } = service(10);
+  const { deploy, store, applies } = service(10);
   const d = await deploy.deploy({ ...owner, files: [{ path: "a.txt", data: "0123456789" }] });
   const work = mkdtempSync(join(tmpdir(), "deploy-app-size-push-"));
   execFileSync("git", ["clone", "--quiet", (await deploy.gitRepoPath(d.id))!, work]);
@@ -63,4 +64,7 @@ test("the cap also blocks an oversized version pushed to the deployment's git re
   execFileSync("git", ["push", "--quiet", (await deploy.gitRepoPath(d.id))!, "HEAD:current"], { cwd: work });
   await deploy.pushGit(d.id, async () => ({ result: true, ok: true }));
   assert.equal(applies(), 1);
+  const after = (await store.get(d.id))!;
+  assert.equal(after.currentVersion, 1);
+  assert.equal(after.versions.length, 1);
 });
