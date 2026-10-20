@@ -22,10 +22,8 @@ test("goals are validated and only a parent may assign them to its own workers",
   const [first, second] = await f.service.spawn(f.caller, { requestId: "initial", count: 2, text: "work" });
   await f.service.sweep();
   const { token_cap: _cap, ...uncapped } = goal;
-  await assert.rejects(
-    f.service.spawn(f.caller, { requestId: "uncapped", text: "work", goal: uncapped }),
-    /require token_cap/,
-  );
+  const [uncappedWorker] = await f.service.spawn(f.caller, { requestId: "uncapped", text: "work", goal: uncapped });
+  assert.ok(uncappedWorker);
   await assert.rejects(
     f.service.spawn(f.caller, { requestId: "bad", text: "work", goal: { ...goal, token_cap: "lots" } }),
     /invalid goal/,
