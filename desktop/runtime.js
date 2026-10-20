@@ -124,8 +124,14 @@
 
     async #observe(screenshot, diff, emit, tree = true) {
       const o = await desk({ type: "observe", app: this.name, screenshot, diff });
-      const identity = JSON.stringify([o.pid, o.window_id ?? o.window, o.frame.x, o.frame.y, o.frame.w, o.frame.h]);
       this.#appIdentity = o.bundle_id ? `bundle:${o.bundle_id}` : `name:${o.app}`;
+      if (!Number.isInteger(o.window_id) || o.window_id <= 0 || o.window_id > 0xffffffff) {
+        observedWindows.delete(this.#appIdentity);
+        this.#scale = null;
+        this.#screenshotWindow = null;
+        throw new Error("Observation has no valid native window ID; screenshot coordinates cannot be verified.");
+      }
+      const identity = JSON.stringify([o.pid, o.window_id, o.frame.x, o.frame.y, o.frame.w, o.frame.h]);
       observedWindows.set(this.#appIdentity, identity);
       if (identity !== this.#screenshotWindow) this.#scale = null;
       const note = appNotes.get(o.bundle_id);

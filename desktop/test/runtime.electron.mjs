@@ -22,7 +22,7 @@ import { appendFileSync } from 'node:fs';
 createInterface({input: process.stdin}).on('line', line => {
  const {id,cmd} = JSON.parse(line);
  if (cmd.type === 'act') appendFileSync(${JSON.stringify(acts)}, JSON.stringify(cmd.actions)+'\\n');
- const observation = {app:'Fixture',window:'Fixture window',frame:{x:10,y:20,w:100,h:100},elements:1,tree:'[1] Button',diffed:false,removed:[],...(cmd.diff ? {tree:'~ [1] Button',diffed:true,removed:[3,4,5,9]} : {}),...(cmd.screenshot ? {screenshot:{png_base64:${JSON.stringify(screenshot)},frame:{x:0,y:20,w:200,h:100}}}: {})};
+ const observation = {app:'Fixture',pid:1,window_id:2,window:'Fixture window',frame:{x:10,y:20,w:100,h:100},elements:1,tree:'[1] Button',diffed:false,removed:[],...(cmd.diff ? {tree:'~ [1] Button',diffed:true,removed:[3,4,5,9]} : {}),...(cmd.screenshot ? {screenshot:{png_base64:${JSON.stringify(screenshot)},frame:{x:0,y:20,w:200,h:100}}}: {})};
  const reply = cmd.type === 'apps' ? {type:'apps',apps:[{name:'Fixture',bundle_id:'test.fixture',pid:1,active:true}]} : cmd.type === 'observe' ? {type:'observation',...observation} : {type:'acted',completed:1, failure:null};
  process.stdout.write(JSON.stringify({id,reply})+'\\n');
 });

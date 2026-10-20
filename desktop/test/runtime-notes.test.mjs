@@ -17,6 +17,7 @@ function runtime(onRequest = () => {}) {
           app,
           bundle_id: app,
           window: "Test window",
+          window_id: 1,
           frame: { w: 100, h: 100 },
           elements: 1,
           tree: "[1] TextField",
@@ -75,7 +76,6 @@ test("setValue forwards explicit submission and rejects invalid options before s
   assert.throws(() => app.setValue(7, "bad", { submit: "true" }), /must be true or false/);
   assert.equal(calls.length, before);
 });
-
 
 test("documentation can be recovered without resetting existing app objects", async () => {
   const calls = [];
