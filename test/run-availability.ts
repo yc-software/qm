@@ -416,7 +416,7 @@ test(
     try {
       await writer.runs.list();
       for (const worker of workers) worker.start();
-      await until(() => resyncs === workers.length);
+      await until(() => resyncs >= workers.length);
       await until(() => claiming === 0);
       await sleep(100);
       let before = claims;
