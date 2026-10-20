@@ -17,6 +17,7 @@ import type { GapPhases, GapWork, LlmCallUsage, LlmTransportMeta, NewEntry } fro
 export type { GapWork } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
+import type { GrindMeter } from "./grind.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
@@ -125,6 +126,7 @@ export interface HarnessTurnInput {
   history: SessionEntry[];
   goal?: GoalRecord | null;
   goalContinuation?: boolean;
+  goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
   tools: ToolContext;
   commandCredentialHandles?: readonly string[];

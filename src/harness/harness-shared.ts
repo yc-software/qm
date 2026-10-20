@@ -112,6 +112,7 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     silentRequested: false,
     pollFire: Boolean(turn.pollFire),
     goal: turn.goal ?? null,
+    ...(turn.goalMeter ? { goalMeter: turn.goalMeter } : {}),
     ...(turn.goalContinuation || turn.continueTurn ? { goalRound: 1 } : {}),
     saveGoal: turn.saveGoal,
     emit: turn.emit,

@@ -483,3 +483,22 @@ test("a turn resumed mid-way cannot cancel: it is not answering a fresh message 
   assert.match(textOf(result as never), /Only the user's own message can cancel/);
   assert.equal(resumed.ref.goal?.status, "active");
 });
+
+test("a spend floor cannot be registered on a model without price data", async () => {
+  const { ref, create, saved } = toolbox();
+  ref.modelHasPrices = () => false;
+  const refused = await create.execute("c1", { objective: "spend", floor: { minUsd: 1 } });
+  assert.match(textOf(refused as never), /no price data.*minMs.*minTokens.*minTurns/s);
+  assert.equal(saved(), null);
+  await create.execute("c2", { objective: "spend", floor: { minMs: 60_000 } });
+  assert.deepEqual(saved()?.floor, { minMs: 60_000 });
+});
+
+test("goal get says when a spend floor is not being enforced", async () => {
+  const { ref, create, get } = toolbox();
+  ref.modelHasPrices = () => true;
+  await create.execute("c1", { objective: "spend", floor: { minUsd: 1 } });
+  ref.goalMeter!.unpricedCalls = 1;
+  const report = await get.execute("c2", {});
+  assert.match(textOf(report as never), /Work floor .*not enforced.* — met/);
+});

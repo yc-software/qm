@@ -73,6 +73,7 @@ import {
   contextTokenBudgetForModel,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexProviderModelId,
+  modelHasPrices,
 } from "../model/pi-models.ts";
 import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
 import {
@@ -1790,6 +1791,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
+          entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
           const effectiveModel = activeModel?.id ?? desiredModelId;
           const defaultThinkingLevel = entry.agentSession.model
             ? defaultInteractiveThinkingLevel(entry.agentSession.model)

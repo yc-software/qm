@@ -121,6 +121,7 @@ export interface ToolContextRef {
   goalRound?: number;
 
   goalMeter?: import("./grind.ts").GrindMeter;
+  modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
@@ -3908,6 +3909,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           true,
         );
       }
+      if (p.floor?.minUsd !== undefined && ref.modelHasPrices?.() === false) {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "create", error: "spend_unmeasurable" },
+          text(
+            "The current model has no price data, so a spend floor (minUsd) cannot be measured. Use a time (minMs), token (minTokens) or turn (minTurns) floor instead.",
+          ),
+          true,
+        );
+      }
       let record: GoalRecord;
       try {
         record = goalFromParams(p);
@@ -3944,7 +3955,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "get", goal },
-        text(goal ? goalReport(goal) : "No goal registered in this session."),
+        text(goal ? goalReport(goal, ref.goalMeter ?? createGrindMeter()) : "No goal registered in this session."),
       );
     },
   });
