@@ -18,8 +18,7 @@ COPY --from=wireproxy-build /out/wireproxy /usr/local/bin/wireproxy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-COPY .husky/install.mjs .husky/install.mjs
-RUN npm ci --omit=dev && npm run audit:prod \
+RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
   && rm -rf /root/.npm /tmp/node-compile-cache
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk

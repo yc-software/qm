@@ -16,8 +16,8 @@ test("core deploy image includes git", () => {
   );
   assert.match(
     dockerfile,
-    /npm ci --omit=dev && npm run audit:prod/,
-    "the production dependency audit is a build gate",
+    /npm ci --omit=dev --ignore-scripts && npm run audit:prod/,
+    "the production install skips dependency lifecycle scripts and the dependency audit is a build gate",
   );
   const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as {
     scripts: Record<string, string>;
