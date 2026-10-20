@@ -92,6 +92,7 @@ import {
 } from "../auth/capability-token.ts";
 import type {
   GapWork,
+  HarnessDetectResult,
   HarnessLlmRequestRecord,
   HarnessTurnInput,
   HarnessTurnResult,
@@ -2348,21 +2349,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) {
           const detectHistory = filterHistory((await historyWindow()).entries.slice(-DETECT_HISTORY_TAIL));
           const detectStart = Date.now();
-          const decision = await deps.harness.models.shouldRespond({
-            session,
-            message: input.text,
-            recentContext: input.detectContext ?? "",
-            ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
-            systemPrompt: resolution.systemPrompt,
-            ...(input.gatewayContext?.reactionGuidance
-              ? { reactionGuidance: input.gatewayContext.reactionGuidance }
-              : {}),
-            history: detectHistory,
-            recordModelCall: (rec) => {
-              deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
-              void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
-            },
-          });
+          const decision = await deps.harness.models
+            .shouldRespond({
+              session,
+              message: input.text,
+              recentContext: input.detectContext ?? "",
+              ...(input.detectOpener ? { threadOpener: input.detectOpener } : {}),
+              systemPrompt: resolution.systemPrompt,
+              ...(input.gatewayContext?.reactionGuidance
+                ? { reactionGuidance: input.gatewayContext.reactionGuidance }
+                : {}),
+              history: detectHistory,
+              recordModelCall: (rec) => {
+                deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
+                void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
+              },
+            })
+            .catch((e: unknown): HarnessDetectResult => {
+              deps.errors?.record(
+                {
+                  category: "turn",
+                  code: "detection_failed",
+                  message: errMessage(e),
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                },
+                e,
+              );
+              return { respond: false, reason: `detection failed: ${errMessage(e)}` };
+            });
           detectMs = Date.now() - detectStart;
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;

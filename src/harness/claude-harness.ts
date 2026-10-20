@@ -858,19 +858,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       },
       resetSession: () => {},
       async shouldRespond(detect) {
-        try {
-          const out = await single(
-            buildDetectionPrompt(detect.reactionGuidance),
-            renderDetectPrompt(detect),
-            undefined,
-            { recordModelCall: detect.recordModelCall },
-            judgeModelId,
-          );
-          return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
-        } catch (error) {
-          swallow("claude: detect", error);
-          return { respond: false };
-        }
+        const out = await single(
+          buildDetectionPrompt(detect.reactionGuidance),
+          renderDetectPrompt(detect),
+          undefined,
+          { recordModelCall: detect.recordModelCall },
+          judgeModelId,
+        );
+        return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));
       },
       async compactHistory(input) {
         const model = getRequiredModel(resolveModelId());
