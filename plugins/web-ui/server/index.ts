@@ -1,10 +1,3 @@
-import {
-  logRequestTiming,
-  requestTiming,
-  timedSync,
-  timeRoute,
-  withRequestTiming,
-} from "../../chassis/src/server-timing.ts";
 import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
@@ -1499,7 +1492,6 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/sessions",
     handle: async (c) => {
       const { res, user } = c;
-      timeRoute("sessions");
       return relayCore(res, "GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
     },
   },
@@ -2013,7 +2005,6 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       const id = c.params.id!;
-      timeRoute("approvals");
       return relayCore(
         res,
         "GET",
@@ -2069,7 +2060,6 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, url, user } = c;
       const id = c.params.id!;
-      timeRoute("transcript");
       const qs = new URLSearchParams({ viewer: user });
       for (const p of ["tailTurns", "sinceSeq", "beforeSeq"] as const) {
         const v = url.searchParams.get(p);
@@ -3366,7 +3356,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   }
 
   if (path === "/me" || path.startsWith("/api/")) {
-    const user = timedSync("auth", () => cookieUser(req));
+    const user = cookieUser(req);
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
@@ -3452,11 +3442,7 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
   try {
-    await withRequestTiming("web", () => {
-      const timing = requestTiming()!;
-      res.once("close", () => logRequestTiming(res, timing));
-      return portalTokenStore.run(token, () => routeRequest(req, res));
-    });
+    await portalTokenStore.run(token, () => routeRequest(req, res));
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

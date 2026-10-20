@@ -1,8 +1,6 @@
-import { performance } from "node:perf_hooks";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
-import { addPhase, requestTiming, withServerTiming } from "../../chassis/src/server-timing.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 
 const IDENTITY_TTL_MS = 60_000;
@@ -61,8 +59,6 @@ function relay(
     forwardCookies?: boolean;
   },
 ): void {
-  const timing = requestTiming();
-  const sentAt = performance.now();
   const up = httpRequest(
     {
       protocol: target.protocol,
@@ -82,12 +78,7 @@ function relay(
       }
       if (out.vary !== undefined) out.vary = withVary(res, String(out.vary));
       if (target.honorFramePolicy && declaresFrameAncestors(out)) res.removeHeader("x-frame-options");
-      if (timing) {
-        addPhase("pre", sentAt - timing.startedAt, timing);
-        addPhase("upstream", performance.now() - sentAt, timing);
-        if (out["server-timing"]) timing.upstream = [out["server-timing"]].flat().join(", ");
-      }
-      res.writeHead(upRes.statusCode ?? 502, withServerTiming(out, timing));
+      res.writeHead(upRes.statusCode ?? 502, out);
       upRes.on("error", () => res.destroy());
       upRes.pipe(res);
     },

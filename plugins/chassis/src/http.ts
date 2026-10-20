@@ -1,7 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { performance } from "node:perf_hooks";
 import { gzip } from "node:zlib";
-import { addPhase, timedSync, withServerTiming } from "./server-timing.ts";
 
 const COMPRESS_MIN_BYTES = 1024;
 
@@ -41,24 +39,19 @@ export function withVary(res: ServerResponse, value: string): string {
 export function sendBuffered(res: ServerResponse, status: number, headers: Record<string, string>, body: string): void {
   const out = { ...headers, vary: withVary(res, "accept-encoding") };
   if (Buffer.byteLength(body) < COMPRESS_MIN_BYTES || !gzipAccepted(res.req)) {
-    res.writeHead(status, withServerTiming(out));
+    res.writeHead(status, out);
     res.end(body);
     return;
   }
-  const started = performance.now();
   gzip(body, (err, packed) => {
-    addPhase("gzip", performance.now() - started);
     if (res.headersSent || res.writableEnded || res.destroyed) return;
     try {
       if (err) {
-        res.writeHead(status, withServerTiming(out));
+        res.writeHead(status, out);
         res.end(body);
         return;
       }
-      res.writeHead(
-        status,
-        withServerTiming({ ...out, "content-encoding": "gzip", "content-length": String(packed.length) }),
-      );
+      res.writeHead(status, { ...out, "content-encoding": "gzip", "content-length": String(packed.length) });
       res.end(packed);
     } catch {
       res.destroy();
@@ -67,12 +60,7 @@ export function sendBuffered(res: ServerResponse, status: number, headers: Recor
 }
 
 export function json(res: ServerResponse, status: number, body: unknown): void {
-  sendBuffered(
-    res,
-    status,
-    { "content-type": "application/json" },
-    timedSync("json", () => JSON.stringify(body)),
-  );
+  sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
 }
 
 export async function readBodyBytes(req: IncomingMessage, maxBytes = Infinity): Promise<Buffer> {

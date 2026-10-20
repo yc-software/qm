@@ -1,4 +1,3 @@
-import { timed } from "../../plugins/chassis/src/server-timing.ts";
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type {
   PendingApproval,
@@ -307,11 +306,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   }
 
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {
-    const session = await timed("lookup", () => deps.sessions.getForParticipant(sessionId, principalId));
+    const session = await deps.sessions.getForParticipant(sessionId, principalId);
     if (!session) return null;
-    return (await timed("access", () => managedProjectMembership(session.scopeId, principalId))) === false
-      ? null
-      : session;
+    return (await managedProjectMembership(session.scopeId, principalId)) === false ? null : session;
   }
 
   async function contextsFor(principalId: string): Promise<ContextSummary[]> {

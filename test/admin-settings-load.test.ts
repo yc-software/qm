@@ -44,7 +44,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
     for (const [key, value] of Object.entries(projected)) assert.deepEqual(value, full[key], view + ":" + key);
     if (view !== "credentials") assert.equal("serviceCredentials" in projected, false, view);
     else assert.deepEqual(projected.directoryChannels, [{ channelId: "C-settings", name: "settings-test" }]);
-    assert.match(response.headers.get("server-timing") ?? "", /core-authorize;dur=/);
+    assert.match(response.headers.get("server-timing") ?? "", /authorize;dur=/);
     if (["customize", "credentials", "connectors"].includes(view))
       assert.equal("modelsByHarness" in projected, false, view);
     if (view === "slack-settings") {

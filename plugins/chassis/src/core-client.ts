@@ -1,5 +1,3 @@
-import { performance } from "node:perf_hooks";
-import { addPhase, requestTiming } from "./server-timing.ts";
 import { signedRequestHeaders } from "./source-auth-sign.ts";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -45,7 +43,6 @@ export async function fetchCoreText(input: {
     let phase = "headers";
     let requestId: string | null = null;
     let status: number | undefined;
-    const startedAt = performance.now();
     try {
       const response = await fetch(`${input.origin}${path}`, {
         method: input.method,
@@ -57,14 +54,7 @@ export async function fetchCoreText(input: {
       status = response.status;
       phase = "body";
       requestId = response.headers.get("x-request-id");
-      const timing = requestTiming();
-      const headersAt = performance.now();
-      addPhase("core-headers", headersAt - startedAt, timing);
-      const text = await response.text();
-      addPhase("core-body", performance.now() - headersAt, timing);
-      const upstream = response.headers.get("server-timing");
-      if (timing && upstream) timing.upstream = upstream;
-      return { status: response.status, text };
+      return { status: response.status, text: await response.text() };
     } catch (error) {
       const cause = error instanceof Error ? error.cause : undefined;
       const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;

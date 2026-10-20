@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Pool, PoolClient } from "pg";
-import { requestTiming } from "../../plugins/chassis/src/server-timing.ts";
-import { timeClientQueries, timePoolWait } from "./pg-timing.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -64,13 +62,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
 
 function guardedPool(pool: Pool): Pool {
   pool.on("error", () => {});
-  pool.on("connect", (client) => {
-    client.on("error", (error) => console.error("[pg] client error:", errMessage(error)));
-    const timing = requestTiming();
-    if (timing) timing.db.connects++;
-    timeClientQueries(client);
-  });
-  timePoolWait(pool);
+  pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
   return pool;
 }
 
