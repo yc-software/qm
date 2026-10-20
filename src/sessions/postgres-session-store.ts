@@ -911,6 +911,21 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC) WHERE origin NOT IN ('conversation', 'cron')`,
         ],
       },
+      {
+        id: "sessions/store/0039-items-call-id-digest-index",
+        statements: [
+          `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS items_one_call_per_kind_digest
+        ON items(tenant_id, session_id, kind, md5(call_id)) WHERE call_id IS NOT NULL`,
+        ],
+      },
+      {
+        id: "sessions/store/0040-items-call-id-digest-swap",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `DROP INDEX IF EXISTS items_one_call_per_kind`,
+          `ALTER INDEX items_one_call_per_kind_digest RENAME TO items_one_call_per_kind`,
+        ],
+      },
     ],
     [
       {

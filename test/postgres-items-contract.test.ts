@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,7 +151,7 @@ test("pg items reject a second call with the same call id, leaving the log untou
 });
 
 test(
-  "pg tool output: the inline cap comes from qm_settings and parked text reads back by call id",
+  "pg tool output: the inline cap comes from qm_settings and parked text reads back by a gateway call id carrying a large thought signature",
   { skip },
   async () => {
     await withSchema("items_tool_output", async ({ raw, url, store }) => {
@@ -176,27 +176,31 @@ test(
 
         const full = "ünï line\n".repeat(10_000);
         const blob = await outputs.save(full);
+        const callId = `call_${randomUUID()}__thought__${randomBytes(4_500).toString("base64")}`;
         const { lease } = await store.acquireLease(session.id);
         assert.ok(lease);
-        await store.append(lease, {
-          type: "tool_call",
-          payload: { tool: "execute", callId: "big" },
-          scopeLabel: scope,
-        });
+        const call = { type: "tool_call" as const, payload: { tool: "execute", callId }, scopeLabel: scope };
+        await store.append(lease, call);
         await store.append(lease, {
           type: "tool_result",
           payload: {
             tool: "execute",
-            callId: "big",
+            callId,
             result: "head…tail",
             output: { blob, chars: full.length, shownChars: 8 },
           },
           scopeLabel: scope,
         });
+        await assert.rejects(store.append(lease, call), DuplicateCallError);
         await store.releaseLease(lease);
-        assert.deepEqual(await outputs.read(session.id, "big"), { text: full });
+        const entries = await store.getEntries(session.id);
+        assert.deepEqual(
+          entries.map((entry) => (entry.payload as { callId?: string }).callId),
+          [callId, callId],
+        );
+        assert.deepEqual(await outputs.read(session.id, callId), { text: full });
         assert.equal(await outputs.read(session.id, "missing"), null);
-        assert.equal(await outputs.read("other-session", "big"), null);
+        assert.equal(await outputs.read("other-session", callId), null);
         const row = (
           await raw.query(
             "SELECT size, storage_key, (extract(epoch FROM expires_at - created_at) / 86400)::int AS days FROM blobs",

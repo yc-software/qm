@@ -121,7 +121,8 @@ export function createPostgresToolOutputStore(opts: {
         `SELECT b.storage_key, i.created_at <= now() - interval '30 days' AS expired
            FROM items i
       LEFT JOIN blobs b ON b.tenant_id = i.tenant_id AND b.sha256 = i.blob_sha
-          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult' AND i.call_id = $2
+          WHERE i.tenant_id = qm_tenant_id() AND i.session_id = $1 AND i.kind = 'ToolResult'
+            AND md5(i.call_id) = md5($2) AND i.call_id = $2
             AND i.blob_sha IS NOT NULL`,
         [sessionId, callId],
       );
