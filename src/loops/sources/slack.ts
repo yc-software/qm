@@ -78,7 +78,10 @@ function itemReactions(item: LoopItem): string[] {
 }
 
 export function slackUserClientFactory(apiUrl?: string): (token: string) => SlackUserClient {
-  const options = apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {};
+  const options = {
+    attachOriginalToWebAPIRequestError: false,
+    ...(apiUrl ? { slackApiUrl: normalizeSlackApiUrl(apiUrl) } : {}),
+  };
   return (token) => new WebClient(token, options);
 }
 
