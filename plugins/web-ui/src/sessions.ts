@@ -180,6 +180,8 @@ const SESSION_BATCH_SIZE = 50;
 let recentLimit = SESSION_BATCH_SIZE;
 let archivedLimit = SESSION_BATCH_SIZE;
 let chatsPageLimit = SESSION_BATCH_SIZE;
+const GROUP_PREVIEW_SIZE = 5;
+const groupLimits = new Map<string, number>();
 
 let chatsPageScope: string | null = null;
 let chatsPageQuery = "";
@@ -211,6 +213,7 @@ export function resetSessionsState(): void {
   recentLimit = SESSION_BATCH_SIZE;
   archivedLimit = SESSION_BATCH_SIZE;
   chatsPageLimit = SESSION_BATCH_SIZE;
+  groupLimits.clear();
   chatsPageScope = null;
   chatsPageQuery = "";
   chatsPageStatus = "active";
@@ -322,14 +325,29 @@ export function renderList(): void {
     sessionsState.openMenuId,
     sessionsState.renamingId,
   ]);
-  const shownThreads = new Set(
-    [
-      ...rest.slice(0, recentLimit),
-      ...archived.slice(0, archivedLimit),
-      ...visible.filter((session) => !session.id || keptIds.has(session.id)),
-    ].map((session) => session.threadRef),
-  );
   const activeItems = recentItemsFor(rest);
+  const keptThreads = new Set(
+    visible.filter((session) => !session.id || keptIds.has(session.id)).map((session) => session.threadRef),
+  );
+  const pageable = activeItems.filter((item) => item.kind === "session" || item.sessions.length);
+  const shownItems = new Set(
+    pageable.filter(
+      (item, i) =>
+        i < recentLimit ||
+        (item.kind === "session"
+          ? keptThreads.has(item.session.threadRef)
+          : keptIds.has(projectMenuKey(item.scopeId)) ||
+            item.sessions.some((session) => keptThreads.has(session.threadRef))),
+    ),
+  );
+  const shownThreads = new Set([
+    ...archived.slice(0, archivedLimit).map((session) => session.threadRef),
+    ...keptThreads,
+    ...[...shownItems]
+      .flatMap((item) => (item.kind === "session" ? [item.session] : item.sessions.slice(0, groupLimit(item))))
+      .map((session) => session.threadRef),
+  ]);
+  const moreBelow = pageable.some((item) => !shownItems.has(item));
   const archivedItems: RecentItem[] = archived.map((session) => ({
     kind: "session",
     session,
@@ -356,7 +374,7 @@ export function renderList(): void {
       }
       ${groupedRows(activeItems, shownThreads)}
       ${
-        rest.some((session) => !shownThreads.has(session.threadRef))
+        moreBelow
           ? html`<button
               class="archived-toggle"
               type="button"
@@ -500,9 +518,32 @@ function recentItem(item: RecentItem, shownThreads: ReadonlySet<string>): Templa
                 (session) => sessionRow(session, true),
               )
         }
+        ${collapsed ? nothing : groupShowMore(item, shownThreads)}
       </div>
     </section>
   `;
+}
+
+function groupLimit(item: Extract<RecentItem, { kind: "project" }>): number {
+  return groupLimits.get(item.scopeId) ?? (item.groupKind === "personal" ? SESSION_BATCH_SIZE : GROUP_PREVIEW_SIZE);
+}
+
+function groupShowMore(
+  item: Extract<RecentItem, { kind: "project" }>,
+  shownThreads: ReadonlySet<string>,
+): TemplateResult | typeof nothing {
+  const hidden = item.sessions.filter((session) => !shownThreads.has(session.threadRef)).length;
+  if (!hidden) return nothing;
+  return html`<button
+    class="archived-toggle group-show-more"
+    type="button"
+    @click=${() => {
+      groupLimits.set(item.scopeId, groupLimit(item) + SESSION_BATCH_SIZE);
+      renderList();
+    }}
+  >
+    Show ${Math.min(hidden, SESSION_BATCH_SIZE)} more
+  </button>`;
 }
 
 function toggleRecentProject(scopeId: string): void {

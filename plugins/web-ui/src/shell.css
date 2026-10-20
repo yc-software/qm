@@ -1043,6 +1043,10 @@ a.chat-row-open {
   margin-left: auto;
   opacity: 0.75;
 }
+.archived-toggle.group-show-more {
+  margin: 0;
+  padding-left: 6px;
+}
 
 .sidebar-footer {
   display: flex;

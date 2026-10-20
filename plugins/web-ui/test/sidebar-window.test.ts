@@ -48,7 +48,7 @@ test("sidebar batches retain pinned, open and selected chats, full counts and ar
     projectToggle.click();
     assert.equal(sidebar.querySelectorAll(".recent-project-children .session-row").length, 0);
     projectToggle.click();
-    button(sidebar, "Show more conversations").click();
+    button(sidebar, "Show 50 more").click();
     assert.equal(sidebar.querySelectorAll(".session-row").length, 103);
     for (const [id, shift] of [
       ["chat-90", false],
@@ -168,6 +168,94 @@ test("an open project menu and rename survive the last project row leaving the b
     assert.equal(input.value, "Unfinished name");
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert.equal(sidebar.querySelector('[aria-label="Target project"]'), null);
+  } finally {
+    await h.close();
+  }
+});
+
+test("channel groups page as units with their own Show more", async () => {
+  const list = sessions(80);
+  const scopeId = "slack:T1:C1";
+  for (const item of [list[2]!, ...list.slice(60, 72)]) item.scopeId = scopeId;
+  const h = await harness({
+    path: `/s/${list[0]!.id}`,
+    session: list[0],
+    listSessions: list,
+    contexts: [
+      { scopeId: "personal:tester", kind: "personal", name: "Personal", sessionCount: 67, lastActivityAt: null },
+      { scopeId, kind: "channel", name: "#builds", sessionCount: 13, lastActivityAt: null },
+    ],
+  });
+  try {
+    await h.boot();
+    h.releaseSessions();
+    await h.sessionsReady();
+    const sidebar = document.querySelector("#sidebar-body")!;
+    const group = (name: string) =>
+      [...sidebar.querySelectorAll<HTMLElement>("section.recent-project")].find(
+        (el) => el.querySelector(".recent-project-name")?.textContent === name,
+      )!;
+    const rows = (name: string) => group(name).querySelectorAll(".recent-project-children .session-row").length;
+    assert.equal(group("Channel").querySelector(".recent-project-count")?.textContent, "13");
+    assert.equal(rows("Channel"), 5);
+    button(group("Channel"), "Show 8 more").click();
+    assert.equal(rows("Channel"), 13);
+    assert.equal(group("Channel").querySelector(".group-show-more"), null);
+    assert.equal(rows("Personal"), 50);
+    button(group("Personal"), "Show 17 more").click();
+    assert.equal(rows("Personal"), 67);
+    assert.ok(
+      ![...sidebar.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Show more conversations"),
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test("a group past the window that holds the open chat still pages", async () => {
+  const list = sessions(72);
+  for (const item of list.slice(0, 60)) item.scopeId = `personal:other-${item.id}`;
+  const scopeId = "slack:T1:C1";
+  for (const item of list.slice(60)) item.scopeId = scopeId;
+  const opened = list[69]!;
+  const h = await harness({
+    path: `/s/${opened.id}`,
+    session: opened,
+    listSessions: list,
+    contexts: [{ scopeId, kind: "channel", name: "#builds", sessionCount: 12, lastActivityAt: null }],
+  });
+  try {
+    await h.boot();
+    h.releaseSessions();
+    await h.sessionsReady();
+    const sidebar = document.querySelector("#sidebar-body")!;
+    const group = () => sidebar.querySelector<HTMLElement>("section.recent-project")!;
+    const rows = () => group().querySelectorAll(".recent-project-children .session-row").length;
+    assert.equal(rows(), 6);
+    assert.ok(group().querySelector(`[data-session-id="${opened.id}"]`));
+    button(group(), "Show 6 more").click();
+    assert.equal(rows(), 12);
+    button(sidebar, "Show more conversations").click();
+    assert.equal(sidebar.querySelectorAll(".session-row").length, 72);
+  } finally {
+    await h.close();
+  }
+});
+
+test("the bottom Show more hides when the only row past the window is already open", async () => {
+  const list = sessions(51);
+  for (const item of list) item.scopeId = `personal:other-${item.id}`;
+  const opened = list[50]!;
+  const h = await harness({ path: `/s/${opened.id}`, session: opened, listSessions: list });
+  try {
+    await h.boot();
+    h.releaseSessions();
+    await h.sessionsReady();
+    const sidebar = document.querySelector("#sidebar-body")!;
+    assert.equal(sidebar.querySelectorAll(".session-row").length, 51);
+    assert.ok(
+      ![...sidebar.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Show more conversations"),
+    );
   } finally {
     await h.close();
   }
