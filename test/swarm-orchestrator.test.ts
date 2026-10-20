@@ -597,3 +597,50 @@ test("swarms stay off for a person until the swarms flag names their personal sc
     await built.runtime.stop();
   }
 });
+
+test("a goal assigned at spawn becomes the worker's session goal and its turn has no swarm deadline", async () => {
+  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  try {
+    const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
+    await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+    const rootTurn = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "swarm-goal-root" },
+      origin: { kind: "human" },
+      text: "Coordinate work",
+    });
+    assert.equal(rootTurn.status, "ok");
+    const root = (await built.sessions.get(rootTurn.sessionId!))!;
+    const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
+    const caller = { kind: "human" as const, actorId: "U1", sessionId: root.id, runId: rootRun.id };
+    await built.app.swarms!.spawn(caller, {
+      requestId: "goal-worker",
+      text: "Work the lane",
+      goal: { objective: "Exhaust the lane", floor: { minMs: 3_600_000 }, token_cap: 50_000 },
+    });
+    await built.app.swarms!.sweep();
+    const worker = (await built.runs.list()).find((run) => run.request.swarm)!;
+    const seen: Array<Pick<HarnessTurnInput, "goal" | "turnWallClockMs" | "goalContinuation">> = [];
+    exerciseTurn = async (turn) => {
+      if (!turn.input.startsWith("Swarm ") && !turn.goalContinuation) return;
+      seen.push({ goal: turn.goal, turnWallClockMs: turn.turnWallClockMs, goalContinuation: turn.goalContinuation });
+      if (turn.goalContinuation) return { stopped: true };
+    };
+    built.runtime.start();
+    const completed = await built.runs.waitFor(worker.id, 15_000);
+    assert.equal(completed.status, "done", JSON.stringify(completed.result));
+    assert.equal(seen[0]?.goal?.objective, "Exhaust the lane");
+    assert.equal(seen[0]?.goal?.capTokens, 50_000);
+    assert.equal(seen[0]?.turnWallClockMs, 0);
+    assert.ok(
+      seen.some((turn) => turn.goalContinuation),
+      "the goal kept the worker going after its first reply",
+    );
+    const goals = await built.sessions.goals([completed.result!.sessionId!]);
+    assert.equal(goals.get(completed.result!.sessionId!)?.objective, "Exhaust the lane");
+  } finally {
+    exerciseTurn = undefined;
+    await built.runtime.stop();
+  }
+});

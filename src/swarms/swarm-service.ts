@@ -15,12 +15,14 @@ import { canonicalJson } from "../util/objects.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { createGoalRecord } from "../harness/goal.ts";
 import {
   assertSwarmOpen,
   SWARM_LIMITS,
   swarmExpired,
   type Swarm,
   type SwarmMember,
+  type SwarmGoal,
   type SwarmMessage,
   type SwarmStore,
 } from "./swarm-store.ts";
@@ -43,6 +45,7 @@ interface SpawnInput extends SpawnRuntimeFields {
   forumSandboxId?: string;
   settings?: Partial<SwarmSettings>;
   backend?: string;
+  goal?: unknown;
 }
 
 interface MessageInput {
@@ -51,6 +54,7 @@ interface MessageInput {
   text: string;
   replyTo?: string;
   notify?: boolean;
+  goal?: unknown;
 }
 
 interface Authority {
@@ -85,6 +89,28 @@ export interface SwarmService {
 
 function boundedText(value: string, max: number, name: string): void {
   if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value) > max) throw new Error(`invalid ${name}`);
+}
+
+/** A goal the parent assigns a worker: the harness keeps the worker's turn going until it is done, paused or capped. */
+function swarmGoal(input: unknown): SwarmGoal | undefined {
+  if (input === undefined) return undefined;
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid goal");
+  const { objective, floor, token_cap: tokenCap, ...rest } = input as Record<string, unknown>;
+  if (Object.keys(rest).length) throw new Error("unsupported goal field");
+  if (typeof objective !== "string") throw new Error("goal objective required");
+  if (tokenCap === undefined) throw new Error("swarm goals require token_cap");
+  if (floor !== undefined && (!floor || typeof floor !== "object" || Array.isArray(floor)))
+    throw new Error("invalid goal floor");
+  const record = createGoalRecord({
+    objective,
+    ...(floor ? { floor: floor as SwarmGoal["floor"] } : {}),
+    capTokens: tokenCap as number,
+  });
+  return {
+    objective: record.objective,
+    ...(record.floor ? { floor: record.floor } : {}),
+    capTokens: record.capTokens!,
+  };
 }
 
 function canonicalAudience(input: MessageInput["audience"], max: number): MessageInput["audience"] {
@@ -164,6 +190,7 @@ function dispatchContract(input: OrchestratorInput) {
     fastMode: input.fastMode,
     turnWallClockMs: input.turnWallClockMs,
     swarm: input.swarm,
+    swarmGoal: input.swarmGoal,
     sessionParticipantIds: input.sessionParticipantIds,
   };
 }
@@ -353,14 +380,23 @@ export function createSwarmService(deps: {
     };
   }
 
-  function dispatchRequest(swarm: Swarm, message: SwarmMessage, recipient: SwarmMember): OrchestratorInput {
+  function dispatchRequest(
+    swarm: Swarm,
+    message: SwarmMessage,
+    recipient: SwarmMember,
+    goalTurn: boolean,
+  ): OrchestratorInput {
+    // A goal-driven turn runs until its goal is done, paused or capped, like a solo goal turn; the swarm turn deadline would cut it off.
+    const { turnWallClockMs, ...template } = swarm.template;
     return {
-      ...swarm.template,
+      ...template,
+      ...(goalTurn || turnWallClockMs === undefined ? {} : { turnWallClockMs }),
       ...recipient.runtime,
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
       origin: { kind: "automation", screenData: message.text },
       text: `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`,
       swarm: { swarmId: swarm.id, messageId: message.id, recipientId: recipient.id },
+      ...(message.goal ? { swarmGoal: message.goal } : {}),
       sessionParticipantIds: swarm.participants,
     };
   }
@@ -381,7 +417,11 @@ export function createSwarmService(deps: {
           );
           continue;
         }
-        const request = dispatchRequest(swarm, message, recipient);
+        const sessionId = recipient.sessionId;
+        const goalTurn =
+          !!message.goal ||
+          (!!sessionId && (await step(() => sessions.goals([sessionId]))).get(sessionId)?.status === "active");
+        const request = dispatchRequest(swarm, message, recipient, goalTurn);
         const { run } = await step(() =>
           runs.enqueue({
             sessionId: recipient.threadRef,
@@ -602,6 +642,7 @@ export function createSwarmService(deps: {
         throw new Error("only the root session can change swarm settings");
       const settings = resolveSwarmSettings(input.settings, existing?.settings ?? defaults);
       boundedText(input.text, settings.textBytes, "text");
+      const goal = swarmGoal(input.goal);
       const requestedRuntime = spawnRuntime(input);
       const count = input.count ?? input.contexts?.length ?? 1;
       if (!Number.isSafeInteger(count) || count < 1 || count >= settings.agents) throw new Error("invalid pool size");
@@ -675,6 +716,7 @@ export function createSwarmService(deps: {
           actorId: auth.actorId,
           text: input.text,
           audience: members.map((member) => member.id),
+          ...(goal ? { goal } : {}),
           createdAt: Date.now(),
           notifications: Object.fromEntries(members.map((member) => [member.id, { state: "pending" as const }])),
         });
@@ -698,6 +740,8 @@ export function createSwarmService(deps: {
       const { auth, swarm } = await load(caller);
       boundedText(input.text, swarm.settings.textBytes, "text");
       input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
+      const goal = swarmGoal(input.goal);
+      if (goal && input.notify === false) throw new Error("a goal needs notify");
       const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
       const fingerprint = signature(input);
       const previous = swarm.messageRequests[key];
@@ -730,6 +774,11 @@ export function createSwarmService(deps: {
         if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
           throw new Error("reply target is not in this swarm");
         const recipients = input.notify === false ? [] : audience.filter((peer) => peer !== auth.memberId);
+        if (
+          goal &&
+          (!recipients.length || recipients.some((peer) => memberById(swarm, peer)?.parentId !== auth.memberId))
+        )
+          throw new Error("goals can only be assigned to your own workers");
         if (swarm.notificationCount + recipients.length > (swarm.settings.notifications ?? Infinity))
           throw new Error("swarm notification budget exhausted");
         swarm.notificationCount += recipients.length;
@@ -743,6 +792,7 @@ export function createSwarmService(deps: {
           text: input.text,
           audience,
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+          ...(goal ? { goal } : {}),
           createdAt: Date.now(),
           notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),
         });
@@ -844,7 +894,8 @@ export function createSwarmService(deps: {
       assertSwarmOpen(swarm);
       const message = swarm.messages.find((item) => item.id === input.swarm!.messageId);
       const dedup = message ? await runs.getByDedupKey(`swarm:${message.id}:${member.id}`) : null;
-      const expected = message && dedup ? dispatchRequest(swarm, message, member) : null;
+      const expected =
+        message && dedup ? dispatchRequest(swarm, message, member, dedup.request.turnWallClockMs === undefined) : null;
       if (
         input.swarm.swarmId !== swarm.id ||
         input.swarm.recipientId !== member.id ||

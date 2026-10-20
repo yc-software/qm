@@ -1,3 +1,4 @@
+import type { SwarmGoal } from "../../swarms/swarm-store.ts";
 import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
@@ -109,6 +110,8 @@ export interface OrchestratorInput extends Omit<
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;
+  /** A goal the swarm parent assigned this worker turn; installed as the session goal before the turn runs. */
+  swarmGoal?: SwarmGoal;
 }
 
 export interface OrchestratorDeps {

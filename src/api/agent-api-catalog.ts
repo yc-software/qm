@@ -63,7 +63,7 @@ const FAMILIES: AgentApiFamily[] = [
     match: (method, path) => path === "/v1/swarm" && (method === "GET" || method === "POST"),
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap}; token_cap is required): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Only a parent can assign goals, to its own workers; send a goal again to replace a paused one.",
     routes: [
       {
         method: "GET",
@@ -75,7 +75,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },

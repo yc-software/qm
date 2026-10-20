@@ -80,7 +80,7 @@ export async function processRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    if (run.request.swarm) {
+    if (run.request.swarm && run.request.turnWallClockMs !== undefined) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
     }
