@@ -1,61 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { gzip } from "node:zlib";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
-const COMPRESS_MIN_BYTES = 1024;
+import { json as sendJson } from "../../plugins/chassis/src/http.ts";
 
-export function gzipAccepted(req: IncomingMessage | undefined): boolean {
-  const header = req?.headers["accept-encoding"];
-  if (header === undefined) return false;
-  let explicit: boolean | undefined;
-  let wildcard: boolean | undefined;
-  for (const part of (Array.isArray(header) ? header.join(",") : header).split(",")) {
-    const [name, ...params] = part.split(";");
-    const token = (name ?? "").trim().toLowerCase();
-    if (token !== "gzip" && token !== "*") continue;
-    const q = params.map((p) => p.trim().toLowerCase()).find((p) => p.startsWith("q="));
-    const weight = q === undefined ? 1 : Number.parseFloat(q.slice(2));
-    const allowed = Number.isFinite(weight) && weight > 0;
-    if (token === "*") wildcard = allowed;
-    else explicit = allowed;
-  }
-  return explicit ?? wildcard ?? false;
-}
-
-export function withVary(res: ServerResponse, value: string): string {
-  const existing = res.getHeader("vary");
-  const tokens = [...(existing === undefined ? [] : String(existing).split(",")), ...value.split(",")]
-    .map((token) => token.trim())
-    .filter(Boolean);
-  return [...new Map(tokens.map((token) => [token.toLowerCase(), token])).values()].join(", ");
-}
-
-export function sendBuffered(res: ServerResponse, status: number, headers: Record<string, string>, body: string): void {
-  const out = { ...headers, vary: withVary(res, "accept-encoding") };
-  if (Buffer.byteLength(body) < COMPRESS_MIN_BYTES || !gzipAccepted(res.req)) {
-    res.writeHead(status, out);
-    res.end(body);
-    return;
-  }
-  gzip(body, (err, packed) => {
-    if (res.headersSent || res.writableEnded || res.destroyed) return;
-    try {
-      if (err) {
-        res.writeHead(status, out);
-        res.end(body);
-        return;
-      }
-      res.writeHead(status, { ...out, "content-encoding": "gzip", "content-length": String(packed.length) });
-      res.end(packed);
-    } catch {
-      res.destroy();
-    }
-  });
-}
-
-export function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  sendBuffered(res, status, { "content-type": "application/json" }, JSON.stringify(body));
-}
+export { sendJson };
+export { gzipAccepted, sendBuffered, withVary } from "../../plugins/chassis/src/http.ts";
 
 const BODY_DEADLINE = Symbol.for("qm.bodyDeadline");
 type DeadlineCarrier = IncomingMessage & { [BODY_DEADLINE]?: { rearm: (ms: number) => void } };

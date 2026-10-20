@@ -1,3 +1,4 @@
+import { timed, timedSync } from "../../plugins/chassis/src/server-timing.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
@@ -295,17 +296,21 @@ export function createSessionMethods(
     async getSessionForViewer(sessionId, principalId, window) {
       const found = await sessionForViewer(sessionId, principalId);
       if (!found) return null;
-      const session = { ...found, canContinue: await canContinueOnWeb(principalId, found) };
+      const session = { ...found, canContinue: await timed("continue", () => canContinueOnWeb(principalId, found)) };
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals, latestRuns] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, {
-          limit,
-          beforeSeq: window?.beforeSeq,
-          sinceSeq: window?.sinceSeq,
-        }),
-        deps.sessions.listPins(sessionId),
-        deps.sessions.goals([sessionId]),
-        window?.beforeSeq === undefined ? deps.runs.latestForThreads([found.threadRef]) : undefined,
+        timed("transcript", () =>
+          transcripts.forViewer(sessionId, principalId, {
+            limit,
+            beforeSeq: window?.beforeSeq,
+            sinceSeq: window?.sinceSeq,
+          }),
+        ),
+        timed("pins", () => deps.sessions.listPins(sessionId)),
+        timed("goals", () => deps.sessions.goals([sessionId])),
+        window?.beforeSeq === undefined
+          ? timed("runs", () => deps.runs.latestForThreads([found.threadRef]))
+          : undefined,
       ]);
       const goal = openGoal(goals.get(sessionId));
       const runtime = latestRuns?.get(found.threadRef)?.result?.runtime;
@@ -313,12 +318,16 @@ export function createSessionMethods(
       let visible = read.entries;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
-        read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
+        read = await timed("transcript", () =>
+          transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq }),
+        );
         visible = read.entries;
       }
-      const w = windowedTranscript(visible, window);
+      const w = timedSync("window", () => windowedTranscript(visible, window));
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq));
+      const pins = await timed("pins", () =>
+        decoratedPins(pinRecords, visible, (seq) => viewerStoredEntryAt(sessionId, principalId, seq)),
+      );
       return {
         session,
         entries: w.entries,

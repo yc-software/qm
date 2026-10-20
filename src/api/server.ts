@@ -2,7 +2,15 @@ import { externalSlackCapabilityAllowed } from "./external-slack-capability.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { reportBackendError, startTiming } from "../../plugins/chassis/src/error-reporting.ts";
+import {
+  addPhase,
+  logRequestTiming,
+  requestTiming,
+  timed,
+  withRequestTiming,
+} from "../../plugins/chassis/src/server-timing.ts";
 import { traceStatus } from "../../plugins/chassis/src/timing.ts";
+import { performance } from "node:perf_hooks";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -257,6 +265,21 @@ async function gate(
   raw: string,
   route: Pick<Route, "auth" | "actor"> | undefined,
 ): Promise<GateResult | null> {
+  const timing = requestTiming();
+  if (timing && !timing.phases.has("pre")) addPhase("pre", performance.now() - timing.startedAt, timing);
+  return timed("auth", () => gateRequest(req, res, wiring, method, pathname, url, raw, route));
+}
+
+async function gateRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  wiring: Wiring,
+  method: string,
+  pathname: string,
+  url: URL,
+  raw: string,
+  route: Pick<Route, "auth" | "actor"> | undefined,
+): Promise<GateResult | null> {
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
@@ -325,7 +348,7 @@ async function gate(
     const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
     actor = token && psecret ? await verifyPortalIdentity(token, psecret, Date.now()) : null;
     if (actor && deps.identity) {
-      await deps.identity.refresh(Boolean(actor.authenticatedAs));
+      await timed("identity", () => deps.identity!.refresh(Boolean(actor!.authenticatedAs)));
       if (
         deps.identity.classify(actor.p).type !== "internal" ||
         (actor.authenticatedAs &&
@@ -540,23 +563,26 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     allowUnsignedSourceAuth,
   };
   const requestNames = new WeakMap<IncomingMessage, string>();
-  const server = createHttpServer((req, res) => {
-    const finishTiming =
-      req.url === "/healthz" || req.url === "/readyz"
-        ? undefined
-        : startTiming("http.server", `${req.method ?? "GET"} /*`);
-    if (finishTiming)
-      res.once("close", () =>
-        finishTiming({
+  const server = createHttpServer((req, res) =>
+    withRequestTiming("core", () => {
+      const timing = requestTiming()!;
+      const finishTiming =
+        req.url === "/healthz" || req.url === "/readyz"
+          ? undefined
+          : startTiming("http.server", `${req.method ?? "GET"} /*`);
+      res.once("close", () => {
+        logRequestTiming(res, timing);
+        finishTiming?.({
           name: `${req.method ?? "GET"} ${requestNames.get(req) ?? "/*"}`,
           status: res.writableFinished ? traceStatus(res.statusCode) : "cancelled",
           data: { url: req.url, http_status: res.writableFinished ? String(res.statusCode) : undefined },
-        }),
-      );
-    req.on("error", () => res.destroy());
-    res.on("error", () => res.destroy());
-    void front(req, res).catch((err: unknown) => respondError(req, res, err));
-  });
+        });
+      });
+      req.on("error", () => res.destroy());
+      res.on("error", () => res.destroy());
+      void front(req, res).catch((err: unknown) => respondError(req, res, err));
+    }),
+  );
   const { fastify, routing } = buildFastify(wiring, server);
   const ready = Promise.resolve(fastify.ready());
   ready.catch((err: unknown) => console.error("[server] fastify initialization failed:", errMessage(err)));

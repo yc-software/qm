@@ -1,3 +1,4 @@
+import { withRequestTiming } from "../../chassis/src/server-timing.ts";
 import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
@@ -963,7 +964,7 @@ const server = createServer((req, res) => {
         Math.round(performance.now() - startedAt),
       );
   });
-  void handle(req, res).catch((err: unknown) => {
+  void withRequestTiming("portal", () => handle(req, res)).catch((err: unknown) => {
     errorLogged = true;
     reportBackendError(err);
     console.error("[portal] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));

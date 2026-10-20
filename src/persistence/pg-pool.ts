@@ -1,6 +1,9 @@
+import { AsyncResource } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import type { Pool, PoolClient } from "pg";
+import { requestTiming } from "../../plugins/chassis/src/server-timing.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
@@ -62,8 +65,60 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
 
 function guardedPool(pool: Pool): Pool {
   pool.on("error", () => {});
-  pool.on("connect", (client) => client.on("error", (error) => console.error("[pg] client error:", errMessage(error))));
+  pool.on("connect", (client) => {
+    client.on("error", (error) => console.error("[pg] client error:", errMessage(error)));
+    const timing = requestTiming();
+    if (timing) timing.db.connects++;
+    timeClientQueries(client);
+  });
+  timePoolWait(pool);
   return pool;
+}
+
+type ConnectCallback = (err: Error | undefined, client: PoolClient | undefined, release: (err?: Error) => void) => void;
+
+function timePoolWait(pool: Pool): void {
+  const connect = pool.connect.bind(pool) as (callback?: ConnectCallback) => Promise<PoolClient> | undefined;
+  pool.connect = ((callback?: ConnectCallback) => {
+    const timing = requestTiming();
+    if (!timing) return connect(callback);
+    const started = performance.now();
+    const waited = () => {
+      timing.db.waitMs += performance.now() - started;
+    };
+    if (callback)
+      return connect(
+        AsyncResource.bind((err: Error | undefined, client: PoolClient | undefined, release: (err?: Error) => void) => {
+          waited();
+          callback(err, client, release);
+        }),
+      );
+    return connect()!.finally(waited);
+  }) as Pool["connect"];
+}
+
+function timeClientQueries(client: PoolClient): void {
+  const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+  client.query = ((...args: unknown[]) => {
+    const timing = requestTiming();
+    if (!timing) return query(...args);
+    const started = performance.now();
+    const finished = () => {
+      timing.db.queries++;
+      timing.db.queryMs += performance.now() - started;
+    };
+    const callback = args.at(-1);
+    if (typeof callback === "function") {
+      args[args.length - 1] = (...result: unknown[]) => {
+        finished();
+        (callback as (...result: unknown[]) => void)(...result);
+      };
+      return query(...args);
+    }
+    const result = query(...args);
+    if (result instanceof Promise) result.then(finished, finished);
+    return result;
+  }) as PoolClient["query"];
 }
 
 async function releasePool(

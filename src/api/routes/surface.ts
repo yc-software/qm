@@ -1,3 +1,4 @@
+import { timed, timeRoute } from "../../../plugins/chassis/src/server-timing.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
@@ -174,6 +175,7 @@ async function getSession(ctx: ApiCtx): Promise<void> {
       message: "tailTurns and beforeSeq must be positive integers, sinceSeq a non-negative one",
     });
   }
+  timeRoute("transcript");
   const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, found);
@@ -225,8 +227,10 @@ async function listSessionApprovals(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   const viewer = url.searchParams.get("viewer");
   if (!viewer) return sendJson(res, 400, { error: "bad_request", message: "viewer required" });
-  const approvals = await app.listSessionApprovals(id, viewer);
-  return sendJson(res, 200, { approvals: [...approvals, ...(await credentialApprovals(ctx, id, viewer))] });
+  timeRoute("approvals");
+  const approvals = await timed("approvals", () => app.listSessionApprovals(id, viewer));
+  const credentials = await timed("credentials", () => credentialApprovals(ctx, id, viewer));
+  return sendJson(res, 200, { approvals: [...approvals, ...credentials] });
 }
 
 // Pending credential requests from this session or any of its sub-agents, shown inline to their owner.
@@ -487,7 +491,8 @@ async function listSessions(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
   const principalId = url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  return sendJson(res, 200, { sessions: await app.listSessions(principalId) });
+  timeRoute("sessions");
+  return sendJson(res, 200, { sessions: await timed("list", () => app.listSessions(principalId)) });
 }
 
 async function searchResources(ctx: ApiCtx): Promise<void> {
