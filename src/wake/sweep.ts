@@ -1,6 +1,7 @@
 import { createSweeper, type Sweeper } from "../util/sweeper.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createNoopLeaderLease } from "../persistence/leader-lease.ts";
+import { reportFailure } from "../util/errors.ts";
 
 const SWEEP_LEASE_KEY = "wake:sweep";
 
@@ -26,7 +27,13 @@ export function createWakeSweep(source: SweepSource, opts: WakeSweepOptions): Wa
   const sweep = async (): Promise<{ swept: number; fresh: number }> => {
     const targets = await source.engagedSessions();
     let fresh = 0;
-    for (const threadRef of targets) fresh += await source.sweepSession(threadRef);
+    for (const threadRef of targets) {
+      try {
+        fresh += await source.sweepSession(threadRef);
+      } catch (e) {
+        reportFailure(`wake-sweep: session ${threadRef}`, e);
+      }
+    }
     return { swept: targets.length, fresh };
   };
 

@@ -26,14 +26,21 @@ test("a pass sweeps every engaged session", async () => {
   assert.equal(res.swept, 1);
 });
 
-test("a per-session sweep error is caught, not thrown (a flaky pull must not kill the loop)", async () => {
-  const { source } = recordingSource({
-    async sweepSession() {
-      throw new Error("surface pull failed");
+test("a per-session sweep error is caught, not thrown, and later sessions are still swept", async () => {
+  const { source, swept } = recordingSource({
+    async engagedSessions() {
+      return ["A", "B"];
+    },
+    async sweepSession(threadRef) {
+      if (threadRef === "A") throw new Error("surface pull failed");
+      swept.push(threadRef);
+      return 1;
     },
   });
   const sweep = createWakeSweep(source, { intervalMs: 10_000 });
-  await assert.rejects(() => sweep.sweep());
+  const res = await sweep.sweep();
+  assert.deepEqual(swept, ["B"]);
+  assert.deepEqual(res, { swept: 2, fresh: 1 });
 });
 
 test("the engaged registry: engage adds, settle removes, list reflects current (RAM, re-derivable)", () => {
