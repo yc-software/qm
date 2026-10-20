@@ -141,6 +141,20 @@ test("teardown parks the container and the next provision restarts it warm", asy
   assert.equal(fake.containers.get(h1.id)!.running, true, "restarted");
 });
 
+test("a parked container restarts after its network was pruned and recreated", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const sb = makeSandbox(fake);
+  const layers = rw(scopeId("personal", "U9"));
+  const h1 = await sb.provision(layers);
+  await sb.teardown(h1);
+  await fake.dockerExec(["network", "rm", localNetworkName(h1.id)]);
+
+  const h2 = await sb.provision(layers);
+  assert.equal(h2.id, h1.id, "same container reused, not recreated");
+  assert.equal(fake.runCount, 1);
+  assert.equal(fake.containers.get(h1.id)!.running, true);
+});
+
 test("a stale-image container is recreated while its home volume survives", async () => {
   const fake = installFakeDocker(daemonPort);
   const layers = rw(scopeId("personal", "U3"));
