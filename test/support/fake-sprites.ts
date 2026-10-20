@@ -213,6 +213,7 @@ export function installFakeSprites(origin = `https://fake-sprites-${++nextOrigin
         .replace(/\/proc\/pressure\/io/g, `${home}/.proc-pressure-io`)
         .replace(/\/proc\/loadavg/g, `${home}/.proc-loadavg`)
         .replace(/\/usr\/local/g, `${home}/.usr-local`)
+        .replace(/\/etc\/sudoers\.d/g, `${home}/.etc-sudoers.d`)
         .replace(/\/home\/sprite/g, home)
         .replace(remapPath, (m) => (m.startsWith(home) ? m : `${home}/tmp/`))
     );

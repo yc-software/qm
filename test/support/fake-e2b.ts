@@ -67,6 +67,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(/\/home\/user/g, r.home)
+        .replace(/\/etc\/sudoers\.d/g, `${r.home}/.etc-sudoers.d`)
         .replace(remapPath, (mm) => (mm.startsWith(r.home) ? mm : `${r.home}/tmp/`))
     );
   };

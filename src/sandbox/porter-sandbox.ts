@@ -19,7 +19,12 @@ import {
   type PorterSandboxLike,
 } from "./porter-client.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import {
+  nonInteractiveShellPrefix,
+  DROPPED_PROXY_ENV,
+  forceThroughProxyEnv,
+  provisionPrepScript,
+} from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { createExecExport, createBackendBlobStaging, createExecFileOps, posixJoin } from "./exec-file-ops.ts";
@@ -308,8 +313,8 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
+        const credLinks = scratch ? null : ephemeralCredLinkScript(homeDir, opts.credentialPaths ?? []);
+        const prep = await execRaw(name, provisionPrepScript(workspaceDir, credLinks), 60);
         if (prep.code !== 0)
           throw new Error(`porter provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
 

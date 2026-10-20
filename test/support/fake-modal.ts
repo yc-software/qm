@@ -56,6 +56,7 @@ export function installFakeModal(opts: { native?: boolean } = {}): FakeModal {
       script
         .replace(/\btimeout \d+ /g, "")
         .replace(/\/root(?![A-Za-z0-9_-])/g, r.home)
+        .replace(/\/etc\/sudoers\.d/g, `${r.home}/.etc-sudoers.d`)
         .replace(remapPath, (mm) => (mm.startsWith(r.home) ? mm : `${r.home}/tmp/`))
     );
   };

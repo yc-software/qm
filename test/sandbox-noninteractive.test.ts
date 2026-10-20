@@ -1,6 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
@@ -10,7 +10,6 @@ import { nonInteractiveShellPrefix, NONINTERACTIVE_ENV } from "../src/sandbox/sa
 import { installFakeSprites, type FakeSprites } from "./support/fake-sprites.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 
 let ff: FakeSprites;
 before(() => {
@@ -18,14 +17,13 @@ before(() => {
 });
 after(() => ff.cleanup());
 
-function spritesHandle(env?: Record<string, string>, extra: { egressProxyUrl?: string } = {}) {
+function spritesHandle(env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
     initializationStore: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
-    ...extra,
   });
   const layers = [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" as const }];
   return { sandbox, layers, ...(env ? { env } : {}) };
@@ -66,42 +64,32 @@ test("an explicit per-turn env value wins over the non-interactive default", asy
   assert.equal(r.stdout, "less");
 });
 
-function resettingSudoDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "fake-sudo-"));
-  const sudo = join(dir, "sudo");
-  writeFileSync(
-    sudo,
-    [
-      "#!/usr/bin/env node",
-      'const { spawnSync } = require("node:child_process");',
-      "const args = process.argv.slice(2);",
-      "let keep = [];",
-      'while (args[0]?.startsWith("-")) {',
-      "  const flag = args.shift();",
-      '  if (flag.startsWith("--preserve-env=")) keep = flag.slice(15).split(",");',
-      '  else if (flag === "-u") args.shift();',
-      "}",
-      "const env = { PATH: process.env.PATH };",
-      "for (const name of keep) if (process.env[name] !== undefined) env[name] = process.env[name];",
-      'process.exit(spawnSync(args[0], args.slice(1), { env, stdio: "inherit" }).status ?? 1);',
-    ].join("\n"),
-  );
-  chmodSync(sudo, 0o755);
-  return dir;
-}
-
-test("sudo keeps the forced egress proxy and non-interactive env that sudo would otherwise reset", async () => {
-  const fakeSudo = resettingSudoDir();
-  const { sandbox, layers } = spritesHandle(undefined, { egressProxyUrl: "https://proxy.example.com" });
-  const egressToken = await mintCapabilityToken(
-    { actorId: "tester", scopeId: layers[0]!.scopeId, aud: EGRESS_PROXY_AUD, exp: Date.now() + 600_000 },
-    "secret",
-  );
-  const handle = await sandbox.provision(layers, { egressToken, env: { PATH: `${fakeSudo}:${process.env.PATH}` } });
-  const r = await sandbox.run(
-    handle,
-    `sudo -u root sh -c 'printf "%s|%s|%s" "$DEBIAN_FRONTEND" "$(echo "$HTTPS_PROXY" | sed "s/x:.*@/x:T@/")" "$NO_PROXY"'`,
-  );
-  assert.equal(r.code, 0, r.stderr);
-  assert.equal(r.stdout, "noninteractive|https://x:T@proxy.example.com|localhost,127.0.0.1,::1");
+test("provisioning installs a sudoers env_keep entry so sudo keeps the proxy and non-interactive env", async () => {
+  const bin = mkdtempSync(join(tmpdir(), "nopass-sudo-"));
+  writeFileSync(join(bin, "sudo"), '#!/bin/sh\nwhile [ "${1#-}" != "$1" ]; do shift; done\nexec "$@"\n');
+  chmodSync(join(bin, "sudo"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    const { sandbox, layers } = spritesHandle();
+    const first = await sandbox.provision(layers);
+    const sudoersDir = join(ff.homeDir(first.id), ".etc-sudoers.d");
+    assert.equal(existsSync(sudoersDir), false);
+    mkdirSync(sudoersDir);
+    await sandbox.provision(layers);
+    const kept = readFileSync(join(sudoersDir, "qm-env"), "utf8");
+    assert.match(kept, /^Defaults env_keep \+= "[^"]*"\n$/);
+    const names = kept.split('"')[1]!.split(" ");
+    for (const name of [
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "NO_PROXY",
+      "https_proxy",
+      "DEBIAN_FRONTEND",
+      "GIT_HTTP_PROXY_AUTHMETHOD",
+    ])
+      assert.ok(names.includes(name), name);
+  } finally {
+    process.env.PATH = path;
+  }
 });

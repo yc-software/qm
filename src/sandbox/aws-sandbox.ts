@@ -9,7 +9,7 @@ import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix } from "./sandbox-env.ts";
+import { nonInteractiveShellPrefix, provisionPrepScript } from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import {
@@ -439,7 +439,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
       try {
         const prepared = await execRaw(
           id,
-          `mkdir -p ${shq(WORKSPACE_DIR)} && ${ephemeralCredLinkScript(HOME_DIR, credentialPaths)}`,
+          provisionPrepScript(WORKSPACE_DIR, ephemeralCredLinkScript(HOME_DIR, credentialPaths)),
           PREP_TIMEOUT_SEC,
         );
         if (prepared.code !== 0)

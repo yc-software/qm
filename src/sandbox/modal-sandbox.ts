@@ -8,7 +8,12 @@ import { orgId as configOrgId } from "../config.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
+import {
+  nonInteractiveShellPrefix,
+  DROPPED_PROXY_ENV,
+  forceThroughProxyEnv,
+  provisionPrepScript,
+} from "./sandbox-env.ts";
 import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
 import { materializeRoLayers } from "./ro-layers.ts";
 import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
@@ -713,13 +718,13 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       };
 
       try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
+        const credLinks = scratch ? null : ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? []);
         await installLayerTools(
           {
             exec: (script, t) => execRaw(name, script, t),
             writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
           },
-          `mkdir -p ${shq(workspaceDir)}${credLinks}`,
+          provisionPrepScript(workspaceDir, credLinks),
         );
 
         await materializeRoLayers(
