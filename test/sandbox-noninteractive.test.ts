@@ -77,18 +77,10 @@ test("provisioning installs a sudoers env_keep entry so sudo keeps the proxy and
     assert.equal(existsSync(sudoersDir), false);
     mkdirSync(sudoersDir);
     await sandbox.provision(layers);
-    const kept = readFileSync(join(sudoersDir, "qm-env"), "utf8");
-    assert.match(kept, /^Defaults env_keep \+= "[^"]*"\n$/);
-    const names = kept.split('"')[1]!.split(" ");
-    for (const name of [
-      "HTTPS_PROXY",
-      "HTTP_PROXY",
-      "NO_PROXY",
-      "https_proxy",
-      "DEBIAN_FRONTEND",
-      "GIT_HTTP_PROXY_AUTHMETHOD",
-    ])
-      assert.ok(names.includes(name), name);
+    assert.equal(
+      readFileSync(join(sudoersDir, "qm-env"), "utf8"),
+      'Defaults env_keep += "DEBIAN_FRONTEND GIT_TERMINAL_PROMPT http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy no_proxy NO_PROXY GIT_HTTP_PROXY_AUTHMETHOD"\n',
+    );
   } finally {
     process.env.PATH = path;
   }

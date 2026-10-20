@@ -83,7 +83,7 @@ export function installFakePorter(opts: FakePorterOptions = {}): FakePorter {
     let out = script
       .replace(/\btimeout (?:-k \d+ )?\d+ /g, "")
       .replace(remapTmp, `${b.tmp}/`)
-      .replace(/\/etc\/sudoers\.d/g, `${b.home}/.etc-sudoers.d`)
+      .replaceAll("/etc/sudoers.d", `${b.home}/.etc-sudoers.d`)
       .replace(pathRe(GUEST_HOME), b.home)
       .replace(pathRe(GUEST_APP), b.app);
     for (const [guest, dir] of Object.entries(b.mounts))

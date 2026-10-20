@@ -27,25 +27,16 @@ export const DROPPED_PROXY_ENV = new Set([
   "NO_PROXY",
 ]);
 
-const SUDO_KEPT_ENV = [...NONINTERACTIVE_ENV.map(([name]) => name), ...DROPPED_PROXY_ENV, "GIT_HTTP_PROXY_AUTHMETHOD"];
+const SUDO_KEPT_ENV = ["DEBIAN_FRONTEND", "GIT_TERMINAL_PROMPT", ...DROPPED_PROXY_ENV, "GIT_HTTP_PROXY_AUTHMETHOD"];
 
-const SUDOERS_KEEP_ENV = `Defaults env_keep += "${SUDO_KEPT_ENV.join(" ")}"`;
+const SUDOERS_KEEP_ENV = shq(`Defaults env_keep += "${SUDO_KEPT_ENV.join(" ")}"`);
 
-const INSTALL_SUDOERS_KEEP_ENV =
-  "umask 337; cat > /etc/sudoers.d/.qm-env.new && " +
-  "{ ! command -v visudo >/dev/null || visudo -cqf /etc/sudoers.d/.qm-env.new; } && " +
-  "mv -f /etc/sudoers.d/.qm-env.new /etc/sudoers.d/qm-env";
-
-function sudoKeepsEnvScript(): string {
-  const install = shq(INSTALL_SUDOERS_KEEP_ENV);
-  return (
-    `{ [ ! -d /etc/sudoers.d ] || grep -qxF ${shq(SUDOERS_KEEP_ENV)} /etc/sudoers.d/qm-env || ` +
-    `printf '%s\\n' ${shq(SUDOERS_KEEP_ENV)} | if [ "$(id -u)" = 0 ]; then sh -c ${install}; else sudo -n sh -c ${install}; fi; } >/dev/null 2>&1 || true`
-  );
-}
+const SUDO_KEEPS_ENV =
+  `[ ! -d /etc/sudoers.d ] || grep -qxF ${SUDOERS_KEEP_ENV} /etc/sudoers.d/qm-env 2>/dev/null || ` +
+  `printf '%s\\n' ${SUDOERS_KEEP_ENV} | sudo -n sh -c 'umask 333; cat > /etc/sudoers.d/qm-env' 2>/dev/null || true`;
 
 export function provisionPrepScript(workspaceDir: string, credLinks: string | null): string {
-  return `mkdir -p ${shq(workspaceDir)}${credLinks ? ` && ${credLinks}` : ""} && { ${sudoKeepsEnvScript()}; }`;
+  return `mkdir -p ${shq(workspaceDir)}${credLinks ? ` && ${credLinks}` : ""} && { ${SUDO_KEEPS_ENV}; }`;
 }
 
 export function forceThroughProxyEnv(
