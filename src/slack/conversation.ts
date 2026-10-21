@@ -11,6 +11,7 @@ export interface ContextWireMessage {
   text: string;
   threadTs?: string;
   files?: string[];
+  reactions?: ReactionTally[];
 }
 
 const MAX_CONTEXT_MESSAGE_CHARS = 600;
@@ -39,6 +40,7 @@ export function buildContextWindow(
       text: clipMessage(resolveMentions(m.text ?? "", opts.nameById), MAX_CONTEXT_MESSAGE_CHARS),
       ...(m.parentTs ? { threadTs: m.parentTs } : {}),
       ...(m.files?.length ? { files: m.files } : {}),
+      ...(m.reactions ? { reactions: m.reactions } : {}),
     };
   });
   const droppedMatches = matched.length > kept.length;
