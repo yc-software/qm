@@ -9,6 +9,7 @@ import {
 } from "../../src/harness/harness.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
+import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
@@ -181,6 +182,7 @@ export function createMockHarness(): Harness {
           kind?: "approval";
           matched?: string;
           approvalKey?: string;
+          grantModes?: { session: boolean; always: boolean };
         }> = [];
         let pausedOnApproval = false;
         const gateTool = (tool: string): boolean => {
@@ -560,6 +562,22 @@ export function createMockHarness(): Harness {
           }
           usedTool = true;
           reply = `ran ${ran}`;
+        } else if (command0.startsWith("!declared ")) {
+          const args = JSON.parse(command0.slice("!declared ".length)) as Record<string, unknown>;
+          const callKey = toolCallApprovalKey("example_send", args);
+          usedTool = true;
+          if (turn.toolApprovalGate?.("example_send", callKey)) reply = `sent ${JSON.stringify(args)}`;
+          else {
+            collected.push({
+              command: `example_send ${JSON.stringify(args)}`,
+              reason: "this tool asks for approval before each call",
+              kind: "approval",
+              approvalKey: callKey,
+              grantModes: { session: false, always: false },
+            });
+            pausedOnApproval = true;
+            reply = "";
+          }
         } else if (command0.startsWith("!read ") && gateTool("read")) {
           usedTool = true;
           reply = "";

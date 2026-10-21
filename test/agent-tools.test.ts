@@ -3,12 +3,7 @@ import { createGoalRecord } from "../src/harness/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import {
-  createAgentTools,
-  GATED_TOOL_APPROVALS,
-  pauseStampAfterToolCall,
-  type ToolContextRef,
-} from "../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
@@ -3518,6 +3513,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
           description: "Search",
           inputSchema: { type: "object", properties: {} },
           readOnly: true,
+          needsApproval: false,
         },
       ],
     },
@@ -4409,7 +4405,7 @@ test("client screenshots reach the model as images and remain subject to output 
 
 test("installing a shared sidebar always waits for the person's approval", async () => {
   const installed: string[] = [];
-  let approved = false;
+  const approved = new Set<string>();
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
@@ -4420,26 +4416,98 @@ test("installing a shared sidebar always waits for the person's approval", async
     },
     pendingApprovals: [],
     scopeLabel: "personal:U1",
-    toolApprovalGate: (tool) => !GATED_TOOL_APPROVALS[tool] || approved,
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
   const files = createAgentTools(ref).find((t) => t.name === "files")!;
   await call(files, { action: "install_canvas", id: "f1" });
   assert.deepEqual(installed, []);
   const card = ref.pendingApprovals?.[0];
-  assert.equal(card?.summary, "file f1");
   assert.deepEqual(
-    [card?.approvalKey, card?.reason, card?.grantModes],
+    [card?.command, card?.summary, card?.reason, card?.grantModes],
     [
-      "tool:files:install_canvas",
-      GATED_TOOL_APPROVALS["files:install_canvas"]!.reason,
+      'files install_canvas {"action":"install_canvas","id":"f1"}',
+      "files install_canvas",
+      "install an always-on canvas someone shared with you; its code runs in your QM web UI",
       { session: false, always: false },
     ],
   );
-  approved = true;
+  approved.add(card!.approvalKey!);
   ref.pausedOnApproval = false;
+  await call(files, { action: "install_canvas", id: "f2" });
+  assert.deepEqual(installed, [], "the approval covers only the approved arguments");
   assert.match(textOut(await call(files, { action: "install_canvas", id: "f1" })), /Installed/);
   assert.deepEqual(installed, ["f1"]);
   ref.current = fakeToolContext();
   const plain = createAgentTools(ref).find((t) => t.name === "files")!;
   assert.doesNotMatch(JSON.stringify(plain.parameters), /install_canvas/);
+});
+
+test("an MCP tool that needs approval is not called until its exact arguments are approved", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async (_name, args) => {
+        calls.push(args);
+        return "deleted";
+      },
+    },
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+  };
+  const descriptor = {
+    serverId: "example",
+    description: "Example",
+    inputSchema: { type: "object", properties: {} },
+    readOnly: false,
+  };
+  const tools = createAgentTools(ref, {
+    mcpTools: [
+      { ...descriptor, name: "example_delete", remoteName: "delete", needsApproval: true },
+      { ...descriptor, name: "example_get", remoteName: "get", needsApproval: false },
+    ],
+  });
+  const del = tools.find((t) => t.name === "example_delete")!;
+  const get = tools.find((t) => t.name === "example_get")!;
+  assert.match(textOut(await call(get, { id: 1 })), /deleted/);
+  assert.match(textOut(await call(del, { id: 1 })), /blocked: needs human approval/);
+  assert.deepEqual(calls, [{ id: 1 }]);
+  const card = ref.pendingApprovals!.at(-1)!;
+  assert.equal(card.command, 'example_delete {"id":1}');
+  approved.add(card.approvalKey!);
+  ref.pausedOnApproval = false;
+  await call(del, { id: 2 });
+  assert.deepEqual(calls, [{ id: 1 }]);
+  await call(del, { id: 1 });
+  assert.deepEqual(calls, [{ id: 1 }, { id: 1 }]);
+});
+
+test("a tool that needs approval fails closed without an approval gate", async () => {
+  let called = false;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async () => {
+        called = true;
+        return "";
+      },
+    },
+  };
+  const [tool] = createAgentTools(ref, {
+    mcpTools: [
+      {
+        name: "example_delete",
+        serverId: "example",
+        remoteName: "delete",
+        description: "Delete",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+        needsApproval: true,
+      },
+    ],
+  }).filter((t) => t.name === "example_delete");
+  assert.match(textOut(await call(tool!, {})), /blocked: needs human approval/);
+  assert.equal(called, false);
 });

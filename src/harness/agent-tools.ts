@@ -1,3 +1,4 @@
+import { toolCallApprovalKey } from "../core/approval-id.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { parkIfOverCap } from "../sessions/tool-output.ts";
 import { handbackStop } from "../runs/run-store.ts";
@@ -133,7 +134,7 @@ export interface ToolContextRef {
   /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
-  toolApprovalGate?: (tool: string) => boolean;
+  toolApprovalGate?: (tool: string, callKey?: string) => boolean;
 }
 
 function text(s: string) {
@@ -4169,8 +4170,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpDefs = opts?.mcpTools ?? [];
   const mcpTools = mcpDefs
     .filter((d) => !opts?.readOnly || d.readOnly)
-    .map((d) =>
-      defineTool({
+    .map((d) => ({
+      ...defineTool({
         name: d.name,
         label: d.name,
         description:
@@ -4200,7 +4201,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
         },
       }),
-    );
+      needsApproval: d.needsApproval === true,
+    }));
 
   const clientTools = [...(opts?.clientTools ?? [])]
     .sort((a, b) => (a.name < b.name ? -1 : 1))
@@ -4338,12 +4340,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       read: skill,
       ...(controlTools ? { share: sharingTool("skill"), move: sharingTool("skill", true) } : {}),
     }),
-    resourceTool("files", {
-      read,
-      write,
-      ...(controlTools ? { share: sharingTool("file") } : {}),
-      ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
-    }),
+    {
+      ...resourceTool("files", {
+        read,
+        write,
+        ...(controlTools ? { share: sharingTool("file") } : {}),
+        ...(ref.current?.installSharedCanvas ? { install_canvas: installCanvas } : {}),
+      }),
+      needsApproval: (params: unknown) => isObj(params) && params.action === "install_canvas",
+      approvalReason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
+    },
     resourceTool("apps", {
       publish,
       ...(controlTools ? { share: sharingTool("deploy"), move: sharingTool("deploy", true) } : {}),
@@ -4511,19 +4517,33 @@ function withRetrySafety(tool: ToolDefinition, marks: Map<string, RetryMark>): T
 }
 
 const TOOL_APPROVAL_EXEMPT = new Set(["finish_silently"]);
-export const GATED_TOOL_APPROVALS: Record<
-  string,
-  { reason: string; summary: (params: Record<string, unknown>) => string }
-> = {
-  "files:install_canvas": {
-    reason: "install an always-on canvas someone shared with you; its code runs in your QM web UI",
-    summary: (params) => `file ${String(params.id)}`,
-  },
-};
 const STRICT_TOOL_APPROVAL_REASON = "strict posture: this tool call requires human approval";
+const DECLARED_TOOL_APPROVAL_REASON = "this tool asks for approval before each call";
+const APPROVAL_ARGS_MAX_CHARS = 16_000;
+
+export interface ToolApprovalDeclaration {
+  needsApproval?: boolean | ((params: unknown) => boolean | Promise<boolean>);
+  approvalReason?: string;
+}
+
+async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
+  const needed =
+    typeof tool.needsApproval === "function"
+      ? await Promise.resolve()
+          .then(() => (tool.needsApproval as (params: unknown) => boolean | Promise<boolean>)(params))
+          .catch(() => true)
+      : tool.needsApproval === true;
+  return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
+}
+
+function approvalCallText(label: string, params: unknown): string {
+  const args = redactCommand(redactSecrets(JSON.stringify(params ?? {})));
+  const shown = args.length > APPROVAL_ARGS_MAX_CHARS ? `${args.slice(0, APPROVAL_ARGS_MAX_CHARS)}…` : args;
+  return `${label} ${shown}`;
+}
 
 function withToolApprovalGate(
-  tool: ToolDefinition,
+  tool: ToolDefinition & ToolApprovalDeclaration,
   ref: ToolContextRef,
   rec: {
     recordCall: (callId: string, payload: Record<string, unknown>) => Promise<void>;
@@ -4553,21 +4573,30 @@ function withToolApprovalGate(
         ? `${tool.name}:${resourceAction ?? "invalid"}`
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
-      if (gate && !gate(approvalIdentity)) {
-        const gated = GATED_TOOL_APPROVALS[approvalIdentity];
-        const reason = gated?.reason ?? STRICT_TOOL_APPROVAL_REASON;
-        let summary: string | undefined;
-        if (gated && isObj(params)) summary = gated.summary(params);
-        else if (params !== undefined) summary = redactCommand(redactSecrets(JSON.stringify(params)));
-        ref.pendingApprovals?.push({
-          command: commandLabel,
-          reason,
-          kind: "approval",
-          approvalKey: `tool:${approvalIdentity}`,
-          ...(gated ? { grantModes: { session: false, always: false } } : {}),
-          ...(summary === undefined ? {} : { summary }),
-          ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
-        });
+      const declaredReason = await declaredApprovalReason(tool, params);
+      const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
+      if (callKey ? !gate?.(approvalIdentity, callKey) : gate && !gate(approvalIdentity)) {
+        const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
+        ref.pendingApprovals?.push(
+          callKey
+            ? {
+                command: approvalCallText(commandLabel, params),
+                reason,
+                kind: "approval",
+                approvalKey: callKey,
+                summary: commandLabel,
+                grantModes: { session: false, always: false },
+                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+              }
+            : {
+                command: commandLabel,
+                reason,
+                kind: "approval",
+                approvalKey: `tool:${approvalIdentity}`,
+                ...(params === undefined ? {} : { summary: redactCommand(redactSecrets(JSON.stringify(params))) }),
+                ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
+              },
+        );
         ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,

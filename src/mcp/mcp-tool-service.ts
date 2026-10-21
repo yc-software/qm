@@ -28,6 +28,15 @@ function modelInputSchema(schema: Record<string, unknown>): Record<string, unkno
   return { ...schema, properties: kept };
 }
 
+export function mcpToolNeedsApproval(
+  server: Pick<McpServer, "approval">,
+  annotations: { readOnlyHint?: boolean; destructiveHint?: boolean } | undefined,
+): boolean {
+  const policy = server.approval ?? "annotations";
+  if (policy !== "annotations") return policy === "all";
+  return annotations?.destructiveHint === true && annotations.readOnlyHint !== true;
+}
+
 export function mcpPublicOAuthClients(servers: McpServer[]): PublicOAuthClient[] {
   return servers.flatMap((s) =>
     s.enabled && s.auth === "oauth-user" && s.clientId && s.oauthAuthorizeUrl && s.oauthTokenUrl && s.credentialHost
@@ -55,6 +64,7 @@ export interface McpToolDescriptor {
   description: string;
   inputSchema: Record<string, unknown>;
   readOnly: boolean;
+  needsApproval: boolean;
   signIn?: true;
 }
 
@@ -146,7 +156,7 @@ export function createMcpToolService(opts: {
     const nextPerUser = new Map<string, McpServer>();
     for (const server of servers) {
       try {
-        let tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+        let tools: NonNullable<McpServer["tools"]>;
         if (server.auth === "oauth-user") {
           nextPerUser.set(server.id, server);
           next.push({
@@ -157,6 +167,7 @@ export function createMcpToolService(opts: {
             description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
             inputSchema: { type: "object", properties: {} },
             readOnly: true,
+            needsApproval: false,
           });
           tools = server.tools ?? [];
           if (!tools.length) continue;
@@ -169,6 +180,7 @@ export function createMcpToolService(opts: {
             description: tool.description || `${tool.name} on ${server.name}`,
             inputSchema: modelInputSchema(tool.inputSchema),
             readOnly: server.readOnly,
+            needsApproval: mcpToolNeedsApproval(server, tool.annotations),
           });
         }
         record("list", server.id, `ok tools=${tools.length}`);

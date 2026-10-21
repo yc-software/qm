@@ -154,6 +154,27 @@ test("tool service exposes namespaced tools and calls through", async (t) => {
   service.close();
 });
 
+test("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true, destructiveHint: true } },
+      { name: "drop", inputSchema: { type: "object" }, annotations: { destructiveHint: true } },
+      { name: "plain", inputSchema: { type: "object" } },
+    ],
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const approvals = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.needsApproval]));
+  };
+  assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
+  assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
+  assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  service.close();
+});
+
 test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(createMemoryMap<McpServer>());

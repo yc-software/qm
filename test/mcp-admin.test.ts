@@ -87,6 +87,11 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.credentialScope, "shared");
   assert.equal((await store.get("crm"))?.credentialHost, undefined);
   assert.equal((await store.get("crm"))?.credentialAccountType, undefined);
+  assert.equal((await put({ approval: "sometimes" })).status, 400);
+  assert.equal((await put({ approval: "all" })).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all");
+  assert.equal((await put({})).status, 200);
+  assert.equal((await store.get("crm"))?.approval, undefined);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {

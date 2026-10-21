@@ -18,6 +18,7 @@ interface McpRemoteTool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
 export type McpAuth =
@@ -70,7 +71,12 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
         do {
           const page = await client.listTools(cursor === undefined ? undefined : { cursor });
           for (const t of page.tools)
-            tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema });
+            tools.push({
+              name: t.name,
+              description: t.description ?? "",
+              inputSchema: t.inputSchema,
+              ...(t.annotations ? { annotations: t.annotations } : {}),
+            });
           cursor = page.nextCursor;
         } while (cursor && tools.length < MAX_TOOLS);
         return tools.slice(0, MAX_TOOLS);

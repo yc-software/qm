@@ -4,7 +4,12 @@
 // HTTP destination every scope's agents can call, so it is governed like a
 // model-provider credential, not like a personal connector.
 
-import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
+import {
+  isValidMcpServerId,
+  type McpApprovalPolicy,
+  type McpServer,
+  type McpServerAuthMode,
+} from "../../../mcp/mcp-server-store.ts";
 import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
 import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
@@ -12,6 +17,7 @@ import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
+const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -39,11 +45,12 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const servers = await ctx.deps.mcpServers.list();
   return sendJson(ctx.res, 200, {
     servers: servers.map(redact),
-    tools: ctx.deps.mcpToolService?.toolDefs().map(({ name, serverId, description, readOnly }) => ({
+    tools: ctx.deps.mcpToolService?.toolDefs().map(({ name, serverId, description, readOnly, needsApproval }) => ({
       name,
       serverId,
       description,
       readOnly,
+      needsApproval,
     })),
   });
 }
@@ -79,6 +86,13 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   const auth = (b.auth ?? "none") as McpServerAuthMode;
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
+  }
+  const approval = b.approval ?? "annotations";
+  if (!APPROVAL_POLICIES.includes(approval)) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `approval must be one of ${APPROVAL_POLICIES.join(", ")}`,
+    });
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
@@ -166,6 +180,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
           clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
         }
       : {}),
+    ...(approval === "annotations" ? {} : { approval }),
     readOnly: b.readOnly !== false,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),
