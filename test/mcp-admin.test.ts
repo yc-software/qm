@@ -95,7 +95,12 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await put({ approval: "annotations" })).status, 200);
   assert.equal((await store.get("crm"))?.approval, undefined);
   assert.equal((await put({ attestActor: true })).status, 400);
-  assert.equal((await put({ catalog: true, attestActor: true })).status, 200);
+  assert.equal(
+    (await put({ catalog: true, attestActor: true })).status,
+    400,
+    "an unauthenticated upstream cannot trust the actor",
+  );
+  assert.equal((await put({ catalog: true, attestActor: true, auth: "bearer", bearerToken: "t" })).status, 200);
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 

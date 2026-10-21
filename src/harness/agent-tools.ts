@@ -4232,7 +4232,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   });
 
   const mcpDefs = opts?.mcpTools ?? [];
-  const mcpTools = mcpDefs
+  const mcpCandidates = mcpDefs
     .filter((d) => !opts?.readOnly || d.readOnly)
     .map((d) => ({
       ...defineTool({
@@ -4453,9 +4453,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     resourceTool("goal", { create: createGoal, get: getGoal, update: updateGoal }),
     runtime,
     context,
-    ...mcpTools,
     ...clientTools,
   ];
+  const nativeNames = new Set(tools.map((t) => t.name));
+  const mcpTools = mcpCandidates.filter((t) => !nativeNames.has(t.name));
+  tools.push(...mcpTools);
   const operationFields: Record<string, Record<string, string[]>> = {
     sandbox: {
       status: ["sandbox_id"],

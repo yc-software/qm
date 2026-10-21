@@ -4494,13 +4494,30 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   );
 });
 
+function catalogTools(ref: ToolContextRef, name = "records") {
+  return createAgentTools(ref, {
+    mcpTools: [
+      {
+        name,
+        serverId: name,
+        remoteName: "",
+        catalog: true,
+        description: "Catalog",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+        needsApproval: false,
+      },
+    ],
+  });
+}
+
 test("a catalog tool asks per call and forwards the approval only on the approved call", async () => {
   const calls: Array<[Record<string, unknown>, string | undefined]> = [];
   const approved = new Set<string>();
   const ref: ToolContextRef = {
     current: {
       ...fakeToolContext(),
-      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-email",
+      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-message",
       callMcpTool: async (_name, args, approval) => {
         calls.push([args, approval]);
         return "ok";
@@ -4510,31 +4527,70 @@ test("a catalog tool asks per call and forwards the approval only on the approve
     scopeLabel: "personal:U1",
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
-  const [catalog] = createAgentTools(ref, {
-    mcpTools: [
-      {
-        name: "yc",
-        serverId: "yc",
-        remoteName: "",
-        catalog: true,
-        description: "Catalog",
-        inputSchema: { type: "object", properties: {} },
-        readOnly: false,
-        needsApproval: false,
-      },
-    ],
-  }).filter((t) => t.name === "yc");
-  const send = { operation: "invoke", tool: "send-email", arguments: { to: "x" } };
+  const catalog = catalogTools(ref).find((t) => t.name === "records")!;
+  const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
   await call(catalog, { operation: "invoke", tool: "find", arguments: {} });
   await call(catalog, send);
   assert.deepEqual(calls, [[{ operation: "invoke", tool: "find", arguments: {} }, undefined]]);
   const card = ref.pendingApprovals!.at(-1)!;
-  assert.equal(card.command, 'yc {"arguments":{"to":"x"},"operation":"invoke","tool":"send-email"}');
+  assert.equal(card.command, 'records {"arguments":{"to":"x"},"operation":"invoke","tool":"send-message"}');
   approved.add(card.approvalKey!);
   ref.pausedOnApproval = false;
   await call(catalog, send);
   assert.deepEqual(calls.at(-1), [send, card.approvalKey]);
-  assert.equal(ref.approvedToolCalls?.size, 0);
+  approved.clear();
+  ref.pausedOnApproval = false;
+  await call(catalog, send);
+  assert.equal(calls.length, 2, "the next identical call needs its own approval");
+  assert.equal(ref.pendingApprovals!.length, 2);
+});
+
+test("a failing approval check returns its error to the model and offers no card", async () => {
+  let ran = false;
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      mcpToolNeedsApproval: async () => {
+        throw new Error("Unknown Records tool: nope. Search for it first.");
+      },
+      callMcpTool: async () => {
+        ran = true;
+        return "ok";
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: () => true,
+  };
+  const catalog = catalogTools(ref).find((t) => t.name === "records")!;
+  assert.match(
+    textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
+    /could not check whether this call needs approval: Unknown Records tool: nope/,
+  );
+  assert.equal(ran, false);
+  assert.deepEqual(ref.pendingApprovals, []);
+});
+
+test("a catalog named like a native tool never replaces it or widens read-only turns", () => {
+  const ref: ToolContextRef = { current: fakeToolContext() };
+  const files = catalogTools(ref, "files").filter((t) => t.name === "files");
+  assert.equal(files.length, 1);
+  assert.doesNotMatch(files[0]!.description, /^Catalog/);
+  const readOnly = createAgentTools(ref, {
+    readOnly: true,
+    mcpTools: [
+      {
+        name: "files",
+        serverId: "files",
+        remoteName: "",
+        catalog: true,
+        description: "Catalog",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+        needsApproval: false,
+      },
+    ],
+  });
+  assert.ok(!readOnly.some((t) => t.name === "files"));
 });
 
 test("a tool that needs approval fails closed without an approval gate", async () => {

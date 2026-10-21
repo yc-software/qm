@@ -87,25 +87,28 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
-  const approval = b.approval ?? (await ctx.deps.mcpServers.get(id))?.approval ?? "annotations";
+  const existing = await ctx.deps.mcpServers.get(id);
+  const approval = b.approval ?? existing?.approval ?? "annotations";
   if (!APPROVAL_POLICIES.includes(approval)) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message: `approval must be one of ${APPROVAL_POLICIES.join(", ")}`,
     });
   }
-  const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
-  const catalog = b.catalog === true;
-  const attestActor = b.attestActor === true;
+  const catalog = (b.catalog ?? existing?.catalog) === true;
+  const attestActor = (b.attestActor ?? existing?.attestActor) === true;
   if ((catalog || attestActor) && oauthUser) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
       message: "catalog and attestActor are not available with oauth-user auth",
     });
   }
-  if (attestActor && !catalog) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestActor requires catalog" });
+  if (attestActor && (!catalog || (auth !== "bearer" && auth !== "client-credentials"))) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "attestActor requires catalog and bearer or client-credentials auth, so only QM can assert the person",
+    });
   }
   if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
