@@ -137,7 +137,7 @@ export function createSuggestedActivityService(deps: {
       const { runs, activities: latest, firedAt: latestAt } = await latestResult(cron, principalId);
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
-      if (refresh && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
+      if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
         const result = await deps.scheduler.runNow(cron.id);
         pending = result.started || result.reason === "already_running";
       } else if (

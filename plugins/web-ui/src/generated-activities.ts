@@ -12,8 +12,10 @@ export function loadGeneratedActivities(me: Me, onChange?: () => void, refresh =
   const cached = requests.get(me);
   if (!refresh && cached && cached.until > Date.now()) return cached.pending.then(onChange);
   const request = { until: Date.now() + 5 * 60_000, pending: Promise.resolve() };
+  requests.set(me, request);
   request.pending = (async () => {
     for (let attempt = 0; attempt < 19; attempt++) {
+      if (requests.get(me) !== request) return;
       const response = await api<{ activities: unknown; pending?: boolean }>("/api/suggested-activities", {
         method: "POST",
         body: JSON.stringify({
@@ -30,7 +32,6 @@ export function loadGeneratedActivities(me: Me, onChange?: () => void, refresh =
     }
     request.until = 0;
   })().catch(swallowAs("web-ui: load generated activities", undefined));
-  requests.set(me, request);
   return request.pending;
 }
 

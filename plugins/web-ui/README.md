@@ -114,7 +114,8 @@ uses when it collapses and reappears around a draft. The core stores dismissals 
 user's suggestion profile (the 30 most recent IDs and titles), filters them out of every
 later response on every device, and adds their titles to the managed cron task so the
 next run avoids them; user-edited cron tasks are left alone. Three seconds after the last
-dismissal in a burst, the browser asks for a refresh. The core starts one immediate run
+dismissal in a burst, the browser asks for a refresh; opening a new chat does the same if that
+request never arrived. The core starts one immediate run
 of the user's suggestions cron only when a dismissal is newer than the latest run and no
 run is in flight. Until it lands, fewer rows show; new rows then expand in.
 

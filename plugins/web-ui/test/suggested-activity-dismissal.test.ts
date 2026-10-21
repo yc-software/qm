@@ -198,3 +198,22 @@ test("every request of a refresh asks again, so dismissals made during a running
     [true, true],
   );
 });
+
+test("a refresh loop waiting between polls stops when another dismissal starts the debounce over", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  requests.length = 0;
+  served = ["x", "y", "z"].map(activity);
+  pendingResponses = 1;
+  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const loading = loadGeneratedActivities(me, () => {}, true);
+  await flush();
+  dismissGeneratedActivity(me, activity("x"), () => {});
+  await flush();
+  t.mock.timers.tick(10_000);
+  await loading;
+  for (let i = 0; i < 5; i++) await flush();
+  assert.deepEqual(
+    requests.map((request) => request.path),
+    ["/api/suggested-activities", "/api/suggested-activities/dismiss", "/api/suggested-activities"],
+  );
+});

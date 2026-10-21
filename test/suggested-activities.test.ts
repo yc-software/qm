@@ -322,3 +322,16 @@ test("a task edited to ask for three suggestions still has its results served", 
   await f.settle();
   assert.deepEqual((await f.service.get("alice", [])).activities, activities.slice(0, 3));
 });
+
+test("opening a new chat after dismissals that never sent a refresh starts the run; plain polls do not", async () => {
+  const f = fixture();
+  await f.service.get("alice", []);
+  await f.settle();
+  f.advance(1_000);
+  await f.service.dismiss("alice", "app");
+  f.advance(1_000);
+  assert.equal((await f.service.get("alice", [], { poll: true })).pending, false);
+  assert.equal((await f.service.get("alice", [])).pending, true);
+  await f.settle();
+  assert.equal(f.calls.length, 2);
+});
