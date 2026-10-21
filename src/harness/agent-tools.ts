@@ -370,6 +370,9 @@ export function pauseStampAfterToolCall(
   };
 }
 
+const outsideWorkspace = (path: string): string =>
+  `[not in the computer's workspace: ${path}; only workspace files can be read, so copy it there or name it relative to the workspace]`;
+
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
   const scratchExec = !!opts?.scratchExec;
   const ownerAuthExec = !!opts?.ownerAuthExec;
@@ -1134,7 +1137,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
-      const { content, sourceScopeId, shared } = await tc.read(params.path, signal, params.sandbox_id);
+      const {
+        content,
+        sourceScopeId,
+        shared,
+        outsideWorkspace: outside,
+      } = await tc.read(params.path, signal, params.sandbox_id);
       signal?.throwIfAborted();
       return recordResult(
         callId,
@@ -1145,7 +1153,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           found: content !== null,
           ...(content !== null ? { bytes: content.length, sourceScopeId } : {}),
         },
-        text(content ?? `[no such file: ${params.path}]`),
+        text(content ?? (outside ? outsideWorkspace(params.path) : `[no such file: ${params.path}]`)),
         content === null,
         sourceScopeId,
         false,
@@ -3867,15 +3875,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ): Promise<string[]> {
     const out: string[] = [];
     for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
-      const missing = path.startsWith("/")
-        ? "[missing: no such file in the computer's workspace; only workspace files can be read, so copy it there or name it relative to the workspace]"
-        : "[missing: no such file]";
       const content = tc
         ? await tc.read(path, signal, sandboxId).then(
-            (r) => r.content ?? missing,
+            (r) => r.content ?? (r.outsideWorkspace ? outsideWorkspace(path) : "[missing: no such file]"),
             (e: unknown) => `[unreadable: ${errMessage(e)}]`,
           )
-        : missing;
+        : "[missing: no such file]";
       let body = content;
       if (body.length > GOAL_EVIDENCE_FILE_CHARS)
         body = `${body.slice(0, GOAL_EVIDENCE_FILE_CHARS)}\n[truncated at ${GOAL_EVIDENCE_FILE_CHARS} of ${body.length} chars]`;

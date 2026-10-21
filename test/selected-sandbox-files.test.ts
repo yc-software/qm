@@ -147,9 +147,22 @@ test("naming the default sandbox explicitly persists exactly like omitting it", 
   assert.deepEqual(new Set(h.stored.map((e) => `${e.scope} ${e.path}`)), new Set([`${conversation} notes.md`]));
 });
 
-test("an absolute path inside a computer's workspace reads like its workspace-relative path", async () => {
+test("an absolute path inside a computer's workspace reads and writes like its workspace path", async () => {
   const h = harness({ access: plan("sb1", conversation) });
   assert.equal((await h.ctx.read("/workspace/notes.md", undefined, "sb1")).content, "selected copy");
-  assert.equal((await h.ctx.read("/workspace/notes.md")).content, "default copy");
-  assert.equal((await h.ctx.read("/elsewhere/notes.md", undefined, "sb1")).content, null);
+  assert.equal((await h.ctx.read("/workspace/./notes.md")).content, "default copy");
+  await h.ctx.write("/workspace/notes.md", "edited", "sb1");
+  assert.equal(h.disks.get("selected")!.get("notes.md"), "edited");
+  assert.deepEqual(h.stored, [{ scope: conversation, path: "sandbox-files/sb1/notes.md" }]);
+});
+
+test("an absolute path outside the workspace reads nothing and says so", async () => {
+  const h = harness({ access: plan("sb1", conversation) });
+  for (const path of ["/elsewhere/notes.md", "/workspace/../etc/notes.md"])
+    assert.deepEqual(await h.ctx.read(path, undefined, "sb1"), {
+      content: null,
+      sourceScopeId: null,
+      outsideWorkspace: true,
+    });
+  assert.deepEqual(await h.ctx.read("/workspace/absent.md", undefined, "sb1"), { content: null, sourceScopeId: null });
 });

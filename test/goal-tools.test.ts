@@ -391,7 +391,8 @@ test("update reads evidence from the named sandbox and says why a file could not
     read: async (path: string, _signal: AbortSignal | undefined, sandboxId?: string) => {
       reads.push([path, sandboxId]);
       if (sandboxId === "gone") throw new Error("sandbox not found: gone");
-      return { content: path === "report.md" ? "on sb1" : null };
+      if (path === "report.md") return { content: "on sb1", sourceScopeId: null };
+      return { content: null, sourceScopeId: null, ...(path.startsWith("/home") ? { outsideWorkspace: true } : {}) };
     },
   } as unknown as ToolContextRef["current"];
   let seen = "";
@@ -403,18 +404,20 @@ test("update reads evidence from the named sandbox and says why a file could not
   await update.execute("u1", {
     status: "complete",
     note: "done",
-    files: ["report.md", "/home/user/code.txt"],
+    files: ["report.md", "/home/user/code.txt", "typo.md"],
     sandbox_id: "sb1",
   });
   assert.deepEqual(reads, [
     ["report.md", "sb1"],
     ["/home/user/code.txt", "sb1"],
+    ["typo.md", "sb1"],
   ]);
   assert.match(seen, /<file path="report.md">\non sb1\n<\/file>/);
   assert.match(
     seen,
-    /<file path="\/home\/user\/code.txt">\n\[missing: no such file in the computer's workspace; only workspace files/,
+    /<file path="\/home\/user\/code.txt">\n\[not in the computer's workspace: \/home\/user\/code.txt; only workspace files/,
   );
+  assert.match(seen, /<file path="typo.md">\n\[missing: no such file\]/);
   await update.execute("u2", { status: "complete", note: "done", files: ["report.md"], sandbox_id: "gone" });
   assert.match(seen, /<file path="report.md">\n\[unreadable: sandbox not found: gone\]/);
 });
