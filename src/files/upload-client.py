@@ -15,9 +15,10 @@ PART_SIZE = 64 * 1024 * 1024
 
 
 class RequestError(RuntimeError):
-    def __init__(self, status, message):
+    def __init__(self, status, message, content=b""):
         super().__init__(message)
         self.status = status
+        self.content = content
 
 
 def quote(value):
@@ -52,7 +53,7 @@ def request(method, url, data=None, headers=None):
             if 200 <= status < 300:
                 return content
             if status < 500 and (status != 429 or error_code(content) == "upload_quota"):
-                raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}")
+                raise RequestError(status, f"request failed ({status}): {content[:4096].decode(errors='replace')}", content)
             failure = f"HTTP {status}: {content[:200].decode(errors='replace')}"
         else:
             failure = result.stderr.decode(errors="replace").strip() or f"curl exited {result.returncode}"
@@ -67,6 +68,18 @@ def api(method, path, data=None):
     return json.loads(request(method, os.environ["AGENT_API_URL"].rstrip("/") + path, body, headers))
 
 
+def describe(listing):
+    lines = [f"{'id':32}  {'state':10}  {'size':>12}  {'started (UTC)':16}  {'last activity (UTC)':19}  name"]
+    when = lambda ms: time.strftime("%Y-%m-%d %H:%M", time.gmtime(ms / 1000)) if ms else "-"
+    for upload in listing["uploads"]:
+        lines.append(f"{upload['id']:32}  {upload['state']:10}  {upload['sizeBytes']:>12}  {when(upload['createdAt']):16}  {when(upload.get('lastActivityAt')):19}  {upload['name']}")
+    if not listing["uploads"]:
+        lines.append("(no unfinished uploads in this conversation)")
+    if listing["elsewhere"]:
+        lines.append(f"{listing['elsewhere']} more unfinished upload(s) belong to other conversations and can only be aborted there.")
+    return "\n".join(lines)
+
+
 def save(path, state):
     temporary = path.with_name(path.name + ".tmp")
     fd = os.open(temporary, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
@@ -79,11 +92,23 @@ def save(path, state):
 
 def main():
     parser = argparse.ArgumentParser(description="Publish a file durably to Files with resumable direct uploads")
-    parser.add_argument("file", type=Path)
+    parser.add_argument("file", type=Path, nargs="?")
     parser.add_argument("--state", type=Path)
     parser.add_argument("--scope")
     parser.add_argument("--name")
+    parser.add_argument("--list", action="store_true", help="list your unfinished uploads")
+    parser.add_argument("--abort", nargs="+", metavar="ID", help="abort unfinished uploads by id")
     args = parser.parse_args()
+    if args.list:
+        print(describe(api("GET", "/v1/files/uploads")))
+        return
+    if args.abort:
+        for upload_id in args.abort:
+            api("DELETE", f"/v1/files/uploads/{upload_id}")
+            print(f"aborted {upload_id}")
+        return
+    if args.file is None:
+        parser.error("a file path, --list or --abort is required")
     state_path = args.state or args.file.with_name(args.file.name + ".qm-upload.json")
     checksums = []
     size = 0
@@ -132,7 +157,13 @@ def main():
         state = {"id": uuid.uuid4().hex, "manifest": manifest, "destination": destination, "next": 1}
         save(state_path, state)
     if status is None:
-        status = api("POST", "/v1/files/uploads", {**manifest, "requestId": state["id"]})["upload"]
+        try:
+            status = api("POST", "/v1/files/uploads", {**manifest, "requestId": state["id"]})["upload"]
+        except RequestError as error:
+            if error_code(error.content) != "upload_quota":
+                raise
+            me = f"python3 {sys.argv[0]}"
+            raise RuntimeError(f"{json.loads(error.content)['message']}\n\n{describe(json.loads(error.content))}\n\nAbort one with: {me} --abort ID\nThen rerun this upload. List again with: {me} --list") from None
     if status["state"] == "pending":
         with args.file.open("rb") as source:
             for number in range(state["next"], len(checksums) + 1):

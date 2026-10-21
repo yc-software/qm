@@ -25,11 +25,17 @@ function fixture() {
       row.state = to;
       return true;
     },
-    async extend(id, expiresAt) {
+    async touch(id, at) {
       const row = rows.get(id);
-      if (!row || row.state !== "pending") return false;
-      row.expiresAt = expiresAt;
-      return true;
+      if (row?.state === "pending") row.lastActivityAt = at;
+    },
+    async active(actorId, now) {
+      return [...rows.values()].filter(
+        (r) =>
+          r.actorId === actorId &&
+          !["complete", "aborted", "failed"].includes(r.state) &&
+          !(r.state === "pending" && r.expiresAt <= now),
+      );
     },
     async expired(now) {
       return [...rows.values()].filter(
@@ -122,22 +128,22 @@ function fixture() {
   };
 }
 
-test("an idle pending upload expires after an hour; signing parts keeps it alive up to a day", async () => {
+test("idle uploads keep their slot until the 24h cap; signing records last activity", async () => {
   const hour = 60 * 60 * 1000;
   const f = fixture();
-  const idle = await f.service.begin(f.input);
+  const row = await f.service.begin(f.input);
+  f.advance(23 * hour);
+  await f.service.sign(row.id, 1);
+  assert.equal((await f.store.get(row.id))!.lastActivityAt, row.createdAt + 23 * hour);
+  assert.deepEqual(
+    (await f.service.list("U1")).map((r) => r.id),
+    [row.id],
+  );
   f.advance(hour);
-  await assert.rejects(f.service.sign(idle.id, 1), /expired/);
+  await assert.rejects(f.service.sign(row.id, 1), /expired/);
+  assert.deepEqual(await f.service.list("U1"), []);
   await f.service.sweep();
-  assert.equal((await f.store.get(idle.id))!.state, "aborted");
-
-  const busy = await f.service.begin(f.input);
-  for (let i = 0; i < 24; i++) {
-    await f.service.sign(busy.id, 1);
-    f.advance(hour - 1);
-  }
-  await assert.rejects(f.service.sign(busy.id, 1), /expired/);
-  assert.equal((await f.store.get(busy.id))!.expiresAt, busy.createdAt + 24 * hour);
+  assert.equal((await f.store.get(row.id))!.state, "aborted");
 });
 
 test("signed parts bind the exact size, checksum, upload and number; unpublished parts are invisible", async () => {

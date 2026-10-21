@@ -87,7 +87,7 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files.',
+      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files. You may hold 4 unfinished uploads (500 GiB) at once; if the helper reports the quota is full, run it with --list to see yours and --abort ID to free any you no longer need.',
     routes: [
       {
         method: "GET",
@@ -99,6 +99,12 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/files/uploads",
         summary:
           "begin a direct upload with {name,mimetype?,scopeId?,sizeBytes,checksums,requestId?}; checksums are ordered base64 SHA-256 hashes of 64 MiB parts",
+      },
+      {
+        method: "GET",
+        path: "/v1/files/uploads",
+        summary:
+          "list your unfinished upload sessions in this conversation (name, size, state, started, last activity)",
       },
       { method: "GET", path: "/v1/files/uploads/:id", summary: "inspect an owned upload session" },
       {

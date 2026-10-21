@@ -30,6 +30,7 @@ test(
       state: "pending",
       expiresAt: Date.now() + 60_000,
       createdAt: Date.now(),
+      lastActivityAt: Date.now(),
     });
     const uploads = Array.from({ length: MAX_ACTIVE_UPLOADS + 3 }, row);
     const results = await Promise.allSettled(uploads.map((r, i) => (i % 2 ? first : second).insert(r)));
@@ -73,6 +74,7 @@ test("expired upload batches rotate durably without starving later rows", { skip
       uploadId: "upload",
       state: "completing",
       createdAt: now,
+      lastActivityAt: now,
       expiresAt: i,
     });
   }
@@ -106,6 +108,7 @@ test("terminal failed uploads release active quota", { skip: !url }, async () =>
       uploadId: "upload",
       state: "completing",
       createdAt: Date.now(),
+      lastActivityAt: Date.now(),
       expiresAt: Date.now(),
     });
     await store.transition(id, ["completing"], "failed");
@@ -113,30 +116,39 @@ test("terminal failed uploads release active quota", { skip: !url }, async () =>
   assert.equal((await store.get(ids.at(-1)!))!.state, "failed");
 });
 
-test("expired pending uploads stop holding quota; extend only moves pending rows", { skip: !url }, async () => {
-  const store = createPostgresFileUploadStore(url!);
-  const actorId = `idle-quota-${randomUUID()}`;
-  const now = Date.now();
-  const row = (expiresAt: number): FileUpload => ({
-    id: randomUUID().replaceAll("-", ""),
-    actorId,
-    scopeId: scopeId("personal", actorId),
-    name: "file",
-    mimetype: "text/plain",
-    sizeBytes: 1,
-    partSize: 64 * 1024 * 1024,
-    checksums: ["hash"],
-    uploadId: "upload",
-    state: "pending",
-    createdAt: now,
-    expiresAt,
-  });
-  const stale = Array.from({ length: MAX_ACTIVE_UPLOADS }, () => row(now - 1));
-  for (const r of stale) await store.insert(r);
-  const live = row(now + 60_000);
-  await store.insert(live);
-  assert.ok(await store.extend(live.id, now + 120_000));
-  assert.equal((await store.get(live.id))!.expiresAt, now + 120_000);
-  await store.transition(stale[0]!.id, ["pending"], "aborted");
-  assert.equal(await store.extend(stale[0]!.id, now + 120_000), false);
-});
+test(
+  "active lists the actor's unfinished uploads that hold quota; touch records activity",
+  { skip: !url },
+  async () => {
+    const store = createPostgresFileUploadStore(url!);
+    const actorId = `active-uploads-${randomUUID()}`;
+    const now = Date.now();
+    const row = (expiresAt: number, owner = actorId): FileUpload => ({
+      id: randomUUID().replaceAll("-", ""),
+      actorId: owner,
+      scopeId: scopeId("personal", owner),
+      name: "file",
+      mimetype: "text/plain",
+      sizeBytes: 1,
+      partSize: 64 * 1024 * 1024,
+      checksums: ["hash"],
+      uploadId: "upload",
+      state: "pending",
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt,
+    });
+    const stale = Array.from({ length: MAX_ACTIVE_UPLOADS }, () => row(now - 1));
+    for (const r of stale) await store.insert(r);
+    const live = row(now + 60_000);
+    const aborted = row(now + 60_000);
+    await store.insert(live);
+    await store.insert(aborted);
+    await store.transition(aborted.id, ["pending"], "aborted");
+    await store.insert(row(now + 60_000, `other-${actorId}`));
+    await store.touch(live.id, now + 5_000);
+    await store.touch(aborted.id, now + 5_000);
+    assert.deepEqual(await store.active(actorId, now), [{ ...live, lastActivityAt: now + 5_000 }]);
+    assert.equal((await store.get(aborted.id))!.lastActivityAt, now);
+  },
+);

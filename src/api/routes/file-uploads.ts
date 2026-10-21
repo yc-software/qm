@@ -8,6 +8,28 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 type Uploads = NonNullable<ApiCtx["deps"]["fileUploads"]>;
 type Upload = NonNullable<Awaited<ReturnType<Uploads["get"]>>>;
 
+const visible = async ({ app, capability }: ApiCtx, actorId: string, upload: Upload) =>
+  upload.actorId === actorId &&
+  (!capability || upload.scopeId === capability.scopeId) &&
+  (await app.belongsToScope(actorId, upload.scopeId));
+
+const unfinished = async (ctx: ApiCtx, uploads: Uploads, actorId: string) => {
+  const rows = await uploads.list(actorId);
+  const shown = [];
+  for (const row of rows)
+    if (await visible(ctx, actorId, row))
+      shown.push({
+        id: row.id,
+        name: row.name,
+        sizeBytes: row.sizeBytes,
+        state: row.state,
+        createdAt: row.createdAt,
+        lastActivityAt: row.lastActivityAt,
+        expiresAt: row.expiresAt,
+      });
+  return { uploads: shown, elsewhere: rows.length - shown.length };
+};
+
 const uploadRoute =
   (handle: (ctx: ApiCtx, uploads: Uploads, actorId: string) => Promise<void>) =>
   async (ctx: ApiCtx): Promise<void> => {
@@ -20,25 +42,25 @@ const uploadRoute =
     try {
       return await handle(ctx, uploads, actorId);
     } catch (error) {
-      if (error instanceof FileUploadError)
-        return sendJson(res, error.status, { error: error.code, message: error.message });
-      throw error;
+      if (!(error instanceof FileUploadError)) throw error;
+      return sendJson(res, error.status, {
+        error: error.code,
+        message: error.message,
+        ...(error.code === "upload_quota" ? await unfinished(ctx, uploads, actorId) : {}),
+      });
     }
   };
 
 const ownedUpload = (handle: (ctx: ApiCtx, uploads: Uploads, upload: Upload, actorId: string) => Promise<void>) =>
   uploadRoute(async (ctx, uploads, actorId) => {
-    const { res, app, capability, params } = ctx;
-    const upload = await uploads.get(params.id!);
-    if (
-      !upload ||
-      upload.actorId !== actorId ||
-      (capability && upload.scopeId !== capability.scopeId) ||
-      !(await app.belongsToScope(actorId, upload.scopeId))
-    )
-      return sendJson(res, 404, { error: "not_found" });
+    const upload = await uploads.get(ctx.params.id!);
+    if (!upload || !(await visible(ctx, actorId, upload))) return sendJson(ctx.res, 404, { error: "not_found" });
     return handle(ctx, uploads, upload, actorId);
   });
+
+const listUploads = uploadRoute(async (ctx, uploads, actorId) =>
+  sendJson(ctx.res, 200, await unfinished(ctx, uploads, actorId)),
+);
 
 const uploadClient = uploadRoute(async ({ res }) => {
   const script = await readFile(new URL("../../files/upload-client.py", import.meta.url), "utf8");
@@ -99,6 +121,7 @@ const abortUpload = ownedUpload(async ({ res, deps }, uploads, upload, actorId) 
 
 export const fileUploadRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/files/upload-client", actor: "query.viewer", auth: "either", handle: uploadClient },
+  { method: "GET", path: "/v1/files/uploads", actor: "query.viewer", auth: "either", handle: listUploads },
   { method: "GET", path: "/v1/files/uploads/:id", actor: "query.viewer", auth: "either", handle: getUpload },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/files/uploads", auth: "either", handle: beginUpload },

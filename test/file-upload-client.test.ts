@@ -230,3 +230,66 @@ test("publisher starts a fresh upload when the saved session was aborted or expi
     }
   }
 });
+
+test("publisher shows what holds a full quota and can list and abort those uploads", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "qm-publisher-"));
+  const requests: string[] = [];
+  const stuck = "c".repeat(32);
+  const listing = {
+    uploads: [{ id: stuck, name: "stuck.bin", sizeBytes: 9, state: "pending", createdAt: 0, lastActivityAt: 60_000 }],
+    elsewhere: 2,
+  };
+  const server = createServer(async (request, response) => {
+    for await (const _ of request) void _;
+    requests.push(`${request.method} ${request.url}`);
+    response.setHeader("content-type", "application/json");
+    if (request.method === "DELETE") response.end(JSON.stringify({ ok: true }));
+    else if (request.method === "GET" && request.url === "/v1/files/uploads") response.end(JSON.stringify(listing));
+    else if (request.method === "POST" && request.url === "/v1/files/uploads")
+      response.writeHead(429).end(JSON.stringify({ error: "upload_quota", message: "quota is full", ...listing }));
+    else response.writeHead(404).end("{}");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const source = join(directory, "next.txt");
+  await writeFile(source, "abc");
+  const token =
+    Buffer.from(JSON.stringify({ actorId: "user", scopeId: "personal:user" })).toString("base64url") + ".signature";
+  const run = (...args: string[]) =>
+    new Promise<{ code: number | null; out: string }>((resolve, reject) => {
+      let out = "";
+      const child = spawn(
+        "python3",
+        [fileURLToPath(new URL("../src/files/upload-client.py", import.meta.url)), ...args],
+        {
+          env: { ...process.env, AGENT_API_URL: origin, AGENT_API_TOKEN: token },
+        },
+      );
+      child.stdout.on("data", (chunk) => (out += chunk));
+      child.stderr.on("data", (chunk) => (out += chunk));
+      child.on("error", reject);
+      child.on("exit", (code) => resolve({ code, out }));
+    });
+  try {
+    const refused = await run(source);
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /quota is full/);
+    assert.match(refused.out, new RegExp(`${stuck} .*stuck\\.bin`));
+    assert.match(refused.out, /1970-01-01 00:01/);
+    assert.match(refused.out, /2 more unfinished upload/);
+    assert.match(refused.out, /--abort ID/);
+    assert.equal(requests.filter((r) => r === "POST /v1/files/uploads").length, 1);
+
+    const listed = await run("--list");
+    assert.equal(listed.code, 0);
+    assert.match(listed.out, /stuck\.bin/);
+
+    assert.equal((await run("--abort", stuck)).code, 0);
+    assert.ok(requests.includes(`DELETE /v1/files/uploads/${stuck}`));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
