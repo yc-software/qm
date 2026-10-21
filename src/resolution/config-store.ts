@@ -39,14 +39,14 @@ export interface PersistedSoulRevision {
   updatedBy?: string;
 }
 type SoulSnapshot = PersistedSoul | null;
-export type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
+type ScopedRow<K extends string, V> = { scopeId: ScopeId } & Record<K, V>;
 export type PersistedSecurityPosture = ScopedRow<"posture", SecurityPosture>;
 export type PersistedSharingPosture = ScopedRow<"posture", SharingPosture>;
 export type PersistedApprovalGrantModes = ScopedRow<"modes", ApprovalGrantModes>;
 export type PersistedEgressPolicy = ScopedRow<"policy", EgressPolicy>;
 export type ModelAccount = "company" | "personal" | "anthropic" | "openai";
 
-export interface PersistedModelAccount extends PersistedScopedFlag {
+interface PersistedModelAccount extends PersistedScopedFlag {
   provider?: "anthropic" | "openai";
 }
 
@@ -78,7 +78,7 @@ interface ScopedRuntimeSelection extends RuntimeSelection {
 }
 export type PersistedApprovedHarnesses = ScopedRow<"ids", string[]>;
 export type PersistedInternalMemberOverrides = ScopedRow<"members", string[]>;
-export interface PersistedSlackEmojiCatalog {
+interface PersistedSlackEmojiCatalog {
   scopeId: ScopeId;
   emoji: Record<string, string>;
   updatedAt: number;
