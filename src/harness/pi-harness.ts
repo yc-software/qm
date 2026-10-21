@@ -2527,28 +2527,14 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       },
 
       async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+        const model = requiredModel(judgeModelId());
         const providerKeys = await resolveProviderKeys();
-        const ask = (model: Model<Api>) =>
-          oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-            modelGateway,
-            signal,
-            thinkingLevel: "low",
-          });
-        const modelId = judgeModelId();
-        const model = requiredModel(modelId);
         if (!keyForModel(providerKeys, model)) return undefined;
-        try {
-          return await ask(model);
-        } catch (error) {
-          const fallbackId =
-            error instanceof ProviderTurnError && FALLBACK_CODES.has(error.code) && !signal?.aborted
-              ? refusalFallbackModelId(modelId)
-              : undefined;
-          const fallback = fallbackId ? resolveModel(companyServedId(fallbackId)) : undefined;
-          if (!fallback || !keyForModel(providerKeys, fallback)) throw error;
-          console.error(`[pi] judge refusal — retrying on ${fallbackId}: ${errMessage(error)}`);
-          return ask(fallback);
-        }
+        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
+          modelGateway,
+          signal,
+          thinkingLevel: "low",
+        });
       },
 
       async screenSecurity({

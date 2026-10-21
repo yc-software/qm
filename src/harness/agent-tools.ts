@@ -41,6 +41,7 @@ import {
   type GoalGovernor,
   type GoalRecord,
   type GovernorVerdict,
+  GovernorUndecided,
 } from "./goal.ts";
 import {
   toolLabelOf,
@@ -4094,18 +4095,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ].join("\n");
       let verdict: GovernorVerdict;
       try {
-        verdict = ref.governGoal
-          ? await ref.governGoal({
-              objective: goal.objective,
-              trigger: "completion",
-              recentWork: ref.goalRecentWork?.() ?? "",
-              evidence,
-              ...(goal.governor ? { previous: goal.governor } : {}),
-            })
-          : {
-              verdict: "continue",
-              reasons: "no independent governor is available on this runtime; keep working",
-            };
+        if (!ref.governGoal) throw new GovernorUndecided("no independent governor is available on this runtime");
+        verdict = await ref.governGoal({
+          objective: goal.objective,
+          trigger: "completion",
+          recentWork: ref.goalRecentWork?.() ?? "",
+          evidence,
+          ...(goal.governor ? { previous: goal.governor } : {}),
+        });
       } catch (e) {
         return recordCoreAuthoredResult(
           callId,

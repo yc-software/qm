@@ -396,7 +396,7 @@ test("governGoal parses the verdict, treats a non-verdict as no decision, and ga
     reasons: "proven",
   });
   await assert.rejects(judged('{"verdict": "yes"}'), GovernorUndecided);
-  await assert.rejects(judged("I can't help with evaluating this request."), GovernorUndecided);
+  await assert.rejects(judged("I can't help with evaluating this request."), /not a verdict: "I can't help/);
   await assert.rejects(judged(undefined), GovernorUndecided);
   const goal = createGoalRecord({ objective: "obj" });
   const pause = await judged('{"verdict": "pause", "reasons": "which account?"}');

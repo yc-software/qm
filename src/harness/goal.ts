@@ -343,7 +343,11 @@ export async function governGoal(
     parsed = undefined;
   }
   if (!parsed || !GOVERNOR_VERDICTS.includes(parsed.verdict as GovernorVerdict["verdict"]))
-    throw new GovernorUndecided(reply.trim() ? "its reply was not a verdict" : "it returned no reply");
+    throw new GovernorUndecided(
+      reply.trim()
+        ? `its reply was not a verdict: ${JSON.stringify(reply.trim().slice(0, 200))}`
+        : "it returned no reply",
+    );
   let verdict = parsed.verdict as GovernorVerdict["verdict"];
   const reasons =
     typeof parsed.reasons === "string" && parsed.reasons.trim() ? parsed.reasons.trim() : "no reasons given";

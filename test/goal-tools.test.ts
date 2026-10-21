@@ -129,13 +129,15 @@ test("agent cannot close a user-paused goal or replace it", async () => {
   assert.match(textOf(conflict as never), /already registered/);
 });
 
-test("the agent cannot self-complete: without a governor the request is rejected", async () => {
-  const { ref, create, update } = toolbox();
+test("the agent cannot self-complete: without a governor the request decides nothing", async () => {
+  const { ref, create, update, saved } = toolbox();
   delete ref.governGoal;
   await create.execute("c1", { objective: "ship it" });
+  const before = structuredClone(saved());
   const res = await update.execute("u1", { status: "complete", note: "trust me" });
-  assert.match(textOf(res as never), /did not accept completion/);
+  assert.match(textOf(res as never), /could not reach a decision \(no independent governor/);
   assert.equal(ref.goal?.status, "active");
+  assert.deepEqual(saved(), before);
 });
 
 test("a governor approval closes the goal and sees only the objective and evidence", async () => {
