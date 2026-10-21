@@ -28,7 +28,7 @@ function modelInputSchema(schema: Record<string, unknown>): Record<string, unkno
   return { ...schema, properties: kept };
 }
 
-export function mcpToolNeedsApproval(
+function mcpToolNeedsApproval(
   server: Pick<McpServer, "approval">,
   annotations: { readOnlyHint?: boolean; destructiveHint?: boolean } | undefined,
 ): boolean {
