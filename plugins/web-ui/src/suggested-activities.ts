@@ -43,7 +43,11 @@ class SuggestionRows extends Directive {
           redraw();
         }, MOTION_MS);
       });
-      for (const id of ids) if (!previous.has(id)) this.entering.add(id);
+      for (const id of ids) {
+        if (previous.has(id)) continue;
+        this.entering.add(id);
+        setTimeout(() => this.entering.delete(id), MOTION_MS);
+      }
     }
     this.shown = visible;
     const rows = [...visible];
@@ -64,6 +68,19 @@ class SuggestionRows extends Directive {
 }
 
 const suggestionRows = directive(SuggestionRows);
+
+function dismiss(event: Event, activity: SuggestedActivity, onDismiss: (activity: SuggestedActivity) => void) {
+  const button = event.currentTarget as HTMLElement;
+  const row = button.closest(".suggested-activity-row");
+  const list = row?.parentElement;
+  const hadFocus = document.activeElement === button;
+  onDismiss(activity);
+  if (!hadFocus || !list) return;
+  const rows = [...list.querySelectorAll(".suggested-activity-row:not(.is-leaving)")];
+  const next =
+    rows.find((candidate) => row.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING) ?? rows.at(-1);
+  next?.querySelector<HTMLElement>(".suggested-activity-dismiss")?.focus();
+}
 
 export function suggestedActivities(
   activities: SuggestedActivity[] | undefined,
@@ -112,7 +129,7 @@ export function suggestedActivities(
                       aria-label="Dismiss suggestion: ${activity.title}"
                       title="Dismiss"
                       ?disabled=${collapsed}
-                      @click=${() => onDismiss(activity)}
+                      @click=${(event: Event) => dismiss(event, activity, onDismiss)}
                     >
                       ${icon(X, 14)}
                     </button>`

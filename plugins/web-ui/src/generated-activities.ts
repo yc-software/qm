@@ -5,7 +5,6 @@ import type { Me } from "./shell-state";
 
 const REFRESH_DEBOUNCE_MS = 3_000;
 const requests = new WeakMap<Me, { until: number; pending: Promise<void> }>();
-const dismissed = new Set<string>();
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function loadGeneratedActivities(me: Me, onChange?: () => void, refresh = false): Promise<void> {
@@ -20,24 +19,23 @@ export function loadGeneratedActivities(me: Me, onChange?: () => void, refresh =
         body: JSON.stringify({
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           poll: refresh || attempt > 0,
-          ...(refresh && attempt === 0 ? { refresh: true } : {}),
+          ...(refresh ? { refresh: true } : {}),
         }),
       });
       if (requests.get(me) !== request) return;
-      me.suggestedActivities = parseSuggestedActivities(JSON.stringify(response.activities)).filter(
-        (activity) => !dismissed.has(activity.id),
-      );
+      me.suggestedActivities = parseSuggestedActivities(JSON.stringify(response.activities));
       onChange?.();
       if (!response.pending) return;
       await new Promise((resolve) => setTimeout(resolve, 10_000));
     }
+    request.until = 0;
   })().catch(swallowAs("web-ui: load generated activities", undefined));
   requests.set(me, request);
   return request.pending;
 }
 
 export function dismissGeneratedActivity(me: Me, activity: SuggestedActivity, onChange: () => void): void {
-  dismissed.add(activity.id);
+  requests.delete(me);
   me.suggestedActivities = me.suggestedActivities?.filter((candidate) => candidate.id !== activity.id);
   onChange();
   clearTimeout(refreshTimer);

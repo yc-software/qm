@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import test, { after, type TestContext } from "node:test";
 import { browserEnv } from "./browser-env.ts";
 
 const activity = (id: string) => ({ id, title: `Do ${id}`, prompt: `Let's do ${id}.`, icon: "📊" });
 const requests: { path: string; body: Record<string, unknown> }[] = [];
-const served = ["a", "d", "e", "f"].map(activity);
+let served = ["d", "e", "f"].map(activity);
+let hold: Promise<void> | undefined;
+let pendingResponses = 0;
 
 const { vite, close } = await browserEnv({
   fetch: (input, init) => {
     const path = String(input);
     requests.push({ path, body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
-    if (path === "/api/suggested-activities")
-      return Promise.resolve(Response.json({ activities: served, pending: false }));
+    if (path === "/api/suggested-activities") {
+      const activities = served;
+      const pending = pendingResponses > 0;
+      pendingResponses = Math.max(0, pendingResponses - 1);
+      return (hold ?? Promise.resolve()).then(() => Response.json({ activities, pending }));
+    }
     return Promise.resolve(Response.json({ dismissed: true }));
   },
 });
@@ -19,10 +25,10 @@ after(close);
 
 const { render } = await import("lit");
 const { suggestedActivities } = await vite.ssrLoadModule("/src/suggested-activities.ts");
-const { dismissGeneratedActivity } = await vite.ssrLoadModule("/src/generated-activities.ts");
+const { dismissGeneratedActivity, loadGeneratedActivities } = await vite.ssrLoadModule("/src/generated-activities.ts");
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function mount(initial: ReturnType<typeof activity>[], dismissible = true) {
+function mount(t: TestContext, initial: ReturnType<typeof activity>[], dismissible = true) {
   const host = document.createElement("div");
   let list = initial;
   const draw = () =>
@@ -59,6 +65,10 @@ function mount(initial: ReturnType<typeof activity>[], dismissible = true) {
     host,
     rows,
     dismiss,
+    settle: () => {
+      t.mock.timers.tick(220);
+      draw();
+    },
     replace: (next: ReturnType<typeof activity>[]) => {
       list = next;
       draw();
@@ -68,32 +78,32 @@ function mount(initial: ReturnType<typeof activity>[], dismissible = true) {
 
 test("three suggestions show at first without motion; dismissing one collapses it while a reserve row slides in", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const view = mount(["a", "b", "c", "d", "e"].map(activity));
+  const view = mount(t, ["a", "b", "c", "d", "e"].map(activity));
   assert.deepEqual(view.rows(), ["Do a", "Do b", "Do c"]);
   view.dismiss("Do b");
   assert.deepEqual(view.rows(), ["Do a", "Do b leaving", "Do c", "Do d entering"]);
-  t.mock.timers.tick(220);
-  assert.deepEqual(view.rows(), ["Do a", "Do c", "Do d entering"]);
+  view.settle();
+  assert.deepEqual(view.rows(), ["Do a", "Do c", "Do d"]);
 });
 
 test("when the reserve runs out fewer rows show, and the refreshed set animates in", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const view = mount(["a", "b", "c", "d"].map(activity));
+  const view = mount(t, ["a", "b", "c", "d"].map(activity));
   view.dismiss("Do a");
   view.dismiss("Do b");
-  t.mock.timers.tick(220);
-  assert.deepEqual(view.rows(), ["Do c", "Do d entering"]);
+  view.settle();
+  assert.deepEqual(view.rows(), ["Do c", "Do d"]);
   view.dismiss("Do c");
   view.dismiss("Do d");
-  t.mock.timers.tick(220);
+  view.settle();
   assert.deepEqual(view.rows(), []);
   assert.ok(view.host.querySelector(".suggested-activities.is-empty"));
   view.replace(["x", "y", "z", "w"].map(activity));
   assert.deepEqual(view.rows(), ["Do x entering", "Do y entering", "Do z entering"]);
 });
 
-test("suggestions without generation have no dismiss control and render nothing when empty", () => {
-  const view = mount(["a", "b"].map(activity), false);
+test("suggestions without generation have no dismiss control and render nothing when empty", (t) => {
+  const view = mount(t, ["a", "b"].map(activity), false);
   assert.equal(view.host.querySelectorAll(".suggested-activity-dismiss").length, 0);
   assert.deepEqual(view.rows(), ["Do a", "Do b"]);
   view.replace([]);
@@ -142,4 +152,49 @@ test("each dismissal is saved at once, and a burst of dismissals asks for one re
     ["d", "e", "f"],
   );
   assert.equal(changes, 4);
+});
+
+test("a poll that was already in flight cannot bring back a suggestion dismissed meanwhile", async () => {
+  requests.length = 0;
+  served = ["a", "b", "c"].map(activity);
+  let release = () => {};
+  hold = new Promise((resolve) => (release = resolve));
+  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const loading = loadGeneratedActivities(me);
+  await flush();
+  dismissGeneratedActivity(me, activity("a"), () => {});
+  release();
+  hold = undefined;
+  await loading;
+  assert.deepEqual(
+    me.suggestedActivities.map((candidate: { id: string }) => candidate.id),
+    ["b", "c"],
+  );
+});
+
+test("keyboard dismissal moves focus to the next suggestion's dismiss button", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const view = mount(t, ["a", "b", "c", "d"].map(activity));
+  document.body.append(view.host);
+  const button = view.host.querySelector<HTMLButtonElement>('[aria-label="Dismiss suggestion: Do b"]')!;
+  button.focus();
+  button.click();
+  assert.equal(document.activeElement?.getAttribute("aria-label"), "Dismiss suggestion: Do c");
+  view.host.remove();
+});
+
+test("every request of a refresh asks again, so dismissals made during a running refresh are picked up", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  requests.length = 0;
+  served = ["x", "y", "z"].map(activity);
+  pendingResponses = 1;
+  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const loading = loadGeneratedActivities(me, () => {}, true);
+  await flush();
+  t.mock.timers.tick(10_000);
+  await loading;
+  assert.deepEqual(
+    requests.map((request) => request.body.refresh),
+    [true, true],
+  );
 });

@@ -1474,8 +1474,8 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),
-        ...(suggestedActivities.length ? { suggestedActivities } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
+        ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,
       });
     },

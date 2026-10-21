@@ -40,6 +40,7 @@ export interface SuggestedActivityResult {
 
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
 const GENERATED_COUNT = 5;
+const VISIBLE_COUNT = 3;
 const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
@@ -83,7 +84,7 @@ export function createSuggestedActivityService(deps: {
       if (typeof text !== "string") continue;
       try {
         const activities = parseSuggestedActivities(text);
-        if (activities.length !== GENERATED_COUNT) continue;
+        if (activities.length < VISIBLE_COUNT || activities.length > GENERATED_COUNT) continue;
         return { runs, activities, firedAt: run.firedAt };
       } catch {
         continue;
@@ -174,10 +175,9 @@ export function createSuggestedActivityService(deps: {
           { id, title: activity.title, at: now() },
         ].slice(-MAX_DISMISSED),
       });
-      const updated = deps.store.update
-        ? await deps.store.update(principalId, dismiss)
-        : await deps.store.merge(principalId, { dismissed: dismiss(profile).dismissed });
-      if (updated && owned(cron, principalId)) await syncAction(cron, updated);
+      const updated = await deps.store.update?.(principalId, dismiss);
+      if (!updated) return false;
+      if (owned(cron, principalId)) await syncAction(cron, updated);
       return true;
     },
 

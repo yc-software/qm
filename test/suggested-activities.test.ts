@@ -309,3 +309,16 @@ test("a refresh runs once per batch of dismissals and never while a run is in fl
   await f.settle();
   assert.equal(f.calls.length, 2);
 });
+
+test("a task edited to ask for three suggestions still has its results served", async () => {
+  const f = fixture();
+  f.output(JSON.stringify(activities.slice(0, 3)));
+  await f.service.get("alice", []);
+  await f.settle();
+  assert.deepEqual(await f.service.get("alice", []), { activities: activities.slice(0, 3), pending: false });
+  f.advance(5_000);
+  f.output(JSON.stringify(activities.slice(0, 2)));
+  await f.deps.scheduler.runNow((await f.crons.list())[0]!.id);
+  await f.settle();
+  assert.deepEqual((await f.service.get("alice", [])).activities, activities.slice(0, 3));
+});

@@ -1654,7 +1654,7 @@ export function createChatSurface(
       !agent.state.isStreaming;
     const me = appState.me;
     const redrawSuggestions = () => {
-      if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
+      if (appState.me === me && !chatState.sessionId) drawActiveChat();
     };
     const suggestions = showSuggestions
       ? suggestedActivities(me?.suggestedActivities, {
