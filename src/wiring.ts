@@ -87,30 +87,7 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import {
-  createMemoryConfigStore,
-  type ScopedConfigStore,
-  type PersistedSoul,
-  type PersistedSoulRevision,
-  type PersistedCommandPolicy,
-  type PersistedSecurityPosture,
-  type PersistedSharingPosture,
-  type PersistedApprovalGrantModes,
-  type PersistedEgressPolicy,
-  type PersistedScopedFlag,
-  type PersistedBaseModel,
-  type PersistedApprovedHarnesses,
-  type PersistedInternalMemberOverrides,
-  type PersistedWebuiModels,
-  type PersistedPeopleDirectoryUrl,
-  type PersistedAckEmoji,
-  type PersistedSlackEmojiCatalog,
-  type PersistedBranding,
-  type PersistedBrowseMaxSteps,
-  type PersistedBrowseModel,
-  type PersistedAutoFlaggerConfig,
-  type PersistedDeploymentIdentity,
-} from "./resolution/config-store.ts";
+import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -299,7 +276,6 @@ import {
   createConnectorClientResolver,
   deriveConnectorKey,
   type SecretKey,
-  type StoredConnectorClient,
 } from "./connectors/connector-client-store.ts";
 import {
   createBrowserSessionStore,
@@ -682,32 +658,7 @@ export function buildApp(
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
   const configStore = createMemoryConfigStore(config.orgId, {
-    connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
-    souls: artifactMap<PersistedSoul>("soul_configs"),
-    soulHistory: artifactMap<PersistedSoulRevision>("soul_history"),
-    commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
-    securityPostures: artifactMap<PersistedSecurityPosture>("security_postures"),
-    sharingPostures: artifactMap<PersistedSharingPosture>("sharing_postures"),
-    approvalGrantModes: artifactMap<PersistedApprovalGrantModes>("approval_grant_modes"),
-    egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
-    unfulfilledInsights: artifactMap<PersistedScopedFlag>("unfulfilled_insights_flag"),
-    externalSlackParticipants: artifactMap<PersistedScopedFlag>("external_slack_participants_flag"),
-    channelHeaderPin: artifactMap<PersistedScopedFlag>("channel_header_pin_flag"),
-    baseModels: artifactMap<PersistedBaseModel>("base_model_configs"),
-    approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
-    internalMemberOverrides: artifactMap<PersistedInternalMemberOverrides>("internal_member_overrides"),
-    orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),
-    interactiveFastMode: artifactMap<PersistedScopedFlag>("interactive_fast_mode_flag"),
-    individualModelAuth: artifactMap<PersistedScopedFlag>("individual_model_auth_flag"),
-    webuiModels: artifactMap<PersistedWebuiModels>("webui_model_configs"),
-    peopleDirectoryUrls: artifactMap<PersistedPeopleDirectoryUrl>("people_directory_urls"),
-    ackEmoji: artifactMap<PersistedAckEmoji>("ack_emoji"),
-    slackEmojiCatalog: artifactMap<PersistedSlackEmojiCatalog>("slack_emoji_catalog"),
-    branding: artifactMap<PersistedBranding>("branding_configs"),
-    browseMaxSteps: artifactMap<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
-    browseModels: artifactMap<PersistedBrowseModel>("browse_model_configs"),
-    autoFlaggerConfigs: artifactMap<PersistedAutoFlaggerConfig>("auto_flagger_configs"),
-    deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
+    ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),

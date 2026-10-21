@@ -732,29 +732,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
-    id: "people-directory-url",
-    kind: "string",
-    target: "org",
-    clearable: true,
-    readKey: "peopleDirectoryUrl",
-    get: (deps, scope) => deps.config!.getPeopleDirectoryUrl(scope),
-    apply: generic<string | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the people directory is org-wide");
-        if (bad) return bad;
-        const raw = (body as { url?: unknown }).url;
-        if (raw !== undefined && raw !== null && typeof raw !== "string") {
-          return { error: "people-directory-url requires { url: string } (empty string clears it)" };
-        }
-        const url = typeof raw === "string" ? raw.trim() : "";
-        if (url && !/^https?:\/\//.test(url))
-          return { error: "people-directory-url must start with http:// or https://" };
-        return { value: url || null };
-      },
-      (deps, scope, url) => deps.config!.setPeopleDirectoryUrl(scope, url),
-    ),
-  },
-  {
     id: "ack-emoji",
     kind: "string-list",
     target: "org",

@@ -139,7 +139,7 @@ Building interface pieces that disagree with the surrounding product in appearan
 
 QM is for organizations in general. YC's usage guides development but architecture should not be _warped_ to fit our purposes and customizations. Leaking YC _data_ is a separate concern.
 
-- **Dedicated people-directory configuration:** Role lookup from a people website became its own People directory admin card, org-wide URL setting, and save path in the generic product. This could have been ordinary organization knowledge or a deployment tool. _Status:_ [qm#1441](https://github.com/yc-software/qm/pull/1441) removes the dedicated admin card.
+- **Dedicated people-directory configuration:** Role lookup from a people website became its own People directory admin card, org-wide URL setting, and save path in the generic product. This could have been ordinary organization knowledge or a deployment tool. _Status:_ [qm#1441](https://github.com/yc-software/qm/pull/1441) removed the dedicated admin card; [qm#2456](https://github.com/yc-software/qm/pull/2456) removes the setting, its admin resource and its system-prompt line.
 - **[qm#1008](https://github.com/yc-software/qm/pull/1008)** (2026-09-09): A 29-file 'software factory' loop (Linear auto-triage, forge ship contract) built for YC's own workflow was ported into public src/loops/factory before it had ever run end to end. _Status:_ wound back in [qm#1026](https://github.com/yc-software/qm/pull/1026).
 - **[qm#530](https://github.com/yc-software/qm/pull/530)** (2026-08-15): Assistant and org names were fixed across prompts, manifests, auth and UI; made deployment-configurable with neutral defaults. _Status:_ wound back in [qm#530](https://github.com/yc-software/qm/pull/530).
 
