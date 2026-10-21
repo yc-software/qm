@@ -3208,15 +3208,17 @@ qm-markdown .tok-in {
   color: var(--muted-foreground);
   opacity: 0.3;
   cursor: pointer;
-  transition: opacity 120ms ease;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease;
 }
 .suggested-activity-row-inner:hover .suggested-activity-dismiss,
 .suggested-activity-dismiss:focus-visible {
   opacity: 0.75;
 }
-.suggested-activity-dismiss:hover {
-  opacity: 1;
-  background: color-mix(in srgb, var(--muted-foreground) 14%, transparent);
+.suggested-activity-dismiss:hover,
+.suggested-activity-dismiss:focus-visible {
+  color: color-mix(in srgb, var(--muted-foreground) 70%, var(--foreground));
 }
 .suggested-activity-dismiss:focus-visible {
   outline: 2px solid var(--primary);
