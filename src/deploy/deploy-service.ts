@@ -25,6 +25,7 @@ import type { DeployProfile, DeployProvider } from "./deploy-provider.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { APP_ICON_HINT, defaultAppIcon, parseAppIcon } from "./app-icon.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 
 export interface DeployFile {
@@ -46,6 +47,7 @@ export interface DeployInput extends RedeployInput {
   createdBy: string;
   createdInScope?: ScopeId;
   name?: string;
+  icon?: string;
 }
 
 export type Reach =
@@ -65,6 +67,7 @@ export interface DeployOrUpdateInput {
   createdInScope?: ScopeId;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  icon?: string;
 }
 
 export interface ReachOptions {
@@ -84,6 +87,7 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
+  setDeploymentIcon(id: string, icon: string): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
@@ -339,6 +343,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     assertShareAllowed,
 
     async deploy(input) {
+      if (input.icon !== undefined && !parseAppIcon(input.icon)) throw new Error(`icon must be ${APP_ICON_HINT}`);
       if (input.name !== undefined) {
         validateName(input.name);
         if (await deps.deployStore.getByName(input.name)) throw new Error(`deployment name taken: ${input.name}`);
@@ -369,6 +374,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
         ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+        icon: (input.icon && parseAppIcon(input.icon)) || defaultAppIcon(input.name ?? id),
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
@@ -561,6 +567,24 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async setDeploymentIcon(id, icon) {
+      const parsed = parseAppIcon(icon);
+      if (!parsed) throw new Error(`icon must be ${APP_ICON_HINT}`);
+      return withDeployLock(id, async () => {
+        const d = await deps.deployStore.get(id);
+        if (!d) throw new Error(`unknown deployment: ${id}`);
+        await deps.deployStore.setIcon(id, parsed);
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId: d.createdBy,
+          action: "deploy_icon",
+          resource: id,
+          scopeLabel: d.ownerScopeId,
+        });
+        return (await deps.deployStore.get(id))!;
+      });
+    },
+
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
@@ -699,6 +723,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const { ownerScopeId, createdBy } = input;
       if (input.embedAncestors !== undefined && !parseEmbedAncestors(input.embedAncestors))
         throw new Error(`embedAncestors must be an ${EMBED_ANCESTORS_HINT}`);
+      const icon = input.icon === undefined ? undefined : parseAppIcon(input.icon);
+      if (icon === null) throw new Error(`icon must be ${APP_ICON_HINT}`);
 
       if (input.renameFrom !== undefined) {
         if (input.name === undefined) throw new Error("rename requires a target name");
@@ -730,6 +756,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         } else if (input.alwaysOn !== undefined) await this.setDeploymentAlwaysOn(existing.id, input.alwaysOn);
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        if (icon !== undefined) await this.setDeploymentIcon(existing.id, icon);
         return (await deps.deployStore.get(existing.id))!;
       }
 
@@ -746,6 +773,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         );
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        if (icon !== undefined) await this.setDeploymentIcon(existing.id, icon);
         return (await deps.deployStore.get(existing.id))!;
       }
 
@@ -769,6 +797,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         });
         if (input.embedAncestors !== undefined)
           await this.setDeploymentEmbedAncestors(existing.id, input.embedAncestors);
+        if (icon !== undefined) await this.setDeploymentIcon(existing.id, icon);
         return (await deps.deployStore.get(existing.id))!;
       }
       const d = await this.deploy({
@@ -782,6 +811,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.env ? { env: input.env } : {}),
         ...(input.stampEnv ? { stampEnv: input.stampEnv } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+        ...(icon !== undefined ? { icon } : {}),
       });
       if (input.embedAncestors !== undefined) await this.setDeploymentEmbedAncestors(d.id, input.embedAncestors);
       return (await deps.deployStore.get(d.id))!;

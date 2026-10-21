@@ -1236,7 +1236,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
       "`alwaysOn: false` to turn it back off. An app cannot be shown inside another site's page " +
       "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
-      "a panel or extension, and `[]` to turn it back off.",
+      "a panel or extension, and `[]` to turn it back off. On a new app's first publish, pass `icon`: " +
+      "one emoji that fits what the app is or does; it becomes the browser tab icon unless the app " +
+      "declares its own favicon. Updates keep the icon; pass `icon` again only when asked to change it.",
     parameters: Type.Object({
       dir: Type.Optional(
         Type.String({
@@ -1279,6 +1281,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
         }),
       ),
+      icon: Type.Optional(
+        Type.String({
+          description:
+            "One emoji for the app's browser tab icon, chosen to fit the app. Set it on the first publish; omitted on a new app = a default emoji picked from the name. Omitted on an update or rollback = keep the current icon.",
+        }),
+      ),
       sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
     }),
     async execute(callId, params) {
@@ -1298,6 +1306,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const reach = describePublishAudience(r.audience);
         const alwaysOnNote = r.alwaysOn ? "\nAlways-on: the app is kept warm — no idle cold starts." : "";
         const embedNote = r.embedAncestors?.length ? `\nEmbeddable by: ${r.embedAncestors.join(", ")}` : "";
+        const iconNote = r.icon ? `\nIcon: ${r.icon}` : "";
         const publicNote = r.public ? "\nAccess: public — anyone with the link can open it without signing in." : "";
         const dataNote = r.dataDir
           ? `\nDurable data: runtime state written under ${r.dataDir} ($DATA_DIR) survives restarts and redeploys — keep SQLite at ${r.dataDir}/app.db (it gets the strongest durability the runtime offers). If this app writes runtime state anywhere else on disk, migrate it there (data deliberately baked into the repo stays where it is).`
@@ -1315,7 +1324,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(r.dataDir ? { dataDir: r.dataDir } : {}),
           },
           text(
-            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${dataNote}`,
+            `Published ${r.name ?? r.id} (v${r.version}) → ${r.url}\n${reach}${publicNote}${alwaysOnNote}${embedNote}${iconNote}${dataNote}`,
           ),
         );
       } catch (e) {

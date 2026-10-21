@@ -91,6 +91,7 @@ export interface PublishInput {
   rollbackTo?: number;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  icon?: string;
   public?: boolean;
   share?: Array<{ scope: ScopeId; permission: Permission }>;
   sandboxId?: string;
@@ -114,6 +115,7 @@ interface PublishResult {
   dataDir?: string;
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  icon?: string;
   public?: boolean;
 }
 
@@ -1129,6 +1131,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(input.rollbackTo !== undefined ? { rollbackTo: input.rollbackTo } : {}),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.embedAncestors !== undefined ? { embedAncestors: input.embedAncestors } : {}),
+          ...(input.icon !== undefined ? { icon: input.icon } : {}),
         });
         const ref = d.name ?? d.id;
         const grantees = await deps.deploy.deploymentGrantees(d.id);
@@ -1148,6 +1151,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           ...(dataDir ? { dataDir } : {}),
           ...(d.alwaysOn ? { alwaysOn: true } : {}),
           ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
+          ...(d.icon ? { icon: d.icon } : {}),
           ...(d.public ? { public: true } : {}),
         };
       });

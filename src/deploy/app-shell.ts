@@ -1,4 +1,5 @@
 import { ANNOTATE_BUTTON, ANNOTATE_CSS, ANNOTATE_JS, ANNOTATE_MARKUP } from "./app-annotate.ts";
+import { appIconHref } from "./app-icon.ts";
 
 export const APP_SHELL_PATH_PREFIX = "/__claw__/";
 
@@ -9,6 +10,7 @@ function escAttr(value: string): string {
 export function appShellHtml(opts: {
   slug: string;
   name?: string;
+  icon?: string;
   portalUrl: string;
   path: string;
   annotationsEnabled?: boolean;
@@ -23,7 +25,7 @@ export function appShellHtml(opts: {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${name}</title>
-<style>
+${opts.icon ? `<link rel="icon" type="image/svg+xml" href="${escAttr(appIconHref(opts.icon))}">\n` : ""}<style>
   :root {
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
@@ -169,9 +171,10 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 
   const defaultName = document.getElementById("name").textContent;
   let lastHref = null;
-  let lastIcon = null;
+  const platformIcon = document.querySelector('link[rel~="icon"]');
+  let lastIcon = platformIcon ? platformIcon.href : null;
   const syncIcon = (doc) => {
-    const source = doc && doc.querySelector('link[rel~="icon"][href]');
+    const source = (doc && doc.querySelector('link[rel~="icon"][href]')) || platformIcon;
     const href = source ? source.href : null;
     if (href === lastIcon) return;
     lastIcon = href;

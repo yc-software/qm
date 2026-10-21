@@ -30,6 +30,7 @@ import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
+import { appIconOf } from "../../deploy/app-icon.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
@@ -955,6 +956,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
         annotationsEnabled,
         slug,
         name: deployment?.displayName ?? slug,
+        icon: appIconOf(deployment ?? { id: slug, name: slug }),
         portalUrl: loginUrl,
         path: safePathname + url.search,
       }),

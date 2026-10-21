@@ -74,6 +74,34 @@ test("the app bar's tab icon follows the framed app's icon link", async () => {
   dom.window.close();
 });
 
+test("an app's own icon link takes precedence over the platform icon and hands back to it", async () => {
+  const dom = new JSDOM(
+    appShellHtml({ slug: "demo", portalUrl: "https://portal.example.com", path: "/app", icon: "📈" }),
+    { url: "https://demo.apps.example.com", runScripts: "outside-only" },
+  );
+  const win = dom.window;
+  win.eval("window.fetch = async () => ({ ok: false });");
+  win.eval(win.document.querySelector("script")!.textContent!);
+  const frame = win.document.querySelector<HTMLIFrameElement>("#app")!.contentDocument!;
+  frame.appendChild(frame.createElement("html")).appendChild(frame.createElement("head"));
+  const icons = () => [...win.document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]')].map((l) => l.href);
+  const tick = () => new Promise((r) => setTimeout(r, 600));
+  await tick();
+  assert.equal(icons().length, 1);
+  assert.match(icons()[0]!, /^data:image\/svg\+xml,/);
+  const platform = icons()[0];
+  const link = frame.createElement("link");
+  link.rel = "icon";
+  link.href = "/favicon.svg";
+  frame.head.appendChild(link);
+  await tick();
+  assert.deepEqual(icons(), ["https://demo.apps.example.com/favicon.svg"]);
+  link.remove();
+  await tick();
+  assert.deepEqual(icons(), [platform]);
+  dom.window.close();
+});
+
 test("embedded chat publishes active colors and tracks theme changes from other tabs", async (t) => {
   const dom = new JSDOM("<iframe></iframe>", { url: "https://portal.example.com", runScripts: "outside-only" });
   const frame = dom.window.document.querySelector("iframe")!.contentWindow as unknown as DOMWindow;

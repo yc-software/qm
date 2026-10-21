@@ -16,6 +16,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope-membership.ts";
 import { createHmac } from "node:crypto";
 import { scopeId } from "../src/types.ts";
+import { defaultAppIcon } from "../src/deploy/app-icon.ts";
 
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
@@ -461,6 +462,23 @@ test("app shell: annotations default off and follow the signed-in manager flag",
     assert.match((await httpGet(f.port, "/", headers)).body, /ann-toggle/);
     await f.featureFlags.setEnabled("app_annotations", scopeId("personal", "U1"), false, "admin");
     assert.equal((await httpGet(f.port, "/__claw__/annotate.css", headers)).status, 404);
+  } finally {
+    await f.close();
+  }
+});
+
+test("app shell: the owner's shell carries the deployment's stored icon", async () => {
+  const f = await widgetFixture();
+  try {
+    const page = await httpGet(f.port, "/", {
+      Host: HOST,
+      Cookie: `portal_session=${mintPortalSession("U1")}`,
+      "Sec-Fetch-Dest": "document",
+    });
+    const href = page.body.match(/<link rel="icon" type="image\/svg\+xml" href="([^"]+)">/)?.[1];
+    assert.ok(href, "the shell declares a tab icon");
+    assert.equal(f.d.icon, defaultAppIcon("mysite"));
+    assert.ok(decodeURIComponent(href!.replace(/&amp;/g, "&")).includes(`${f.d.icon}</text>`));
   } finally {
     await f.close();
   }

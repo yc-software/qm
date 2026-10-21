@@ -69,6 +69,7 @@ export interface Deployment {
 
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  icon?: string;
   public?: true;
   lastAccessAt?: number;
   appliedVersion?: number;
@@ -96,6 +97,7 @@ export interface DeployStore {
       name?: string;
       createdInScope?: ScopeId;
       alwaysOn?: boolean;
+      icon?: string;
     } & VersionInput,
   ): Promise<Deployment>;
   addVersion(id: string, input: VersionInput): Promise<DeploymentVersion>;
@@ -112,6 +114,7 @@ export interface DeployStore {
   setDisplayName(id: string, displayName: string | undefined): Promise<void>;
   setAlwaysOn(id: string, alwaysOn: boolean): Promise<void>;
   setEmbedAncestors(id: string, embedAncestors: string[]): Promise<void>;
+  setIcon(id: string, icon: string): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number): Promise<void>;
@@ -325,6 +328,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         ...(input.name ? { name: input.name } : {}),
         ...(input.createdInScope ? { createdInScope: input.createdInScope } : {}),
         ...(input.alwaysOn ? { alwaysOn: true } : {}),
+        ...(input.icon ? { icon: input.icon } : {}),
         currentVersion: 1,
         status: "stopped",
         endpoint: null,
@@ -439,6 +443,9 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     },
     async setEmbedAncestors(id, embedAncestors) {
       await backingMap.merge(id, { embedAncestors } as Partial<Deployment>);
+    },
+    async setIcon(id, icon) {
+      await backingMap.merge(id, { icon } as Partial<Deployment>);
     },
     async setPublic(id, isPublic) {
       await backingMap.merge(id, { public: isPublic ? true : undefined });
