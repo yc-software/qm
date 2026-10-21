@@ -420,7 +420,17 @@ export function createDeliveryPoller(deps: {
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
               if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
               if (commandApproval)
-                card = approvalMessage([{ ...commandApproval, reason: commandApproval.reason ?? "Approval required" }]);
+                card = approvalMessage([
+                  {
+                    ...commandApproval,
+                    reason: commandApproval.reason ?? "Approval required",
+                    ...(deps.webUiPublicUrl && commandApproval.sessionId
+                      ? {
+                          originUrl: `${deps.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
+                        }
+                      : {}),
+                  },
+                ]);
               let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);

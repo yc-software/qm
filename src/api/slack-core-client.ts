@@ -59,6 +59,7 @@ interface SlackRunHooks {
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
   createdAt?: number;
   reason?: string;
+  sessionId?: string;
   request?: Record<string, unknown>;
 }
 
@@ -413,6 +414,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         requestId: record.requestId,
         ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
         command: record.command,
+        sessionId: record.sessionId,
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
         ...(record.summary !== undefined ? { summary: record.summary } : {}),

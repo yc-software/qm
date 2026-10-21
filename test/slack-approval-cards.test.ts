@@ -286,4 +286,8 @@ test("a command too long to show in Slack can only be denied there", () => {
     /too long to show in Slack\. Open this conversation in QM on the web to review and approve it/,
   );
   assert.ok(!JSON.stringify(msg.blocks).includes("attacker@example.com"));
+  const linked = approvalMessage([
+    { requestId: "req-2", command, reason: "needs approval", originUrl: "https://qm.example.com/s/abc" },
+  ]);
+  assert.match(JSON.stringify(linked.blocks), /<https:\/\/qm\.example\.com\/s\/abc\|this conversation in QM>/);
 });

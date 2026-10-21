@@ -13,6 +13,7 @@ export interface PendingApproval {
   summary?: string;
   kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
+  originUrl?: string;
 }
 
 export interface SlackApprovalMessage {
@@ -79,7 +80,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
       lines.push(
         shown
           ? "*Command:*"
-          : "*Command:* too long to show in Slack. Open this conversation in QM on the web to review and approve it.",
+          : `*Command:* too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
       );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
