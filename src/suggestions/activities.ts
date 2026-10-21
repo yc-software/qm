@@ -3,7 +3,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
-import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
+import { claimManagedCron, nightlyAt, refreshManagedAction, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId, type Cron } from "../types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate three suggested activities for the owner of this personal session's new-chat screen.
@@ -22,7 +22,6 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   timezone: string;
   lastSeenAt: number;
   lastBootstrapAt?: number;
-  managedAction?: string;
   seeds?: SuggestedActivity[];
 }
 
@@ -82,10 +81,7 @@ export function createSuggestedActivityService(deps: {
       const cron = await deps.crons.get(profile.cronId!);
       if (!owned(cron, principalId) || cron.archived) return fallback;
       const action = actionFor(seeds);
-      if (cron.action === profile.managedAction && action !== cron.action) {
-        await deps.crons.update(cron.id, { action });
-        await deps.store.merge(principalId, { managedAction: action });
-      }
+      await refreshManagedAction(deps, principalId, cron, profile.managedAction, action);
       const { runs } = await deps.crons.listFires(cron.id, { limit: 10 });
       let pending = runs.some((run) => run.status === "running");
       let latest: SuggestedActivity[] | undefined;
