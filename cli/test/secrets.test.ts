@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type QmConfig } from "../src/config.ts";
-import { FLY_TEMPLATE_ENV_DEFAULTS } from "../src/target-env-defaults.ts";
+import { ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
   serviceSecretValue,
@@ -154,8 +154,6 @@ test('"sandbox" is a reserved name — a plugin may not shadow the sandbox pseud
 test("model credentials are optional at deploy time because Admin onboarding can configure them", () => {
   const fly = makeConfig({ target: "fly" });
   assert.equal(secretByName(fly, "ANTHROPIC_API_KEY").required, false);
-  const flyMock = makeConfig({ target: "fly", env: { core: { HARNESS: "mock" } } });
-  assert.equal(secretByName(flyMock, "ANTHROPIC_API_KEY").required, false);
   const docker = makeConfig();
   assert.equal(secretByName(docker, "ANTHROPIC_API_KEY").required, false);
 });
@@ -242,30 +240,25 @@ test("AWS public app domains require and route their gate secret to core", () =>
   assert.ok(renderEnvExample(enabled).includes("AWS_DEPLOY_GATE_SECRET="));
 });
 
-test("real harnesses require and route the sandbox-reachable PUBLIC_API_URL to core", () => {
-  const real = makeConfig({ env: { core: { HARNESS: "pi" } } });
+test("the default harness requires and routes the sandbox-reachable PUBLIC_API_URL to core", () => {
+  const real = makeConfig();
   const publicApi = secretByName(real, "PUBLIC_API_URL");
   assert.equal(publicApi.required, true);
   assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
   assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
-  assert.ok(
-    !computedSecrets(makeConfig({ env: { core: { HARNESS: "mock" } } })).some((s) => s.name === "PUBLIC_API_URL"),
-  );
 });
 
-test("FLY_TEMPLATE_ENV_DEFAULTS stays in sync with deploy/core/fly.toml", () => {
+test("ENV_DEFAULTS stays in sync with the packaged core fly template", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "deploy", "core", "fly.toml"), "utf8");
-  const packaged = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
-  for (const [name, value] of Object.entries(FLY_TEMPLATE_ENV_DEFAULTS.core ?? {})) {
+  const toml = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
+  for (const [name, value] of Object.entries(ENV_DEFAULTS.core ?? {})) {
     assert.match(
       toml,
       new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `deploy/core/fly.toml sets ${name}="${value}"`,
+      `cli/templates/fly/core.toml sets ${name}="${value}"`,
     );
   }
   assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
-  assert.doesNotMatch(packaged, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {

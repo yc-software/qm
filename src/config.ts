@@ -28,7 +28,7 @@ import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strat
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
-import { validateCoreSecretEnv } from "./deployment/secret-schema.ts";
+import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
   parseSecurityPosture,
@@ -76,7 +76,7 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "mock" | "pi" | "claude";
+  harness: "pi" | "claude";
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
@@ -1020,10 +1020,10 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
 }
 
 function harnessEnvStrict(value: string | undefined): Config["harness"] {
-  if (value === undefined || value.trim() === "") return "mock";
+  if (value === undefined || value.trim() === "") return "pi";
   const harness = value.trim();
-  if (harness === "mock" || harness === "pi" || harness === "claude") return harness;
-  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use mock, pi, or claude, or unset it.`);
+  if (harness === "pi" || harness === "claude") return harness;
+  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
 }
 
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
@@ -1179,6 +1179,25 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+function resolveStoreKinds(env: NodeJS.ProcessEnv): Pick<Config, "sessionStore" | "runStore"> {
+  for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
+    if (env[key] === "sqlite") {
+      throw new Error(
+        `${key}=sqlite is no longer supported — SQLite was removed. ` +
+          `Set ${key === "ARTIFACT_STORE" ? "DATABASE_URL (Postgres)" : `${key}=postgres (with DATABASE_URL)`}.`,
+      );
+    }
+  }
+  const sessionStore = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
+  const runStore = env.RUN_STORE === "memory" || env.RUN_STORE === "postgres" ? env.RUN_STORE : sessionStore;
+  if (env.NODE_ENV === "production" && (sessionStore === "memory" || runStore === "memory")) {
+    throw new Error(
+      `production requires SESSION_STORE=postgres and a Postgres run store (got SESSION_STORE=${env.SESSION_STORE ?? "unset"}, RUN_STORE=${env.RUN_STORE ?? "unset"}): in-memory sessions and runs are lost on restart and invisible to other instances.`,
+    );
+  }
+  return { sessionStore, runStore };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
@@ -1223,36 +1242,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
-    throw new Error(`missing or insecure required core secrets: ${missingSecrets.join(", ")}`);
+    const described = missingSecrets.map((name) => {
+      const reason = CORE_SECRET_SPECS.find((spec) => spec.name === name)?.reason;
+      return reason ? `${name} (${reason})` : name;
+    });
+    throw new Error(`missing or insecure required core secrets: ${described.join(", ")}`);
   }
   const modelProvider = modelProviderEnvStrict(env);
-  for (const key of ["SESSION_STORE", "RUN_STORE", "ARTIFACT_STORE"] as const) {
-    if (env[key] === "sqlite") {
-      throw new Error(
-        `${key}=sqlite is no longer supported — SQLite was removed. ` +
-          `Set ${key === "ARTIFACT_STORE" ? "DATABASE_URL (Postgres)" : `${key}=postgres (with DATABASE_URL)`} for durability, ` +
-          `or use the in-memory default (${key === "ARTIFACT_STORE" ? "unset ARTIFACT_STORE" : `${key}=memory`}) for an ephemeral store.`,
-      );
-    }
-  }
+  const { sessionStore, runStore } = resolveStoreKinds(env);
   if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but portable recovery snapshots are memory-only; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
+      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but there are no home snapshots, so a sandbox the provider loses comes back with an empty home; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
     );
   }
   if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — native home checkpoints have limited retention; portable recovery snapshots are memory-only. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — there are no home snapshots, so unless native home checkpoints are enabled (limited retention) the home is lost at Modal's 24h sandbox lifetime. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
     );
   }
   if (env.SMOLMACHINES_TOKEN && !env.SMOLMACHINES_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
-    );
-  }
-  if (env.NODE_ENV === "production" && harnessEnvStrict(env.HARNESS) === "mock") {
-    console.warn(
-      `[config] HARNESS is ${env.HARNESS?.trim() ? '"mock"' : "unset, which means mock"} in production — this deployment answers every message with canned text and calls no model provider. Set HARNESS=pi to run real agent turns.`,
     );
   }
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {
@@ -1334,13 +1344,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (superserveSelected && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
       "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
-    );
-  }
-  const superserveEnabled =
-    superserveSelected || Boolean(env.SUPERSERVE_API_KEY?.trim() && env.SUPERSERVE_TEMPLATE?.trim());
-  if (superserveEnabled && env.NODE_ENV === "production" && !env.DATABASE_URL?.trim()) {
-    throw new Error(
-      "the superserve sandbox backend requires DATABASE_URL in production: the config generation and the provisioning lock have to be durable across instances, or a blue-green rollout can destroy a scope's resident disk.",
     );
   }
 
@@ -1427,8 +1430,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, porter, or e2b)`,
     );
   }
-  let runStore: "memory" | "postgres" = env.SESSION_STORE === "postgres" ? "postgres" : "memory";
-  if (env.RUN_STORE === "memory" || env.RUN_STORE === "postgres") runStore = env.RUN_STORE;
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
   const modelGateway = modelGatewayFromEnv(env);
   const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
@@ -1484,7 +1485,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.POSTHOG_API_KEY?.trim()
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),
-    sessionStore: env.SESSION_STORE === "postgres" ? "postgres" : "memory",
+    sessionStore,
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.DATABASE_POOL_URL ? { databasePoolUrl: env.DATABASE_POOL_URL } : {}),
     ...(env.DATABASE_POOL_CA_CERT ? { databasePoolCaCert: env.DATABASE_POOL_CA_CERT } : {}),

@@ -1,13 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "../src/harness/mock-harness.ts";
+import * as mockHarness from "./support/mock-harness.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
-mock.module("../src/harness/mock-harness.ts", {
+mock.module("./support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
     createMockHarness: () => {
@@ -18,7 +18,7 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/build-app.ts");
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",

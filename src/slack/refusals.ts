@@ -1,10 +1,6 @@
 import type { TurnResult } from "../types.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 
-export function isBoundaryRefusal(reason: string | undefined): boolean {
-  return (reason ?? "").startsWith("internal-only");
-}
-
 export function refusalDelivery(
   result: { refusalKind?: TurnResult["refusalKind"] },
   unprompted: boolean,
@@ -31,14 +27,14 @@ export function refusalNote(
   result: { status?: string; reason?: string; adminUrl?: string; refusalKind?: TurnResult["refusalKind"] },
   kind: "dm" | "channel",
 ): string {
-  const standalone = standaloneFailureText(result);
-  if (standalone) return standalone;
-  const reason = result.reason ?? "refused";
-  if (isBoundaryRefusal(reason)) {
+  if (result.refusalKind === "internal_only") {
+    const reason = result.reason ?? "refused";
     return kind === "dm"
       ? `I can't respond just now — ${reason}.`
       : `I can't respond here — ${reason}. Try a DM or a fully-internal channel.`;
   }
+  const standalone = standaloneFailureText(result);
+  if (standalone) return standalone;
   const clause = userFacingFailureClause(result);
   const detail = result.adminUrl ? ` Full error: ${result.adminUrl}` : "";
   return kind === "dm"

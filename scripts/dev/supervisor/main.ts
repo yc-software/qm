@@ -24,7 +24,15 @@ import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/uti
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";
-import type { BootPhaseEvent, BootResult, BootSpec, ChildName, SlackHealth, StatusReport } from "../lib/types.ts";
+import type {
+  BootPhaseEvent,
+  BootResult,
+  BootSpec,
+  CanaryReply,
+  ChildName,
+  SlackHealth,
+  StatusReport,
+} from "../lib/types.ts";
 import { CHILD_ORDER, EXIT } from "../lib/types.ts";
 
 const HEALTH_INTERVAL_MS = 10_000;
@@ -75,7 +83,7 @@ let currentGitSha = "";
 let handle = "";
 let sandbox: SandboxResolution | null = null;
 let durability = { sessionStore: "memory", runStore: "memory", databaseUrl: "" };
-let harness = "mock";
+let harness = "pi";
 let watch = true;
 let bootId = "";
 let bootedAt: number | null = null;
@@ -157,17 +165,14 @@ async function fetchSlackHealth(): Promise<SlackHealth | null> {
   }
 }
 
-async function runCanary(
-  channel: string,
-  timeoutMs = 15_000,
-): Promise<{ ok: boolean; rttMs?: number; reason?: string }> {
+async function runCanary(channel: string, timeoutMs = 15_000): Promise<CanaryReply> {
   try {
     const res = await fetch(`http://127.0.0.1:${ports.slackHealth}/canary`, {
       method: "POST",
       body: JSON.stringify({ channel, timeoutMs }),
       signal: AbortSignal.timeout(timeoutMs + 5000),
     });
-    return (await res.json()) as { ok: boolean; rttMs?: number; reason?: string };
+    return (await res.json()) as CanaryReply;
   } catch (err) {
     return { ok: false, reason: `canary endpoint unreachable: ${errMessage(err)}` };
   }
@@ -311,16 +316,13 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   const assembled = await assembleEnv({
     worktree,
     callerEnv: spec.callerEnv,
-    allowMock: spec.callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
   harness = assembled.harness;
   let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
-  if (assembled.harness === "mock") harnessDetail = "mock turns";
-  else if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
-  if (assembled.codexAuthSource && assembled.harness !== "mock")
-    harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
+  if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
+  if (assembled.codexAuthSource) harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
   phase("env", "ok", harnessDetail);
 
   phase("deps", "start");
@@ -662,7 +664,12 @@ function serveApi(): Server {
       if (req.method === "POST" && req.url === "/canary") {
         if (!canaryChannel) await resolveCanaryChannel(readBootSpec());
         const channel = String(body.channel || canaryChannel || "");
-        respond(200, channel ? await runCanary(channel) : { ok: false, reason: "no canary channel configured" });
+        respond(
+          200,
+          channel
+            ? await runCanary(channel)
+            : ({ ok: false, code: "unconfigured", reason: "no canary channel configured" } satisfies CanaryReply),
+        );
         return;
       }
       if (req.method === "POST" && req.url === "/shutdown") {
@@ -704,7 +711,6 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     const assembled = await assembleEnv({
       worktree,
       callerEnv,
-      allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
     });
     const dryEnvSha = computeEnvSha(assembled.env);
@@ -806,7 +812,6 @@ async function statusReport(): Promise<StatusReport> {
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,
-    turnsLive: harness !== "mock",
     publicApiUrl: sandbox?.publicApiUrl ?? null,
     children: childStatuses,
   };

@@ -1,15 +1,14 @@
 import { resolveGatewayModel } from "../model/gateway-models.ts";
 import { countTokens } from "../util/tokens.ts";
 import {
-  documentExtension,
   fitDocumentText,
   type DocumentTextBudget,
   documentFallbackText,
   documentText,
-  isTextDocument,
   nativeDocumentIsReadable,
   type DocumentInput,
 } from "../core/document-inputs.ts";
+import { documentExtension, isTextDocument } from "../core/document-kinds.ts";
 
 export interface DocumentModel {
   api?: string;
@@ -80,7 +79,11 @@ export async function documentBlocks(
           blocks.push({
             type: "document",
             title: document.name,
-            source: { type: "text", media_type: "text/plain", data: fitText(await documentText(document, signal)) },
+            source: {
+              type: "text",
+              media_type: "text/plain",
+              data: fitText((await documentText(document, signal)).text),
+            },
           });
         } catch {
           blocks.push({ type: "text", text: fitText(await documentFallbackText(document, signal)) });
@@ -126,11 +129,15 @@ export async function withDocumentInputs(
   model: DocumentModel,
   documents: readonly DocumentInput[],
   signal?: AbortSignal,
+  stubText?: string,
 ): Promise<unknown> {
   if (!documents.length || !payload || typeof payload !== "object") return payload;
   const p = payload as Record<string, unknown>;
   if (model.api === "pi-messages" && p.context && typeof p.context === "object") {
-    return { ...p, context: await withDocumentInputs(p.context, { ...model, api: "fallback" }, documents, signal) };
+    return {
+      ...p,
+      context: await withDocumentInputs(p.context, { ...model, api: "fallback" }, documents, signal, stubText),
+    };
   }
   const google = model.api?.startsWith("google-");
   let listKey = "messages";
@@ -149,7 +156,10 @@ export async function withDocumentInputs(
     JSON.stringify(payload, (key, value) => (["data", "image_url", "file_data"].includes(key) ? "" : value)),
   );
   const remainingTokens = Math.max(0, (model.contextWindow ?? 128_000) - promptTokens - 8192);
-  const blocks = await documentBlocks(documents, model, Math.min(100_000, remainingTokens), signal);
+  const blocks =
+    stubText === undefined
+      ? await documentBlocks(documents, model, Math.min(100_000, remainingTokens), signal)
+      : [bareText ? { text: stubText } : { type: textType, text: stubText }];
   let original: unknown[] = [];
   if (Array.isArray(content)) original = content;
   else if (typeof content === "string") original = [{ type: textType, text: content }];
@@ -169,7 +179,9 @@ export async function withDocumentInputs(
     ],
   };
   const nativeRouter =
-    model.provider === "openrouter" && documents.some((document) => nativeDocumentFormat(model, document) === "chat");
+    stubText === undefined &&
+    model.provider === "openrouter" &&
+    documents.some((document) => nativeDocumentFormat(model, document) === "chat");
   return {
     ...p,
     [listKey]: items,

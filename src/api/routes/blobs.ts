@@ -103,6 +103,6 @@ async function getBlob(ctx: BaseCtx): Promise<void> {
 }
 
 export const blobRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "POST", path: "/v1/blobs", auth: "either", handle: putBlob },
+  { method: "POST", path: "/v1/blobs", actor: "system", auth: "either", handle: putBlob },
   { method: "GET", path: "/v1/blobs/:id", auth: "either", handle: getBlob },
 ];

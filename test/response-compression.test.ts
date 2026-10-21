@@ -12,9 +12,9 @@ import { gunzipSync } from "node:zlib";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gzipAccepted, sendBuffered, sendJson } from "../src/api/http.ts";
+import { gzipAccepted, json as sendJson, sendBuffered } from "../plugins/chassis/src/http.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 interface RawResponse {

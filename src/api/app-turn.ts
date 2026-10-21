@@ -116,7 +116,11 @@ export function createTurnMethods(
       await deps.identity.refresh();
       const actor: Principal = deps.identity.resolve(req.actor);
       if (!deps.identity.isInternal(actor)) {
-        return { status: "refused", reason: "internal-only: non-internal principals cannot interact" };
+        return {
+          status: "refused",
+          refusalKind: "internal_only",
+          reason: "internal-only: non-internal principals cannot interact",
+        };
       }
       let projectAudience: Principal[] | undefined;
       let projectName: string | undefined;
@@ -426,8 +430,6 @@ export function createTurnMethods(
         ...(req.addressed || origin.kind === "human" ? { addressed: true } : {}),
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
-        ...(typeof req.intakePreambleMs === "number" ? { intakePreambleMs: req.intakePreambleMs } : {}),
-        ...(typeof req.clientSentAt === "number" ? { clientSentAt: req.clientSentAt } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(projectVersion ? { scopeVersion: projectVersion } : {}),
@@ -537,7 +539,7 @@ export function createTurnMethods(
           );
           const wake: Wake = {
             situation: origin.kind === "ambient" ? "ambientUpdate" : "addressed",
-            ts: String(req.clientSentAt ?? Date.now()),
+            ts: String(Date.now()),
             text: injectedText,
             halt: origin.kind === "human" && isHalt(req.text),
             ...(fileNames.length ? { fileNames } : {}),
@@ -722,8 +724,8 @@ export function createTurnMethods(
       );
     },
 
-    syncRunStream(runId, offset) {
-      deps.runStreamEvents?.emit({ runId, kind: "sync", offset });
+    syncRunStream(runId, offset, reasoning) {
+      deps.runStreamEvents?.emit({ runId, kind: "sync", offset, reasoning });
     },
 
     async getRun(runId, viewer) {
@@ -739,11 +741,13 @@ export function createTurnMethods(
       const replying = deps.turnStream?.replying(runId) ?? false;
       const replyComplete = deps.turnStream?.isReplyDone(runId) ?? false;
       const activity = await deps.runActivity?.list(runId);
+      const reasoning = deps.turnStream?.reasoning(runId) ?? [];
       const stale =
         run.status === "pending" ? run.attempts > 0 : !alive && leaseLapsed(run, Date.now() - STALE_LEASE_GRACE_MS);
       return {
         desktopClientId: desktopClientForTurn({ ...run.request, attempt: run.attempts }),
         status: run.status,
+        attempt: run.attempts,
         result: run.result ? await withAdminLink(run.result) : run.result,
         ...(run.request.surface === "web" &&
         !run.request.approval &&
@@ -782,6 +786,7 @@ export function createTurnMethods(
         ...(replying ? { replying: true } : {}),
         ...(replyComplete ? { replyComplete: true } : {}),
         ...(activity && activity.length ? { activity } : {}),
+        ...(reasoning.length ? { reasoning } : {}),
       };
     },
 

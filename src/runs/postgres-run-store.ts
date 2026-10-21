@@ -10,7 +10,7 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import { countedClaims, isTerminal, releasesDedupKey, runPriority } from "./run-store.ts";
+import { countedClaims, isTerminal, releasesDedupKey, runPriority, withTraceCarrier } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -154,6 +154,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
           `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'`,
         ],
       },
+      {
+        id: "runs/store/0010-drop-turn-metrics",
+        statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
+      },
     ],
     [
       {
@@ -283,6 +287,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
         AND (sibling.status='running' OR (sibling.status='pending'
           AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
+      OFFSET 0
     )`;
 
   async function claim(workerId: string, ttlMs: number, runId?: string, sessionId?: string): Promise<Run | null> {
@@ -335,7 +340,15 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
            ON CONFLICT (idempotency_key) DO NOTHING
            RETURNING *, pg_notify('qm_run_available', 'null')`,
-          [id, sessionId, jsonbStringify(request), dedupKey ?? null, maxAttempts, Date.now(), priority],
+          [
+            id,
+            sessionId,
+            jsonbStringify(withTraceCarrier(request)),
+            dedupKey ?? null,
+            maxAttempts,
+            Date.now(),
+            priority,
+          ],
         );
         if (rows[0]) return { run: rowToRun(rows[0]), deduped: false };
         const existing = await runs.getByDedupKey(dedupKey!);

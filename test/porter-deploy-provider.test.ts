@@ -12,6 +12,7 @@ import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -81,6 +82,7 @@ function make(
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
   store = createMemoryMap<StoredPorterDeployBody>();
   provider = createPorterDeployProvider({
+    ...singleProcessDeps(),
     appsDomain: "apps.test",
     namePrefix: "qmt",
     appPort,
@@ -172,6 +174,7 @@ test("explicit public visibility opts the domain out of the private default", as
 
 test("without an apps domain the app defaults to its cluster-internal address", async () => {
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     namePrefix: "qmt",
     appPort,
     readyWindowSec: 10,
@@ -400,6 +403,7 @@ test("a body that vanished between list and terminate does not break destroy or 
 
 test("without an apps domain a private app gets the host the cluster names", async () => {
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     visibility: "private",
     namePrefix: "qmt",
     appPort,
@@ -419,6 +423,7 @@ test("a cluster that names no host fails the deploy and leaves no body behind", 
   fake.cleanup();
   fake = installFakePorter({ assignHost: false });
   const bare = createPorterDeployProvider({
+    ...singleProcessDeps(),
     visibility: "private",
     namePrefix: "qmt",
     appPort,
@@ -449,4 +454,13 @@ test("deployment names become DNS labels and ids become sandbox-safe names", asy
   const body = fake.bodies().find((b) => b.phase === "running")!;
   assert.match(body.name, /^qmt-app-dep-9-/);
   assert.deepEqual(fake.volumeNames(), ["qmt-app-dep-9-data"]);
+});
+
+test("a refused sandbox create surfaces the cluster's own error unchanged", async () => {
+  const refused = new Error("no private sandbox ingress is configured on this cluster");
+  fake.client.sandboxes.create = () => Promise.reject(refused);
+  await assert.rejects(
+    provider.apply(deployment("refused"), version({ "server.js": SERVER }, "node server.js")),
+    (error) => error === refused,
+  );
 });

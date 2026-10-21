@@ -39,7 +39,6 @@ function harness(run: (hooks: any) => Promise<unknown>) {
     core: {
       stageBlob: async () => ({ blobId: "b", sizeBytes: 0 }),
       reportRunEditRef: async () => {},
-      reportTurnMetrics: async () => {},
     },
     flow: {
       inFlightRuns: { add() {}, delete() {}, has: () => false },

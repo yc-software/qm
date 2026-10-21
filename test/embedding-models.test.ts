@@ -1,5 +1,6 @@
 import "./support/auto-fake-sprites.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { AddressInfo } from "node:net";
@@ -74,7 +75,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
   assert.ok(!defaultWebuiModelIds().includes("embed-small"));
-  for (const harness of ["pi", "claude", "mock"]) assert.equal(modelSupportedByHarness("embed-small", harness), false);
+  for (const harness of ["pi", "claude"]) assert.equal(modelSupportedByHarness("embed-small", harness), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();
   assert.equal(resolveEmbeddingModel("embed-small"), undefined);
@@ -131,8 +132,8 @@ test("org embedding selection is durable and survives chat runtime replacement a
   const baseModels = createMemoryMap<PersistedBaseModel>();
   const first = createMemoryConfigStore("test", { baseModels });
   await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelectionLatest("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
-  await first.setRuntimeSelectionLatest("org:test", null);
+  await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
+  await first.setRuntimeSelection("org:test", null);
   const restarted = createMemoryConfigStore("test", { baseModels });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { shq } from "../util/shell.ts";
-import { swallowAs } from "../util/errors.ts";
+import { swallow, swallowAs } from "../util/errors.ts";
 import { makeTar, parseTar } from "./tar.ts";
 import { DISPLACED_DIR_REL } from "../credentials/resident-paths.ts";
 import { proxyExportPrefix } from "./sandbox-env.ts";
@@ -49,6 +49,9 @@ export interface ExecFileOps {
   removeDirAndList?(handle: SandboxHandle, removeRelDir: string, listRelDir: string): Promise<string[]>;
 }
 
+const listFilesScript = (rootDir: string, rel: string): string =>
+  `cd ${shq(rootDir)} 2>/dev/null && [ -e ${shq(rel)} ] || exit 0; find ${shq(rel)} -type f`;
+
 export function createExecFileOps({ label, exec, writeInline, combineRemoveAndList }: ExecFileOpsDeps): ExecFileOps {
   return {
     async importFiles(handle, entries): Promise<void> {
@@ -69,12 +72,8 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
 
     async listDir(handle, relDir): Promise<string[]> {
       const rel = workspaceRel(relDir) || ".";
-      const r = await exec(
-        handle.id,
-        `cd ${shq(handle.rootDir)} 2>/dev/null && find ${shq(rel)} -type f 2>/dev/null`,
-        60,
-      );
-      if (r.code !== 0) return [];
+      const r = await exec(handle.id, listFilesScript(handle.rootDir, rel), 60);
+      if (r.code !== 0) throw new Error(`${label} listDir failed (exit ${r.code}): ${r.stderr.trim()}`);
       return r.stdout
         .split("\n")
         .map((s) => s.trim().replace(/^\.\//, ""))
@@ -89,10 +88,11 @@ export function createExecFileOps({ label, exec, writeInline, combineRemoveAndLi
             const rel = workspaceRel(listRelDir) || ".";
             const r = await exec(
               handle.id,
-              `${prep}listing=$(cd ${shq(handle.rootDir)} 2>/dev/null && find ${shq(rel)} -type f 2>/dev/null) && printf '%s\\n' "$listing"; exit 0`,
+              `${prep}listing=$(${listFilesScript(handle.rootDir, rel)}) || echo "listing exited $?" >&2; printf '%s\\n' "$listing"; exit 0`,
               60,
             );
             if (r.code !== 0) throw new Error(`${label} removeDir ${removeRelDir} failed: ${r.stderr}`);
+            if (r.stderr.trim()) swallow(`${label} list ${listRelDir}`, new Error(r.stderr.trim()));
             return r.stdout
               .split("\n")
               .map((s) => s.trim().replace(/^\.\//, ""))

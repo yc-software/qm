@@ -1,6 +1,6 @@
 ---
 name: admin
-description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/metrics/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
+description: Act for an org admin — the admin API (scope directory, per-scope config & SOUL, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
 ---
 
 # admin — act for an org admin, from chat
@@ -43,10 +43,10 @@ Limits the API enforces (don't offer what it will refuse):
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
   a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
-  `admin.sessions.read`, `admin.audit.read`, `admin.metrics.read`, `admin.egress.read`,
-  `admin.files.read`) — set only on a live turn by the cron's owner, who must be a
-  current org admin, on a personal-scope cron running as its owner. Each grant opens
-  exactly its own GET routes to that cron's autonomous fires, audited as the owner
+  `admin.sessions.read`, `admin.audit.read`, `admin.egress.read`, `admin.files.read`)
+  — set only on a live turn by the cron's owner, who must be a current org admin, on a
+  personal-scope cron running as its owner. Each grant opens exactly its own GET
+  routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
 - **Grant changes (promote/revoke) and impersonation are portal-only** through you.
@@ -92,8 +92,8 @@ confirmed absent, send one short message:
 - Composio (recommended): one project key covers most apps. Add it in Admin → Credentials
   as an org service credential with env key `COMPOSIO_API_KEY`, and set up callback
   verification as described in QM's `docs/composio.md`. If they would rather paste the
-  key now, mint a one-time drop with `POST /v1/keychain/drops`
-  (`{"service":"composio","envKey":"COMPOSIO_API_KEY","purpose":"…"}`) and share its `url`.
+  key now, mint a one-time link with the `secret-drop` skill (service `composio`, envKey
+  `COMPOSIO_API_KEY`) and share its `url`.
   A dropped key enables Composio only for them; teammates need the org credential.
 - Own OAuth apps: add each provider in Admin → Connectors. Each one needs the callback URL
   `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
@@ -204,8 +204,8 @@ GET /v1/admin/crons|deployments|skills?scope= → artifacts by owner
 ## Observability
 
 ```bash
-GET /v1/admin/audit?scope=     GET /v1/admin/errors?scope=    GET /v1/admin/metrics?scope=
-GET /v1/admin/egress?scope=    GET /v1/admin/retention
+GET /v1/admin/audit?scope=     GET /v1/admin/errors?scope=    GET /v1/admin/egress?scope=
+GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 

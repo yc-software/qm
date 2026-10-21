@@ -2,6 +2,7 @@ import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
+import { swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -16,6 +17,7 @@ import { randomBytes } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import {
   fetchCoreText,
+  relayCoreStream,
   signedHeaders,
   withSourceAuthNonce,
   CAPABILITY_HEADER,
@@ -512,6 +514,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
 const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
 const WEB_DELIVERY_GIVEUP_MS = 60_000;
 let deliveriesPollInFlight = false;
+let deliveriesPollFailing = false;
 
 interface PendingWebDelivery {
   id: string;
@@ -519,34 +522,51 @@ interface PendingWebDelivery {
   destination?: { target?: string };
 }
 
-async function drainWebDeliveries(): Promise<void> {
+export async function drainWebDeliveries(): Promise<void> {
   if (deliveriesPollInFlight) return;
   deliveriesPollInFlight = true;
   try {
-    const r = await coreFetch("GET", "/v1/deliveries?type=web");
-    if (r.status !== 200) return;
-    let pending: PendingWebDelivery[] = [];
-    try {
-      pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-    } catch {
-      return;
-    }
-    const now = Date.now();
-    for (const d of pending) {
-      const target = d.destination?.target ?? "";
-      const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-      if (conns && conns.size) {
-        for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-      } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-        continue;
-      }
-      await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`).catch(() => {});
-    }
-  } catch {
-    void 0;
+    noteDeliveriesPoll(await pollWebDeliveries());
+  } catch (e) {
+    noteDeliveriesPoll(e);
   } finally {
     deliveriesPollInFlight = false;
   }
+}
+
+function noteDeliveriesPoll(failure: unknown): void {
+  if (failure === undefined) {
+    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
+    deliveriesPollFailing = false;
+    return;
+  }
+  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
+  deliveriesPollFailing = true;
+}
+
+async function pollWebDeliveries(): Promise<unknown> {
+  const r = await coreFetch("GET", "/v1/deliveries?type=web");
+  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
+  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
+  const now = Date.now();
+  let failure: unknown;
+  for (const d of pending) {
+    const target = d.destination?.target ?? "";
+    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
+    if (conns && conns.size) {
+      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
+    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
+      continue;
+    }
+    try {
+      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
+      if (ack.status !== 200)
+        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
+    } catch (e) {
+      failure ??= e;
+    }
+  }
+  return failure;
 }
 
 const SSE_HEARTBEAT_MS = 15_000;
@@ -688,11 +708,7 @@ async function coreFetch(
   });
 }
 
-async function coreFetchCap(
-  method: HttpMethod,
-  pathWithQuery: string,
-  rawBody = "",
-): Promise<{ status: number; text: string }> {
+async function mintSessionCap(): Promise<{ token: string } | { status: number; text: string }> {
   const cap = await coreFetch("POST", "/v1/session-cap", "");
   if (cap.status !== 200) return { status: cap.status === 401 ? 401 : 503, text: cap.text };
   let token: string | undefined;
@@ -703,9 +719,19 @@ async function coreFetchCap(
   }
   if (!token)
     return { status: 503, text: JSON.stringify({ error: "not_configured", message: "no session capability" }) };
+  return { token };
+}
+
+async function coreFetchCap(
+  method: HttpMethod,
+  pathWithQuery: string,
+  rawBody = "",
+): Promise<{ status: number; text: string }> {
+  const cap = await mintSessionCap();
+  if (!("token" in cap)) return cap;
   const r = await fetch(`${CORE}${pathWithQuery}`, {
     method,
-    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: token },
+    headers: { "content-type": "application/json", [CAPABILITY_HEADER]: cap.token },
     ...(rawBody ? { body: rawBody } : {}),
     redirect: "manual",
   });
@@ -713,11 +739,27 @@ async function coreFetchCap(
 }
 
 async function relayCore(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  relay(res, await coreFetch(method, pathWithQuery, rawBody));
+  const portalTok = portalTokenStore.getStore();
+  return relayCoreStream(res, {
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    method,
+    path: pathWithQuery,
+    body: rawBody,
+    headers: portalTok ? { [PORTAL_IDENTITY_HEADER]: portalTok } : undefined,
+  });
 }
 
 async function relayCap(res: ServerResponse, method: HttpMethod, pathWithQuery: string, rawBody = ""): Promise<void> {
-  relay(res, await coreFetchCap(method, pathWithQuery, rawBody));
+  const cap = await mintSessionCap();
+  if (!("token" in cap)) return relay(res, cap);
+  return relayCoreStream(res, {
+    origin: CORE,
+    method,
+    path: pathWithQuery,
+    body: rawBody,
+    headers: { [CAPABILITY_HEADER]: cap.token },
+  });
 }
 
 /**
@@ -1298,6 +1340,15 @@ const apiRoutes: readonly WebRoute[] = [
       c.res.end();
     },
   },
+  ...["reply-status", "reply"].map((action) => ({
+    method: "POST",
+    path: `/api/composio/slack/${action}`,
+    handle: async (c: WebCtx) => {
+      const body = await readJson(c.req, c.res, false);
+      if (!body) return;
+      return relayCore(c.res, "POST", `/v1/composio/slack/${action}`, JSON.stringify(body));
+    },
+  })),
   { method: "GET", path: "/api/composio/slack", handle: (c) => relayCore(c.res, "GET", "/v1/composio/slack") },
   {
     method: "POST",
@@ -1363,6 +1414,16 @@ const apiRoutes: readonly WebRoute[] = [
         "/v1/composio/authorize",
         JSON.stringify({ toolkit: body.toolkit, ...(callbackUrl ? { callbackUrl } : {}) }),
       );
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/composio/disconnect",
+    handle: async (c) => {
+      const body = await readJson<{ accountId?: unknown }>(c.req, c.res, false);
+      if (!body) return;
+      c.res.setHeader("Cache-Control", "no-store");
+      return relayCore(c.res, "POST", "/v1/composio/disconnect", JSON.stringify({ accountId: body.accountId }));
     },
   },
   {
@@ -1472,9 +1533,37 @@ const apiRoutes: readonly WebRoute[] = [
     method: "GET",
     path: "/api/sessions",
     handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/sessions?principalId=${encodeURIComponent(user)}`);
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const p of ["limit", "before", "status", "surface", "scope", "q"] as const) {
+        const v = url.searchParams.get(p);
+        if (v !== null) qs.set(p, v.slice(0, 500));
+      }
+      return relayCore(res, "GET", `/v1/sessions?${qs.toString()}`);
     },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/row",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const p of ["id", "threadRef"] as const) {
+        const v = url.searchParams.get(p);
+        if (v !== null) qs.set(p, v);
+      }
+      return relayCore(res, "GET", `/v1/sessions/row?${qs.toString()}`);
+    },
+  },
+  {
+    method: "GET",
+    path: "/api/sessions/:id/children",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/children?principalId=${encodeURIComponent(c.user)}`,
+      ),
   },
   {
     method: "GET",
@@ -2181,7 +2270,17 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, user } = c;
       const provider = c.params.provider!;
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
-      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo: "/keychain" });
+      const body = await readJson<{ returnTo?: unknown }>(c.req, res);
+      if (!body) return;
+      const returnTo =
+        typeof body?.returnTo === "string" &&
+        body.returnTo.startsWith("/") &&
+        !body.returnTo.startsWith("//") &&
+        !body.returnTo.includes("\\") &&
+        new URL(body.returnTo, PUBLIC_URL).origin === new URL(PUBLIC_URL).origin
+          ? body.returnTo
+          : "/keychain";
+      const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });
       const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
       return relayCore(res, "GET", corePath);
     },
@@ -2819,7 +2918,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/webhooks",
     handle: async (c) => {
       const { res, user } = c;
-      return relay(res, await coreFetch("GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`));
+      return relayCore(res, "GET", `/v1/webhooks?viewer=${encodeURIComponent(user)}`);
     },
   },
   {
@@ -2997,7 +3096,7 @@ const apiRoutes: readonly WebRoute[] = [
           ) {
             return json(res, 400, {
               error: "unsupported_verification",
-              message: "verification requires a scheme (HMAC-SHA256, GitHub, Slack, or Stripe)",
+              message: "verification requires a scheme",
             });
           }
           verification = {
@@ -3041,12 +3140,6 @@ const apiRoutes: readonly WebRoute[] = [
           error: "action_required",
           message: "an action (the agent's instructions) is required",
         });
-      if (!["hmac-sha256", "github", "slack", "stripe"].includes(verification.scheme)) {
-        return json(res, 400, {
-          error: "unsupported_verification",
-          message: "choose HMAC-SHA256, GitHub, Slack, or Stripe signature verification",
-        });
-      }
       if (!verification.secret) {
         verification = { ...verification, secret: randomBytes(32).toString("hex") };
       }
@@ -3058,7 +3151,7 @@ const apiRoutes: readonly WebRoute[] = [
         verification,
         ...(filters ? { filters } : {}),
       });
-      return relay(res, await coreFetch("POST", "/v1/webhooks", reqBody));
+      return relayCore(res, "POST", "/v1/webhooks", reqBody);
     },
   },
   {

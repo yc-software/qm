@@ -1,4 +1,5 @@
-import { GmailReadError, getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
+import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
+import { GmailApiError } from "../../connectors/gmail-api.ts";
 import { orgId as configOrgId } from "../../config.ts";
 import {
   authorizeUrl,
@@ -14,13 +15,15 @@ import {
   type OAuthClientResolver,
   type AccountType,
   type OAuthState,
+  ACCOUNT_TYPES,
+  isAccountType,
 } from "../../connectors/oauth.ts";
-import { CONNECTOR_STATUS_ACCOUNT_TYPES, providerTokenStatuses } from "../../credentials/connector-status.ts";
+import { providerTokenStatuses } from "../../credentials/connector-status.ts";
 import type { ConnectorTokenStore, DerivedOAuthAuth, OAuthTokenStatus } from "../../credentials/keychain.ts";
 import { createEnvSecretSource } from "../../credentials/secret-source.ts";
 import type { ServerDeps } from "../deps.ts";
 import { personKey, samePerson } from "../../directory/person.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
 import { audit } from "./shared.ts";
@@ -54,7 +57,7 @@ export function resolverFor(deps: ServerDeps): OAuthClientResolver {
 }
 
 function parseAccountType(v: string | null | undefined): AccountType {
-  return v === "personal" || v === "company" ? v : "default";
+  return isAccountType(v) ? v : "default";
 }
 
 async function providerConfigured(deps: ServerDeps, provider: string): Promise<boolean> {
@@ -169,7 +172,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       scopeLabel: state.principalId,
     });
     if (state.consentLinkId && deps.consentLinks) {
-      await deps.consentLinks.redeem(state.consentLinkId).catch(() => null);
+      await deps.consentLinks.redeem(state.consentLinkId).catch(swallowAs("connectors: redeem consent link", null));
     }
     if (state.returnTo) {
       const dest = new URL(state.returnTo, "http://localhost");
@@ -187,10 +190,10 @@ async function principalHasProvider(deps: ServerDeps, provider: string, principa
   const p = oauthProvider(provider);
   if (!p || !deps.connectorTokens) return false;
   for (const host of p.hosts) {
-    for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES) {
+    for (const at of ACCOUNT_TYPES) {
       const st = await deps.connectorTokens
         .connectorTokenStatus(host, principalId, at)
-        .catch(() => ({ connected: false }) as OAuthTokenStatus);
+        .catch(swallowAs("connectors: token status", { connected: false } as OAuthTokenStatus));
       if (st.connected && !st.needsReconnect) return true;
     }
   }
@@ -444,13 +447,11 @@ export async function oauthRevoke(ctx: ApiCtx): Promise<void> {
     if (!provider)
       return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${providerName}` });
     for (const h of provider.hosts)
-      for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
-        await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
+      for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(h, principalId, at);
     audit(deps, { principalId, action: "connector.oauth.revoked", resource: providerName, scopeLabel: principalId });
     return sendJson(res, 200, { ok: true, principalId, provider: providerName, hosts: provider.hosts });
   }
-  for (const at of CONNECTOR_STATUS_ACCOUNT_TYPES)
-    await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
+  for (const at of ACCOUNT_TYPES) await deps.connectorTokens.deleteConnectorToken(host, principalId, at);
   audit(deps, { principalId, action: "connector.oauth.revoked", resource: host, scopeLabel: principalId });
   return sendJson(res, 200, { ok: true, principalId, host });
 }
@@ -502,7 +503,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
   ctx.res.setHeader("Cache-Control", "no-store");
   if (!principal) return sendJson(ctx.res, 403, { error: "forbidden", message: "Sign in to read sent mail." });
   const requestedAccountType = ctx.url.searchParams.get("accountType");
-  if (requestedAccountType !== null && !["default", "personal", "company"].includes(requestedAccountType))
+  if (requestedAccountType !== null && !isAccountType(requestedAccountType))
     return sendJson(ctx.res, 400, { error: "bad_request" });
   const pageToken = ctx.url.searchParams.get("pageToken") ?? undefined;
   if (pageToken && pageToken.length > 2048) return sendJson(ctx.res, 400, { error: "bad_request" });
@@ -510,9 +511,7 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
     let accountType: AccountType | undefined;
     let auth: DerivedOAuthAuth | null | undefined;
     let authError: unknown;
-    for (const candidate of requestedAccountType
-      ? [requestedAccountType as AccountType]
-      : (["default", "personal", "company"] satisfies AccountType[])) {
+    for (const candidate of requestedAccountType ? [requestedAccountType] : ACCOUNT_TYPES) {
       try {
         auth = await ctx.deps.connectorTokens?.connectorDerivedAuth("gmail.googleapis.com", principal, candidate);
         if (auth) {
@@ -536,14 +535,13 @@ export async function gmailSent(ctx: ApiCtx): Promise<void> {
       accountType,
     });
   } catch (error) {
-    let status = 502;
-    if (error instanceof GmailReadError) {
-      if ([401, 403].includes(error.status)) status = 409;
-      else if (error.status === 404) status = 404;
-    }
+    const upstream = error instanceof GmailApiError ? error.status : 0;
+    const reconnect = upstream === 401 || upstream === 403;
+    let status = upstream === 404 ? 404 : 502;
+    if (reconnect) status = 409;
     return sendJson(ctx.res, status, {
       error: "gmail_unavailable",
-      message: error instanceof GmailReadError ? error.message : "Couldn't load sent mail from Gmail. Try again.",
+      message: reconnect ? "Reconnect Google to read sent mail." : "Couldn't load sent mail from Gmail. Try again.",
     });
   }
 }
@@ -553,9 +551,26 @@ export const connectorRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/connectors/gmail/sent", auth: "source", handle: gmailSent },
   { method: "POST", path: "/v1/connectors/oauth/consent/mint", auth: { aud: "oauth-consent" }, handle: consentMint },
   { method: "GET", path: "/v1/connectors/oauth/consent/redeem/:linkId", auth: "source", handle: consentRedeem },
-  { match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start", auth: "source", handle: oauthStart },
-  { method: "GET", path: "/v1/connectors/oauth/status", auth: "source", handle: oauthStatus },
-  { method: "POST", path: "/v1/connectors/oauth/revoke", auth: "either", handle: oauthRevoke },
-  { method: "POST", path: "/v1/connectors/token", auth: "source", handle: setToken },
+  {
+    match: (m, p) => m === "GET" && parseOAuthRoute(p)?.action === "start",
+    actor: "query.principalId",
+    auth: "source",
+    handle: oauthStart,
+  },
+  {
+    method: "GET",
+    path: "/v1/connectors/oauth/status",
+    actor: "query.principalId",
+    auth: "source",
+    handle: oauthStatus,
+  },
+  {
+    method: "POST",
+    path: "/v1/connectors/oauth/revoke",
+    actor: "body.principalId",
+    auth: "either",
+    handle: oauthRevoke,
+  },
+  { method: "POST", path: "/v1/connectors/token", actor: "body.principalId", auth: "source", handle: setToken },
   { method: "GET", path: "/v1/connectors/catalog", auth: "source", handle: catalog },
 ];

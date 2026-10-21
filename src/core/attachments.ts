@@ -18,6 +18,7 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
+import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
@@ -212,7 +213,7 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
       (m) =>
         `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
           unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download GET $AGENT_API_URL/v1/files/${m.artifactId}/content (header x-agent-capability: $AGENT_API_TOKEN) to a path you choose`
+            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)} to a path you choose`
             : ""
         }`,
     )
@@ -225,21 +226,8 @@ export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, u
   return `${lead}\n${list}`;
 }
 
-const FILE_EVENT_KIND = "file_event";
-
-export interface FileEventPayload {
-  kind: typeof FILE_EVENT_KIND;
-  direction: FileDirection;
-  issues: string[];
-  text: string;
-}
-
-export function fileEventPayload(direction: FileDirection, issues: string[]): FileEventPayload {
-  const lead =
-    direction === "in"
-      ? `Files received this turn that did not reach ./${INBOX_DIR}/`
-      : "Files the agent tried to send that did not go out";
-  return { kind: FILE_EVENT_KIND, direction, issues, text: `${lead}: ${issues.join("; ")}` };
+export function inboundIssuesNote(issues: readonly string[]): string {
+  return issues.length ? `Files received this turn that did not reach ./${INBOX_DIR}/: ${issues.join("; ")}` : "";
 }
 
 export function inboundIssueList(opts: {

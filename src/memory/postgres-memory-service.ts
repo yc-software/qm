@@ -82,7 +82,13 @@ const LIVE = `SELECT id, text, sensitivity, sources, source_unknown, author, cre
   FROM memory_facts WHERE scope_id = $1 AND deleted_at IS NULL ORDER BY id`;
 
 export function createPostgresMemoryService(connectionString: string): MemoryService {
-  const { q, pool } = createPgPool(connectionString, [{ id: "memory/facts/0001", statements: SCHEMA }]);
+  const { q, pool } = createPgPool(connectionString, [
+    {
+      id: "memory/facts/0000-records-column",
+      statements: ["ALTER TABLE IF EXISTS memory_revisions ADD COLUMN IF NOT EXISTS records JSONB"],
+    },
+    { id: "memory/facts/0001", statements: SCHEMA },
+  ]);
 
   function tx(client: PoolClient, scopeId: ScopeId): FactStoreTx {
     return {

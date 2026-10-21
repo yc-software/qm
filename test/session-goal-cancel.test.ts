@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createGoalRecord, openGoal } from "../src/harness/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { Principal } from "../src/types.ts";
@@ -67,6 +67,7 @@ for (const status of ["active", "paused"] as const) {
     const entries = await built.sessions.getEntries(session.id);
     assert.deepEqual(entries.at(-1)?.payload, {
       kind: "goal_cancelled",
+      cause: "system",
       objective: "old outreach goal",
       cancelledBy: "U1",
     });

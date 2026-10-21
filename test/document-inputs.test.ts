@@ -4,9 +4,10 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
+import { isDocumentAttachment } from "../src/core/document-kinds.ts";
 import {
   documentFallbackText,
-  isDocumentAttachment,
+  documentText,
   historicalDocumentMetas,
   loadDocumentInputs,
   type DocumentInput,
@@ -257,7 +258,7 @@ test("steered reuploads already in the turn do not consume another document slot
     0,
     initial.documents,
   );
-  assert.deepEqual(steered, { documents: [], notices: [] });
+  assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
   assert.deepEqual(checked, ["steered-upload"]);
   assert.equal(opens(), 1);
 });
@@ -280,7 +281,7 @@ test("document restoration checks current access and budgets before opening byte
   assert.equal(opens(), 0);
   const result = await loadDocumentInputs(store, [meta], () => true, 1);
   assert.equal(result.documents.length, 0);
-  assert.match(result.notices[0]!, /budget/);
+  assert.match(result.notices[0]!, /not included inline/);
   assert.equal(opens(), 0);
 });
 
@@ -305,6 +306,22 @@ test("fallback text has one aggregate model-aware budget across all attachments"
   );
   assert.ok(JSON.stringify(payload).length < 30_000);
   assert.match(JSON.stringify(payload), /truncated to fit/);
+});
+
+test("document text reports truncation as a flag, not from the extracted wording", async () => {
+  const text = (body: string, name = "notes.txt") => ({
+    name,
+    mimeType: name.endsWith(".rtf") ? "application/rtf" : "text/plain",
+    dataBase64: Buffer.from(body).toString("base64"),
+  });
+  const quoted = await documentText(text("[Document text truncated at 5 characters.]"));
+  assert.equal(quoted.truncated, false);
+  const long = await documentText(text("x".repeat(200_001)));
+  assert.equal(long.truncated, true);
+  assert.match(long.text, /\[Document text truncated at 200000 characters\.\]$/);
+  const office = await documentText(text(`{\\rtf1 ${"y".repeat(200_100)}}`, "long.rtf"));
+  assert.equal(office.truncated, true);
+  assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
 });
 
 test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {

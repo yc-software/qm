@@ -16,6 +16,7 @@ import { createCanReadScope, createCanWriteScope } from "../src/resolution/scope
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -27,6 +28,7 @@ async function fixture() {
   const directory: DirectoryStore = createDirectoryStore();
   const sessions = createMemorySessionStore();
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },

@@ -63,6 +63,7 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   "morning-digest": "x",
   "slack-drafts": "slack",
   x: "x",
+  zoom: "zoom",
 };
 
 export function filterConnectorSkills(
@@ -255,7 +256,9 @@ export function completedSurfaceEnqueues(
         done: false,
       });
     } else if (e.type === "tool_result") {
-      const cid = (e.payload as { callId?: unknown } | null)?.callId;
+      const payload = e.payload as { callId?: unknown; interrupted?: unknown } | null;
+      if (payload?.interrupted === true) continue;
+      const cid = payload?.callId;
       const call =
         typeof cid === "string" ? calls.find((c) => c.callId === cid && !c.done) : calls.findLast((c) => !c.done);
       if (call) call.done = true;

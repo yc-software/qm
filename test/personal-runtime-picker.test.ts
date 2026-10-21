@@ -12,8 +12,7 @@ type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
 async function setup() {
   const built = buildApp(testConfig());
-  built.config.setApprovedHarnesses(["pi", "claude"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi", "claude"]);
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
@@ -101,9 +100,8 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     ]);
     assert.ok((await s.get("U1", "group:room")).modelsByHarness.pi!.includes("gpt-5.6-terra"));
     assert.ok(!(await s.get("U2", "group:room")).modelsByHarness.pi!.includes("gpt-5.6-terra"));
-    await s.built.config.setRuntimeSelectionLatest("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
-    s.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
-    await s.built.config.flushScope("org:default-org");
+    await s.built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
+    await s.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
     assert.ok(!(await s.get()).modelsByHarness.pi!.includes("gpt-5.6-terra"));
     assert.equal((await s.put({ harnessId: "pi", modelId: "gpt-5.6-terra" })).status, 400);
     const refused = await s.built.app.turn({
@@ -117,8 +115,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
       model: "gpt-5.6-terra",
     });
     assert.equal(refused.status, "refused");
-    s.built.config.setWebuiModels("org:default-org", []);
-    await s.built.config.flushScope("org:default-org");
+    await s.built.config.setWebuiModels("org:default-org", []);
     assert.ok((await s.get()).modelsByHarness.pi!.includes("gpt-5.6-terra"));
   } finally {
     await s.close();

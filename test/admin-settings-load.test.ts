@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -26,8 +27,7 @@ const scopePath = "/v1/admin/scopes/org%3Adefault-org";
 test("settings projections preserve values while excluding unrelated payloads", async (t) => {
   const srv = start();
   t.after(srv.close);
-  srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
-  await srv.built.config.flushScope("org:default-org");
+  await srv.built.config.setBranding("org:default-org", { selfLabel: "Test assistant", accent: "#445566" });
   await srv.built.directory.replaceChannels([{ channelId: "C-settings", name: "settings-test" }]);
   const full = (await (await fetch(srv.base + scopePath, { headers: ADMIN })).json()) as Record<string, unknown>;
   for (const view of [
@@ -148,7 +148,7 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openai: true,
     openrouter: true,
   }));
-  await srv.built.config.setRuntimeSelectionLatest("org:default-org", {
+  await srv.built.config.setRuntimeSelection("org:default-org", {
     harnessId: "pi",
     modelId: "settings/previously-saved-model",
   });
@@ -169,6 +169,28 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
   assert.ok(body.modelsByHarness.pi!.some((model) => model.id === body.runtime.modelId));
   assert.equal(body.modelCatalogRefreshing, true);
   assert.ok(performance.now() - started < 500);
+});
+
+test("a configured base model the cold catalog cannot resolve stays listed without a guessed provider", async (t) => {
+  const pending = Promise.withResolvers<Response>();
+  const srv = start({ modelCredentialFetch: () => pending.promise });
+  t.after(srv.close);
+  t.after(() => pending.resolve(Response.json({ data: [] })));
+  t.mock.method(srv.built.modelCredentials, "availability", async () => ({
+    anthropic: true,
+    openai: true,
+    openrouter: true,
+  }));
+  for (const modelId of ["settings/saved-base-model", "saved-base-model-without-vendor"]) {
+    await srv.built.config.setBaseModel("org:default-org", modelId);
+    const response = await fetch(srv.base + scopePath + "?view=models", { headers: ADMIN });
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { baseModelOptions: { id: string; name: string; provider: string }[] };
+    assert.deepEqual(
+      body.baseModelOptions.find((model) => model.id === modelId),
+      { id: modelId, name: `${modelId} (configured)`, provider: "" },
+    );
+  }
 });
 
 test("cached model catalogs refresh in the background and retain dynamic entries after expiry", async (t) => {

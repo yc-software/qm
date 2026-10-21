@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
 import * as piHarness from "../src/harness/pi-harness.ts";
-import * as mockHarness from "../src/harness/mock-harness.ts";
+import * as mockHarness from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -28,9 +28,6 @@ function observedHarness() {
 
 mock.module("../src/harness/pi-harness.ts", {
   namedExports: { ...piHarness, createPiHarness: observedPiHarness },
-});
-mock.module("../src/harness/mock-harness.ts", {
-  namedExports: { ...mockHarness, createMockHarness: observedHarness },
 });
 const { buildApp } = await import("../src/wiring.ts");
 
@@ -97,8 +94,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
     const provider = account === "anthropic" ? "anthropic" : "openai";
     const model = provider === "anthropic" ? "claude-sonnet-5" : "gpt-5.6-terra";
     const built = buildApp(testConfig({ openaiApiKey: "company-openai" }));
-    built.config.setApprovedHarnesses(["pi"]);
-    await built.config.flushScope("org:default-org");
+    await built.config.setApprovedHarnesses(["pi"]);
     await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
     await built.config.setPersonalModelAuth("U1", true, account === "personal" ? undefined : account);
     const submitted = await built.app.turn({
@@ -137,8 +133,7 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
 
 test("personal web selections reject wrong providers, harnesses, policy exclusions and disconnected keys", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
-  built.config.setApprovedHarnesses(["pi", "claude"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi", "claude"]);
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const submit = (model: string, harness = "pi") =>
@@ -158,8 +153,7 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
     ["unknown", "pi"],
   ])
     assert.equal((await submit(model!, harness!)).status, "refused");
-  built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
   assert.equal((await submit("gpt-5.6-sol")).status, "refused");
@@ -168,8 +162,7 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
 test("a queued web selection cannot fall back to another personal provider after disconnect", async () => {
   turns.length = 0;
   const built = buildApp(testConfig());
-  built.config.setApprovedHarnesses(["pi"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi"]);
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true);
@@ -199,8 +192,7 @@ test("a queued web selection cannot fall back to another personal provider after
 test("web subscription selections use the namespaced model and personal OAuth on Pi", async () => {
   turns.length = 0;
   const built = buildApp(testConfig());
-  built.config.setApprovedHarnesses(["pi"]);
-  await built.config.flushScope("org:default-org");
+  await built.config.setApprovedHarnesses(["pi"]);
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,
@@ -238,9 +230,9 @@ test("web subscription selections use the namespaced model and personal OAuth on
 
 test("partial personal web choices queue the complete validated scoped runtime", async () => {
   const built = buildApp(testConfig());
-  built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "pi", modelId: "gpt-5.6-sol" });
-  await built.config.setRuntimeSelectionLatest("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
+  await built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "gpt-5.6-sol" });
+  await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const submit = (choice: { harness?: string; model?: string }) =>
@@ -263,7 +255,7 @@ test("partial personal web choices queue the complete validated scoped runtime",
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,
   });
-  await built.config.setRuntimeSelectionLatest("personal:U1", { harnessId: "pi", modelId: "codex/gpt-5.6-sol" });
+  await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "codex/gpt-5.6-sol" });
   const second = await submit({ model: "codex/gpt-5.6-terra" });
   assert.ok(second.runId, JSON.stringify(second));
   const oauth = await built.runs.get(second.runId!);
@@ -288,7 +280,7 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
   assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
   assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");
   assert.equal(piOptions?.companyModelId?.("claude-opus-5"), "claude-opus-5");
-  built.config.setApprovedHarnesses(["pi"]);
+  await built.config.setApprovedHarnesses(["pi"]);
   await built.userModelCredentials.setOAuth("U1", "openai", {
     accessToken: "personal-oauth",
     expiresAt: Date.now() + 3_600_000,

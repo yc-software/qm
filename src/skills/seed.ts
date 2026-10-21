@@ -76,11 +76,9 @@ export function foreignSkillCollision(
   all: Skill[],
   scopeId: ScopeId,
   name: string,
-  createdBy: string,
+  isOwn: (skill: Skill) => boolean,
 ): Skill | undefined {
-  return all.find(
-    (s) => s.scopeId === scopeId && s.manifest.name === name && s.createdBy !== createdBy && s.status !== "archived",
-  );
+  return all.find((s) => s.scopeId === scopeId && s.manifest.name === name && !isOwn(s) && s.status !== "archived");
 }
 
 const upsertQueue = createKeyedQueue<string>();
@@ -115,10 +113,9 @@ async function upsertSeedSkillUnsafe(
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
   const all = await skills.list();
-  const existing = all.find(
-    (s) => s.scopeId === scopeId && s.manifest.name === manifest.name && s.createdBy === createdBy,
-  );
-  if (!existing && foreignSkillCollision(all, scopeId, manifest.name, createdBy)) return "foreign";
+  const isOwn = (s: Skill) => (pack ? s.pack?.packId === pack.packId : s.createdBy === createdBy);
+  const existing = all.find((s) => s.scopeId === scopeId && s.manifest.name === manifest.name && isOwn(s));
+  if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";
   if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
     const changed = !sameManifest(existing.manifest, manifest);

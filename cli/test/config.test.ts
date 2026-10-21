@@ -11,7 +11,6 @@ import {
   loadConfigAt,
   loadConfigInDir,
   localSandboxActive,
-  mockHarnessWarning,
   sandboxCoreEnv,
   securityScreenEnv,
   updateConfigImageOverrides,
@@ -32,7 +31,8 @@ function writeConfig(extra: Record<string, unknown>): { dir: string; path: strin
           },
         }
       : extra.env;
-  writeFileSync(path, JSON.stringify({ ...BASE, ...extra, ...(env === undefined ? {} : { env }) }));
+  const publicUrl = extra.target === "aws" ? { publicUrl: "https://agent.acme.example" } : {};
+  writeFileSync(path, JSON.stringify({ ...BASE, ...publicUrl, ...extra, ...(env === undefined ? {} : { env }) }));
   return { dir, path };
 }
 
@@ -420,7 +420,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         target: "aws",
         publicUrl: "http://agent.acme.example",
         services: ["core", "web-ui", "portal"],
-        env: { core: { HARNESS: "mock" } },
+        env: { core: {} },
         aws: aws(["core", "web-ui", "portal"]),
       },
       error: /portal requires an HTTPS publicUrl/,
@@ -431,7 +431,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         target: "aws",
         publicUrl: "https://agent.acme.example",
         services: ["core", "web-ui", "portal"],
-        env: { core: { HARNESS: "mock" }, portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
+        env: { core: {}, portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
         aws: aws(["core", "web-ui", "portal"]),
       },
       error: /PORTAL_EXPECTED_TEAM_ID/,
@@ -443,7 +443,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         services: ["core", "web-ui", "portal"],
         env: {
-          core: { HARNESS: "mock" },
+          core: {},
           portal: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
@@ -461,7 +461,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         services: ["core", "web-ui", "portal"],
         env: {
-          core: { HARNESS: "mock" },
+          core: {},
           portal: {
             OIDC_CLIENT_ID: "client",
             OIDC_ISSUER: "https://auth.example.com",
@@ -491,7 +491,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         apiUrl: "http://api.agent.acme.example",
         services: ["core"],
-        env: { core: { HARNESS: "mock" } },
+        env: { core: {} },
         aws: aws(["core"]),
       },
       error: /apiUrl must use the same protocol as publicUrl/,
@@ -502,9 +502,9 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       label: `deployBranch ${JSON.stringify(deployBranch)}`,
       config: {
         target: "aws",
-        publicUrl: "http://agent.acme.example",
+        publicUrl: "https://agent.acme.example",
         services: ["core"],
-        env: { core: { HARNESS: "mock" } },
+        env: { core: {} },
         aws: { ...aws(["core"]), deployBranch },
       },
       error: /"aws\.deployBranch" must be a valid git branch name/,
@@ -513,9 +513,9 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
   withConfig(
     {
       target: "aws",
-      publicUrl: "http://agent.acme.example",
+      publicUrl: "https://agent.acme.example",
       services: ["core"],
-      env: { core: { HARNESS: "mock" } },
+      env: { core: {} },
       aws: { ...aws(["core"]), deployBranch: "release/prod-2", deployEnvironment: "production" },
     },
     ({ path }) => {
@@ -527,9 +527,9 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     withConfig(
       {
         target: "aws",
-        publicUrl: "http://agent.acme.example",
+        publicUrl: "https://agent.acme.example",
         services: ["core"],
-        env: { core: { HARNESS: "mock" } },
+        env: { core: {} },
         aws: { ...aws(["core"]), deployEnvironment },
       },
       ({ path }) =>
@@ -548,11 +548,11 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       target: "aws",
       publicUrl: "http://agent.acme.example",
       services: ["core"],
-      env: { core: { HARNESS: "mock" } },
+      env: { core: {} },
       aws: aws(["core"]),
     },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.env.core?.HARNESS, "mock");
+      assert.throws(() => loadConfigAt(path), /AWS HARNESS=pi requires an HTTPS publicUrl/);
     },
   );
   withConfig(
@@ -1364,7 +1364,7 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
   withConfig({ modelProvider: "openai", env: { core: { HARNESS: "pi" } } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.modelProvider, "openai");
   });
-  for (const harness of ["codex", "opencode"]) {
+  for (const harness of ["codex", "opencode", "mock"]) {
     withConfig({ env: { core: { HARNESS: harness } } }, ({ path }) => {
       assert.throws(() => loadConfigAt(path), new RegExp(`env.core.HARNESS "${harness}" is not recognized`));
     });
@@ -1373,7 +1373,7 @@ test("modelProvider must name a vendor the configured harness can bill", () => {
     assert.equal(
       loadConfigAt(path).config.modelProvider,
       "openrouter",
-      "an unset harness is mock, which bills anything",
+      "an unset harness is pi, which bills openrouter",
     );
   });
 });
@@ -1393,21 +1393,6 @@ test("env.core.MODEL_PROVIDER is validated as the provider core will actually us
   );
   withConfig({ env: { core: { HARNESS: "pi", MODEL_PROVIDER: "bedrock" } } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /env.core.MODEL_PROVIDER must be one of/);
-  });
-});
-
-test("a mock deployment is named as one, and a real harness draws no warning", () => {
-  withConfig({ env: { core: {} } }, ({ path }) => {
-    assert.match(mockHarnessWarning(loadConfigAt(path).config)!, /unset, which means "mock".*calls no model provider/s);
-  });
-  withConfig({ env: { core: { HARNESS: "mock" } } }, ({ path }) => {
-    assert.match(mockHarnessWarning(loadConfigAt(path).config)!, /set to "mock"/);
-  });
-  withConfig({ env: { core: { HARNESS: "pi" } } }, ({ path }) => {
-    assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined);
-  });
-  withConfig({ target: "fly", appPrefix: "acme", env: { core: {} } }, ({ path }) => {
-    assert.equal(mockHarnessWarning(loadConfigAt(path).config), undefined, "the fly template renders HARNESS=pi");
   });
 });
 

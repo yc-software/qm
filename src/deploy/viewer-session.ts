@@ -59,7 +59,7 @@ function readCookies(header: string | undefined, name: string): string[] {
     try {
       out.push(decodeURIComponent(p.slice(name.length + 1)));
     } catch (error) {
-      void error;
+      if (!(error instanceof URIError)) throw error;
     }
   }
   return out;

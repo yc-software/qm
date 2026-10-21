@@ -48,6 +48,7 @@ import {
   type Project,
 } from "../projects/project-store.ts";
 
+import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
 
@@ -152,7 +153,10 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     opts: { blockingOnly: boolean; viewer?: string },
   ): Promise<PendingApproval[]> {
     if (!deps.approvals) return [];
-    const [entries, session] = await Promise.all([deps.approvals.entries(), deps.sessions.get(sessionId)]);
+    const [entries, session] = await Promise.all([
+      deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [sessionId] } }),
+      deps.sessions.get(sessionId),
+    ]);
     if (!session) return [];
     const candidates: Array<{ key: string; record: PendingApprovalRecord }> = [];
     for (const [key, record] of entries) {
@@ -213,7 +217,8 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       }
       const shutdown = deps.shutdown?.();
       if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
-      const claimed = await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
+      const claimed =
+        run.status === "running" ? null : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
         try {
           const result = await processRun(
@@ -302,6 +307,14 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     return sessions.filter((session) => allowed.get(session.scopeId) !== false);
   }
 
+  async function scopesForViewer(principalId: string): Promise<ParticipantScope[]> {
+    const scopes = await deps.sessions.participantScopes(principalId);
+    const allowed = await Promise.all(
+      scopes.map(async (scope) => (await managedProjectMembership(scope.scopeId, principalId)) !== false),
+    );
+    return scopes.filter((_, index) => allowed[index]);
+  }
+
   async function sessionForViewer(sessionId: string, principalId: string): Promise<Session | null> {
     const session = await deps.sessions.getForParticipant(sessionId, principalId);
     if (!session) return null;
@@ -336,20 +349,24 @@ export function createAppHelpers(deps: AppDeps, app: App) {
         project,
       });
     }
-    for (const s of await sessionsForViewer(principalId)) {
-      const { kind } = parseScopeId(s.scopeId);
-      if (s.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
-      let ctx = byScope.get(s.scopeId);
-      if (!ctx && kind === "group" && (await deps.directory.groupMember(parseScopeId(s.scopeId).ref, principalId))) {
-        ctx = { scopeId: s.scopeId, kind: "group", name: s.channelName ?? null, sessionCount: 0, lastActivityAt: null };
+    for (const scope of await scopesForViewer(principalId)) {
+      const { kind, ref } = parseScopeId(scope.scopeId);
+      if (scope.scopeId !== personal && kind !== "channel" && kind !== "group") continue;
+      let ctx = byScope.get(scope.scopeId);
+      if (!ctx && kind === "group" && (await deps.directory.groupMember(ref, principalId))) {
+        ctx = {
+          scopeId: scope.scopeId,
+          kind: "group",
+          name: scope.channelName ?? null,
+          sessionCount: 0,
+          lastActivityAt: null,
+        };
       }
       if (!ctx) continue;
-      if (!ctx.name && s.channelName) ctx.name = s.channelName;
-      if (s.hasEntries !== false || Boolean(s.title?.trim())) {
-        ctx.sessionCount++;
-        ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, s.lastActivityAt ?? s.createdAt);
-      }
-      byScope.set(s.scopeId, ctx);
+      if (!ctx.name && scope.channelName) ctx.name = scope.channelName;
+      ctx.sessionCount += scope.sessionCount;
+      if (scope.lastActivityAt !== null) ctx.lastActivityAt = Math.max(ctx.lastActivityAt ?? 0, scope.lastActivityAt);
+      byScope.set(scope.scopeId, ctx);
     }
     return [...byScope.values()].sort((a, b) => {
       if (a.kind === "personal") return -1;
@@ -389,13 +406,13 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       scopeId("org", orgIdOf()),
     ]);
     try {
-      const [sessions, channels, groups, projects] = await Promise.all([
-        deps.sessions ? sessionsForViewer(principalId) : Promise.resolve([]),
+      const [sessionScopes, channels, groups, projects] = await Promise.all([
+        deps.sessions ? scopesForViewer(principalId) : Promise.resolve([]),
         deps.directory ? deps.directory.listChannelsFor(principalId) : Promise.resolve([]),
         deps.directory?.listGroupsFor?.(principalId) ?? Promise.resolve([]),
         projectsForViewer(principalId),
       ]);
-      const historical = new Set(sessions.map((session) => session.scopeId));
+      const historical = new Set(sessionScopes.map((scope) => scope.scopeId));
       for (const channel of channels) {
         const scope = scopeId("channel", channel.channelId);
         if (channel.isPrivate === true || historical.has(scope)) scopes.add(scope);
@@ -403,7 +420,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       for (const groupId of groups) scopes.add(scopeId("group", groupId));
       for (const project of projects) scopes.add(project.scopeId);
     } catch (error) {
-      void error;
+      swallow("app: current resource scopes for viewer", error);
     }
     return [...scopes];
   }
@@ -426,22 +443,27 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   async function mayWriteSession(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
-    sharedAccess = new Map<ScopeId, Promise<boolean>>(),
+    sharedAccess = new Map<string, Promise<boolean>>(),
   ): Promise<boolean> {
     const actor = deps.identity.classify(principalId);
     if (!deps.identity.isInternal(actor)) return false;
     const { kind, ref } = parseScopeId(session.scopeId);
     if (kind === "personal") return session.scopeId === scopeId("personal", actor.id);
     if (kind !== "channel" && kind !== "group") return false;
-    if (isSubagentThreadRef(session.threadRef)) return principalCanWriteScope(actor.id, session.scopeId);
-    if (!sharedAccess.has(session.scopeId)) sharedAccess.set(session.scopeId, mayUseSharedScope(kind, ref, actor));
-    return sharedAccess.get(session.scopeId)!;
+    const subagent = isSubagentThreadRef(session.threadRef);
+    const key = subagent ? `subagent ${session.scopeId}` : session.scopeId;
+    if (!sharedAccess.has(key))
+      sharedAccess.set(
+        key,
+        subagent ? principalCanWriteScope(actor.id, session.scopeId) : mayUseSharedScope(kind, ref, actor),
+      );
+    return sharedAccess.get(key)!;
   }
 
   async function canContinueOnWeb(
     principalId: string,
     session: Pick<Session, "threadRef" | "scopeId">,
-    sharedAccess?: Map<ScopeId, Promise<boolean>>,
+    sharedAccess?: Map<string, Promise<boolean>>,
   ): Promise<boolean> {
     if (!session.threadRef.startsWith("web:") && !isSubagentThreadRef(session.threadRef)) return false;
     return mayWriteSession(principalId, session, sharedAccess);

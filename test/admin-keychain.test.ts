@@ -7,16 +7,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -157,8 +159,6 @@ test("user keychain reads only the selected owner's metadata and grants", async 
   t.mock.method(s.keychain, "listAsks", fail);
   t.mock.method(s.built.sessions, "distinctParticipants", fail);
   t.mock.method(s.built.app, "directoryMembers", fail);
-  if (s.built.auditLog.tallyByResource)
-    t.mock.method(s.built.auditLog as Required<typeof s.built.auditLog>, "tallyByResource", fail);
   const response = await fetch(s.base + "/v1/admin/keychain?principal=Alice%40example.com", {
     headers: { "x-admin-actor": "admin-alice@default-org" },
   });

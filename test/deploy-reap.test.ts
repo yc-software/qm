@@ -8,6 +8,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 function svc(managedScaleToZero: boolean) {
   const deployStore = createDeployStore();
@@ -20,6 +21,7 @@ function svc(managedScaleToZero: boolean) {
     },
   };
   const deploy = createDeployService({
+    ...singleProcessDeps(),
     deployStore,
     provider,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

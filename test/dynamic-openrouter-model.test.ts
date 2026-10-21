@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const oxAlphaCatalog: typeof fetch = async () =>
@@ -31,7 +31,7 @@ test("web turns hydrate persisted OpenRouter catalog models before runtime resol
     }),
     { modelCredentialFetch: oxAlphaCatalog },
   );
-  await built.config.setRuntimeSelectionLatest("org:default-org", {
+  await built.config.setRuntimeSelection("org:default-org", {
     harnessId: "pi",
     modelId: "stealth/ox-alpha",
   });

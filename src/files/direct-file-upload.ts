@@ -18,7 +18,7 @@ import {
   type FileArtifact,
   type FileArtifactStore,
 } from "./file-artifact-store.ts";
-import type { FileUpload, FileUploadStore } from "./file-upload-store.ts";
+import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-upload-store.ts";
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
 
@@ -27,14 +27,6 @@ const MAX_DIRECT_FILE_BYTES = 100 * 1024 ** 3;
 const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
 const URL_TTL_SECONDS = 15 * 60;
 const SHA256_BASE64 = /^[A-Za-z0-9+/]{43}=$/;
-
-export class FileUploadError extends Error {
-  status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
 
 export function multipartChecksum(checksums: string[]): string {
   return `${createHash("sha256")

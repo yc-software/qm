@@ -29,10 +29,10 @@ import {
   type PorterSandboxLike,
 } from "../sandbox/porter-client.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
-import { errMessage, execFailure, swallow, swallowAs } from "../util/errors.ts";
+import { execFailure, swallow, swallowAs } from "../util/errors.ts";
 
 const APP_DIR = "/app";
 const HOME_DIR = "/root";
@@ -72,7 +72,7 @@ export interface PorterDeployProviderOptions {
   resolveCacheMs?: number;
   client?: PorterClientLike;
   store?: DurableMap<StoredPorterDeployBody>;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }
 
@@ -85,7 +85,7 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
   const readyWindowSec = opts.readyWindowSec ?? APP_READY_WINDOW_SEC_DEFAULT;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
   const store = opts.store ?? createMemoryMap<StoredPorterDeployBody>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const client: PorterClientLike =
     opts.client ??
@@ -209,29 +209,19 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
         await retireBodies(d, true);
         await store.delete(d.id).catch((e) => swallow("porter-deploy: clear stale pointer", e));
         const name = `${baseName(d)}-${randomUUID().slice(0, 5)}`;
-        const sb = await client.sandboxes
-          .create({
-            image,
-            name,
-            command: ["sleep", "infinity"],
-            tags: { [KIND_TAG]: "app", [DEPLOY_TAG]: d.id },
-            env: appEnv(version),
-            volume_mounts: { [DATA_DIR]: volumeId },
-            networking:
-              visibility === "internal"
-                ? [{ port: appPort, internal: true }]
-                : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
-            ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
-          })
-          .catch((e) => {
-            if (visibility !== "internal" && errMessage(e).includes("sandbox ingress")) {
-              throw new Error(
-                `porter deploy ${d.id}: the cluster refused the app's ${visibility} domain because sandbox ingress is not enabled — turn it on for this cluster (docs/porter.md), then point PORTER_DEPLOY_APPS_DOMAIN's wildcard DNS record at it (${errMessage(e)})`,
-                { cause: e },
-              );
-            }
-            throw e;
-          });
+        const sb = await client.sandboxes.create({
+          image,
+          name,
+          command: ["sleep", "infinity"],
+          tags: { [KIND_TAG]: "app", [DEPLOY_TAG]: d.id },
+          env: appEnv(version),
+          volume_mounts: { [DATA_DIR]: volumeId },
+          networking:
+            visibility === "internal"
+              ? [{ port: appPort, internal: true }]
+              : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
+          ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
+        });
         try {
           await waitPorterRunning(name, sb);
           const address = await addressOf(d, sb);

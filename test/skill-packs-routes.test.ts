@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
@@ -184,6 +184,45 @@ test("register → browse → import → list → remove a git skill pack (org s
     assert.equal(del.removed, 2);
     assert.equal((await json(await fetch(`${s.base}/v1/admin/skill-packs`, { headers: ADMIN }))).packs.length, 0);
     assert.equal(await s.built.skillBundles.get(id), null, "removing the pack deletes its shared bundle too");
+  } finally {
+    rmSync(repo.dir, { recursive: true, force: true });
+    await s.close();
+  }
+});
+
+test("pack removal and re-import identify pack skills by their pack record, not their creator label", async () => {
+  const repo = makeFixtureRepo();
+  const s = start();
+  try {
+    const reg = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ url: repo.dir, ref: repo.sha, config: { exclude: ["trusted/*"] } }),
+      }),
+    );
+    const id = reg.pack.id as string;
+    const lookalike = await s.built.skills.create({
+      scopeId: "org:default-org",
+      manifest: { name: "reg-alpha", description: "native", body: "native body", requiredCapabilities: [] },
+      createdBy: `pack:${id}`,
+    });
+    await s.built.skills.review(lookalike.id, "admin-alice@default-org", []);
+    await s.built.skills.publish(lookalike.id);
+
+    const imp = await json(
+      await fetch(`${s.base}/v1/admin/skill-packs/${id}/import`, {
+        method: "POST",
+        headers: ADMIN,
+        body: JSON.stringify({ selected: ["reg-alpha", "reg-beta"] }),
+      }),
+    );
+    assert.deepEqual(imp.imported, ["reg-beta"]);
+    assert.equal((await s.built.skills.get(lookalike.id))?.manifest.body, "native body", "import leaves it alone");
+
+    const del = await json(await fetch(`${s.base}/v1/admin/skill-packs/${id}`, { method: "DELETE", headers: ADMIN }));
+    assert.equal(del.removed, 1);
+    assert.equal((await s.built.skills.get(lookalike.id))?.status, "published", "pack removal leaves it alone");
   } finally {
     rmSync(repo.dir, { recursive: true, force: true });
     await s.close();

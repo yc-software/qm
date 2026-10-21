@@ -95,7 +95,7 @@ async function runWorkspaceReadSmoke(input: {
   orgId: string;
   hosts: string[];
 }): Promise<void> {
-  input.built.config.setEgress(scopeId("personal", input.actor), { allowedHosts: input.hosts });
+  await input.built.config.setEgress(scopeId("personal", input.actor), { allowedHosts: input.hosts });
   const result = await input.built.app.turn({
     surface: "test",
     actor: { externalId: input.actor, displayName: input.actor },
@@ -187,7 +187,6 @@ const built = buildApp({
   orgId,
   sessionStore: "memory",
   runStore: "memory",
-  harness: "mock",
 });
 const core = createServer(built.app, {
   signingSecret: secret,

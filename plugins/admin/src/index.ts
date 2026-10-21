@@ -32,9 +32,10 @@ function signedHeaders(method: string, corePath: string, rawBody: string): Recor
   return signedRequestHeaders(CORE_SIGNING_SECRET, method, corePath, rawBody, { "content-type": "application/json" });
 }
 
+const GOVERNANCE_UI = await buildGovernanceUI();
 const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8")
   .replaceAll("__ADMIN_BASE__", () => ADMIN_BASE_PATH)
-  .replace('"__GOVERNANCE_UI__";', () => buildGovernanceUI())
+  .replace('"__GOVERNANCE_UI__";', () => GOVERNANCE_UI)
   .replace(
     "<style data-admin-components></style>",
     () =>
@@ -314,7 +315,6 @@ const WRITES = new Map<string, string[]>([
 ]);
 
 const READS = [
-  "metrics",
   "spend",
   "egress",
   "errors",

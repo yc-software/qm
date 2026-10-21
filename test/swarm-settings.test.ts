@@ -25,6 +25,20 @@ test("backend defaults validate every setting and preserve unspecified defaults"
   assert.deepEqual(resolveSwarmSettings(large), { ...SWARM_DEFAULTS, ...large });
 });
 
+test("budget settings are optional, off by default, and honored from SWARM_DEFAULTS", () => {
+  const caps = { messages: 128, notifications: 256, spawnRequests: 32, lifetimeMs: 28_800_000 };
+  assert.deepEqual(resolveSwarmSettings({}), SWARM_DEFAULTS);
+  for (const key of Object.keys(caps)) {
+    assert.equal(key in SWARM_DEFAULTS, false);
+    for (const value of [0, -1, 1.5, "1", null])
+      assert.throws(() => resolveSwarmSettings({ [key]: value }), new RegExp(key));
+  }
+  assert.deepEqual(resolveSwarmSettings(caps), { ...SWARM_DEFAULTS, ...caps });
+  const swarmDefaults = loadConfig({ SWARM_DEFAULTS: JSON.stringify(caps) }).swarmDefaults;
+  assert.deepEqual(swarmDefaults, { ...SWARM_DEFAULTS, ...caps });
+  assert.deepEqual(resolveSwarmSettings({ messages: 500 }, swarmDefaults), { ...swarmDefaults, messages: 500 });
+});
+
 test("resolved defaults, initial overrides, children, and restarted services share one immutable settings contract", async () => {
   const f = await swarmFixture();
   const defaults = resolveSwarmSettings({
@@ -45,8 +59,8 @@ test("resolved defaults, initial overrides, children, and restarted services sha
   const restarted = createSwarmService({ ...f.serviceOptions, defaults: resolveSwarmSettings({ turnMs: 999 }) });
   assert.deepEqual((await restarted.inspect(caller)).settings, { ...defaults, turnMs: 777 });
   await assert.rejects(
-    restarted.spawn(caller, { requestId: "change", text: "work", settings: { turnMs: 999 } }),
-    /initial/,
+    restarted.spawn(caller, { requestId: "change", text: "work", settings: { depth: 5 } }),
+    /only the root/,
   );
   await assert.rejects(restarted.spawn(caller, { requestId: "child", text: "work" }), /depth/);
   await assert.rejects(restarted.context(caller, { long: "x".repeat(20) }), /context/);
@@ -57,8 +71,24 @@ test("resolved defaults, initial overrides, children, and restarted services sha
   const run = (await f.runs.list()).find((r) => r.request.swarm?.recipientId === sibling!.id)!;
   assert.equal(run.request.turnWallClockMs, 777);
   await assert.rejects(restarted.spawn(f.caller, { requestId: "excess", text: "work" }), /agent budget/);
+  await assert.rejects(
+    restarted.spawn(f.caller, { requestId: "turn", text: "work", settings: { agents: 4, turnMs: 999 } }),
+    /turnMs cannot change/,
+  );
+  const [extra] = await restarted.spawn(f.caller, {
+    requestId: "raise",
+    text: "work",
+    settings: { agents: 4, spawnRequests: 3 },
+  });
+  assert.ok(extra);
+  assert.deepEqual((await restarted.inspect(f.caller)).settings, {
+    ...defaults,
+    turnMs: 777,
+    agents: 4,
+    spawnRequests: 3,
+  });
   const swarm = (await f.store.get(f.root.id))!;
-  assert.equal(swarm.expiresAt - swarm.createdAt, 60_000);
+  assert.equal(swarm.expiresAt! - swarm.createdAt, 60_000);
 });
 
 test("canonical recipient sets deduplicate retries but reject changed sets", async () => {
@@ -159,4 +189,25 @@ test("operators can disable swarms without changing other background work", () =
   assert.equal(disabled.swarmsEnabled, false);
   assert.equal(disabled.backgroundWorkEnabled, true);
   assert.throws(() => loadConfig({ SWARMS_ENABLED: "invalid" }), /SWARMS_ENABLED/);
+});
+
+test("concurrent root settings changes both apply", async () => {
+  const f = await swarmFixture();
+  await f.service.spawn(f.caller, { requestId: "pool", text: "work" });
+  await f.service.sweep();
+  const update = f.store.update.bind(f.store);
+  const ready = Promise.withResolvers<void>();
+  let arrivals = 0;
+  f.store.update = async (...args) => {
+    if (++arrivals === 2) ready.resolve();
+    await ready.promise;
+    return update(...args);
+  };
+  await Promise.all([
+    f.service.spawn(f.caller, { requestId: "agents", text: "work", settings: { agents: 64 } }),
+    f.service.spawn(f.caller, { requestId: "depth", text: "work", settings: { depth: 8 } }),
+  ]);
+  const { settings } = (await f.store.get(f.root.id))!;
+  assert.equal(settings.agents, 64);
+  assert.equal(settings.depth, 8);
 });

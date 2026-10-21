@@ -183,8 +183,9 @@ these, not through them.
   changes do not revoke individual link holders.
 - **The spend export token is bearer authorization for org-wide spend.** When
   `SPEND_EXPORT_TOKEN` is set, anyone holding it can read every scope's daily model-call
-  spend: per-person totals, channel and group names, and the model mix. It reads no
-  conversation content and changes nothing, and each export is audited, but the token is
+  spend: per-person totals, channel and group names, the model mix, and each billed
+  cron's title, owner, scope, schedule and state. It reads no conversation content or
+  cron task and changes nothing, and each export is audited, but the token is
   not bound to a caller. Rotating it means replacing the secret in core and in every
   consumer; core accepts only the current value after it restarts with the new one.
 - **Portal sessions have residual risk.** A signed portal session defaults to eight

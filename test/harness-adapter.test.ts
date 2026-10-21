@@ -1,25 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createClaudeHarness } from "../src/harness/claude-harness.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 
 test("harness adapters declare their native control and tool transports", async (t) => {
-  const mock = createMockHarness();
   const pi = createPiHarness();
   const claude = createClaudeHarness();
   t.after(async () => {
     await pi.turns.close?.();
   });
 
-  assert.deepEqual(
-    [mock.profile.controlTransport, pi.profile.controlTransport, claude.profile.controlTransport],
-    ["mock", "in-process", "sdk"],
-  );
-  assert.deepEqual(
-    [mock.profile.toolTransport, pi.profile.toolTransport, claude.profile.toolTransport],
-    ["mock", "in-process", "in-process-mcp"],
-  );
+  assert.deepEqual([pi.profile.controlTransport, claude.profile.controlTransport], ["in-process", "sdk"]);
+  assert.deepEqual([pi.profile.toolTransport, claude.profile.toolTransport], ["in-process", "in-process-mcp"]);
   assert.equal(pi.profile.capabilities.has("fast-mode"), true);
 });
 

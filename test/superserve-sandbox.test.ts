@@ -20,6 +20,7 @@ import { scopeId } from "../src/types.ts";
 import { shq } from "../src/util/shell.ts";
 import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-superserve.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;
@@ -36,8 +37,11 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSuperserveSandbox(newWorkspace(), {
+    store: createMemoryMap(),
+    ...singleProcessDeps(),
     client: fake.client,
     namePrefix: "qmt",
+    configEpoch: 1,
     ...extra,
   });
 }
@@ -408,8 +412,8 @@ test("concurrent cores serialize read-only layer preparation", async () => {
     create: async (...args: Parameters<typeof fake.client.create>) => wrap(await fake.client.create(...args)),
     connect: async (...args: Parameters<typeof fake.client.connect>) => wrap(await fake.client.connect(...args)),
   };
-  const first = createSuperserveSandbox(workspace, { client, advisoryLock, configEpoch: 1 });
-  const second = createSuperserveSandbox(workspace, { client, advisoryLock, configEpoch: 1 });
+  const first = createSuperserveSandbox(workspace, { store: createMemoryMap(), client, advisoryLock, configEpoch: 1 });
+  const second = createSuperserveSandbox(workspace, { store: createMemoryMap(), client, advisoryLock, configEpoch: 1 });
   const results = await Promise.allSettled([first.provision(layered), second.provision(layered)]);
   assert.equal(overlappingWrites, false, "each core owns the shared archive until extraction finishes");
   assert.deepEqual(
@@ -426,8 +430,18 @@ test("an older core leaves newer read-only layers intact", async () => {
   await newerWorkspace.write(shared, "policy.txt", "new");
   const layered = [...layers, { scopeId: shared, mountPath: "global", mode: "ro" as const }];
   const advisoryLock = createMemoryAdvisoryLock();
-  const older = createSuperserveSandbox(olderWorkspace, { client: fake.client, advisoryLock, configEpoch: 1 });
-  const newer = createSuperserveSandbox(newerWorkspace, { client: fake.client, advisoryLock, configEpoch: 2 });
+  const older = createSuperserveSandbox(olderWorkspace, {
+    store: createMemoryMap(),
+    client: fake.client,
+    advisoryLock,
+    configEpoch: 1,
+  });
+  const newer = createSuperserveSandbox(newerWorkspace, {
+    store: createMemoryMap(),
+    client: fake.client,
+    advisoryLock,
+    configEpoch: 2,
+  });
   await older.provision(layered);
   const upgraded = await newer.provision(layered);
   const held = await older.provision(layered);
@@ -588,22 +602,39 @@ test("a newer core stamps its epoch even when only lifecycle settings changed", 
 
 test("the config epoch is claimed once per deployment generation, so a restarted core cannot outrank a newer one", async () => {
   const epochs: DurableMap<StoredConfigEpoch> = createMemoryMap();
-  const claimed = await createConfigEpochResolver(epochs, "release-1")();
+  const claimed = await createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock)();
   assert.equal(claimed, 1);
-  assert.equal(await createConfigEpochResolver(epochs, "release-1")(), claimed, "a restart reuses its own generation");
-  const newRelease = await createConfigEpochResolver(epochs, "release-2")();
+  assert.equal(
+    await createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock)(),
+    claimed,
+    "a restart reuses its own generation",
+  );
+  const newRelease = await createConfigEpochResolver(epochs, "release-2", singleProcessDeps().advisoryLock)();
   assert.equal(newRelease, claimed + 1, "each new generation is strictly higher than every generation before it");
-  assert.equal(await createConfigEpochResolver(epochs, "release-1")(), claimed, "a restart still ranks below it");
+  assert.equal(
+    await createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock)(),
+    claimed,
+    "a restart still ranks below it",
+  );
 
-  const older = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), idlePauseSec: 600 });
+  const older = make({
+    configEpoch: createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock),
+    idlePauseSec: 600,
+  });
   await older.teardown(await older.provision(layers));
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], String(claimed));
 
-  const newer = make({ configEpoch: createConfigEpochResolver(epochs, "release-2"), idlePauseSec: 1_800 });
+  const newer = make({
+    configEpoch: createConfigEpochResolver(epochs, "release-2", singleProcessDeps().advisoryLock),
+    idlePauseSec: 1_800,
+  });
   await newer.teardown(await newer.provision(layers));
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800);
 
-  const restarted = make({ configEpoch: createConfigEpochResolver(epochs, "release-1"), idlePauseSec: 600 });
+  const restarted = make({
+    configEpoch: createConfigEpochResolver(epochs, "release-1", singleProcessDeps().advisoryLock),
+    idlePauseSec: 600,
+  });
   await restarted.teardown(await restarted.provision(layers));
   assert.equal(fake.current(scopeName())?.timeoutSeconds, 1_800, "the restarted older release stays passive");
   assert.equal(fake.current(scopeName())?.metadata[SUPERSERVE_METADATA.epoch], String(newRelease));

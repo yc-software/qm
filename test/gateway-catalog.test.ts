@@ -17,7 +17,7 @@ import {
   safeModelMetadata,
 } from "../src/model/pi-models.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { validateCustomProviderSpec } from "../src/model/custom-providers.ts";
+import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
 
 const config = {
@@ -70,7 +70,6 @@ afterEach(() => setGatewayModels([]));
 
 test("gateway configuration no longer requires a model list", () => {
   const parsed = loadConfig({
-    HARNESS: "mock",
     MODEL_GATEWAY_URL: config.url,
     MODEL_GATEWAY_API_KEY: config.apiKey,
     MODEL_GATEWAY_API_KEY_HEADER: config.apiKeyHeader,
@@ -209,7 +208,7 @@ test("malformed and oversized catalogs cannot grant access", async () => {
   }
 });
 
-test("gateway namespace cannot be registered by custom providers even before discovery", () => {
+test("custom provider models live in their own namespace, never the gateway one", () => {
   assert.doesNotThrow(() =>
     validateCustomProviderSpec({
       id: "gateway",
@@ -227,22 +226,26 @@ test("gateway namespace cannot be registered by custom providers even before dis
     baseUrl: config.url,
     models: [{ id: "gateway/future" }],
   };
-  assert.throws(() => validateCustomProviderSpec(spec), /already registered/);
+  assert.doesNotThrow(() => validateCustomProviderSpec(spec));
+  setCustomProviders([spec]);
+  assert.equal(resolveModel("custom/custom/gateway/future")?.provider, "custom");
+  assert.equal(resolveModel("gateway/future"), undefined);
+  setCustomProviders([]);
   assert.throws(
     () => validateCustomProviderSpec({ ...spec, id: "qm:gateway", models: [{ id: "other" }] }),
     /must match/,
   );
 });
 
-test("removed gateway selections never fall back to a different org or direct model", () => {
+test("removed gateway selections never fall back to a different org or direct model", async () => {
   const store = createMemoryConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-5" };
-  store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
-  store.setRuntimeSelection(org, fallback);
-  store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
+  await store.setRuntimeSelection(org, fallback);
+  await store.setRuntimeSelection(personal, { harnessId: "pi", modelId: "gateway/removed" });
   assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
 });
 

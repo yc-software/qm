@@ -55,7 +55,7 @@ import {
   fastModeModelIds,
   defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
-import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
@@ -130,7 +130,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.deepEqual(inFlight.cost, spec.cost);
   assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
   assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
-  for (const harness of ["pi", "mock"]) assert.equal(modelSupportedByHarness(MODEL_ID, harness), true);
+  assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), true);
   assert.equal(modelSupportedByHarness(MODEL_ID, "claude"), false);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
   await writer.upsert(
@@ -177,17 +177,7 @@ test("template capabilities are inherited and overlay API models cannot silently
   );
 });
 
-test("collisions are rejected in both registration orders and OpenRouter failure rebuilds local choices", async () => {
-  const custom = {
-    id: "gateway",
-    name: "Gateway",
-    protocol: "openai" as const,
-    baseUrl: "https://example.invalid/v1",
-    models: [{ id: MODEL_ID }],
-  };
-  setCustomProviders([custom]);
-  assert.throws(() => validateModelOverlay(spec), /already registered/);
-  setCustomProviders([]);
+test("OpenRouter failure rebuilds local choices", async () => {
   let fail = false;
   const fetcher: typeof fetch = async () => {
     if (fail) throw new Error("offline");
@@ -195,12 +185,10 @@ test("collisions are rejected in both registration orders and OpenRouter failure
   };
   await selectableModelCatalog(fetcher);
   setModelOverlays([validateModelOverlay(spec)]);
-  assert.throws(() => validateCustomProviderSpec(custom), /already registered/);
   fail = true;
   assert.ok((await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
   setModelOverlays([], [MODEL_ID]);
   assert.ok(!(await selectableModelCatalog(fetcher)).some((m) => m.id === MODEL_ID));
-  assert.throws(() => validateCustomProviderSpec(custom), /already registered/);
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
@@ -267,7 +255,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelectionLatest("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
+    await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
       "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
@@ -508,9 +496,9 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
 
-test("runtime normalization preserves native capabilities and reflects overlay capability edits", () => {
+test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setApprovedHarnesses(["pi", "claude"]);
   const org = "org:default-org" as const;
   const scope = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };

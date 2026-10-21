@@ -23,6 +23,8 @@ const productionEnv = {
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
+  DATABASE_URL: "postgres://qm@localhost/qm",
+  SESSION_STORE: "postgres",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
@@ -184,24 +186,6 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("production names a mock harness rather than letting it pass as a real deployment", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  try {
-    loadConfig(productionEnv);
-    loadConfig({ ...productionEnv, HARNESS: "mock" });
-    loadConfig({ ...productionEnv, HARNESS: "pi" });
-    loadConfig({});
-  } finally {
-    console.warn = original;
-  }
-  const mock = warnings.filter((w) => w.includes("calls no model provider"));
-  assert.equal(mock.length, 2, "production + unset and production + mock each warn once");
-  assert.match(mock[0]!, /unset, which means mock/);
-  assert.match(mock[1]!, /HARNESS is "mock"/);
-});
-
 test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
   const warnings: string[] = [];
   const original = console.warn;
@@ -295,6 +279,25 @@ test("sandbox backend is parsed once before production backend guards", () => {
   );
 });
 
+test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+  const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
+  assert.throws(
+    () => loadConfig(noDatabase),
+    /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
+  );
+  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
+  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
+  assert.throws(
+    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
+    /production requires SESSION_STORE=postgres/,
+  );
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(
+    () => loadConfig({ SANDBOX_BACKEND: "local" }),
+    "a single-process dev instance needs no durable store",
+  );
+});
+
 test("production refuses missing, placeholder, or weak signing keys", () => {
   assert.throws(
     () => loadConfig({ NODE_ENV: "production" }),
@@ -383,15 +386,15 @@ test("HARNESS=pi can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
   assert.doesNotThrow(() => loadConfig({ HARNESS: " pi " }));
   assert.doesNotThrow(() => loadConfig({ HARNESS: " pi ", ANTHROPIC_API_KEY: "sk-ant" }));
-  assert.doesNotThrow(() => loadConfig({ HARNESS: "mock" }));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi" }));
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, HARNESS: "pi", ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
 test("HARNESS accepts only the remaining harnesses", () => {
-  for (const harness of ["codex", " opencode "])
-    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use mock, pi, or claude/);
+  for (const harness of ["codex", " opencode ", "mock"])
+    assert.throws(() => loadConfig({ HARNESS: harness }), /is not recognized — use pi or claude/);
   assert.equal(loadConfig({ HARNESS: "pi" }).harness, "pi");
+  assert.equal(loadConfig({}).harness, "pi");
 });
 
 test("HARNESS=claude uses native Claude authentication and does not require an Anthropic key", () => {
@@ -461,23 +464,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     }).sandboxBackend,
     "superserve",
   );
-  const superserveProd = {
-    ...productionEnv,
-    SANDBOX_BACKEND: "superserve",
-    SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-    SUPERSERVE_API_KEY: "ss_live_k",
-  };
-  assert.throws(
-    () => loadConfig(superserveProd),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "without a durable store the generation and provisioning lock are per-process",
-  );
-  assert.throws(
-    () => loadConfig({ ...superserveProd, SANDBOX_BACKEND: "local" }),
-    /superserve sandbox backend requires DATABASE_URL in production/,
-    "the requirement follows the credentials that enable it, not just the primary backend",
-  );
-  assert.doesNotThrow(() => loadConfig({ ...superserveProd, DATABASE_URL: "postgres://qm@localhost/qm" }));
   assert.doesNotThrow(
     () =>
       loadConfig({

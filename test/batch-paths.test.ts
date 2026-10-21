@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
@@ -64,6 +65,54 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 
+  test(`batch appends keep order, roll back atomically and check leases: ${backend}`, { skip }, async () => {
+    const store =
+      backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+    const scope = scopeId("personal", "batch");
+    for (let i = 0; i < 2; i++) {
+      const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
+      const { lease } = await store.acquireLease(session.id);
+      assert.ok(lease);
+      const entries = await store.appendMany(
+        lease,
+        Array.from({ length: 5 }, (_, n) => ({
+          type: "user" as const,
+          payload: { text: `message ${n}` },
+          scopeLabel: scope,
+        })),
+      );
+      assert.deepEqual(
+        entries.map((entry) => entry.seq),
+        [0, 1, 2, 3, 4],
+      );
+      assert.deepEqual((await store.getEntries(session.id)).slice(-5), entries);
+      assert.deepEqual(await store.appendMany(lease, []), []);
+      const batch = [5, 6].map((n) => ({
+        type: "user" as const,
+        payload: { text: `message ${n}` },
+        scopeLabel: scope,
+      }));
+      if (backend === "postgres") {
+        const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+        try {
+          const constraint = `items_batch_${randomUUID().replaceAll("-", "")}`;
+          await pool.query(
+            `ALTER TABLE items ADD CONSTRAINT ${constraint} CHECK (session_id <> '${session.id}' OR seq <> 6) NOT VALID`,
+          );
+          try {
+            await assert.rejects(store.appendMany(lease, batch));
+            assert.equal((await store.getEntries(session.id)).length, 5);
+          } finally {
+            await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
+          }
+        } finally {
+          await pool.end();
+        }
+      }
+      await store.releaseLease(lease);
+      await assert.rejects(store.appendMany(lease, batch), /lease/);
+    }
+  });
   test(`session goals live on the session row behind its lease: ${backend}`, { skip }, async () => {
     const store =
       backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
@@ -84,13 +133,17 @@ for (const backend of ["memory", "postgres"] as const) {
       const { lease } = await store.acquireLease(id);
       assert.ok(lease);
       await store.setGoal(lease, goal(`first ${i}`));
-      const notice = { type: "system" as const, payload: { kind: "goal_notice", n: i }, scopeLabel: scope };
+      const notice = {
+        type: "system" as const,
+        payload: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
+        scopeLabel: scope,
+      };
       await store.setGoal(lease, { ...goal(`goal ${i}`), status: "paused" }, [notice]);
       await store.releaseLease(lease);
       await assert.rejects(store.setGoal(lease, goal("stale lease"), [notice]), /valid session lease/);
       assert.deepEqual(
         (await store.getEntries(id)).map((entry) => entry.payload),
-        [notice.payload],
+        [{ ...notice.payload, cause: "system" }],
         "the notice lands with the goal and not with a rejected write",
       );
     }

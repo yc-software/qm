@@ -19,13 +19,15 @@ open -a Calculator
 
 Run alone, macOS grants permissions to the terminal that launches desk, so switch your terminal on under System Settings > Privacy & Security > Accessibility and Screen Recording, then restart it.
 
-All running apps can be observed and controlled, subject to macOS permissions.
+App listing shows regular Mac apps. Explicit names, bundle IDs, and full application paths can also target accessory apps with an accessible, visible window. Background-only processes are excluded; observation and control remain subject to macOS permissions and app support.
 
 ## Platform considerations
 
-- **Events posted to a background app.** `CGEventPostToPid` clicks and keys might be ignored, or land in the wrong window, when the app isn't frontmost. If nothing happens, add `{"type":"raise"}` first; that does take focus.
-- **Screenshots.** They use `CGWindowListCreateImage`, deprecated in macOS 14 in favour of ScreenCaptureKit. On macOS 15+ it may return nothing or prompt monthly. `pixels_per_point` also needs checking on a Retina screen.
+- **Background input is experimental.** Desk sends target-only synthetic activation and input without raising the app, but some apps may ignore it. `{"type":"raise"}` is an explicit foreground action. Live Mac verification is still required.
+- **Screenshots.** On macOS 14+ they use ScreenCaptureKit's `SCScreenshotManager`. The app's own menus, popovers and sheets in front of the target window are composited in, and the image grows to include any part outside the window, across displays if needed; `frame` says which screen area it covers. macOS 12.3–13 uses `CGWindowListCreateImage` for the main window only; menu/panel composition requires macOS 14+. desk links ScreenCaptureKit, so it needs macOS 12.3 or later. `pixels_per_point` still needs checking on a Retina screen.
 - **`_AXUIElementGetWindow`** (private, widely used) maps the AX window to a window id for capture and event targeting.
-- **`AXManualAccessibility`** is set on each app so Electron and Chrome apps expose their trees.
-- **Speed.** Each element costs about 7 AX round trips, so big windows may take seconds. The 800-element cap bounds this.
+- **Clipboard.** `paste` replaces the general pasteboard, presses Cmd+V and restores the previous contents only once the focused field visibly contains the pasted text. When it cannot confirm that (canvas or terminal views without readable text, password fields, slow apps), it leaves the pasted text on the clipboard and says so, rather than risk the app pasting the user's clipboard. Clipboard data is available before Cmd+V is sent, so the receiving app does not need a callback from desk to read it.
+- **Keyboard layout.** `type_text` reads the current layout with `TISCopyCurrentKeyboardLayoutInputSource` and `UCKeyTranslate` on desk's main thread (TIS calls are main-thread only on recent macOS).
+- **Accessibility enablement.** On first observation, desk requests `AXManualAccessibility` and uses `AXEnhancedUserInterface` only if an empty web area still needs it. Prior settings are restored on normal exit.
+- **Speed.** Element attributes are read in batches. Actions and settability are cached until that app posts an accessibility notification; frames, values and children are always read fresh. Offscreen pruning and a 6,000-element read cap bound each walk.
 - **Universal binary:** `cargo build --release --target aarch64-apple-darwin --target x86_64-apple-darwin`, then `lipo`.

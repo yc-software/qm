@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -36,12 +37,15 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
 
 function kcAt(now: () => number): Keychain {
   return createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants: createMemoryMap(),
     asks: createMemoryMap(),
@@ -303,6 +307,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const swept: number[] = [];
   const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
   const scheduler = createScheduler({
+    ...singleProcessDeps(),
     crons: createCronStore(createMemoryMap()),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
@@ -401,7 +406,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
       deliveries,
       idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
       identity: createIdentityService(createMemoryMap()),
-      run: async () => ({ status: "ok", reply: "The keychain ask was approved.\n\n[SILENT]" }) as TurnResult,
+      run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
     {
       owner: "U_ALICE",

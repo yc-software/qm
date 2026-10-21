@@ -13,7 +13,7 @@
     "serve": "node --env-file-if-exists=.env server/index.ts",
     "start": "npm run build && npm run serve",
     "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "typecheck": "tsrs -p tsconfig.json --noEmit && tsrs -p tsconfig.server.json --noEmit && tsrs -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "@codemirror/language": "6.12.4",
@@ -33,6 +33,7 @@
     "date-fns": "^4.4.0",
     "dockview-core": "^7.0.4",
     "dompurify": "^3.4.13",
+    "emoji-datasource": "^16.0.0",
     "html-to-image": "1.11.13",
     "jszip": "^3.10.1",
     "lit": "^3.3.1",
@@ -50,8 +51,9 @@
     "@types/papaparse": "5.5.2",
     "jsdom": "^29.1.1",
     "katex": "^0.16.47",
+    "tsrs": "0.14.1-ts7.1.0-dev.20260929",
     "typescript": "^5.8.2",
-    "vite": "^7.1.6"
+    "vite": "^7.3.7"
   },
   "overrides": {
     "@earendil-works/pi-web-ui": {

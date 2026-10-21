@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
-import { cacheHitRatio, isStablePrefixMiss } from "../src/admin/metrics-sink.ts";
+import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { testConfig } from "./support/test-config.ts";
@@ -65,7 +65,6 @@ function start() {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,
-    metrics: built.metrics,
     runs: built.runs,
   });
   server.listen(0);
@@ -83,78 +82,6 @@ test("cacheHitRatio: read / (read + write + uncached); null when there's no tele
   assert.equal(cacheHitRatio({ cacheRead: 80, cacheWrite: 10, uncachedInput: 10 }), 0.8);
   assert.equal(cacheHitRatio({}), null);
   assert.equal(cacheHitRatio({ cacheRead: 0, cacheWrite: 0, uncachedInput: 0 }), null);
-});
-
-test("isStablePrefixMiss: flags a big-write/near-zero-read turn, not a small cold seed", () => {
-  assert.equal(isStablePrefixMiss({ cacheRead: 0, cacheWrite: 50_000, uncachedInput: 100 }), true);
-  assert.equal(isStablePrefixMiss({ cacheRead: 50_000, cacheWrite: 0, uncachedInput: 100 }), false);
-  assert.equal(isStablePrefixMiss({ cacheRead: 0, cacheWrite: 200, uncachedInput: 50 }), false);
-  assert.equal(isStablePrefixMiss({}), null);
-});
-
-test("metrics: the cache aggregate reflects warm turns and flags a stable-prefix miss", async () => {
-  const s = start();
-  try {
-    const warm1: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:w1" },
-      text: "hello there",
-    };
-    const warm2: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U2" },
-      conversation: { kind: "dm", threadRef: "dm:U2:w2" },
-      text: "how are you",
-    };
-    const miss: TurnRequest = {
-      surface: "test",
-      actor: { externalId: "U3" },
-      conversation: { kind: "dm", threadRef: "dm:U3:m1" },
-      text: "!cachemiss",
-    };
-    const turns = [];
-    for (const request of [warm1, warm2, miss]) {
-      const result = await s.built.app.turn(request);
-      assert.equal(result.status, "ok");
-      const calls = await s.built.sessions.listLlmRequests(result.sessionId!);
-      const usage = calls.find((call) => call.model === "mock")!.usage!;
-      turns.push(usage.cacheRead! / (usage.cacheRead! + usage.cacheWrite! + usage.input));
-    }
-
-    const m = await getJson(s.base, "/v1/admin/metrics?scope=org:default-org");
-    assert.ok(m.cache, "the metrics response carries a cache block");
-    assert.equal(m.cache.samples, 3, "all three turns carried cache telemetry");
-    assert.ok(turns[0]! > 0 && turns[1]! > 0);
-    assert.equal(turns[2], 0);
-    assert.ok(Math.abs(m.cache.avgHitRatio - turns.reduce((sum, ratio) => sum + ratio, 0) / turns.length) < 1e-9);
-    assert.ok(
-      m.cache.pooledHitRatio > 0 && m.cache.pooledHitRatio <= 1,
-      "pooled (token-weighted) ratio is a real fraction",
-    );
-    assert.equal(m.cache.missTurns, 1, "exactly the one re-prefilled turn is a miss");
-    assert.ok(Math.abs(m.cache.missRate - 1 / 3) < 1e-9, "miss rate = miss turns / turns-with-telemetry");
-    assert.ok(m.cache.cacheReadTotal > 0, "warm turns contributed cache reads");
-    assert.ok(m.cache.cacheWriteTotal > 0, "the miss turn contributed a cache write");
-  } finally {
-    await s.close();
-  }
-});
-
-test("metrics: empty scope yields a present-but-empty cache block (null ratios, not an error)", async () => {
-  const s = start();
-  try {
-    const m = await getJson(s.base, "/v1/admin/metrics?scope=personal:nobody");
-    assert.ok(m.cache, "cache block is always present");
-    assert.equal(m.cache.samples, 0);
-    assert.equal(m.cache.avgHitRatio, null, "no turns ⇒ null ratio (UI renders —), not 0");
-    assert.equal(m.cache.pooledHitRatio, null);
-    assert.equal(m.cache.missRate, null);
-    assert.equal(m.cache.missTurns, 0);
-    assert.equal(m.cache.cacheReadTotal, 0);
-  } finally {
-    await s.close();
-  }
 });
 
 test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to the viewer", async () => {
@@ -186,14 +113,6 @@ test("history /llm: per-call usage (cacheRead/cacheWrite) is plumbed through to 
       uncachedInput: req.usage.input,
     });
     assert.ok(ratio !== null && ratio > 0 && ratio < 1, "the call serves cached prefix and uncached new context");
-    assert.equal(
-      isStablePrefixMiss({
-        cacheRead: req.usage.cacheRead,
-        cacheWrite: req.usage.cacheWrite,
-        uncachedInput: req.usage.input,
-      }),
-      false,
-    );
   } finally {
     await s.close();
   }
@@ -218,7 +137,7 @@ test("viewer: per-call usage maps to a usage block; the per-turn rollup sums acr
   assert.equal(v.sumCacheUsage([{}, {}]), null, "a turn with no usage on any call has no rollup");
 });
 
-test("viewer: the ratio + miss math matches the server's canonical helpers", () => {
+test("viewer: the ratio math matches the server's canonical helper and flags only big cold writes", () => {
   const v = loadViewerCacheHelpers();
   for (const u of [
     { cacheRead: 100, cacheWrite: 0, uncachedInput: 0 },
@@ -226,8 +145,10 @@ test("viewer: the ratio + miss math matches the server's canonical helpers", () 
     { cacheRead: 80, cacheWrite: 10, uncachedInput: 10 },
   ]) {
     assert.equal(v.viewerCacheHitRatio(u), cacheHitRatio(u), "viewer ratio == server ratio");
-    assert.equal(v.viewerIsStablePrefixMiss(u), isStablePrefixMiss(u) === true, "viewer miss == server miss");
   }
+  assert.equal(v.viewerIsStablePrefixMiss({ cacheRead: 0, cacheWrite: 50_000, uncachedInput: 100 }), true);
+  assert.equal(v.viewerIsStablePrefixMiss({ cacheRead: 50_000, cacheWrite: 0, uncachedInput: 100 }), false);
+  assert.equal(v.viewerIsStablePrefixMiss({ cacheRead: 0, cacheWrite: 200, uncachedInput: 50 }), false);
 });
 
 test("viewer: cache metadata flags a stable-prefix miss with danger styling, and is quiet when warm", () => {

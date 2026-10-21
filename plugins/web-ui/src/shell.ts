@@ -44,9 +44,10 @@ import {
   type PendingApproval,
   type TranscriptPage,
   loadChatPrefs,
+  fetchSessionRow,
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
-import { errMessage, swallow } from "../../chassis/src/errors";
+import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
@@ -998,11 +999,13 @@ function warmDeferredChunks(): void {
   else setTimeout(warm, 1500);
 }
 
-function openAppEditChat(slug: string): void {
+async function openAppEditChat(slug: string): Promise<void> {
   const user = appState.me?.user ?? "anon";
   const threadRef = `web:${user}:app-edit:${slug}`;
   if (storedDraft(threadRef) === `Update my deployed app "${slug}": `) saveDraft(threadRef, "");
-  const existing = sessionsState.list.find((s) => s.threadRef === threadRef);
+  const existing =
+    sessionsState.list.find((s) => s.threadRef === threadRef) ??
+    (await fetchSessionRow({ threadRef }).catch(swallowAs("web-ui: find app edit chat", null)));
   if (existing) {
     void openSession(existing);
     return;
@@ -1208,7 +1211,7 @@ export async function boot(): Promise<void> {
   if (wanted === "app-edit") {
     const slug = (params.get("slug") ?? "").toLowerCase();
     if (/^[a-z0-9-]{1,63}$/.test(slug)) {
-      openAppEditChat(slug);
+      await openAppEditChat(slug);
       if (params.get("embed") === "1")
         watchAppAnnotations(slug, (text, files, id, remove) =>
           mainConversation().composer.addAnnotations(text, files, id, remove),

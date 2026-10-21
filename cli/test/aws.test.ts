@@ -25,6 +25,7 @@ import {
   awsRollback,
   awsSecretsPush,
   awsSetBackgroundWork,
+  awsStoppedCoreOwner,
   taskDefinitionForBackgroundWork,
   awsStatus,
   awsUp,
@@ -427,8 +428,9 @@ else if (a.includes("ecs list-tasks")) console.log(JSON.stringify({ taskArns: pr
 else if (a.includes("ecs describe-tasks") && a.includes("task/old-core-")) console.log(JSON.stringify({ tasks: [] }));
 else if (a.includes("ecs describe-tasks") && a.includes("task/live-core")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/live-core", taskDefinitionArn: process.env.AWS_FAKE_STALE_CORE ? "stale-task-definition" : s.services["acme-core"].taskDefinition, lastStatus: "RUNNING", healthStatus: "HEALTHY", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (a.includes("ecs run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "arn:aws:ecs:us-west-2:123456789012:task/canary" }] }));
-else if (a.includes("ecs wait tasks-stopped")) console.log("");
-else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
+else if (a.includes("ecs describe-tasks") && s.missingPolls > 0) { s.missingPolls--; save(); console.log(JSON.stringify({ tasks: [], failures: [{ arn: "arn:aws:ecs:us-west-2:123456789012:task/canary", reason: s.failureReason || "MISSING" }] })); }
+else if (a.includes("ecs describe-tasks") && s.runningPolls > 0) { s.runningPolls--; save(); console.log(JSON.stringify({ tasks: [{ lastStatus: "RUNNING", containers: [{ name: "core" }] }], failures: [] })); }
+else if (a.includes("ecs describe-tasks")) { const exitCode = Number(process.env.AWS_FAKE_CANARY_EXIT || "0") || ${JSON.stringify(opts.migrationExitCode ?? 0)}; console.log(JSON.stringify({ tasks: [{ lastStatus: "STOPPED", stoppedReason: "Essential container in task exited", containers: [{ name: "core", exitCode, reason: process.env.AWS_FAKE_CANARY_REASON ?? (exitCode && ${JSON.stringify(Boolean(opts.migrationExitCode ?? 0))} ? "migration failed" : undefined) }] }], failures: [] })); }
 else if (a.includes("ecs describe-task-definition")) {
   const id = after("--task-definition");
   console.log(JSON.stringify({ taskDefinition: s.definitions[id] }));
@@ -451,6 +453,7 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--task-definition")) service.taskDefinition = after("--task-definition");
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
+  if (s.stoppedInventory) delete s.taskInventory;
   if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
@@ -1281,7 +1284,7 @@ test("AWS up scales services to the configured desired count and live check flag
     process.env.AWS_FAKE_CANARY_EXIT = "1";
     await assert.rejects(
       () => awsCheckLive(scaled(), { report: false }),
-      /core: private live session smoke failed: canary task exited 1/,
+      /core: private live session smoke failed: AWS canary task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: Essential container in task exited/,
     );
     if (priorCanaryExit === undefined) delete process.env.AWS_FAKE_CANARY_EXIT;
     else process.env.AWS_FAKE_CANARY_EXIT = priorCanaryExit;
@@ -2835,7 +2838,6 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.match(calls, /ecs run-task .*--launch-type FARGATE/);
     assert.match(calls, /subnet-a/);
     assert.match(calls, /src\/migrate-main\.ts/);
-    assert.match(calls, /ecs wait tasks-stopped/);
     assert.match(calls, /ecs deregister-task-definition/);
     assert.ok(calls.indexOf("dynamodb put-item") < calls.indexOf("ecs run-task"));
     assert.ok(calls.indexOf("rds describe-db-instances") < calls.indexOf("ecs run-task"));
@@ -2847,6 +2849,66 @@ test("AWS migration runs the exact candidate core image inside the service VPC",
     assert.equal(registered.at(-1)?.containerDefinitions[0]?.image, image);
     assert.equal(registered.at(-1)?.containerDefinitions[0]?.healthCheck, undefined);
   } finally {
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("AWS migration polls a long-running task to its deadline without stopping it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-candidate-migrate-wait-"));
+  const candidatePath = join(dir, "candidate.json");
+  writeFileSync(
+    candidatePath,
+    JSON.stringify({
+      contract: 1,
+      accountId: "123456789012",
+      region: "us-west-2",
+      label: "candidate-deadbeef",
+      images: { core: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}` },
+      imageProvenance: { core: { kind: "source-build", source: "checkout" } },
+      architectures: { core: "amd64" },
+    }),
+  );
+  const single = oneServiceConfig();
+  const fake = statefulAws(dir, single);
+  const setState = (patch: Record<string, unknown>): void => {
+    writeFileSync(fake.state, JSON.stringify({ ...JSON.parse(readFileSync(fake.state, "utf8")), ...patch }));
+    writeFileSync(fake.log, "");
+  };
+  const priorDeadline = process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+  try {
+    setState({ missingPolls: 2, runningPolls: 3 });
+    await awsMigrateCandidate(single, dir, candidatePath);
+    assert.equal(readFileSync(fake.log, "utf8").match(/ecs describe-tasks/g)?.length, 6);
+
+    setState({ runningPolls: 1e9 });
+    process.env.QM_AWS_ROLLOUT_DEADLINE_MS = "50";
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /task\/canary is still RUNNING and was left running/,
+    );
+    let calls = readFileSync(fake.log, "utf8");
+    assert.doesNotMatch(calls, /ecs stop-task/);
+    assert.match(calls, /ecs deregister-task-definition/);
+    assert.match(calls, /dynamodb delete-item/);
+
+    setState({ runningPolls: 0, missingPolls: 1e9 });
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /ECS still does not list arn:aws:ecs:us-west-2:123456789012:task\/canary/,
+    );
+
+    setState({ missingPolls: 1, failureReason: "ACCESS_DENIED" });
+    await assert.rejects(
+      () => awsMigrateCandidate(single, dir, candidatePath),
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary failed \(ACCESS_DENIED\)/,
+    );
+    calls = readFileSync(fake.log, "utf8");
+    assert.equal(calls.match(/ecs describe-tasks/g)?.length, 1);
+    assert.match(calls, /dynamodb delete-item/);
+  } finally {
+    if (priorDeadline === undefined) delete process.env.QM_AWS_ROLLOUT_DEADLINE_MS;
+    else process.env.QM_AWS_ROLLOUT_DEADLINE_MS = priorDeadline;
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
   }
@@ -3212,7 +3274,10 @@ test("AWS migration failure deregisters the candidate task and releases the depl
   );
   const fake = statefulAws(dir, oneServiceConfig(), {}, { migrationExitCode: 1 });
   try {
-    await assert.rejects(() => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath), /migration task failed/);
+    await assert.rejects(
+      () => awsMigrateCandidate(oneServiceConfig(), dir, candidatePath),
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: migration failed; Essential container in task exited/,
+    );
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /ecs deregister-task-definition/);
     assert.match(calls, /dynamodb delete-item/);
@@ -3244,7 +3309,7 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
   try {
     await assert.rejects(
       () => awsUp(oneServiceConfig(), dir, { yes: true, candidate: candidatePath }),
-      /migration task failed/,
+      /migration task arn:aws:ecs:us-west-2:123456789012:task\/canary exited 1: migration failed; Essential container in task exited/,
     );
     const calls = readFileSync(fake.log, "utf8");
     assert.doesNotMatch(calls, /ecs (?:deregister-task-definition|update-service)/);
@@ -6117,6 +6182,127 @@ test("controlled AWS cohorts bind immutable identities and hand over without ECS
       awsSetBackgroundWork({ ...single, aws: { ...single.aws!, backgroundWorkControl: false } }, dir, true),
       /cannot fall back/,
     );
+  } finally {
+    process.env.PATH = priorPath;
+    fake.restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stopped AWS core cohort is replaceable only while the production route reports another active owner", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-stopped-background-"));
+  const dockerBin = join(dir, "docker");
+  writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
+  chmodSync(dockerBin, 0o755);
+  const base = oneServiceConfig();
+  const single: QmConfig = { ...base, aws: { ...base.aws!, backgroundWorkControl: true } };
+  const fake = statefulAws(dir, single);
+  const priorPath = process.env.PATH;
+  process.env.PATH = `${dir}:${priorPath}`;
+  try {
+    await awsUp(single, dir, { yes: true });
+    const current = () => {
+      const state = JSON.parse(readFileSync(fake.state, "utf8"));
+      return JSON.parse(
+        state.dynamo[`deployment/manifest/${state.dynamo["deployment/current"].manifestId.S}`].manifest.S,
+      );
+    };
+    const manifest = current();
+    const stopped = (lastStatus = "STOPPED", runningCount = 0) => {
+      const state = JSON.parse(readFileSync(fake.state, "utf8"));
+      state.services["acme-core"].desiredCount = 0;
+      if (runningCount) state.serviceOverrides = { "acme-core": { runningCount } };
+      else delete state.serviceOverrides;
+      state.stoppedInventory = true;
+      state.taskInventory = {
+        "acme-core": [
+          {
+            taskArn: "arn:aws:ecs:us-west-2:123456789012:task/old-core",
+            taskDefinitionArn: state.services["acme-core"].taskDefinition,
+            desiredStatus: "STOPPED",
+            lastStatus,
+          },
+        ],
+      };
+      return state;
+    };
+    const production = {
+      protocol: 2,
+      deploymentId: "other-core:release",
+      instanceId: "other-instance",
+      ownerDeploymentId: "other-core:release" as string | null,
+      setAt: "2026-10-19T00:00:00.000Z",
+      setBy: "other-core:release",
+      active: true,
+    };
+    let status = 200;
+    const reads: string[] = [];
+    const fetchLayer = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (!String(url).includes("/v1/background-work")) return fetchLayer(url, init);
+      reads.push(String(url));
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), "Bearer separate-control-secret-value-0000000000");
+      assert.equal(init?.method, "GET");
+      return new Response(JSON.stringify(production), { status });
+    };
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    assert.deepEqual(await awsStoppedCoreOwner(single, manifest.backgroundDeploymentId), {
+      ...production,
+      ownerDeploymentId: "other-core:release",
+    });
+    assert.deepEqual(reads, ["https://agent.acme.example/v1/background-work"]);
+    reads.length = 0;
+    await awsStoppedCoreOwner({ ...single, apiUrl: "https://api.acme.example" }, manifest.backgroundDeploymentId);
+    assert.deepEqual(reads, ["https://api.acme.example/v1/background-work"]);
+    await assert.rejects(
+      awsStoppedCoreOwner({ ...single, apiUrl: "http://api.acme.example" }, manifest.backgroundDeploymentId),
+      /must be HTTPS/,
+    );
+    const refusals: Array<[() => void, RegExp]> = [
+      [() => Object.assign(production, { deploymentId: manifest.backgroundDeploymentId }), /another deployment/],
+      [
+        () => Object.assign(production, { ownerDeploymentId: manifest.backgroundDeploymentId }),
+        /active background owner/,
+      ],
+      [() => Object.assign(production, { ownerDeploymentId: null }), /active background owner/],
+      [() => Object.assign(production, { active: false }), /active background owner/],
+      [() => (status = 503), /HTTP 503/],
+      [() => writeFileSync(fake.state, JSON.stringify(stopped("DEACTIVATING"))), /retiring task/],
+      [() => writeFileSync(fake.state, JSON.stringify(stopped("STOPPED", 1))), /stable deployment capacity/],
+    ];
+    const healthy = structuredClone(production);
+    for (const [arrange, error] of refusals) {
+      Object.assign(production, healthy);
+      status = 200;
+      writeFileSync(fake.state, JSON.stringify(stopped()));
+      arrange();
+      writeFileSync(fake.log, "");
+      await assert.rejects(awsUp(single, dir, { yes: true }), error);
+      await assert.rejects(awsRollback(single, manifest.id), error);
+      assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service|register-task-definition/);
+    }
+    Object.assign(production, healthy);
+    status = 200;
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    reads.length = 0;
+    writeFileSync(fake.log, "");
+    await awsUp(single, dir, { yes: true, restart: ["core"] });
+    const replaced = current();
+    assert.notEqual(replaced.id, manifest.id);
+    assert.notEqual(replaced.backgroundDeploymentId, manifest.backgroundDeploymentId);
+    assert.equal(replaced.counts.core, 1);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs update-service/);
+    writeFileSync(fake.state, JSON.stringify(stopped()));
+    await awsRollback(single, manifest.id);
+    const rolledBack = JSON.parse(readFileSync(fake.state, "utf8"));
+    assert.equal(current().id, manifest.id);
+    assert.equal(rolledBack.services["acme-core"].taskDefinition, manifest.tasks.core);
+    assert.equal(rolledBack.services["acme-core"].desiredCount, 1);
+    assert.deepEqual(reads, [
+      "https://agent.acme.example/v1/background-work",
+      "https://agent.acme.example/v1/background-work",
+    ]);
   } finally {
     process.env.PATH = priorPath;
     fake.restore();

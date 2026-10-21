@@ -5,7 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -105,6 +106,8 @@ describe("surface-context pulls", async () => {
       messages: [{ ts: "1699.0001", author: "Alice", text: "deploy went out" }],
       hasMore: true,
       nextBefore: "1699.0001",
+      selfTs: ["1699.0001", 7],
+      liveSearch: "unconnected",
     }));
     assert.equal(
       query.conversationTarget,
@@ -119,6 +122,8 @@ describe("surface-context pulls", async () => {
     assert.equal(body.messages[0].text, "deploy went out");
     assert.equal(body.hasMore, true);
     assert.equal(body.nextBefore, "1699.0001");
+    assert.deepEqual(body.selfTs, ["1699.0001"]);
+    assert.equal(body.liveSearch, "unconnected");
     const pending = await (await signedGet(pendingPath())).json();
     assert.deepEqual((pending as any).requests, []);
   });

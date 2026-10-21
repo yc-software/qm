@@ -9,17 +9,19 @@
   },
   "scripts": {
     "start": "node src/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs --noEmit",
     "test": "NODE_ENV=test ALLOW_UNSIGNED_TEST_IDENTITY=1 node --test"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",
     "@types/node": "^24.0.0",
     "jsdom": "^29.1.1",
+    "tsrs": "0.14.1-ts7.1.0-dev.20260929",
     "typescript": "^5.8.2"
   },
   "dependencies": {
     "@sentry/node": "10.75.0",
+    "emoji-datasource": "^16.0.0",
     "esbuild": "^0.28.1",
     "lit": "^3.3.3",
     "lucide": "^0.544.0"

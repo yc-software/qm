@@ -61,12 +61,6 @@ export async function fireAskResolution(
     surface: "keychain-ask",
     ...(cron?.runtime ? { runtime: cron.runtime } : {}),
     deferWhenBusy: true,
-    ...(cron
-      ? {
-          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
-          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
-        }
-      : {}),
     ...(destination ? { destination } : {}),
     ...(ask.requesterThreadRef ? { threadRef: ask.requesterThreadRef } : {}),
   });

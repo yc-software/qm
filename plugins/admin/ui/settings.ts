@@ -150,6 +150,7 @@ function card(s: SettingsState) {
   if (s.key === "branding") return brandingCard(s);
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
+  const canAdd = available.some((m) => m.id === s.selected);
   return html`<section
     class=${classMap({ card: true, "sv-models": true, hidden: !s.available, dirty: s.dirty })}
     id="card-webui-models"
@@ -159,20 +160,23 @@ function card(s: SettingsState) {
       <div class="model-add-row">
         <div class="model-add-field">
           <label for="webui-models-add">Add a model</label
-          ><select
+          ><input
             id="webui-models-add"
+            list="webui-models-options"
+            autocomplete="off"
+            placeholder="Search models…"
             .value=${s.selected}
             ?disabled=${!available.length}
-            @change=${(e: Event) => {
+            @input=${(e: Event) => {
               s.selected = value(e);
               s.render();
             }}
-          >
-            <option value="">Choose a model…</option>
+            @keydown=${(e: KeyboardEvent) => e.key === "Enter" && canAdd && s.add()}
+          /><datalist id="webui-models-options">
             ${available.map((m) => html`<option value=${m.id}>${label(s, m.id)}</option>`)}
-          </select>
+          </datalist>
         </div>
-        <button type="button" id="webui-models-add-button" ?disabled=${!s.selected} @click=${() => s.add()}>
+        <button type="button" id="webui-models-add-button" ?disabled=${!canAdd} @click=${() => s.add()}>
           + Add model
         </button>
       </div>

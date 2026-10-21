@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { litFixture } from "./lit-fixture.ts";
 
+const zero = { costUsd: 0, calls: 0, tokens: 0 };
+const background = (sources: Record<string, number> = {}) => {
+  const all = Object.fromEntries(
+    ["cron", "loop", "swarm", "webhook", "monitor"].map((source) => [
+      source,
+      { ...zero, costUsd: sources[source] ?? 0 },
+    ]),
+  );
+  return { ...zero, costUsd: Object.values(sources).reduce((a, b) => a + b, 0), sources: all };
+};
+
 const person = (principalId: string, costUsd: number, over: Record<string, any> = {}) => ({
   principalId,
   scopeId: `personal:${principalId}`,
@@ -16,8 +27,7 @@ const person = (principalId: string, costUsd: number, over: Record<string, any> 
   cacheWrite: 100,
   cacheHitRatio: 0.7,
   live: { costUsd, calls: 2, tokens: 1000 },
-  cron: { costUsd: 0, calls: 0, tokens: 0 },
-  background: { costUsd: 0, calls: 0, tokens: 0 },
+  background: background(),
   ...over,
 });
 
@@ -33,18 +43,16 @@ const DATA = {
     cacheWrite: 400,
     cacheHitRatio: 0.7,
     live: { costUsd: 16, calls: 8, tokens: 4000 },
-    cron: { costUsd: 0, calls: 0, tokens: 0 },
-    background: { costUsd: 0, calls: 0, tokens: 0 },
+    background: background(),
   },
   series: [
-    { day: "2026-09-23", costUsd: 6, calls: 4, live: { costUsd: 6 }, cron: { costUsd: 0 }, background: { costUsd: 0 } },
+    { day: "2026-09-23", costUsd: 6, calls: 4, live: { costUsd: 6 }, background: background() },
     {
       day: "2026-09-24",
       costUsd: 10,
       calls: 4,
       live: { costUsd: 10 },
-      cron: { costUsd: 0 },
-      background: { costUsd: 0 },
+      background: background(),
     },
   ],
   people: [person("alice", 5), person("bob", 10), person("carol", 1)],
@@ -63,8 +71,7 @@ const EMPTY = {
     cacheWrite: 0,
     cacheHitRatio: null,
     live: { costUsd: 0, calls: 0, tokens: 0 },
-    cron: { costUsd: 0, calls: 0, tokens: 0 },
-    background: { costUsd: 0, calls: 0, tokens: 0 },
+    background: background(),
   },
   series: [],
   people: [],
@@ -114,7 +121,7 @@ test("spend view: KPI stats, stacked chart and range tabs describe the whole org
   assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.stats)), [
     ["$16.00", "Total spend"],
     ["$16.00", "Live"],
-    ["$0.00", "Crons"],
+    ["$0.00", "Background"],
     ["70.0%", "Cache hit rate"],
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.shell.tabs.map((t: any) => [t.label, t.active]))), [
@@ -200,15 +207,15 @@ test("spend view: a null per-row cache ratio reads n/a", () => {
 test("spend chart: category stacks and keyboard details use exact amounts", () => {
   const { f } = render({
     ...DATA,
-    series: [{ day: "2026-09-24", live: { costUsd: 3 }, cron: { costUsd: 2 }, background: { costUsd: 1 } }],
+    series: [{ day: "2026-09-24", live: { costUsd: 3 }, background: background({ cron: 2, loop: 1, swarm: 0.5 }) }],
   });
   const bar = f.root.querySelectorAll<HTMLElement>(".spend-column")[29]!;
   bar.dispatchEvent(new f.window.Event("focus"));
   assert.match(
     f.root.querySelector(".spend-chart-detail")!.textContent!,
-    /Live \$3.00.*Crons \$2.00.*Background \$1.00/,
+    /Live \$3.00.*Crons \$2.00.*Loops \$1.00.*Swarms \$0.50.*Webhooks \$0.00.*Monitors \$0.00/,
   );
-  assert.equal(bar.querySelectorAll(".spend-segment").length, 3);
+  assert.equal(bar.querySelectorAll(".spend-segment").length, 6);
   assert.ok(!f.root.innerHTML.includes("NaN"));
   f.window.close();
 });
@@ -228,19 +235,19 @@ test("spend models: category breakdown, sorting, filtering and export", () => {
   const { f, calls } = render({
     ...DATA,
     models: [
-      { ...person("", 10), model: "model-a", live: { costUsd: 3 }, cron: { costUsd: 6 }, background: { costUsd: 1 } },
-      { ...person("", 6), model: null, live: { costUsd: 5 }, cron: { costUsd: 0 }, background: { costUsd: 1 } },
+      { ...person("", 10), model: "model-a", live: { costUsd: 3 }, background: background({ cron: 6, swarm: 1 }) },
+      { ...person("", 6), model: null, live: { costUsd: 5 }, background: background({ webhook: 1 }) },
     ],
   });
   const names = () =>
     [...f.root.querySelectorAll(".spend-models tbody tr")].map((row) => row.querySelector("td")!.textContent!.trim());
   assert.deepEqual(names(), ["model-a", "Unknown model"]);
   const cells = [...f.root.querySelectorAll(".spend-models tbody tr:first-child td")].map((c) => c.textContent!.trim());
-  assert.deepEqual(cells.slice(0, 5), ["model-a", "$10.00", "$3.00", "$6.00", "$1.00"]);
-  const cron = [...f.root.querySelectorAll<HTMLElement>(".spend-models thead button")].find((b) =>
-    b.textContent!.includes("Crons"),
+  assert.deepEqual(cells.slice(0, 4), ["model-a", "$10.00", "$3.00", "$7.00Crons $6.00 · Swarms $1.00"]);
+  const backgroundHeader = [...f.root.querySelectorAll<HTMLElement>(".spend-models thead button")].find((b) =>
+    b.textContent!.includes("Background"),
   )!;
-  cron.click();
+  backgroundHeader.click();
   assert.deepEqual(names(), ["Unknown model", "model-a"]);
   calls.shell.search.onInput("model-a");
   assert.deepEqual(names(), ["model-a"]);
@@ -417,5 +424,80 @@ test("spend view: Custom turns the current window into two editable UTC days, ap
   calls.shell.tabs[0].onClick();
   assert.deepEqual(calls.ranges, ["7d"]);
   assert.equal(calls.api, 0);
+  f.window.close();
+});
+
+test("spend view: crons show each cron's spend under its title, scope and schedule, filter, and open the cron's runs", () => {
+  const opened: string[][] = [];
+  const downloads: string[] = [];
+  const cron = (cronId: string, costUsd: number, scopeId: string, scopeName: string, info: unknown) => ({
+    ...person("", costUsd, { principalId: null, scopeId, kind: "person" }),
+    cronId,
+    scopeName,
+    info,
+  });
+  const digest = {
+    id: "abc123",
+    title: "Morning digest",
+    owner: "alice",
+    ownerScopeId: "channel:C1",
+    schedule: { cron: "0 9 * * 1-5" },
+    enabled: true,
+  };
+  const { f, calls } = render(
+    {
+      ...DATA,
+      crons: [
+        cron("gone1234567890", 1, "personal:alice", "Alice", null),
+        cron("abc123", 7, "channel:C1", "#general", digest),
+      ],
+    },
+    {
+      cronName: (c: { id: string; title?: string }) => c.title || `Cron ${c.id.slice(0, 6)}`,
+      shortSchedule: (schedule: { cron: string }) => schedule.cron,
+      openCronRuns: (cronId: string, scope: string) => opened.push([cronId, scope]),
+      downloadCsv: (breakdown?: string) => downloads.push(breakdown ?? "entity"),
+    },
+  );
+  const rows = () => [...f.root.querySelectorAll<HTMLTableRowElement>(".spend-crons tbody tr")];
+  const labels = () =>
+    rows().map((row) => {
+      const cell = row.querySelector("td")!;
+      const where = cell.querySelector(".subline")!.textContent!;
+      return [cell.textContent!.replace(where, "").trim(), where.trim()];
+    });
+  assert.deepEqual(labels(), [
+    ["Morning digest", "#general · 0 9 * * 1-5"],
+    ["Cron gone12", "Alice · deleted"],
+  ]);
+  rows()[1]!.click();
+  rows()[0]!.click();
+  assert.deepEqual(opened, [
+    ["gone1234567890", "personal:alice"],
+    ["abc123", "channel:C1"],
+  ]);
+  [...f.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Export cron CSV")!.click();
+  assert.deepEqual(downloads, ["cron"]);
+  for (const query of ["digest", "abc123", "general", "channel:C1"]) {
+    calls.shell.search.onInput(query);
+    assert.deepEqual(labels(), [["Morning digest", "#general · 0 9 * * 1-5"]], query);
+  }
+  f.window.close();
+});
+
+test("spend view: background by source names where background spend came from, largest first", () => {
+  const { f } = render({
+    ...DATA,
+    org: { ...DATA.org, background: background({ cron: 6, loop: 3, swarm: 1 }) },
+  });
+  const card = [...f.root.querySelectorAll(".tablewrap")].find((t) => t.textContent!.includes("Share of background"))!;
+  const rows = [...card.querySelectorAll("tbody tr")].map((r) =>
+    [...r.querySelectorAll("td")].slice(0, 3).map((c) => c.textContent!.trim()),
+  );
+  assert.deepEqual(rows, [
+    ["Crons", "$6.00", "60.0%"],
+    ["Loops", "$3.00", "30.0%"],
+    ["Swarms", "$1.00", "10.0%"],
+  ]);
   f.window.close();
 });

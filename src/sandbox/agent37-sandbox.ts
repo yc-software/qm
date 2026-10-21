@@ -17,7 +17,7 @@ import {
 } from "../credentials/resident-paths.ts";
 import { DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
@@ -119,11 +119,11 @@ export interface Agent37SandboxOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   fetchImpl?: typeof fetch;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions = {}): Sandbox {
+export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): Sandbox {
   if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
@@ -135,7 +135,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     disk: opts.diskGb ?? DEFAULT_DISK_GB,
   };
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const provisionQueue = createKeyedQueue<string>();
 
@@ -420,11 +420,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
           if (existing.status !== "running") await ensureRunning(existing.id);
           return { coldStart: false };
         }
-        try {
-          onStatus?.("Creating the sandbox…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Creating the sandbox…");
         const info = await createInstance(name);
         idByName.set(name, info.id);
         return { coldStart: true };
@@ -521,10 +517,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
+      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,

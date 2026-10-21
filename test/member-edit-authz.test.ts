@@ -56,7 +56,10 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
       return undefined;
     },
   };
-  const sessions = { listByParticipant: async () => [] as { scopeId: string }[] };
+  const sessions = {
+    listByParticipant: async () => [] as { scopeId: string }[],
+    participantScopes: async () => [] as { scopeId: string }[],
+  };
   const skills = createSkillStore();
   const deployRows: Deployment[] = [];
   const deploy = { listDeployments: async () => deployRows };
@@ -292,6 +295,27 @@ test("SOUL: the HTTP route reports durable storage failures as 500", async () =>
   } as unknown as ApiCtx);
   assert.equal(out.status, 500);
   assert.equal(out.body?.error, "soul_update_failed");
+});
+
+test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 403 denial", async () => {
+  const app = createApp(makeDeps() as unknown as AppDeps);
+  const out: { status?: number; body?: { error?: string } } = {};
+  const res = {
+    getHeader() {},
+    writeHead(status: number) {
+      out.status = status;
+    },
+    end(data?: string) {
+      out.body = data ? JSON.parse(data) : undefined;
+    },
+  };
+  await postSoul({
+    res,
+    app,
+    body: { scopeId: scopeId("personal", OWNER), content: "not yours", actorId: OUTSIDER },
+  } as unknown as ApiCtx);
+  assert.equal(out.status, 403);
+  assert.equal(out.body?.error, "soul_update_denied");
 });
 
 test("SOUL: failed persistence restores the pre-write cache even when compensating reads fail", async () => {

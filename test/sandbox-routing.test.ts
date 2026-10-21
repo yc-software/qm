@@ -423,3 +423,17 @@ for (const combined of [true, false]) {
     assert.deepEqual(calls, combined ? ["combined:old:keep"] : ["remove:old", "list:keep"]);
   });
 }
+
+test("removeDirAndList keeps the removal strict but treats a failed listing as nothing to clean", async () => {
+  const r = resource("r1", "sprites");
+  const { router, sprites } = build({ "personal:a": r });
+  const h = await router.provision(layersFor("personal:a"));
+  sprites.listDir = async () => {
+    throw new Error("find: Permission denied");
+  };
+  assert.deepEqual(await router.removeDirAndList!(h, "turn/current", "turn"), []);
+  sprites.removeDir = async () => {
+    throw new Error("rm: read-only file system");
+  };
+  await assert.rejects(router.removeDirAndList!(h, "turn/current", "turn"), /read-only file system/);
+});

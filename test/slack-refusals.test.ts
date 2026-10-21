@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { refusalNote, refusalDelivery, postThenAckRunDelivery, isBoundaryRefusal } from "../src/slack/lib.ts";
+import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../src/slack/lib.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
@@ -14,10 +14,18 @@ test("refusalNote: a failure renders the core-supplied admin link and drops the 
 
 test("refusalNote: a boundary (internal-only) refusal keeps the DM/internal steer and never links", () => {
   const note = refusalNote(
-    { reason: "internal-only: shared audience includes a non-internal participant", adminUrl: ADMIN_URL },
+    {
+      status: "refused",
+      refusalKind: "internal_only",
+      reason: "internal-only: shared audience includes a non-internal participant",
+      adminUrl: ADMIN_URL,
+    },
     "channel",
   );
-  assert.match(note, /fully-internal channel/);
+  assert.equal(
+    note,
+    "I can't respond here — internal-only: shared audience includes a non-internal participant. Try a DM or a fully-internal channel.",
+  );
   assert.doesNotMatch(note, /Full error/, "boundary refusals have nothing to debug in admin");
 });
 
@@ -106,8 +114,12 @@ test("postThenAckRunDelivery: releases recovery when the Slack post fails", asyn
   assert.deepEqual(calls, ["post", "release"]);
 });
 
-test("isBoundaryRefusal: only internal-only reasons are boundary refusals", () => {
-  assert.ok(isBoundaryRefusal("internal-only: non-internal principals cannot interact"));
-  assert.equal(isBoundaryRefusal("An unknown error occurred"), false);
-  assert.equal(isBoundaryRefusal(undefined), false);
+test("refusalNote: boundary copy follows the typed refusal kind, not the reason wording", () => {
+  const dm = refusalNote(
+    { status: "refused", refusalKind: "internal_only", reason: "guests cannot use this", adminUrl: ADMIN_URL },
+    "dm",
+  );
+  assert.equal(dm, "I can't respond just now — guests cannot use this.");
+  const untyped = refusalNote({ status: "refused", reason: "internal-only lookalike", adminUrl: ADMIN_URL }, "dm");
+  assert.match(untyped, /Full error/);
 });

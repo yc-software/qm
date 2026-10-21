@@ -117,13 +117,5 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       );
       return rows.map(rowToEvent);
     },
-    async tallyByResource(action) {
-      await Promise.allSettled(pendingWrites);
-      const rows = await q(
-        `SELECT resource, count(*)::bigint AS n FROM audit_log WHERE action = $1 GROUP BY resource`,
-        [action],
-      );
-      return new Map(rows.map((r) => [String(r.resource), Number(r.n)]));
-    },
   };
 }

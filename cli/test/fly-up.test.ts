@@ -85,6 +85,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "FLY_DEPLOY_API_TOKEN",
       "FLY_API_TOKEN",
       "PORTAL_IDENTITY_SECRET",
+      "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
     ]
@@ -115,7 +116,7 @@ else console.log("ok");
     plugins: [],
     skills: [],
     env: {
-      core: { HARNESS: "mock", SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
+      core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
     },
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes" },
@@ -163,6 +164,69 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
       /--only "slack": slack is a virtual service — it runs in-process on the core, so deploy it with --only core/,
     );
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fly up gives the egress proxy public ingress once, before deploying it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-fly-egress-"));
+  const fly = join(dir, "fly");
+  const log = join(dir, "fly.log");
+  const ipsFile = join(dir, "ips");
+  writeFileSync(
+    fly,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const a = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
+if (a[0] === "apps" && a[1] === "create") console.log("already been taken");
+else if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-egress-proxy" }]));
+else if (a[0] === "secrets" && a[1] === "list") console.log("QM_OWNER_CD83933C6C53374D digest\\nCAPABILITY_SECRET digest\\nCORE_SIGNING_SECRET digest");
+else if (a[0] === "ips" && a[1] === "list") console.log(fs.existsSync(${JSON.stringify(ipsFile)}) ? fs.readFileSync(${JSON.stringify(ipsFile)}, "utf8") : "[]");
+else console.log("ok");
+`,
+  );
+  chmodSync(fly, 0o755);
+  const prior = process.env.FLY_BIN;
+  process.env.FLY_BIN = fly;
+  const config: QmConfig = {
+    contract: 1,
+    orgId: "acme",
+    publicUrl: "https://acme.fly.dev",
+    target: "fly",
+    appPrefix: "acme",
+    region: "sjc",
+    flyOrg: "personal",
+    services: ["core", "egress-proxy"],
+    plugins: [],
+    skills: [],
+    env: {},
+    imageOverrides: { "egress-proxy": `registry.fly.io/acme-egress-proxy@sha256:${"c".repeat(64)}` },
+    sandbox: { app: "acme-sandboxes" },
+  };
+  try {
+    await flyUp(config, dir, { only: ["egress-proxy"] });
+    let calls = readFileSync(log, "utf8");
+    assert.match(calls, /^ips allocate-v6 -a acme-egress-proxy$/m);
+    assert.match(calls, /^ips allocate-v4 --shared -a acme-egress-proxy$/m);
+    assert.ok(calls.indexOf("ips allocate-v4") < calls.indexOf("deploy --yes"));
+
+    writeFileSync(log, "");
+    writeFileSync(
+      ipsFile,
+      JSON.stringify([
+        { Type: "private_v6", Address: "fdaa::3" },
+        { Type: "v6", Address: "2a09:8280:1::1:0" },
+        { Type: "shared_v4", Address: "66.241.124.1" },
+      ]),
+    );
+    await flyUp(config, dir, { only: ["egress-proxy"] });
+    calls = readFileSync(log, "utf8");
+    assert.doesNotMatch(calls, /ips allocate/);
+    assert.match(calls, /^deploy --yes .*acme-egress-proxy/m);
+  } finally {
+    if (prior === undefined) delete process.env.FLY_BIN;
+    else process.env.FLY_BIN = prior;
     rmSync(dir, { recursive: true, force: true });
   }
 });

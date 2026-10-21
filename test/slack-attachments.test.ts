@@ -355,4 +355,10 @@ test("uploadFailureNote blames files:write only for permission-class errors", ()
   });
   assert.doesNotMatch(note, /files:write/);
   assert.match(note, /invalid_arguments/);
+  const scopeWording = uploadFailureNote({
+    data: { error: "invalid_blocks" },
+    message: "An API error occurred: invalid_blocks (scope of the block is wrong)",
+  });
+  assert.doesNotMatch(scopeWording, /files:write/);
+  assert.doesNotMatch(uploadFailureNote(new Error("missing scope files:write")), /upload permission/);
 });

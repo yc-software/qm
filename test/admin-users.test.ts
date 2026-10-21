@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -329,10 +329,9 @@ test("/v1/admin/users: a freshly promoted user shows as admin in the roster", as
 test("user detail resolves mixed-case email links to the canonical personal scope", async (t) => {
   const s = start();
   try {
-    const stats = await s.built.sessions.scopeSessionStats("personal:alice@example.com", false, "conversation");
-    t.mock.method(s.built.sessions, "scopeSessionStats", async (scope: string) => {
+    t.mock.method(s.built.sessions, "scopeConversationCount", async (scope: string) => {
       assert.equal(scope, "personal:alice@example.com");
-      return { ...stats, total: 3 };
+      return 3;
     });
     const response = await fetch(`${s.base}/v1/admin/users/Alice%40example.com`, {
       headers: { "x-admin-actor": "admin-alice@default-org" },

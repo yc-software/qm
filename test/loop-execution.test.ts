@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -57,7 +57,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
             ...req,
             text:
               stage === "intake"
-                ? `!execute ${JSON.stringify({ command, credentials: ["service_error-source"] })}`
+                ? `!execute ${JSON.stringify({ command, credentials: ["error-source"] })}`
                 : `!run ${command}`,
           });
           assert.equal(result.status, "ok");

@@ -1,6 +1,6 @@
 import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { InviteMailer } from "../admin/invite-email.ts";
+import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
@@ -34,7 +34,7 @@ import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
 import type { Orchestrator } from "../core/orchestrator.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
-import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
+import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
 import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts";
 import type { SubscribeOptions } from "../util/event-bus.ts";
@@ -76,7 +76,6 @@ import type {
   CronFireNote,
   Delivery,
   Destination,
-  RecipientConsent,
   SurfaceContextQuery,
   SurfaceContextRequest,
   SurfaceContextResult,
@@ -284,12 +283,13 @@ export interface App {
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
   pendingApprovalForThread(threadRef: string, viewer?: string): Promise<TurnResult | null>;
   subscribeRun(runId: string, listener: (event: RunStreamEvent) => void, onResync?: () => void): () => void;
-  syncRunStream(runId: string, offset: number): void;
+  syncRunStream(runId: string, offset: number, reasoning: Record<string, number>): void;
   getRun(
     runId: string,
     viewer?: string,
   ): Promise<{
     status: Run["status"];
+    attempt: number;
     result: TurnResult | null;
     input?: {
       runId: string;
@@ -310,6 +310,7 @@ export interface App {
     firstBlockClosed?: boolean;
     surfacePosted?: boolean;
     activity?: RunActivityEntry[];
+    reasoning?: ReasoningBlock[];
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
@@ -366,6 +367,9 @@ export interface App {
   listConversationPins(threadRef: string, reader: string): Promise<SessionPinView[] | null>;
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
+  listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
+  sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
+  sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
     principalId: string,
     query: string,
@@ -466,14 +470,12 @@ export interface App {
   latestCronFireForThread(id: string, threadRef: string): Promise<CronFireLogEntry | undefined>;
   setCronRuntime(id: string, runtime: Exclude<Cron["runtime"], undefined>): Promise<Cron | null>;
   setCronDestination(id: string, destination: Destination | undefined): Promise<Cron | null>;
-  setCronRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<Webhook>;
   getWebhook(id: string): Promise<Webhook | null>;
   listWebhookEvents(id: string, viewer: string): Promise<Array<WebhookEvent & { sessionId?: string }>>;
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
-  setWebhookRecipientConsent(id: string, recipientConsent: RecipientConsent): Promise<void>;
   pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
   enqueueDelivery(input: {
     destination: Destination;
@@ -639,7 +641,7 @@ export interface AppDeps {
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
-  inviteMailer?: InviteMailer;
+  inviteMailer?: Mailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   orchestrator: Orchestrator;
@@ -777,6 +779,38 @@ export function toFileItem(a: FileArtifact): FileListItem {
   };
 }
 
+export class SoulUpdateDeniedError extends Error {
+  constructor() {
+    super("not authorized to update SOUL for this scope");
+    this.name = "SoulUpdateDeniedError";
+  }
+}
+
+export class SoulVersionConflictError extends Error {
+  constructor() {
+    super("Guidance changed; read it and retry the edit.");
+    this.name = "SoulVersionConflictError";
+  }
+}
+
 export const CONTEXT_REQUEST_EXPIRY_MS = 2 * 60_000;
 
 export const STALE_LEASE_GRACE_MS = 30_000;
+
+interface SessionPageQuery {
+  limit: number;
+  before?: { activity: number; id: string };
+  status?: SessionPageStatus;
+  surface?: string;
+  scopeId?: ScopeId;
+  titleQuery?: string;
+}
+
+export type SessionPageStatus = "active" | "archived" | "waiting";
+
+interface SessionPageResult {
+  sessions: Session[];
+  pinned?: Session[];
+  next: { activity: number; id: string } | null;
+  hasArchived?: boolean;
+}

@@ -7,6 +7,8 @@ import {
   AwsApiError,
   type AwsMicrovmApi,
 } from "../src/sandbox/aws-microvm-api.ts";
+import { SignatureV4 } from "@smithy/signature-v4";
+import { Sha256 } from "@aws-crypto/sha256-js";
 
 interface Recorded {
   url: string;
@@ -227,4 +229,83 @@ test("runMicrovm retries a throttled create but never an ambiguous server error"
   const api2 = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl: broken.fetchImpl });
   await assert.rejects(api2.runMicrovm(run), /-> 502: bad gateway/);
   assert.equal(broken.calls.length, 1);
+});
+
+test("writeAbs splits writes above the chunk size into parts, joins them in the MicroVM, and removes the parts", async () => {
+  const writes: Array<{ path: string; bytes: number }> = [];
+  const execs: string[] = [];
+  let failWrite: RegExp | null = null;
+  const { fetchImpl } = fakeFetch((rec) => {
+    const body = JSON.parse(rec.body ?? "{}") as { path?: string; b64?: string; cmd?: string };
+    if (rec.url.endsWith("/write")) {
+      if (failWrite?.test(body.path!)) return { status: 500, body: { error: "disk full" } };
+      writes.push({ path: body.path!, bytes: Buffer.from(body.b64!, "base64").length });
+    }
+    if (rec.url.endsWith("/exec")) {
+      execs.push(body.cmd!);
+      return { status: 200, body: { stdout: "", stderr: "", code: 0 } };
+    }
+    return { status: 200, body: { ok: true } };
+  });
+  const api = { createAuthToken: async () => "tok" } as unknown as AwsMicrovmApi;
+  const client = createMicrovmClient(api, { agentPort: 8080, tokenTtlMinutes: 30, writeChunkBytes: 4, fetchImpl });
+  await client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/small", new Uint8Array(4));
+  assert.deepEqual(writes, [{ path: "/app/small", bytes: 4 }]);
+  assert.equal(execs.length, 0);
+  writes.length = 0;
+  await client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/big", new Uint8Array(10));
+  const stem = writes[0]!.path.replace(/\.part-0$/, "");
+  assert.match(stem, /^\/app\/big\.qm-[0-9a-f]{12}$/);
+  assert.deepEqual(writes, [
+    { path: `${stem}.part-0`, bytes: 4 },
+    { path: `${stem}.part-1`, bytes: 4 },
+    { path: `${stem}.part-2`, bytes: 2 },
+  ]);
+  assert.deepEqual(execs, [
+    `cat '${stem}.part-0' '${stem}.part-1' '${stem}.part-2' > '${stem}.joined' && [ "$(wc -c < '${stem}.joined')" -eq 10 ] && { chmod --reference='/app/big' '${stem}.joined' 2>/dev/null || true; } && mv -fT '${stem}.joined' '/app/big'`,
+    `rm -f '${stem}'.part-* '${stem}'.joined`,
+  ]);
+  execs.length = 0;
+  writes.length = 0;
+  failWrite = /^\/app\/other\.qm-[0-9a-f]{12}\.part-1$/;
+  await assert.rejects(
+    client.writeAbs("mvm-1", "mvm-1.example.on.aws", "/app/other", new Uint8Array(10)),
+    /part-1 failed \(500\)/,
+  );
+  const other = writes[0]!.path.replace(/\.part-0$/, "");
+  assert.deepEqual(execs, [`rm -f '${other}'.part-* '${other}'.joined`]);
+});
+
+test("findImage filters by name, follows nextToken, and signs the query string it sends", async () => {
+  const { fetchImpl, calls } = fakeFetch((rec) =>
+    rec.url.includes("nextToken=")
+      ? { status: 200, body: { items: [{ name: "b-qm-sandbox", imageArn: "arn:b" }] } }
+      : { status: 200, body: { items: [{ name: "b-qm-sandbox-old", imageArn: "arn:old" }], nextToken: "p/2" } },
+  );
+  const api = createMicrovmApi({ region: "us-west-2", credentials: creds, fetchImpl });
+  assert.equal((await api.findImage("b-qm-sandbox"))?.imageArn, "arn:b");
+  assert.deepEqual(
+    calls.map((c) => new URL(c.url).search),
+    ["?nameFilter=b-qm-sandbox", "?nameFilter=b-qm-sandbox&nextToken=p%2F2"],
+  );
+  const signer = new SignatureV4({ service: "lambda", region: "us-west-2", credentials: creds, sha256: Sha256 });
+  const { url, headers } = calls[1]!;
+  const u = new URL(url);
+  const expected = await signer.sign(
+    {
+      method: "GET",
+      protocol: "https:",
+      hostname: u.hostname,
+      path: u.pathname,
+      headers: { host: u.hostname, "content-type": "application/json" },
+      body: "",
+      query: Object.fromEntries(u.searchParams),
+    },
+    {
+      signingDate: new Date(
+        headers["x-amz-date"]!.replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z"),
+      ),
+    },
+  );
+  assert.equal(headers.authorization, (expected.headers as Record<string, string>).authorization);
 });

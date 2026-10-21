@@ -165,7 +165,9 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
         const sandbox = forHandle(handle);
         if (sandbox.removeDirAndList) return sandbox.removeDirAndList(handle, removeRelDir, listRelDir);
         await sandbox.removeDir(handle, removeRelDir);
-        return sandbox.listDir(handle, listRelDir);
+        return sandbox
+          .listDir(handle, listRelDir)
+          .catch(swallowAs(`sandbox-routing: list ${listRelDir}`, [] as string[]));
       });
     },
     teardown(handle, tdOpts?: TeardownOptions): Promise<void> {

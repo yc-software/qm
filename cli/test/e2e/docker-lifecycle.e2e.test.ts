@@ -44,6 +44,7 @@ test(
       join(dep, ".env"),
       [
         `CORE_SIGNING_SECRET=${sentinel}`,
+        `PUBLIC_API_URL=http://qm-${org}-core:8080`,
         `CAPABILITY_SECRET=${sentinel}-capability`,
         `CONNECTOR_SECRET_KEY=${sentinel}-connector`,
         `PORTAL_IDENTITY_SECRET=${sentinel}-identity`,
@@ -62,7 +63,7 @@ test(
       services: [...SERVICES],
       botName: "straylight",
       orgName: "Straylight Industries",
-      env: { core: { HARNESS: "mock" } },
+      env: { core: {} },
       sandbox: { backend: "local", image: "qm-sandbox-local:latest" },
     });
     standInPlugin(dep, "widget");
@@ -120,6 +121,10 @@ test(
           encoding: "utf8",
         }).trim();
         assert.equal(got, sentinel);
+        const apiUrl = execFileSync("docker", ["exec", core, "printenv", "PUBLIC_API_URL"], {
+          encoding: "utf8",
+        }).trim();
+        assert.equal(apiUrl, `http://qm-${org}-core:8080`);
       });
 
       await t.test("the configured bot identity reaches the core container and only the core container", () => {

@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { buildApp } from "./support/build-app.ts";
+import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 
@@ -32,12 +32,12 @@ function mention(text: string, channel: string, root: string): TurnRequest {
   };
 }
 
-function startFulfiller(app: any, messages: unknown[]) {
+function startFulfiller(app: any, messages: unknown[], extra: Partial<SurfaceContextResult> = {}) {
   let running = true;
   const loop = (async () => {
     while (running) {
       const pending = await app.pendingContextRequests("slack");
-      for (const r of pending) await app.fulfillContextRequest(r.id, { result: { messages } });
+      for (const r of pending) await app.fulfillContextRequest(r.id, { result: { messages, ...extra } });
       await sleep(20);
     }
   })();
@@ -91,14 +91,19 @@ test("whats_new returns POINTERS (counts of new-here + other active threads), ne
   const built = freshApp();
   built.runtime.start();
   const root = "C10:1000.1";
-  const stop = startFulfiller(built.app, [
-    { ts: "1000.1", author: "Ann", text: "the anchor message" },
-    { ts: "1000.2", author: "Bob", text: "here 1", threadTs: "1000.1" },
-    { ts: "1000.3", author: "Cat", text: "here 2", threadTs: "1000.1" },
-    { ts: "2000.2", author: "Dee", text: "other 1", threadTs: "2000.1" },
-    { ts: "2000.3", author: "Eve", text: "other 2", threadTs: "2000.1" },
-    { ts: "3000.1", author: "Fay", text: "a top-level channel post" },
-  ]);
+  const stop = startFulfiller(
+    built.app,
+    [
+      { ts: "1000.1", author: "Ann", text: "the anchor message" },
+      { ts: "1000.2", author: "Bob", text: "here 1", threadTs: "1000.1" },
+      { ts: "1000.3", author: "you", text: "here 2 from a person named you", threadTs: "1000.1" },
+      { ts: "1000.4", author: "you", text: "the agent's own reply", threadTs: "1000.1" },
+      { ts: "2000.2", author: "Dee", text: "other 1", threadTs: "2000.1" },
+      { ts: "2000.3", author: "Eve", text: "other 2", threadTs: "2000.1" },
+      { ts: "3000.1", author: "Fay", text: "a top-level channel post" },
+    ],
+    { selfTs: ["1000.4"] },
+  );
   try {
     await built.app.turn(mention("!whats_new", "C10", "1000.1"));
     const reply = await subToolResult(built, root, "whats_new");
@@ -286,7 +291,7 @@ test("search source=slack routes through the live-search seam; an unconfigured p
     while (running) {
       for (const r of await built.app.pendingContextRequests("slack")) {
         const body = (r as any).query?.searchAll
-          ? { messages: [], note: "live-search-unconfigured" }
+          ? { messages: [], liveSearch: "unconfigured" as const }
           : { messages: [] };
         await built.app.fulfillContextRequest(r.id, { result: body });
       }
@@ -314,7 +319,7 @@ test("search source=slack with no connected login for the asker tells the agent 
       for (const r of await built.app.pendingContextRequests("slack")) {
         const q = (r as any).query ?? {};
         const body =
-          q.searchAll && !q.viewerToken ? { messages: [], note: "live-search-unconnected" } : { messages: [] };
+          q.searchAll && !q.viewerToken ? { messages: [], liveSearch: "unconnected" as const } : { messages: [] };
         await built.app.fulfillContextRequest(r.id, { result: body });
       }
       await sleep(20);

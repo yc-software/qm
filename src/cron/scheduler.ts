@@ -10,7 +10,7 @@ import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import type { VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
-import { createNoopLeaderLease, type LeaderLease } from "../persistence/leader-lease.ts";
+import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
@@ -64,7 +64,7 @@ export interface Scheduler {
 
 export interface SchedulerDeps {
   admittedWork?: AdmittedWork;
-  lock?: import("../persistence/advisory-lock.ts").AdvisoryLock;
+  advisoryLock: import("../persistence/advisory-lock.ts").AdvisoryLock;
   crons: CronStore;
   deliveries: DeliveryStore;
   idempotency: IdempotencyStore;
@@ -73,7 +73,7 @@ export interface SchedulerDeps {
   currentScopeMembers?: CurrentScopeMembers;
   now?: () => number;
   maxFiresPerTick?: number;
-  leaderLease?: LeaderLease;
+  leaderLease: LeaderLease;
   directory?: VisibilityDirectory & {
     get(principalId: string): Promise<{ displayName: string } | null>;
     list(): Promise<DirectoryMember[]>;
@@ -82,6 +82,7 @@ export interface SchedulerDeps {
   jobQueue?: CronJobQueue;
   requireQueueStart?: boolean;
   sessions?: TriggerDeps["sessions"];
+  resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
@@ -187,15 +188,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
-  const leaderLease = deps.leaderLease ?? createNoopLeaderLease();
+  const leaderLease = deps.leaderLease;
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
-    if (scheduled && deps.lock?.tryWithLock) {
-      const result = await deps.lock.tryWithLock(`cron-lifecycle:${cronId}`, run);
+    if (scheduled && deps.advisoryLock.tryWithLock) {
+      const result = await deps.advisoryLock.tryWithLock(`cron-lifecycle:${cronId}`, run);
       if (result === null) await deps.crons.defer(cronId, now() + BUSY_DEFER_MS);
       return result;
     }
-    return deps.lock ? deps.lock.withLock(`cron-lifecycle:${cronId}`, run) : run();
+    return deps.advisoryLock.withLock(`cron-lifecycle:${cronId}`, run);
   }
 
   async function fire(cron: Cron, t: number, fireKey: string, scheduledAt?: number): Promise<FireResult> {
@@ -273,6 +274,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ...(deps.directory ? { directory: deps.directory } : {}),
           ...(deps.currentScopeMembers ? { currentScopeMembers: deps.currentScopeMembers } : {}),
           ...(deps.sessions ? { sessions: deps.sessions } : {}),
+          ...(deps.resolveRecipient ? { resolveRecipient: deps.resolveRecipient } : {}),
         },
         {
           ...cronTriggerAuthority(cron),
@@ -287,8 +289,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
-          ...(cron.recipientConsent ? { recipientConsent: cron.recipientConsent } : {}),
-          recipientConsentRequired: cron.schedule.everyMs !== undefined || cron.schedule.cron !== undefined,
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );

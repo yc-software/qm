@@ -3,7 +3,7 @@
     "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["esnext"],
+    "lib": ["es2024"],
     "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,

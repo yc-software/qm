@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp(maxContextTokens?: number) {
@@ -169,3 +169,32 @@ for (const extension of ["docx", "pdf"]) {
     assert.doesNotMatch(JSON.stringify(followupCalls.at(-1)?.promptEnvelope), /"documents":/);
   });
 }
+
+test("large documents never push a follow-up turn past the context budget", async () => {
+  const budget = 20_000;
+  const built = freshApp(budget);
+  const request = {
+    surface: "test" as const,
+    actor: { externalId: "U1" },
+    conversation: { kind: "dm" as const, threadRef: "dm:U1:large-docs" },
+  };
+  const sizes = new Map<string, number>();
+  for (const name of ["one.txt", "two.txt", "three.txt"]) {
+    const blob = await built.blobTransfer.put(Buffer.from(`${name} `.repeat(4_000)));
+    sizes.set(name, blob.sizeBytes);
+    const turn = await built.app.turn({
+      ...request,
+      text: `read ${name}`,
+      attachments: [{ name, mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
+    });
+    assert.equal(turn.status, "ok");
+  }
+  const followup = await built.app.turn({ ...request, text: "compare the three files" });
+  assert.equal(followup.status, "ok");
+  const calls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
+  const replayed = (
+    (calls.at(-1)?.promptEnvelope as { documents?: Array<{ name: string }> } | undefined)?.documents ?? []
+  ).map((document) => document.name);
+  const replayedTokens = replayed.reduce((sum, name) => sum + Math.ceil(sizes.get(name)! / 4), 0);
+  assert.ok(replayedTokens <= budget / 2, `replayed ${replayed.join(", ")} (~${replayedTokens} tokens)`);
+});

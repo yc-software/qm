@@ -99,7 +99,6 @@ export interface StatusReport {
   webEnabled?: boolean;
   slackEnabled: boolean;
   watch: boolean;
-  turnsLive: boolean;
   publicApiUrl: string | null;
   children: Record<string, ChildStatus & { slack?: SlackHealth }>;
 }
@@ -127,4 +126,11 @@ export interface LeaseInfo {
   meta: Record<string, string>;
   heartbeat: { pid: number; at: number; phase: string } | null;
   state: Record<string, unknown> | null;
+}
+
+export interface CanaryReply {
+  ok: boolean;
+  code?: "unconfigured";
+  rttMs?: number;
+  reason?: string;
 }

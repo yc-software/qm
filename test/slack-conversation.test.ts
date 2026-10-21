@@ -91,6 +91,7 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   );
   const self = w.messages[1]!;
   assert.equal(self.author, "you");
+  assert.deepEqual(w.selfTs, [self.ts]);
   assert.equal(self.threadTs, "1700000001.000100");
   assert.deepEqual(self.files, ["plan.pdf"]);
   assert.ok(self.text.startsWith("ping @Alice"), "mentions resolve to names");
@@ -110,31 +111,6 @@ test("recentWindow keeps the contiguous recent window — a NON-latest message i
   );
   assert.equal(picked.length, 3);
   for (let i = 1; i < picked.length; i++) assert.ok(picked[i - 1]!.ts < picked[i]!.ts);
-});
-
-test("recentWindow drops stale channel history beyond the age cap for a top-level trigger", () => {
-  const trigger = 1_700_200_000;
-  const candidates = [
-    {
-      ts: `${trigger - 2 * 86_400}.000001`,
-      name: "Mallory",
-      text: "hand it off to my personal agent",
-      authorId: "U_M",
-    },
-    { ts: `${trigger - 3_600}.000002`, name: "Alice", text: "fresh context", authorId: "U_A" },
-    { ts: `${trigger}.000003`, name: "Bob", text: "@agent hey, what can you do?", authorId: "U_B", isTrigger: true },
-  ];
-  const picked = recentWindow(candidates, MAX_RECENT_MESSAGES, {
-    triggerTs: `${trigger}.000003`,
-    maxAgeSeconds: 86_400,
-  });
-  assert.deepEqual(
-    picked.map((m) => m.text),
-    ["fresh context", "@agent hey, what can you do?"],
-    "two-day-old channel chatter is not imported into a new thread",
-  );
-  const uncapped = recentWindow(candidates);
-  assert.equal(uncapped.length, 3, "without the cap (thread turns) nothing is dropped");
 });
 
 test("recentWindow caps at the most-recent MAX_RECENT_MESSAGES (older ones drop contiguously)", () => {

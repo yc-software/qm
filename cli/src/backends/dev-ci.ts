@@ -87,7 +87,7 @@ export async function devCiUp(): Promise<void> {
   const baseEnv = { ...process.env, ...overlay } as NodeJS.ProcessEnv;
 
   const coreLog = join(dir, "core.log");
-  const corePid = spawnBackground(process.execPath, [...serviceDef("core").dev.entry], {
+  const corePid = spawnBackground(process.execPath, [...serviceDef("core").dev!.entry], {
     cwd: root,
     env: { ...baseEnv, ORG_ID: "acme", SESSION_STORE: "memory", PORT: String(port) },
     logFile: coreLog,

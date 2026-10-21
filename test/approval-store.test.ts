@@ -98,7 +98,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
     const deliveries = createDeliveryStore();
     const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
     const approval = record(threadRef);
-    approval.request!.deliveryTarget = "D1:1700.1";
+    approval.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.1" };
     await approvals.put("A1", approval);
     const [delivery] = await deliveries.pending("principal");
     assert.equal(delivery?.destination.threadTs, "1700.1");
@@ -107,7 +107,7 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
   const channel = record("channel:C1:1700.2");
   channel.request!.conversation = { kind: "channel", threadRef: "channel:C1:1700.2" } as never;
-  channel.request!.deliveryTarget = "C1:1700.2";
+  channel.request!.slackSource = { accountId: "default", teamId: "T1", userId: "U1", replyThreadTs: "1700.2" };
   await approvals.put("A2", channel);
   assert.equal((await deliveries.pending("principal"))[0]?.destination.threadTs, undefined);
 });

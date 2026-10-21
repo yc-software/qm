@@ -1,12 +1,12 @@
 import { composeSoul } from "../resolution/resolution-service.ts";
-import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { notifyDeploymentShared } from "../deploy/share-notice.ts";
 import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import type { ParticipantPageQuery } from "../sessions/session-store.ts";
+import type { PendingApprovalRecord, Session } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -14,11 +14,12 @@ import { cancelGoal, goalCancelledPayload, openGoal } from "../harness/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";
-import { processIsGone } from "../sandbox/process-poll.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { cronIsActive, cronTiedTo } from "../cron/cron-store.ts";
 import { cronRef, deployRef, encodeRef, fileRef, parseRef, skillRef } from "../acl/resource-ref.ts";
 import { samePerson } from "../directory/person.ts";
 import { AdminError } from "../admin/admin-service.ts";
+import { swallowAs } from "../util/errors.ts";
 import { type ArtifactHome } from "./artifact-share.ts";
 import { randomUUID } from "node:crypto";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -26,7 +27,14 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 import { projectIdFromGroupRef, projectScopeId } from "../projects/project-store.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
-import { toFileItem, type ScopeDeployment, type SessionPinView, type SessionSearchHit } from "./app-types.ts";
+import {
+  SoulUpdateDeniedError,
+  SoulVersionConflictError,
+  toFileItem,
+  type ScopeDeployment,
+  type SessionPinView,
+  type SessionSearchHit,
+} from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
 const MAX_SESSION_PINS = 50;
@@ -52,6 +60,8 @@ function coversTailWindow(entries: readonly { type: string }[], tailTurns: numbe
 
 const GOAL_CANCEL_LEASE_WAIT_MS = 30_000;
 
+const MAX_LISTED_CHILDREN = 500;
+
 export function createSessionMethods(
   deps: AppDeps,
   h: AppHelpers,
@@ -68,6 +78,9 @@ export function createSessionMethods(
   | "uploadFileForViewer"
   | "openFileForViewer"
   | "listSessions"
+  | "listSessionPage"
+  | "sessionChildren"
+  | "sessionRow"
   | "searchSessions"
   | "sessionBackground"
   | "readSessionBackgroundOutput"
@@ -161,7 +174,7 @@ export function createSessionMethods(
 
   const storedEntryAt = async (sessionId: string, seq: number) => {
     const entry = await deps.sessions.getEntry(sessionId, seq);
-    return entry && entry.type !== "soul" ? entry : undefined;
+    return entry;
   };
 
   const viewerStoredEntryAt = async (sessionId: string, principalId: string, seq: number) => {
@@ -239,6 +252,127 @@ export function createSessionMethods(
         ...(s.archived ? { archived: true } : {}),
       }));
   };
+
+  async function decorateSessions(principalId: string, all: Session[]): Promise<Session[]> {
+    const visibleById = new Map(all.map((session) => [session.id, session]));
+    const roots = all.filter((session) => !session.parentSessionId).map((session) => session.id);
+    const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
+    const descendantIds = new Set(descendants.map((d) => d.id));
+    const approvalRows: PendingApprovalRecord[] = [];
+    const approvalIds = [...visibleById.keys(), ...descendantIds];
+    const approvals = approvalIds.length
+      ? await deps.approvals?.selectEntries({ where: { field: "sessionId", anyOfFold: approvalIds } })
+      : [];
+    for (const [, record] of approvals ?? []) {
+      const session = visibleById.get(record.sessionId);
+      if (
+        session
+          ? await approvalRecordIsCurrent(record, session)
+          : descendantIds.has(record.sessionId) && (await approvalRecordIsCurrent(record))
+      )
+        approvalRows.push(record);
+    }
+    const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
+    const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
+    const sharedAccess = new Map<string, Promise<boolean>>(
+      all
+        .filter((s) => {
+          const { kind, ref } = parseScopeId(s.scopeId);
+          return kind === "group" && projectIdFromGroupRef(ref);
+        })
+        .map((s) => [s.scopeId, Promise.resolve(true)]),
+    );
+    const sessions = await Promise.all(
+      all
+        .filter(
+          (s) =>
+            s.hasEntries !== false ||
+            Boolean(s.title?.trim()) ||
+            workingThreadRefs.has(s.threadRef) ||
+            waiting.has(s.id),
+        )
+        .map(async ({ hasEntries: _hasEntries, ...s }) => ({
+          ...s,
+          canContinue: await canContinueOnWeb(principalId, s, sharedAccess),
+        })),
+    );
+    const now = Date.now();
+    const jobCounts = new Map<string, number>();
+    for (const rec of (await deps.processes?.listLive(now)) ?? []) {
+      if (rec.kind !== "background" || !rec.sessionRef) continue;
+      jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
+    }
+    const watchCounts = new Map<string, number>();
+    for (const m of (await deps.monitors?.enabled()) ?? []) {
+      if (m.expiresAt <= now) continue;
+      watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
+    }
+    const cronCounts = new Map<string, number>();
+    for (const c of await deps.crons.list()) {
+      if (!cronIsActive(c)) continue;
+      for (const ref of new Set([c.destination?.target, c.sessionRef])) {
+        if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
+      }
+    }
+    const working = sessions.filter((s) => workingThreadRefs.has(s.threadRef));
+    const idleChildren = sessions.filter(
+      (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
+    );
+    const [latestRuns, sessionGoals] = await Promise.all([
+      deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
+      deps.sessions.goals(working.map((s) => s.id)),
+    ]);
+    const failedChildren = new Set<string>();
+    for (const s of idleChildren) {
+      const run = latestRuns.get(s.threadRef);
+      if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
+    }
+    const goals = new Map<
+      string,
+      { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
+    >();
+    for (const s of working) {
+      const goal = openGoal(sessionGoals.get(s.id));
+      if (!goal) continue;
+      const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
+      if (goal.status === "active")
+        goals.set(s.id, {
+          objective: goal.objective,
+          activeMs: goal.activeMs ?? 0,
+          ...(runningSince ? { runningSince: Math.max(runningSince, goal.activeSince ?? goal.createdAt) } : {}),
+          ...(goal.floor ? { floor: { ...goal.floor } } : {}),
+        });
+    }
+    const subagents = new Map<string, { running: number; waiting: number }>();
+    for (const d of descendants) {
+      const isWaiting = waiting.has(d.id);
+      if (!isWaiting && !workingThreadRefs.has(d.threadRef)) continue;
+      const counts = subagents.get(d.rootId) ?? { running: 0, waiting: 0 };
+      counts[isWaiting ? "waiting" : "running"]++;
+      subagents.set(d.rootId, counts);
+    }
+    if (
+      subagents.size === 0 &&
+      workingThreadRefs.size === 0 &&
+      waiting.size === 0 &&
+      failedChildren.size === 0 &&
+      jobCounts.size === 0 &&
+      watchCounts.size === 0 &&
+      cronCounts.size === 0
+    )
+      return sessions;
+    return sessions.map((s) => ({
+      ...s,
+      ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
+      ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
+      ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
+      ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
+      ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
+      ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
+      ...(goals.has(s.id) ? { goal: goals.get(s.id)! } : {}),
+      ...(subagents.has(s.id) ? { subagents: subagents.get(s.id)! } : {}),
+    }));
+  }
 
   return {
     async getSession(sessionId, window) {
@@ -436,100 +570,64 @@ export function createSessionMethods(
     },
 
     async listSessions(principalId) {
-      const all = await sessionsForViewer(principalId);
-      const visibleById = new Map(all.map((session) => [session.id, session]));
-      const approvalRows: PendingApprovalRecord[] = [];
-      for (const [, record] of (await deps.approvals?.entries()) ?? []) {
-        const session = visibleById.get(record.sessionId);
-        if (session && (await approvalRecordIsCurrent(record, session))) approvalRows.push(record);
+      return decorateSessions(principalId, await sessionsForViewer(principalId));
+    },
+
+    async listSessionPage(principalId, query) {
+      const filter: ParticipantPageQuery = {
+        limit: Math.max(1, Math.min(query.limit, 200)),
+        archived: query.status === "archived",
+        ...(query.before ? { before: query.before } : {}),
+        ...(query.surface ? { surface: query.surface } : {}),
+        ...(query.scopeId ? { scopeId: query.scopeId } : {}),
+        ...(query.titleQuery ? { titleQuery: query.titleQuery } : {}),
+      };
+      if (query.status === "waiting") {
+        const pending = ((await deps.approvals?.all()) ?? []).filter((record) => record.blocksInput !== false);
+        filter.sessionIds = [...new Set(pending.map((record) => record.sessionId))];
       }
-      const waiting = new Set(approvalRows.filter((r) => r.blocksInput !== false).map((r) => r.sessionId));
-      const workingThreadRefs = await workingSessionThreadRefs(deps.sessions, deps.runs, waiting);
-      const sharedAccess = new Map<ScopeId, Promise<boolean>>(
-        all
-          .filter((s) => {
-            const { kind, ref } = parseScopeId(s.scopeId);
-            return kind === "group" && projectIdFromGroupRef(ref);
-          })
-          .map((s) => [s.scopeId, Promise.resolve(true)]),
-      );
-      const sessions = await Promise.all(
-        all
-          .filter(
-            (s) =>
-              s.hasEntries !== false ||
-              Boolean(s.title?.trim()) ||
-              workingThreadRefs.has(s.threadRef) ||
-              waiting.has(s.id),
-          )
-          .map(async (s) => ({ ...s, canContinue: await canContinueOnWeb(principalId, s, sharedAccess) })),
-      );
-      const now = Date.now();
-      const jobCounts = new Map<string, number>();
-      for (const rec of (await deps.processes?.listLive(now)) ?? []) {
-        if (rec.kind !== "background" || !rec.sessionRef) continue;
-        jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
-      }
-      const watchCounts = new Map<string, number>();
-      for (const m of (await deps.monitors?.enabled()) ?? []) {
-        if (m.expiresAt <= now) continue;
-        watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
-      }
-      const cronCounts = new Map<string, number>();
-      for (const c of await deps.crons.list()) {
-        if (!cronIsActive(c)) continue;
-        for (const ref of new Set([c.destination?.target, c.sessionRef])) {
-          if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
-        }
-      }
-      const working = sessions.filter((s) => workingThreadRefs.has(s.threadRef));
-      const idleChildren = sessions.filter(
-        (s) => s.parentSessionId && !workingThreadRefs.has(s.threadRef) && !waiting.has(s.id),
-      );
-      const [latestRuns, sessionGoals] = await Promise.all([
-        deps.runs.latestForThreads([...working, ...idleChildren].map((s) => s.threadRef)),
-        deps.sessions.goals(working.map((s) => s.id)),
+      const firstPage = !query.before && query.status !== "archived";
+      const [page, pinned, archived] = await Promise.all([
+        deps.sessions.listParticipantPage(principalId, {
+          ...filter,
+          ...(query.status === "archived" ? {} : { pinned: false }),
+        }),
+        firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, pinned: true, limit: 200 }) : null,
+        firstPage ? deps.sessions.listParticipantPage(principalId, { ...filter, archived: true, limit: 1 }) : null,
       ]);
-      const failedChildren = new Set<string>();
-      for (const s of idleChildren) {
-        const run = latestRuns.get(s.threadRef);
-        if (run?.status === "failed" || run?.result?.status === "failed") failedChildren.add(s.id);
-      }
-      const goals = new Map<
-        string,
-        { objective: string; activeMs: number; runningSince?: number; floor?: Record<string, number> }
-      >();
-      for (const s of working) {
-        const goal = openGoal(sessionGoals.get(s.id));
-        if (!goal) continue;
-        const runningSince = latestRuns.get(s.threadRef)?.startedAt ?? undefined;
-        if (goal.status === "active")
-          goals.set(s.id, {
-            objective: goal.objective,
-            activeMs: goal.activeMs ?? 0,
-            ...(runningSince ? { runningSince: Math.max(runningSince, goal.activeSince ?? goal.createdAt) } : {}),
-            ...(goal.floor ? { floor: { ...goal.floor } } : {}),
-          });
-      }
-      if (
-        workingThreadRefs.size === 0 &&
-        waiting.size === 0 &&
-        failedChildren.size === 0 &&
-        jobCounts.size === 0 &&
-        watchCounts.size === 0 &&
-        cronCounts.size === 0
-      )
-        return sessions;
-      return sessions.map((s) => ({
-        ...s,
-        ...(workingThreadRefs.has(s.threadRef) ? { working: true } : {}),
-        ...(waiting.has(s.id) ? { awaitingInput: true } : {}),
-        ...(failedChildren.has(s.id) ? { lastTurnFailed: true } : {}),
-        ...(jobCounts.has(s.threadRef) ? { backgroundJobs: jobCounts.get(s.threadRef)! } : {}),
-        ...(watchCounts.has(s.threadRef) ? { watches: watchCounts.get(s.threadRef)! } : {}),
-        ...(cronCounts.has(s.threadRef) ? { crons: cronCounts.get(s.threadRef)! } : {}),
-        ...(goals.has(s.id) ? { goal: goals.get(s.id)! } : {}),
-      }));
+      const viewable = async (rows: Session[]) => {
+        const allowed = await Promise.all(
+          rows.map(async (row) => (await managedProjectMembership(row.scopeId, principalId)) !== false),
+        );
+        return rows.filter((_, index) => allowed[index]);
+      };
+      const rows = await viewable([...(pinned?.sessions ?? []), ...page.sessions]);
+      let decorated = await decorateSessions(principalId, rows);
+      if (query.status === "waiting") decorated = decorated.filter((s) => s.awaitingInput);
+      const pinnedIds = new Set(pinned?.sessions.map((s) => s.id) ?? []);
+      return {
+        sessions: decorated.filter((s) => !pinnedIds.has(s.id)),
+        ...(pinned ? { pinned: decorated.filter((s) => pinnedIds.has(s.id)) } : {}),
+        ...(archived ? { hasArchived: archived.sessions.length > 0 } : {}),
+        next: page.next,
+      };
+    },
+
+    async sessionChildren(principalId, sessionId) {
+      const root = await sessionForViewer(sessionId, principalId);
+      if (!root) return null;
+      const children = await deps.sessions.listDescendantsForParticipant(root.id, principalId, MAX_LISTED_CHILDREN);
+      return decorateSessions(principalId, children);
+    },
+
+    async sessionRow(principalId, ref) {
+      const id = ref.id ?? (ref.threadRef ? (await deps.sessions.getByThread(ref.threadRef))?.id : undefined);
+      if (!id) return null;
+      const session = await sessionForViewer(id, principalId);
+      if (!session) return null;
+      const { spawnMeta: _spawnMeta, clientTools: _clientTools, ...row } = session;
+      const [decorated] = await decorateSessions(principalId, [row]);
+      return decorated ?? null;
     },
 
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
@@ -544,19 +642,9 @@ export function createSessionMethods(
           ),
         ),
       );
-      const teamIds = [...new Set(hits.map((hit) => hit.entryScopeLabel))]
-        .map(parseScopeId)
-        .filter((label) => label.kind === "team")
-        .map((label) => label.ref);
-      const memberships = await Promise.all(
-        teamIds.map(async (id) => ((await deps.teams?.isMember(principalId, id)) ? id : null)),
-      );
-      const principal = { ...deps.identity.classify(principalId), teamIds: memberships.filter((id) => id !== null) };
       const terms = searchTerms(query);
       const entryHits: SessionSearchHit[] = hits.flatMap((hit) => {
         if (!allowed.get(hit.scopeId)) return [];
-        if (!principalEntitledToScope(principal, hit.entryScopeLabel, hit.scopeId, scopeId("org", orgIdOf())))
-          return [];
         const session = hit;
         return [
           {
@@ -641,10 +729,12 @@ export function createSessionMethods(
           ...(read.status.state === "exited" ? { exitCode: read.status.code } : {}),
         };
       } catch (e) {
-        if (processIsGone(e)) return { chunk: "", cursor: sinceCursor, state: "exited" };
+        if (e instanceof ProcessSessionGoneError) return { chunk: "", cursor: sinceCursor, state: "exited" };
         throw e;
       } finally {
-        await sandbox.teardown(handle, { keepWarm: true }).catch(() => {});
+        await sandbox
+          .teardown(handle, { keepWarm: true })
+          .catch(swallowAs("app sessions: release process sandbox", undefined));
       }
     },
 
@@ -1210,7 +1300,7 @@ export function createSessionMethods(
       const allowedPersonal = kind === "personal" && samePerson(ref, actorId);
       const allowedShared = opts?.allowSharedScope && (kind === "channel" || kind === "group");
       if (!allowedPersonal && !allowedShared) {
-        throw new Error("not authorized to update SOUL for this scope");
+        throw new SoulUpdateDeniedError();
       }
       const write = async (): Promise<number> => {
         let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
@@ -1219,9 +1309,9 @@ export function createSessionMethods(
           snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
-              ? await deps.config.setSoulLatest(scopeIdValue, content, actorId)
+              ? await deps.config.setSoul(scopeIdValue, content, actorId)
               : await deps.config.setSoulIfVersion(scopeIdValue, opts.expectedVersion, content, actorId);
-          if (version === null) throw new Error("Guidance changed; read it and retry the edit.");
+          if (version === null) throw new SoulVersionConflictError();
           deps.auditLog.record({
             at: Date.now(),
             principalId: actorId,

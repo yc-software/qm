@@ -9,16 +9,18 @@
   },
   "scripts": {
     "start": "node src/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs --noEmit",
     "test": "node --test",
     "hash-password": "node src/hash-password.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "tsrs": "0.14.1-ts7.1.0-dev.20260929",
     "typescript": "^5.8.2"
   },
   "dependencies": {
     "@sentry/node": "10.75.0",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "nodemailer": "^10.1.0"
   }
 }

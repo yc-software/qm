@@ -23,13 +23,13 @@ org credential delivered as sandbox env (admin UI → Service credentials → de
 env"), and it rides into every all-internal conversation — nothing here is deploy config. A
 person's own keychain key overrides the org one. A provider can also be offered as a shared
 credential you call through QM's broker without ever holding the key; the provider doc
-says so when it supports that (Kernel does, via `service_kernel`). Keys you may see today:
+says so when it supports that (Kernel does, via `kernel`). Keys you may see today:
 
 Use the absolute directory reported by the skill read for all `providers/` paths below.
 Keep the same explicit `sandbox_id` for the skill read and every `execute` command
 in this flow, including the runner.
 
-- `KERNEL_API_KEY`, or a `service_kernel` shared credential in your inventory →
+- `KERNEL_API_KEY`, or a `kernel` shared credential in your inventory →
   **Kernel** (onkernel.com). Read `providers/kernel.md`.
 - `ANCHOR_API_KEY` → **Anchor** (anchorbrowser.io). Read `providers/anchor.md`.
 - `BROWSERBASE_API_KEY` → **Browserbase** (browserbase.com). Read
@@ -110,9 +110,8 @@ of them (asks and drops are refused only on trigger-fired turns).
    person whose approval you're waiting on. The approved grant's handle then works in
    `credentials`.
 4. **Not registered anywhere** → the person can supply their own keys on the spot: mint a
-   drop link per key (`POST /v1/keychain/drops` with
-   `{"service":"<your provider doc's keychain service>","envKey":"<the provider key name>","purpose":"browse"}`)
-   and hand the link over — the secret lands in
+   drop link per key with the `secret-drop` skill (service = your provider doc's keychain
+   service, envKey = the provider key name) and hand the link over — the secret lands in
    their keychain, never in chat.
 
 **If the profile has no handle in your manifest, do NOT jump to bootstrapping** — a

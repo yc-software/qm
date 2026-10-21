@@ -21,7 +21,7 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
       title: "DM with Sam",
       from: "Sam",
       snippet: "any update?",
-      slack: { channelId: "D123", ts: "1000.100" },
+      slack: { channelId: "D123", ts: "1000.100", isDirectMessage: true },
     },
     sourceAt: 1_000_100,
     ...over,
@@ -184,11 +184,11 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
 });
 
 test("slack conversation refs key DMs by channel and channel asks by thread root", () => {
-  assert.equal(slackConversationRef("D123", "100.1"), "D123");
-  assert.equal(slackConversationRef("G77", "100.1", "100.1"), "G77:100.1");
+  assert.equal(slackConversationRef("D123", "100.1", undefined, true), "D123");
+  assert.equal(slackConversationRef("G77", "100.1", "100.1", true), "G77:100.1");
   assert.equal(slackConversationRef("C77", "100.1", undefined, true), "C77");
-  assert.equal(slackConversationRef("C9", "200.2"), "C9:200.2");
-  assert.equal(slackConversationRef("C9", "200.2", "100.1"), "C9:100.1");
+  assert.equal(slackConversationRef("D9", "200.2", undefined, false), "D9:200.2");
+  assert.equal(slackConversationRef("C9", "200.2", "100.1", false), "C9:100.1");
 });
 
 test("ledger mutations emit change events", async () => {
@@ -206,7 +206,7 @@ test("ledger mutations emit change events", async () => {
 });
 
 test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
-  assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1"), "GPRIVATE:100.1");
+  assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
 });
 
 test("the inbox sync task asks for the full waiting message", () => {

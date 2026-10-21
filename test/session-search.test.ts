@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
@@ -80,7 +80,7 @@ test("memory store: search ignores non-conversational entry types", async () => 
   const { lease } = await store.acquireLease(s.id);
   await store.append(lease!, {
     type: "tool_call",
-    payload: { text: "grep zanzibar" },
+    payload: { tool: "execute", callId: "c1", text: "grep zanzibar" },
     scopeLabel: scopeId("personal", "U1"),
   });
   await store.append(lease!, {
@@ -106,7 +106,7 @@ test("app.searchSessions decorates hits with session metadata and enforces visib
   const { lease } = await sessions.acquireLease(id);
   await sessions.append(lease!, {
     type: "tool_result",
-    payload: { text: "zanzibar weather outputonly" },
+    payload: { tool: "execute", callId: "c1", text: "zanzibar weather outputonly" },
     scopeLabel: scopeId("personal", "U1"),
   });
   await sessions.releaseLease(lease!);

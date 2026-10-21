@@ -4,7 +4,7 @@ import { createCodexDeviceLogin } from "../../model/codex-device-login.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { validateProviderApiKey } from "./admin/model-providers.ts";
-import type { ApiCtx, Route } from "./route.ts";
+import { withActor, type ApiCtx, type Route } from "./route.ts";
 import { audit } from "./shared.ts";
 
 function caller(ctx: ApiCtx): string | null {
@@ -165,12 +165,14 @@ async function claudeComplete(ctx: ApiCtx): Promise<void> {
 }
 
 export const userModelAuthRoutes: ReadonlyArray<Route<ApiCtx>> = [
-  { method: "POST", path: "/v1/user-model-auth/account", auth: "source", handle: setAccount },
-  { method: "GET", path: "/v1/user-model-auth/status", auth: "source", handle: getStatus },
-  { method: "POST", path: "/v1/user-model-auth/api-key", auth: "source", handle: putApiKey },
-  { method: "POST", path: "/v1/user-model-auth/disconnect", auth: "source", handle: disconnect },
-  { method: "POST", path: "/v1/user-model-auth/chatgpt/start", auth: "source", handle: chatgptStart },
-  { method: "POST", path: "/v1/user-model-auth/chatgpt/poll", auth: "source", handle: chatgptPoll },
-  { method: "POST", path: "/v1/user-model-auth/claude/start", auth: "source", handle: claudeStart },
-  { method: "POST", path: "/v1/user-model-auth/claude/complete", auth: "source", handle: claudeComplete },
+  { method: "GET", path: "/v1/user-model-auth/status", actor: "query.principalId", auth: "source", handle: getStatus },
+  ...withActor("body.principalId", [
+    { method: "POST", path: "/v1/user-model-auth/account", auth: "source", handle: setAccount },
+    { method: "POST", path: "/v1/user-model-auth/api-key", auth: "source", handle: putApiKey },
+    { method: "POST", path: "/v1/user-model-auth/disconnect", auth: "source", handle: disconnect },
+    { method: "POST", path: "/v1/user-model-auth/chatgpt/start", auth: "source", handle: chatgptStart },
+    { method: "POST", path: "/v1/user-model-auth/chatgpt/poll", auth: "source", handle: chatgptPoll },
+    { method: "POST", path: "/v1/user-model-auth/claude/start", auth: "source", handle: claudeStart },
+    { method: "POST", path: "/v1/user-model-auth/claude/complete", auth: "source", handle: claudeComplete },
+  ]),
 ];

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { BuildError, Template, type BuildStep, type TemplateInfo } from "@superserve/sdk";
+import { swallowAs } from "../../src/util/errors.ts";
 import {
   REPO_ROOT,
   requireRelease,
@@ -228,7 +229,10 @@ async function main(): Promise<void> {
         if (args.wait) console.log(`[qm-agent] ready: ${describe(await waitForBuild(existing))}`);
         return;
       }
-      if (existing.latestBuildId) await existing.cancelBuild(existing.latestBuildId).catch(() => undefined);
+      if (existing.latestBuildId)
+        await existing
+          .cancelBuild(existing.latestBuildId)
+          .catch(swallowAs("qm-agent: cancel in-flight build", undefined));
     }
     console.log(`[qm-agent] deleting existing template (${existing.status}${args.force ? ", --force" : ""})`);
     await existing.delete();

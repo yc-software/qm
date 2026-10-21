@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -193,7 +193,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
   try {
     const container = "C-orgoff";
     await built.app.setChannelPolicy(container, "!engage !post ambient reply", "U-admin", undefined, undefined, true);
-    built.config.setOrgAmbient(false);
+    await built.config.setOrgAmbient(false);
     await built.app.ingestSurfaceEvents([
       { container, ts: "1.0", authorId: "U1", text: "did the launch slip?", createdAt: 1 },
     ]);
@@ -201,7 +201,7 @@ test("org-wide ambient switch off silences every channel regardless of per-chann
     assert.equal(decision.act, false, "the org switch wins over an explicit per-channel on");
     await sleep(200);
     assert.equal(((await built.deliveries.pending("slack")) as any[]).length, 0);
-    built.config.setOrgAmbient(true);
+    await built.config.setOrgAmbient(true);
     await built.app.ingestSurfaceEvents([{ container, ts: "2.0", authorId: "U1", text: "any update?", createdAt: 2 }]);
     const pending = await pollDeliveries(built.deliveries);
     assert.equal(pending.length, 1, "flipping the org switch back on restores ambient");
@@ -561,7 +561,7 @@ test("an OpenAI-only deployment judges with an OpenAI auxiliary model, not Haiku
 test("an admin-set org base model drives the auxiliary, not just the PI_MODEL env", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-surfcache-"));
   const built = buildApp(testConfig({ dataDir, openaiApiKey: "sk-openai-test" }));
-  built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
+  await built.config.setBaseModel("org:default-org", "gpt-5.6-sol");
   built.runtime.start();
   try {
     const container = "C-admin-base";

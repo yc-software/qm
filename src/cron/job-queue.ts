@@ -1,6 +1,6 @@
 import { PgBoss } from "pg-boss";
 import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
-import { errMessage } from "../util/errors.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
   cronId: string;
@@ -71,9 +71,13 @@ export function createPgBossCronQueue(
         );
       } catch (e) {
         if (initialized) {
-          await boss.offWork(FIRE_QUEUE, { wait: false }).catch(() => {});
+          await boss
+            .offWork(FIRE_QUEUE, { wait: false })
+            .catch(swallowAs("cron queue: stop worker after failed start", undefined));
         } else {
-          await boss.stop({ close: true, graceful: false }).catch(() => {});
+          await boss
+            .stop({ close: true, graceful: false })
+            .catch(swallowAs("cron queue: stop after failed start", undefined));
           await closePool();
         }
         throw e;

@@ -1,3 +1,5 @@
+import { GmailApiError, gmailApi } from "./gmail-api.ts";
+
 export interface SentEmail {
   id: string;
   threadId: string;
@@ -24,32 +26,13 @@ interface GmailMessage {
   payload?: GmailPart;
 }
 
-export class GmailReadError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(
-      status === 401 || status === 403
-        ? "Reconnect Google to read sent mail."
-        : "Couldn't load sent mail from Gmail. Try again.",
-    );
-    this.status = status;
-  }
-}
-
 export async function listSentEmails(
   token: string,
   pageToken?: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ messages: SentEmail[]; nextPageToken?: string; accountEmail: string }> {
-  const get = async <T>(path: string): Promise<T> => {
-    const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) throw new GmailReadError(response.status);
-    return response.json() as Promise<T>;
-  };
+  const api = gmailApi(token, fetchImpl);
+  const get = <T>(path: string): Promise<T> => api<T>(path, { timeoutMs: 15_000 });
   const params = new URLSearchParams({ labelIds: "SENT", maxResults: "25" });
   if (pageToken) params.set("pageToken", pageToken);
   const page = await get<{ messages?: { id: string }[]; nextPageToken?: string }>(`messages?${params}`);
@@ -65,7 +48,7 @@ export async function listSentEmails(
             `messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=To&metadataHeaders=Subject`,
           );
         } catch (error) {
-          if (error instanceof GmailReadError && error.status === 404) return null;
+          if (error instanceof GmailApiError && error.status === 404) return null;
           throw error;
         }
         const header = (name: string): string =>
@@ -97,16 +80,9 @@ export async function getSentEmail(
 ): Promise<
   SentEmail & { from: string; cc: string; body: string; rfcMessageId: string; html: boolean; attachments: string[] }
 > {
-  const response = await fetchImpl(
-    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=full`,
-    {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000),
-    },
-  );
-  if (!response.ok) throw new GmailReadError(response.status);
-  const message = (await response.json()) as GmailMessage;
-  if (!message.labelIds?.includes("SENT")) throw new GmailReadError(404);
+  const path = `messages/${encodeURIComponent(id)}?format=full`;
+  const message = await gmailApi(token, fetchImpl)<GmailMessage>(path, { timeoutMs: 15_000 });
+  if (!message.labelIds?.includes("SENT")) throw new GmailApiError(path, 404, 0, "");
   const header = (name: string): string =>
     message.payload?.headers?.find((h) => h.name.toLowerCase() === name)?.value ?? "";
   const parts: GmailPart[] = [];

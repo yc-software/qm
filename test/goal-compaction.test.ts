@@ -9,7 +9,7 @@ import type { ScopeId } from "../src/types.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
-test("compaction leaves the session goal on its row and writes no goal entries, ignoring legacy snapshots", async () => {
+test("compaction leaves the session goal on its row and writes no goal entries", async () => {
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("goal", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
@@ -19,11 +19,6 @@ test("compaction leaves the session goal on its row and writes no goal entries, 
     tokensUsed: 1234,
   };
   await sessions.setGoal(lease, goal);
-  await sessions.append(lease, {
-    type: "system",
-    payload: { kind: "goal", goal: { ...goal, objective: "legacy snapshot" } },
-    scopeLabel: scope,
-  });
   for (let i = 0; i < 10; i++) {
     await sessions.append(lease, { type: "user", payload: { text: `message ${i} `.repeat(100) }, scopeLabel: scope });
   }
@@ -52,7 +47,7 @@ test("compaction leaves the session goal on its row and writes no goal entries, 
   const goalEntries = (await sessions.getEntries(session.id)).filter(
     (entry) => (entry.payload as { kind?: string }).kind === "goal",
   );
-  assert.equal(goalEntries.length, 1, "only the legacy snapshot; compaction does not copy goals into the log");
+  assert.equal(goalEntries.length, 0, "compaction does not copy goals into the log");
   assert.deepEqual((await sessions.goals([session.id])).get(session.id), goal);
 });
 

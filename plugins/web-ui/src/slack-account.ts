@@ -1,7 +1,7 @@
 import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check, Link2, UserRound } from "lucide";
-import { slackMark } from "./ui";
+import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import "./slack-account.css";
 import { withBase } from "./core-bridge";
@@ -23,16 +23,19 @@ export function captureSlackReturn(url: string): void {
 export class SlackAccount extends LitElement {
   static properties = {
     user: {},
+    reply: { type: Boolean },
     busy: { state: true },
     error: { state: true },
     connected: { state: true },
     label: { state: true },
   };
   user = "";
+  reply = false;
   private busy = false;
   private error = "";
   private connected = false;
   private label = "";
+  private nativeOAuth = false;
   private attempt: SlackAttempt | null = null;
 
   protected createRenderRoot(): HTMLElement {
@@ -96,6 +99,7 @@ export class SlackAccount extends LitElement {
       });
       if (!response.ok) return;
       const result = await response.json();
+      this.nativeOAuth = result.nativeOAuth === true;
       this.connected = result.connected === true;
       this.label = [result.user, result.workspace].filter(Boolean).join(" · ");
     } catch {
@@ -109,6 +113,27 @@ export class SlackAccount extends LitElement {
     this.error = "";
     try {
       if (await openDesktopBrowser(withBase("/settings"))) return;
+      await this.status();
+      if (this.nativeOAuth) {
+        const response = await fetch(withBase("/api/connectors/slack/start"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ returnTo: `${location.pathname}${location.search}` }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const result = await response.json();
+        if (!response.ok) throw Error(result.message ?? "Could not start Slack authorization.");
+        const url = new URL(result.authorizeUrl);
+        if (
+          url.origin !== "https://slack.com" ||
+          url.pathname !== "/oauth/v2/authorize" ||
+          url.username ||
+          url.password
+        )
+          throw Error("Could not verify the Slack authorization link.");
+        location.assign(url.href);
+        return;
+      }
       const state = crypto.randomUUID();
       const response = await fetch(withBase("/api/composio/slack/authorize"), {
         method: "POST",
@@ -153,6 +178,7 @@ export class SlackAccount extends LitElement {
       this.connected = true;
       this.label = [result.user, result.workspace].filter(Boolean).join(" · ");
       this.clearAttempt();
+      this.dispatchEvent(new CustomEvent("slack-linked", { bubbles: true }));
     } catch (error) {
       this.error = error instanceof Error ? error.message : "Could not verify your Slack account.";
     } finally {
@@ -163,7 +189,7 @@ export class SlackAccount extends LitElement {
   protected render() {
     return html`<section class="slack-account" aria-label="Your Slack account">
       ${
-        this.connected
+        this.connected && !this.reply
           ? html`<div class="slack-connected" role="status">
               ${icon(Check, 14)}<span>Your Slack account is linked${this.label ? ` · ${this.label}` : ""}</span>
             </div>`
@@ -175,7 +201,9 @@ export class SlackAccount extends LitElement {
               </div>
               <span
                 ><strong>${this.busy ? "Linking Slack…" : "Link your Slack account"}</strong
-                ><small>Let QM search Slack and take action on your behalf.</small></span
+                ><small
+                  >${this.reply ? "Send replies here as yourself in Slack." : "Let QM search Slack and take action on your behalf."}</small
+                ></span
               >
               ${icon(ArrowUpRight, 16)}
             </button>`

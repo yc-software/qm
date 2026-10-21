@@ -7,6 +7,8 @@ import {
   type SteerIntake,
 } from "./harness-shared.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
+import type { DocumentInput } from "../core/document-inputs.ts";
+import { documentStub } from "../core/document-kinds.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { Type } from "typebox";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -73,8 +75,9 @@ import {
   contextTokenBudgetForModel,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexProviderModelId,
+  modelHasPrices,
 } from "../model/pi-models.ts";
-import { customModelsJson, customProvidersVersion } from "../model/custom-providers.ts";
+import { customModelsJson, customProvidersVersion, resolveCustomModel } from "../model/custom-providers.ts";
 import {
   GatewayModelUnavailableError,
   modelGatewayRequest,
@@ -92,11 +95,11 @@ import {
   type GapWork,
 } from "./harness.ts";
 import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
-import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
   reconstructMessagesFromHistory,
+  dayMarkerPrefix,
   recordedMessageTimestamps,
   replayPreamble,
   userPromptText,
@@ -150,7 +153,6 @@ export interface PiHarnessOptions {
   scratchExec?: boolean;
   ownerAuthExec?: boolean;
   reachExec?: boolean;
-  mcpTools?: () => McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
   turnWallClockMs?: number;
@@ -928,6 +930,30 @@ function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | 
 
 /** Codes that retry the turn on the configured fallback model. */
 const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
+const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
+
+function documentsDroppedNote(documents: readonly DocumentInput[]): string {
+  return (
+    `The model provider rejected an earlier request in this task while it carried these attachments inline ` +
+    `(most likely they exceed the model's context), so they were removed from model input. ` +
+    documents.map((document) => documentStub(document)).join(" ") +
+    ` If the file matters to the request, tell the person it could not be read in full here and read only the parts you need.`
+  );
+}
+
+const DOCUMENTS_DROPPED_RETRY_NOTE =
+  "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
+
+function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
+  const state = session.agent.state;
+  for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
+    const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
+    if (m?.role === "assistant" && m.stopReason === "error") {
+      state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
+      break;
+    }
+  }
+}
 
 export function piLastAssistantTextOrThrow(session: AssistantTextSession): string | undefined {
   const err = piAssistantFailure(session);
@@ -1202,7 +1228,7 @@ export async function buildModelRuntime(
       const providerModelId =
         model.provider === CODEX_SUBSCRIPTION_PROVIDER
           ? codexProviderModelId(model.id)
-          : (modelRequestOverrides(model.id)?.model ?? model.id);
+          : (modelRequestOverrides(model.id)?.model ?? resolveCustomModel(model.id)?.upstreamId ?? model.id);
       const candidate = withRequestHeaders(model, true, false);
       const passthrough = {
         ...retained(options),
@@ -1547,7 +1573,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   const scratchExec = opts?.scratchExec ?? false;
   const ownerAuthExec = opts?.ownerAuthExec ?? false;
   const reachExec = opts?.reachExec ?? false;
-  const mcpTools = opts?.mcpTools;
   const controlTools = opts?.controlTools ?? false;
   const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
   const signals = opts?.signals;
@@ -1558,7 +1583,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       scratchExec,
       ownerAuthExec,
       reachExec,
-      ...(mcpTools ? { mcpTools } : {}),
+      ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
       ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
@@ -1582,8 +1607,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     ref: TurnSession["ref"],
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
-  ): Promise<{ entry: TurnSession; compileMs: number }> {
-    const compileStart = Date.now();
+  ): Promise<{ entry: TurnSession }> {
     let reconstructed: PiReplayMessage[] | null;
     try {
       reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -1604,7 +1628,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       tempDirPrefix,
       composedPrompt,
     );
-    const compileMs = Date.now() - compileStart;
 
     let session: AgentSession;
     try {
@@ -1660,6 +1683,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             model as DocumentModel,
             ref.documents ?? [],
             ref.abortSignal,
+            ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
           );
           const guarded = guardOutputBudget(finalPayload, model);
           if (guarded.kind === "raised") {
@@ -1723,7 +1747,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),
     };
-    return { entry, compileMs };
+    return { entry };
   }
 
   return defineHarness(
@@ -1773,7 +1797,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
         const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
         const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-        const { entry, compileMs } = await createTurnSession(
+        const { entry } = await createTurnSession(
           withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
           turn.session.id,
           turn.systemPrompt,
@@ -1789,6 +1813,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
           entry.ref.fast = wantFast;
+          entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
           const effectiveModel = activeModel?.id ?? desiredModelId;
           const defaultThinkingLevel = entry.agentSession.model
             ? defaultInteractiveThinkingLevel(entry.agentSession.model)
@@ -1839,8 +1864,15 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   ...imageRefs(turn.images),
                 },
                 scopeLabel: turn.scopeLabel,
+                ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
               });
-          const modelPrompt = userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+          const modelPrompt =
+            (userEntry
+              ? dayMarkerPrefix(
+                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                  userEntry,
+                )
+              : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
           entry.ref.llmCapture = [];
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
@@ -1904,10 +1936,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           ).agent?.subscribe?.((event) => {
             const e = event as { type?: string; message?: unknown };
             if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
+            if (e.type === "message_end") noteDocumentRejection(e.message);
             return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
           });
           const unsubscribe = entry.agentSession.subscribe((event) => {
             if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
+              steps.startStreaming();
               curStart = Date.now();
               curFirst = undefined;
               try {
@@ -1925,12 +1959,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
               if (curFirst === undefined) curFirst = Date.now();
               turn.onDelta?.(event.assistantMessageEvent.delta);
+            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+              const { contentIndex, delta, partial } = event.assistantMessageEvent;
+              const block = partial.content[contentIndex];
+              if (block?.type === "thinking" && !block.redacted)
+                turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
               const u = (event.message as { usage?: Partial<Usage> }).usage;
               const stepModel = entry.agentSession.model;
               const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
-              meterGrindCall(grindMeter, usage, stepModel?.id ?? effectiveModel);
+              meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
               callStats.push({
@@ -2036,6 +2075,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                         ts,
                         attachments: prepared?.attachments,
                         images: prepared?.images,
+                        author: prepared?.author,
                         acknowledge,
                       };
                       pendingSteers.push(steer);
@@ -2117,14 +2157,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.ref.effortLevel =
               custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
             applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
-            const state = entry.agentSession.agent.state;
-            for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
-              const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
-              if (m?.role === "assistant" && m.stopReason === "error") {
-                state.messages = [...state.messages.slice(0, i), ...state.messages.slice(i + 1)];
-                break;
-              }
-            }
+            dropFailedAssistant(entry.agentSession, messagesBefore);
             const outcome = await raceTurnWallClock(
               entry.agentSession.prompt(
                 refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
@@ -2135,8 +2168,45 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
             return true;
           };
-          const recoverRefusedRound = async (): Promise<void> => {
+          let documentRejection: ProviderTurnError | undefined;
+          let documentRetried = false;
+          const noteDocumentRejection = (message: unknown): void => {
+            if (documentRejection || !entry.ref.documents?.length) return;
+            const failed = message as AssistantMessage | undefined;
+            if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
+            const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
+            if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
+            documentRejection = failure;
+            entry.ref.documentsStubbed = true;
+            console.error(
+              `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+            );
+          };
+          const retryWithoutDocuments = async (): Promise<boolean> => {
+            if (!documentRejection || documentRetried || userAborted || turn.cancel?.aborted) return false;
+            const lastAssistant = entry.agentSession.messages
+              .slice(messagesBefore)
+              .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
+            if (lastAssistant && lastAssistant.stopReason !== "error") return false;
+            const capMs = raceCapMs();
+            if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+            documentRetried = true;
+            dropFailedAssistant(entry.agentSession, messagesBefore);
+            const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
+              capMs,
+              extendMs: extendCapMs,
+              abort: () => entry.agentSession.abort(),
+            });
+            if (userAborted) return false;
+            if (outcome !== "ok")
+              throw new NonRetryableTurnError(
+                `${documentRejection.message} (retry without inline documents was ${outcome})`,
+              );
+            return true;
+          };
+          const recoverFailedRound = async (): Promise<void> => {
             if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
+            await retryWithoutDocuments();
             const refusal = providerRefusalError(entry.agentSession, messagesBefore);
             if (!refusal) return;
             try {
@@ -2160,7 +2230,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 abort: () => entry.agentSession.abort(),
               },
             );
-            if (wallClock === "ok") await recoverRefusedRound();
+            if (wallClock === "ok") await recoverFailedRound();
             const goalAfterPrompt = entry.ref.goal;
             if (
               wallClock === "ok" &&
@@ -2208,7 +2278,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                     extendMs: extendCapMs,
                     abort: () => entry.agentSession.abort(),
                   });
-                  if (outcome === "ok") await recoverRefusedRound();
+                  if (outcome === "ok") await recoverFailedRound();
                   return outcome;
                 },
               });
@@ -2263,7 +2333,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (!userAborted && !cancelAbortRejection) {
               const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
               let recovered = false;
-              if (turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
+              try {
+                recovered = await retryWithoutDocuments();
+              } catch (e) {
+                swallow("pi: document-free retry", e);
+              }
+              if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
                   recovered = await attemptRefusalFallback(turnErr.message);
                 } catch (e) {
@@ -2311,7 +2386,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply: "",
               runtimeHandoff: entry.ref.runtimeHandoff,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
               cacheUsage: sumCacheUsage(callStats) ?? undefined,
             };
           }
@@ -2349,7 +2423,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               reply,
               stopped: true as const,
               modelCalls: entry.ref.modelCalls ?? 0,
-              compileMs,
             };
             return cacheUsage ? { ...base, cacheUsage } : base;
           }
@@ -2379,9 +2452,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
                 modelCalls,
                 ...silent,
-                compileMs,
               }
-            : { reply, modelCalls, ...silent, compileMs };
+            : { reply, modelCalls, ...silent };
           return cacheUsage ? { ...base, cacheUsage } : base;
         } finally {
           removeIsolatedDirs(entry);
@@ -2389,25 +2461,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
       },
 
       async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
-        try {
-          const modelId = detectModelId();
-          const model = requiredModel(modelId);
-          const providerKeys = await resolveProviderKeys();
-          if (!keyForModel(providerKeys, model)) return { respond: true };
-          const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
-          const prompt = renderDetectPrompt(detect);
-          detect.recordModelCall({
-            model: modelId,
-            inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
-            entryCount: detect.history.length,
-          });
-          const out = (
-            (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
-          ).trim();
-          return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
-        } catch {
-          return { respond: false };
-        }
+        const modelId = detectModelId();
+        const model = requiredModel(modelId);
+        const providerKeys = await resolveProviderKeys();
+        if (!keyForModel(providerKeys, model)) return { respond: true };
+        const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
+        const prompt = renderDetectPrompt(detect);
+        detect.recordModelCall({
+          model: modelId,
+          inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
+          entryCount: detect.history.length,
+        });
+        const out = (
+          (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? ""
+        ).trim();
+        return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
       },
 
       async compactHistory(input: HarnessCompactInput): Promise<string> {

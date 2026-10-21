@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 
@@ -55,8 +56,7 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
   const srv = start();
   try {
     await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    srv.built.config.setApprovedHarnesses(["pi"]);
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setApprovedHarnesses(["pi"]);
     const res = await put(srv.base, await token({ liveAuthor: true }));
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
@@ -77,8 +77,7 @@ test("runtime-config still refuses an automated trigger with neither liveActor n
   const srv = start();
   try {
     await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
-    srv.built.config.setApprovedHarnesses(["pi"]);
-    await srv.built.config.flushScope("org:default-org");
+    await srv.built.config.setApprovedHarnesses(["pi"]);
     const res = await put(srv.base, await token({ triggered: true }));
     assert.equal(res.status, 403);
     assert.deepEqual(await res.json(), { error: "live_actor_required" });

@@ -3,7 +3,7 @@
     "target": "esnext",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["esnext", "dom", "dom.iterable"],
+    "lib": ["es2024", "dom", "dom.iterable"],
     "types": ["node"],
     "strict": true,
     "verbatimModuleSyntax": true,

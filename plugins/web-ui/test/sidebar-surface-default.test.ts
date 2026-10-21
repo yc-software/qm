@@ -55,7 +55,7 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
     ];
     const env = await browserEnv({
       fetch: async (input) => {
-        if (String(input) === "/api/sessions") return Response.json({ sessions });
+        if (String(input).startsWith("/api/sessions?")) return Response.json({ sessions });
         if (String(input) === "/api/contexts") return Response.json({ contexts: [] });
         throw new Error(`Unexpected request: ${input}`);
       },
@@ -79,21 +79,23 @@ for (const stored of [null, "1", "0", "unavailable"] as const) {
       const groupRow = () => document.querySelector('[data-session-id="group"]');
       assert.deepEqual(rowIds(), stored === "1" ? ["web"] : ["web", "slack", "group"]);
       if (stored !== "1") {
-        assert.ok(slackRow()?.querySelector(".slack-logo"));
-        assert.ok(groupRow()?.querySelector(".slack-logo"));
+        assert.ok(slackRow()?.querySelector(".slack-mark"));
+        assert.ok(groupRow()?.querySelector(".slack-mark"));
         assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /slack/);
       }
       assert.equal(document.querySelector('[data-view="inbox"]'), null);
       assert.equal(document.querySelector('[data-view="calendar"]'), null);
       sidebar.setWebOnly(true);
+      await sidebar.refreshSessions();
       assert.deepEqual(rowIds(), ["web"]);
       sidebar.revealSessionSurface(sessions.find((s) => s.id === "cron-run"));
       assert.equal(sidebar.sessionsState.webOnly, true);
       sidebar.setWebOnly(false);
+      await sidebar.refreshSessions();
       assert.deepEqual(rowIds(), ["web", "slack", "group"]);
-      assert.ok(slackRow()?.querySelector(".slack-logo"));
+      assert.ok(slackRow()?.querySelector(".slack-mark"));
       assert.equal(slackRow()?.querySelector(".ro-lock"), null);
-      assert.match(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);
+      assert.doesNotMatch(slackRow()?.querySelector(".session")?.getAttribute("aria-label") ?? "", /read-only/);
       if (stored !== "unavailable") assert.equal(localStorage.getItem("web-ui:web-only"), "0");
     } finally {
       await env.close();

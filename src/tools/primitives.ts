@@ -1,4 +1,5 @@
 import type { AdminToolAccess } from "./admin.ts";
+import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import {
@@ -61,7 +62,7 @@ import { errMessage, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
-import type { McpToolService, McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
+import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
   ControlService,
@@ -198,6 +199,7 @@ export interface ToolContext extends SurfaceToolDeps {
   sessionSyscalls?: SessionSyscalls;
   /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
+  toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
   commandCredentialHandles?: readonly string[];
   execute(
     command: string,
@@ -243,7 +245,6 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  mcpToolDefs(): McpToolDescriptor[];
   callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
   awaitClientResult(
     callId: string,
@@ -323,7 +324,11 @@ export interface ToolContext extends SurfaceToolDeps {
   soulWrite(
     content: string,
     expectedVersion?: number,
-  ): Promise<ControlOk<{ version: number }> | ControlErr<"soul_update_denied"> | ControlUnavailable>;
+  ): Promise<
+    | ControlOk<{ version: number }>
+    | ControlErr<"soul_update_denied" | "soul_version_conflict" | "soul_update_failed">
+    | ControlUnavailable
+  >;
   shareArtifact(req: ShareArtifactRequest): Promise<ShareArtifactResult | ControlUnavailable>;
 }
 
@@ -542,6 +547,8 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  toolOutput?: ToolOutputStore;
+  sessionId?: string;
 }
 
 export function createToolContext(deps: ToolContextDeps): ToolContext {
@@ -753,6 +760,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
   return {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
+    ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
     ...(deps.commandCredentials?.length
       ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
       : {}),
@@ -979,6 +987,23 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         };
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
+      const parkedKey = parkedOutputKey(path);
+      if (parkedKey && deps.toolOutput && deps.sessionId) {
+        const parked = await withAbort(() => deps.toolOutput!.read(deps.sessionId!, parkedKey), signal);
+        if (parked && "expired" in parked)
+          return {
+            content: `[the full output in ${path} expired after 30 days; only the cut shown in the transcript remains]`,
+            sourceScopeId: writableScopeId,
+          };
+        if (parked) {
+          const { handle } = await machine(sandboxId);
+          await withAbort(() => deps.sandbox.writeFile(handle, path, parked.text), signal);
+          return {
+            content: `[copied the full output (${parked.text.length} chars) to ${path} on the computer; read the parts you need with execute, e.g. sed -n or grep]`,
+            sourceScopeId: writableScopeId,
+          };
+        }
+      }
       signal?.throwIfAborted();
       const { handle, resource, crossScope } = await machine(sandboxId);
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
@@ -1203,10 +1228,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     async historyOpen(seq: number): Promise<string | null> {
       if (!deps.sessionHistory) return null;
       return deps.sessionHistory.open(seq);
-    },
-
-    mcpToolDefs(): McpToolDescriptor[] {
-      return deps.mcp?.toolDefs() ?? [];
     },
 
     async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {

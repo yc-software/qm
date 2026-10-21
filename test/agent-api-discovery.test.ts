@@ -7,9 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
-import { agentApiMatches } from "../src/api/agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -151,11 +150,11 @@ test("a granted autonomous turn discovers only the unattended read family", asyn
     const { body } = await listApis(s.base, await capFor("admin-alice", { grants: ["admin.sessions.read"] }));
     const adminPaths = paths(body).filter((path) => path.startsWith("/v1/admin/"));
     assert.deepEqual(adminPaths, [
+      "/v1/admin/scopes",
       "/v1/admin/sessions",
       "/v1/admin/sessions/:id",
-      "/v1/admin/scopes",
-      "/v1/admin/errors",
       "/v1/admin/runs",
+      "/v1/admin/errors",
       "/v1/admin/whoami",
     ]);
     assert.ok(body.guidance.some((guidance: string) => guidance.includes("flag any other admin action")));
@@ -189,39 +188,6 @@ test("discovery advertises the deployment share endpoint, with guidance", async 
   } finally {
     await s.close();
   }
-});
-
-test("the catalog IS the gate: discovery rows with real paths are admitted, unlisted routes are not", () => {
-  assert.equal(agentApiMatches("GET", "/v1/apis"), true);
-  assert.equal(agentApiMatches("POST", "/v1/deployments/abc/share"), true);
-  assert.equal(agentApiMatches("GET", "/v1/deployments/abc"), true);
-  assert.equal(agentApiMatches("POST", "/v1/deployments/abc/restore"), true);
-  assert.equal(agentApiMatches("GET", "/v1/deployments/abc/share"), true, "owners can inspect app grants");
-  assert.equal(agentApiMatches("DELETE", "/v1/deployments/abc/share"), false, "app grants use GET and POST");
-  assert.equal(agentApiMatches("POST", "/v1/share"), true, "the uniform share verb is agent-callable");
-  assert.equal(agentApiMatches("GET", "/v1/share"), false, "share is POST-only");
-  assert.equal(agentApiMatches("POST", "/v1/crons"), true);
-  assert.equal(agentApiMatches("POST", "/v1/skills"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/skills/abc"), true);
-  assert.equal(agentApiMatches("DELETE", "/v1/skills/abc"), true);
-  assert.equal(agentApiMatches("GET", "/v1/skills/abc"), true);
-  assert.equal(agentApiMatches("POST", "/v1/skills/abc/restore"), true);
-  assert.equal(agentApiMatches("GET", "/v1/crons/abc"), true);
-  assert.equal(agentApiMatches("POST", "/v1/crons/abc/note"), true);
-  assert.equal(agentApiMatches("GET", "/v1/crons/abc/note"), false, "note is POST-only");
-  assert.equal(agentApiMatches("POST", "/v1/webhooks/abc/enable"), true);
-  assert.equal(agentApiMatches("PATCH", "/v1/memory/facts"), true);
-  assert.equal(agentApiMatches("PUT", "/v1/memory/self"), false, "notebooks are edited by fact id, not rewritten");
-  assert.equal(agentApiMatches("PATCH", "/v1/admin/memory"), true);
-  assert.equal(agentApiMatches("GET", "/v1/admin/whoami"), true);
-  assert.equal(
-    agentApiMatches("POST", "/v1/connectors/oauth/revoke"),
-    true,
-    "disconnect is the mirror of connect — agent-callable",
-  );
-  assert.equal(agentApiMatches("POST", "/v1/turns"), false, "turn ingress stays source-auth only");
-  assert.equal(agentApiMatches("GET", "/v1/sessions/abc"), false);
-  assert.equal(agentApiMatches("DELETE", "/v1/webhooks"), false);
 });
 
 test("discovery includes admin routes for a verified human thread reply", async () => {

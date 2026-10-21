@@ -143,7 +143,8 @@ export class ConnectorsState {
         "err",
       );
     this.list = result.data.connectors || [];
-    if (!this.editor) this.draft.provider = this.catalog[0]?.provider || "";
+    if (!this.editing && !this.catalog.some((c) => c.provider === this.draft.provider))
+      this.draft.provider = this.catalog[0]?.provider || "";
     this.render();
   }
   async save() {

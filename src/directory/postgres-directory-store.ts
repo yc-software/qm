@@ -170,25 +170,27 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
   );
 }
 
+export const DIRECTORY_MIGRATIONS = [
+  {
+    id: "directory/store/0001",
+    expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
+    statements: INITIAL_SCHEMA,
+  },
+  { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
+  { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
+  {
+    id: "directory/store/0004",
+    statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
+  },
+  {
+    id: "directory/store/0005",
+    statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
+  },
+];
+
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
-  const { q, pool } = createPgPool(connectionString, [
-    {
-      id: "directory/store/0001",
-      expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
-      statements: INITIAL_SCHEMA,
-    },
-    { id: "directory/store/0002", statements: SYNC_STAMP_SCHEMA },
-    { id: "directory/store/0003", statements: EXTERNAL_ROSTER_SCHEMA },
-    {
-      id: "directory/store/0004",
-      statements: ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"],
-    },
-    {
-      id: "directory/store/0005",
-      statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
-    },
-  ]);
+  const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
   async function pick<T>(
     query: string,

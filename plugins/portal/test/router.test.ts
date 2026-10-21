@@ -305,6 +305,17 @@ test("inbound webhooks pass through to the core with NO session, signature heade
   assert.equal(body.headers["x-github-delivery"], "d-1");
 });
 
+test("inbound Linear webhooks reach the core with their signature header", async () => {
+  const r = await fetch(`${base}/v1/webhooks/incoming/wh_linear`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "linear-signature": "abc123" },
+    body: JSON.stringify({ webhookTimestamp: 1 }),
+  });
+  assert.equal(r.status, 200);
+  const body = (await r.json()) as { headers: Record<string, string> };
+  assert.equal(body.headers["linear-signature"], "abc123");
+});
+
 test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", async () => {
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/abc`)).status, 404);
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/a/b`, { method: "POST" })).status, 404);

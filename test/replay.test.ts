@@ -179,24 +179,28 @@ test("a user turn that lands right after a tool result stays adjacent — no wor
   assert.deepEqual(assistantText, []);
 });
 
-test("reconstructMessagesFromHistory replays a delivery in user voice, never the assistant's", () => {
+test("reconstructMessagesFromHistory replays a delivery as the agent's deliver call and keeps legacy file notes", () => {
   const history: SessionEntry[] = [
     ent("user", { text: "make a flag" }, 1),
     ent("assistant", { text: "here you go" }, 2),
     ent("delivery", { text: "flag.png (image/png, 100 bytes)" }, 3),
-    ent("user", { text: "thanks" }, 4),
+    ent("tool_call", { tool: "deliver", callId: "cron:1", text: "flag.png is ready", via: "cron" }, 4),
+    ent("tool_result", { tool: "deliver", callId: "cron:1", result: "delivered" }, 5),
+    ent("user", { text: "thanks" }, 6),
   ];
   const msgs = reconstructMessagesFromHistory(history);
   assertValidWire(msgs);
   assert.deepEqual(
     msgs.map((m) => m.role),
-    ["user", "assistant", "user", "user"],
+    ["user", "assistant", "user", "assistant", "toolResult", "user"],
   );
-  assert.deepEqual(msgs[1]!.content, [{ type: "text", text: "here you go" }]);
   assert.deepEqual(msgs[2]!.content, [
     { type: "text", text: "[files delivered to the conversation: flag.png (image/png, 100 bytes)]" },
   ]);
-  assert.deepEqual(msgs[3]!.content, [{ type: "text", text: "thanks" }]);
+  assert.deepEqual(msgs[3]!.content, [
+    { type: "toolCall", id: "cron:1", name: "deliver", arguments: { text: "flag.png is ready", via: "cron" } },
+  ]);
+  assert.deepEqual(msgs[4]!.content, [{ type: "text", text: "delivered" }]);
 });
 
 test("reconstructMessagesFromHistory opens with a fixed user frame when the agent spoke first", () => {
@@ -210,7 +214,7 @@ test("reconstructMessagesFromHistory opens with a fixed user frame when the agen
     [
       ["user", [{ type: "text", text: AGENT_OPENED_TEXT }]],
       ["assistant", [{ type: "text", text: "daily digest" }]],
-      ["user", [{ type: "text", text: "thanks" }]],
+      ["user", [{ type: "text", text: "── Wednesday, December 31, 1969 ──\nthanks" }]],
     ],
   );
 });
@@ -528,7 +532,10 @@ test("reconstructMessagesFromHistory replays the environment note the user messa
   ];
   const [user] = reconstructMessagesFromHistory(history);
   assert.deepEqual(user!.content, [
-    { type: "text", text: "what's on today?\n\n<environment>\nIt is Monday 9am\n</environment>" },
+    {
+      type: "text",
+      text: "── Wednesday, December 31, 1969 ──\nwhat's on today?\n\n<environment>\nIt is Monday 9am\n</environment>",
+    },
   ]);
 });
 
@@ -691,4 +698,33 @@ test("a tool result cut off by a deploy says so in its replayed result", () => {
   ];
   const text = JSON.stringify(reconstructMessagesFromHistory(history));
   assert.match(text, /A routine platform deploy interrupted this call/);
+});
+
+test("replayed context marks each Pacific calendar day once, dating overheard Slack messages by when they were sent", () => {
+  const imported = Date.parse("2026-10-19T18:00:00Z");
+  const overheard = (iso: string, text: string): SessionEntry => ({
+    ...overheardEntry(String(Date.parse(iso) / 1000), "Dana", text),
+    createdAt: imported,
+  });
+  const msgs = reconstructMessagesFromHistory([
+    overheard("2026-10-15T20:00:00Z", "kickoff today"),
+    overheard("2026-10-16T16:00:00Z", "the deadline is Friday"),
+    overheard("2026-10-17T05:30:00Z", "still Friday night here"),
+    overheard("2026-10-17T08:00:00Z", "saturday early"),
+    { ...ent("user", { text: "has the deadline passed?" }, 5), createdAt: imported },
+  ]);
+  const lines = msgs.flatMap((m) =>
+    m.content.flatMap((b) => (b.type === "text" ? b.text.split("\n").filter((l) => l.startsWith("──")) : [])),
+  );
+  assert.deepEqual(lines, [
+    "── Thursday, October 15, 2026 ──",
+    "── Friday, October 16, 2026 ──",
+    "── Saturday, October 17, 2026 ──",
+    "── Monday, October 19, 2026 ──",
+  ]);
+  assert.match((msgs[2]!.content[0] as { text: string }).text, /^<message overheard="true"/);
+  assert.equal(
+    (msgs[4]!.content[0] as { text: string }).text,
+    "── Monday, October 19, 2026 ──\nhas the deadline passed?",
+  );
 });

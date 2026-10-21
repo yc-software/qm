@@ -15,11 +15,15 @@ import {
 } from "./services.ts";
 import {
   hostingProviderChoices,
+  isSandboxBackendId,
   isTarget,
+  type SandboxBackendId,
   type Target,
   SANDBOX_BACKEND_POLICY,
+  SANDBOX_BACKENDS,
   targetsAllowingSandboxBackend,
 } from "./providers.ts";
+import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { envNum, isEnvVarName, isMissingOrPlaceholder } from "./util.ts";
 
 export const CONFIG_FILENAME = "qm.config.jsonc";
@@ -46,7 +50,7 @@ export interface PluginEntry {
 }
 
 export interface SandboxConfig {
-  backend?: "local" | "sprites" | "aws" | "agent37" | "superserve" | "e2b";
+  backend?: SandboxBackendId;
   app?: string;
   image?: string;
   baseImage?: string;
@@ -126,9 +130,9 @@ export const MODEL_PROVIDER_KEYS: Readonly<Record<ModelProvider, string>> = {
 };
 
 export const MODEL_PROVIDER_HARNESSES: Readonly<Record<ModelProvider, readonly string[]>> = {
-  anthropic: ["pi", "claude", "mock"],
-  openai: ["pi", "mock"],
-  openrouter: ["pi", "mock"],
+  anthropic: ["pi", "claude"],
+  openai: ["pi"],
+  openrouter: ["pi"],
 };
 
 export const isModelProvider = (value: unknown): value is ModelProvider =>
@@ -816,13 +820,7 @@ function validate(raw: unknown, path: string): QmConfig {
 }
 
 function configuredHarness(config: QmConfig): string {
-  return config.env.core?.HARNESS?.trim() || (config.target === "fly" ? "pi" : "mock");
-}
-
-export function mockHarnessWarning(config: QmConfig): string | undefined {
-  if (configuredHarness(config) !== "mock") return undefined;
-  const unset = !config.env.core?.HARNESS?.trim();
-  return `env.core.HARNESS is ${unset ? "unset, which means" : "set to"} "mock": this deployment answers every message with canned text and calls no model provider. Set it to "pi" for a deployment that runs real agent turns.`;
+  return config.env.core?.HARNESS?.trim() || TARGET_ENV_DEFAULTS[config.target](config, "core", "HARNESS") || "pi";
 }
 
 export function effectiveModelProvider(config: QmConfig): ModelProvider | undefined {
@@ -830,7 +828,7 @@ export function effectiveModelProvider(config: QmConfig): ModelProvider | undefi
   return isModelProvider(override) ? override : config.modelProvider;
 }
 
-const HARNESSES = ["mock", "pi", "claude"];
+const HARNESSES = ["pi", "claude"];
 
 function validateModelProvider(config: QmConfig, path: string): void {
   const harness = configuredHarness(config);
@@ -1024,8 +1022,8 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
   if (hasPortal && protocol !== "https:") {
     throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
   }
-  const harness = config.env.core?.HARNESS?.trim() || "mock";
-  if (protocol !== "https:" && harness !== "mock") {
+  const harness = configuredHarness(config);
+  if (protocol !== "https:") {
     throw new CliError(
       `${path}: AWS HARNESS=${harness} requires an HTTPS publicUrl so sandbox capabilities never cross the Internet in cleartext`,
     );
@@ -1507,17 +1505,9 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   };
   const out: SandboxConfig = {};
   if (o["backend"] !== undefined) {
-    if (
-      o["backend"] !== "local" &&
-      o["backend"] !== "sprites" &&
-      o["backend"] !== "aws" &&
-      o["backend"] !== "agent37" &&
-      o["backend"] !== "superserve" &&
-      o["backend"] !== "e2b"
-    ) {
-      throw new CliError(
-        `${path}: "sandbox.backend" must be "local" (Docker containers on the deployment host), "sprites" (Fly Sprites), "aws" (Lambda MicroVM sandboxes), "agent37", "superserve" (Superserve sandboxes), or "e2b" (E2B sandboxes)`,
-      );
+    if (!isSandboxBackendId(o["backend"])) {
+      const choices = Object.entries(SANDBOX_BACKENDS).map(([id, label]) => (label ? `"${id}" (${label})` : `"${id}"`));
+      throw new CliError(`${path}: "sandbox.backend" must be ${choices.slice(0, -1).join(", ")}, or ${choices.at(-1)}`);
     }
     out.backend = o["backend"];
   }

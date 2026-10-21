@@ -6,7 +6,7 @@ import { runEventRoutes } from "../src/api/routes/run-events.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { App } from "../src/api/app.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
-import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
+import { emitRunReasoning, emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,6 +23,7 @@ test("run events push deltas without snapshot polling and recover a separate wor
       reads++;
       return {
         status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: status === "done" ? { status: "ok", reply: workerText } : null,
@@ -73,7 +74,7 @@ test("run events push deltas without snapshot polling and recover a separate wor
     }
     assert.equal(syncCalls - beforeSync, 1, "later gaps must not start overlapping catch-up replays");
     holdSync = false;
-    app.syncRunStream("run", 14);
+    app.syncRunStream("run", 14, {});
     await sleep(50);
     assert.match(wire, /lost then found/);
     status = "done";
@@ -105,6 +106,7 @@ test("run events deliver a pending activity snapshot before subsequent text and 
       }
       return {
         status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: status === "done" ? { status: "ok", reply: workerText } : null,
@@ -201,6 +203,7 @@ async function streamToolRun(entries: SessionEntry[], state: { status: "running"
     async getRun() {
       return {
         status: state.status,
+        attempt: 1,
         startedAt: 0,
         finishedAt: null,
         result: state.status === "done" ? { status: "ok", reply: "done" } : null,
@@ -411,3 +414,98 @@ test(
     }
   },
 );
+
+test("run events forward reasoning per block, dedupe overlap, and catch up gaps through sync", async () => {
+  const bus = createMemoryEventBus<RunStreamEvent>("test");
+  const worker = { step: "s1", index: 0, text: "**Checking** the cache" };
+  const syncs: Array<Record<string, number> | undefined> = [];
+  const app = {
+    async getRun() {
+      return { status: "running", attempt: 1, startedAt: 0, finishedAt: null, result: null };
+    },
+    subscribeRun(_runId, listener, onResync) {
+      return bus.subscribe(listener, { onResync });
+    },
+    syncRunStream(runId, _offset, reasoning) {
+      syncs.push(reasoning);
+      const sent = reasoning?.["s1:0"] ?? 0;
+      if (worker.text.length > sent) emitRunReasoning(bus, runId, worker, worker.text.slice(sent), sent);
+    },
+    async getRunToolEntries() {
+      return [];
+    },
+  } as Pick<App, "getRun" | "getRunToolEntries" | "subscribeRun" | "syncRunStream">;
+  const server = createServer((req, res) => {
+    void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, {
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    let wire = "";
+    void (async () => {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) return;
+        wire += new TextDecoder().decode(next.value);
+      }
+    })().catch(() => {});
+    await sleep(100);
+    const frames = () =>
+      wire
+        .split("\n\n")
+        .map((chunk) => chunk.split("\n").find((line) => line.startsWith("data: ")))
+        .filter((line): line is string => !!line)
+        .map((line) => JSON.parse(line.slice(6)) as { name?: string; value?: Record<string, unknown> })
+        .filter((frame) => frame.name === "reasoning")
+        .map((frame) => frame.value!);
+    assert.equal(
+      frames()
+        .map((v) => v.delta)
+        .join(""),
+      worker.text,
+      "connect-time sync replays the live block",
+    );
+    bus.emit({ runId: "run", kind: "reasoning", step: "s1", index: 0, offset: 12, text: " the cache" });
+    worker.text += " and the queue";
+    bus.emit({ runId: "run", kind: "reasoning", step: "s1", index: 0, offset: 22, text: " and the queue" });
+    await sleep(50);
+    assert.equal(
+      frames()
+        .map((v) => v.delta)
+        .join(""),
+      worker.text,
+      "overlapping reasoning is sent once",
+    );
+    assert.deepEqual(
+      frames().map((v) => [v.step, v.index, v.offset]),
+      [
+        ["s1", 0, 0],
+        ["s1", 0, 22],
+      ],
+    );
+    syncs.length = 0;
+    worker.text += " then more";
+    bus.emit({ runId: "run", kind: "reasoning", step: "s1", index: 0, offset: 40, text: "more" });
+    await sleep(50);
+    assert.deepEqual(syncs, [{ "s1:0": 36 }], "a gap asks the owner for exactly what this stream lacks");
+    assert.equal(
+      frames()
+        .map((v) => v.delta)
+        .join(""),
+      worker.text,
+    );
+    for (let i = 1; i <= 10; i++)
+      bus.emit({ runId: "run", kind: "reasoning", step: `s${i + 1}`, index: 0, offset: 0, text: "x" });
+    syncs.length = 0;
+    bus.emit({ runId: "run", kind: "reasoning", step: "s12", index: 0, offset: 5, text: "gap" });
+    await sleep(50);
+    assert.equal(Object.keys(syncs[0] ?? {}).length, 8, "sync requests stay small however many blocks a run streams");
+  } finally {
+    controller.abort();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

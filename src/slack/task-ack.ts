@@ -51,7 +51,10 @@ export function createTaskAcknowledgements(
         if (!state) {
           if (next?.existing) return true;
           const emoji = next?.pick
-            ? await Promise.race([next.pick().catch(() => undefined), sleep(1500).then(() => undefined)])
+            ? await Promise.race([
+                next.pick().catch(swallowAs("slack: pick task ack emoji", undefined)),
+                sleep(1500).then(() => undefined),
+              ])
             : undefined;
           if (leaseLost) return false;
           await store.putIfAbsent(runId, {

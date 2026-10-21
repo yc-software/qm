@@ -44,7 +44,7 @@ test("settings navigation never starts the all-scopes history scan", () => {
       },
       renderTabs() {},
       defaultShell() {},
-      renderCurrentData() {},
+      renderData() {},
     });
     vm.runInContext(source, context);
     vm.runInContext(`render({view:${JSON.stringify(view)}, scope:"org:example"})`, context);

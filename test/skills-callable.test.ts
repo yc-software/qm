@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -61,46 +61,6 @@ test("a published personal skill is advertised and loads in the owner's DM", asy
     text: "!skill make-digest",
   } as TurnRequest);
   assert.match(read.reply ?? "", /Step 1: gather/);
-});
-
-test("a skill pinned to the person's scope is listed in their DM shortlist even when the message doesn't mention it", async () => {
-  const { app, skills, config } = freshApp();
-  for (let i = 0; i < 13; i++) {
-    const sk = await skills.create({
-      scopeId: scopeId("personal", "U1"),
-      manifest: {
-        name: `aa-filler-${i}`,
-        description: "filler",
-        requiredCapabilities: [],
-        body: "# filler",
-      },
-      createdBy: "U1",
-    });
-    await skills.review(sk.id, "reviewer-1", []);
-    await skills.publish(sk.id);
-  }
-  const sk = await skills.create({
-    scopeId: scopeId("personal", "U1"),
-    manifest: { name: "zz-voice", description: "write in my voice", requiredCapabilities: [], body: "# voice" },
-    createdBy: "U1",
-  });
-  await skills.review(sk.id, "reviewer-1", []);
-  await skills.publish(sk.id);
-  const shortlist = async (thread: string) =>
-    (
-      await app.turn({
-        surface: "test",
-        actor,
-        conversation: { kind: "dm", threadRef: thread },
-        text: "!sysprompt",
-      } as TurnRequest)
-    ).reply ?? "";
-
-  assert.doesNotMatch(await shortlist("dm:U1:p1"), /zz-voice/);
-  await config.setPinnedSkills(scopeId("personal", "U1"), ["zz-voice", "not-a-real-skill"]);
-  const pinned = await shortlist("dm:U1:p2");
-  assert.match(pinned, /Showing 12 of \d+ available skills\.[^\n]*\n- \*\*zz-voice\*\*/);
-  assert.doesNotMatch(pinned, /not-a-real-skill/);
 });
 
 test("a channel session does NOT see a personal skill (scope boundary)", async () => {
@@ -176,7 +136,7 @@ test("skill files stay on the computer across turns", async () => {
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });
 
-test("shortlist uses visible history, resets with compaction, and leaves the system prefix stable", async () => {
+test("skills index order uses visible history, resets with compaction, and leaves the system prefix stable", async () => {
   const built = freshApp();
   for (let i = 0; i < 20; i++) {
     const skill = await built.skills.create({
@@ -198,21 +158,22 @@ test("shortlist uses visible history, resets with compaction, and leaves the sys
     conversation: { kind: "dm" as const, threadRef: "shortlist-history" },
     text: "!sysprompt",
   };
+  const promoted = (prompt: string) => prompt.indexOf("**helper-19**") < prompt.indexOf("**helper-00**");
   const first = await built.app.turn(request);
-  assert.doesNotMatch(first.reply ?? "", /\*\*helper-19\*\*/);
+  assert.ok(!promoted(first.reply ?? ""));
   const sessionId = first.sessionId!;
   const { lease } = await built.sessions.acquireLease(sessionId, "turn");
   assert.ok(lease);
   await built.sessions.append(lease, {
     type: "tool_call",
-    payload: { tool: "skills", action: "read", name: "helper-19" },
+    payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
     scopeLabel: "personal:U1",
   });
   await built.sessions.releaseLease(lease);
   const second = await built.app.turn(request);
-  assert.match(second.reply ?? "", /\*\*helper-19\*\*/);
+  assert.ok(promoted(second.reply ?? ""));
   const unchanged = await built.app.turn(request);
-  assert.doesNotMatch(unchanged.reply ?? "", /Showing 12 of/);
+  assert.doesNotMatch(unchanged.reply ?? "", /\*\*helper-00\*\*/);
   const entries = await built.sessions.getEntries(sessionId);
   const reset = await built.sessions.acquireLease(sessionId, "compaction");
   assert.ok(reset.lease);
@@ -223,7 +184,7 @@ test("shortlist uses visible history, resets with compaction, and leaves the sys
   });
   await built.sessions.releaseLease(reset.lease);
   const third = await built.app.turn(request);
-  assert.doesNotMatch(third.reply ?? "", /\*\*helper-19\*\*/);
+  assert.ok(!promoted(third.reply ?? ""));
   const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
   const systems = recorded.map((r) => (r.promptEnvelope as { system: string }).system);
   assert.equal(systems.length, 4);

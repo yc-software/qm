@@ -17,7 +17,7 @@ import { sleep } from "../src/util/async.ts";
 
 const execFileAsync = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
-const AGENT_DIR = join(HERE, "..", "aws", "microvm-agent");
+const AGENT_DIR = join(HERE, "..", "cli", "templates", "aws", "microvm-agent");
 
 function reqEnv(name: string): string {
   const v = process.env[name];

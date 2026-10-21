@@ -54,7 +54,7 @@ async function nativeNamesFor(deps: AppDeps, packId: string, scope: ScopeId): Pr
   const all = await deps.skills.list();
   return new Set(
     all
-      .filter((s) => s.scopeId === scope && s.status !== "archived" && s.createdBy !== `pack:${packId}`)
+      .filter((s) => s.scopeId === scope && s.status !== "archived" && s.pack?.packId !== packId)
       .map((s) => s.manifest.name),
   );
 }
@@ -73,7 +73,7 @@ async function importedPackSkills(
 async function buildClaimedPaths(deps: AppDeps, exceptPackId: string, scopeId: ScopeId): Promise<Map<string, string>> {
   const claimed = new Map<string, string>();
   for (const s of await deps.skills.list()) {
-    if (s.status !== "published" || s.createdBy === `pack:${exceptPackId}` || s.scopeId !== scopeId) continue;
+    if (s.status !== "published" || s.pack?.packId === exceptPackId || s.scopeId !== scopeId) continue;
     for (const p of persistedSkillRecordPaths(s.manifest.name, s.manifest.files)) claimed.set(p, s.createdBy);
   }
   return claimed;
@@ -94,7 +94,7 @@ async function archiveRemoved(deps: AppDeps, packId: string, scopeId: ScopeId, k
   const keptSet = new Set(kept);
   const archived: string[] = [];
   for (const s of await deps.skills.list()) {
-    if (s.createdBy !== `pack:${packId}` || s.scopeId !== scopeId || s.status === "archived") continue;
+    if (s.pack?.packId !== packId || s.scopeId !== scopeId || s.status === "archived") continue;
     const upstream = s.pack?.upstreamName;
     if (upstream && !keptSet.has(upstream)) {
       await deps.skills.archive(s.id);
@@ -380,7 +380,7 @@ export function createSkillMethods(
     async removeSkillPack(id) {
       const { packs } = requireRegistry(deps);
       return withSkillMutationLock(deps, async () => {
-        const mine = (await deps.skills.list()).filter((s) => s.createdBy === `pack:${id}`);
+        const mine = (await deps.skills.list()).filter((s) => s.pack?.packId === id);
         for (const s of mine) await deps.skills.delete(s.id);
         await deps.skillBundles?.delete(id);
         await packs.remove(id);

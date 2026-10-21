@@ -6,7 +6,7 @@ import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { TurnFailurePayload } from "../core/turn-error.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { acquireLeaseWithin, entryDeliveryKey, type SessionStore } from "../sessions/session-store.ts";
+import { acquireLeaseWithin, type SessionStore } from "../sessions/session-store.ts";
 import { turnRecordedFailure } from "./web-transcript-delivery.ts";
 import { reportFailureAs } from "../util/errors.ts";
 
@@ -115,7 +115,6 @@ export async function recordRunFailureEntry(sessions: TurnFailureSessions, run: 
   try {
     const tail = await sessions.getEntries(session.id, { limit: FAILURE_RECORD_SCAN_LIMIT });
     if (turnRecordedFailure(tail, { notBefore: run.startedAt ?? run.createdAt, runId: run.id })) return false;
-    if (tail.some((entry) => entryDeliveryKey(entry) === `run:${run.id}`)) return false;
     const payload: TurnFailurePayload = {
       kind: "turn_failure",
       message: `I couldn't finish that turn: ${userFacingFailureClause(run.result ?? { status: "failed" })}`,

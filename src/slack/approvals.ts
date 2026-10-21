@@ -10,7 +10,6 @@ import {
   createApprovalRegistry,
   createThreadTracker,
   inlineCode,
-  isBoundaryRefusal,
   recoveredApprovalContext,
   resolveReactionTargets,
   slackReplyArgs,
@@ -401,7 +400,7 @@ export function createApprovals(deps: {
         return;
       }
 
-      const failLink = isBoundaryRefusal(result.reason) ? null : (result.adminUrl ?? null);
+      const failLink = result.refusalKind === "internal_only" ? null : (result.adminUrl ?? null);
       const failDetail = failLink ? ` Full error: ${failLink}` : "";
       await updateSlackMessage(
         client,

@@ -4,7 +4,6 @@ import {
   MODEL_PROVIDER_KEYS,
   effectiveModelProvider,
   localSandboxActive,
-  mockHarnessWarning,
   validatePortalTrust,
   type ModelProvider,
   type QmConfig,
@@ -12,7 +11,7 @@ import {
 import { CliError, errMessage, step, warn } from "../log.ts";
 import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
-import { emailTransportConfigured } from "../preflight.ts";
+import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
   try {
@@ -166,7 +165,7 @@ export async function doctorCommon(
   } else if (config.sandbox) {
     step("sandbox: sprites boot the platform's stock image");
   } else {
-    step("sandbox: not configured — agents cannot execute commands (HARNESS=mock turns only)");
+    step("sandbox: not configured — agents cannot execute commands");
   }
 
   if (config.services.includes("slack")) {
@@ -216,8 +215,6 @@ export async function doctorCommon(
 }
 
 async function baseModelCheck(config: QmConfig, secrets: Map<string, string>): Promise<void> {
-  const mockHarness = mockHarnessWarning(config);
-  if (mockHarness) warn(mockHarness);
   const provider = effectiveModelProvider(config);
   if (!provider) {
     step("base model: no modelProvider set — an administrator supplies the key from the Admin page");
@@ -279,21 +276,6 @@ async function resendCheck(apiKey: string): Promise<void> {
   if (!res.ok) throw new CliError(`the Resend API returned HTTP ${res.status}; retry when it recovers`);
 }
 
-async function smtpReachable(host: string, port: number): Promise<string> {
-  const { connect } = await import("node:net");
-  return new Promise<string>((resolve, reject) => {
-    const socket = connect({ host, port });
-    const done = (error?: Error, greeting?: string): void => {
-      socket.destroy();
-      if (error) reject(error);
-      else resolve(greeting ?? "");
-    };
-    socket.setTimeout(10_000, () => done(new Error("connection timed out")));
-    socket.once("error", (e: Error) => done(e));
-    socket.once("data", (chunk: Buffer) => done(undefined, chunk.toString("utf8").split("\r\n")[0] ?? ""));
-  });
-}
-
 async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, haveValues: boolean): Promise<void> {
   if (haveValues && !emailTransportConfigured(config, secrets)) {
     step("sign-in email: disabled; use qm admin-login for administrator access");
@@ -327,13 +309,13 @@ async function authBrokerCheck(config: QmConfig, secrets: Map<string, string>, h
     return;
   }
   const port = Number(config.env.auth?.SMTP_PORT ?? 587);
-  let greeting: string;
+  const implicit = smtpTlsMode(config.env.auth?.SMTP_TLS, port) === "implicit";
   try {
-    greeting = await smtpReachable(host, port);
+    await smtpTransport(host, port, implicit ? "implicit" : "none").verify();
   } catch (e) {
     throw new CliError(
       `SMTP relay ${host}:${port} is unreachable: ${errMessage(e)} — the broker cannot send sign-in links`,
     );
   }
-  step(`SMTP relay ${host}:${port}: reachable (${greeting || "no greeting"})`);
+  step(`SMTP relay ${host}:${port}: reachable`);
 }

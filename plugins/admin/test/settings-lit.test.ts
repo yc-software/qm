@@ -34,10 +34,17 @@ test("model chips add and remove with stable keyed rendering", () => {
   const dom = setup();
   try {
     dom.window.eval("settingsUI.load(" + JSON.stringify(models) + ',"org:test","webui-models")');
-    const select = dom.window.document.getElementById("webui-models-add") as HTMLSelectElement;
-    select.value = "b";
-    select.dispatchEvent(new dom.window.Event("change"));
-    dom.window.document.getElementById("webui-models-add-button")!.click();
+    const doc = dom.window.document;
+    const input = doc.getElementById("webui-models-add") as HTMLInputElement;
+    const options = () => [...doc.querySelectorAll("#webui-models-options option")].map((o) => o.textContent);
+    assert.deepEqual(options(), ["Alpha (a)", "Beta (b)"]);
+    input.value = "Bet";
+    input.dispatchEvent(new dom.window.Event("input"));
+    assert.equal((doc.getElementById("webui-models-add-button") as HTMLButtonElement).disabled, true);
+    input.value = "b";
+    input.dispatchEvent(new dom.window.Event("input"));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
+    assert.deepEqual(options(), ["Alpha (a)"]);
     assert.equal(dom.window.eval('settingsUI.collect("webui-models").ids.join()'), "b");
     dom.window.document.querySelector<HTMLButtonElement>('[aria-label="Remove b"]')!.click();
     assert.equal(dom.window.eval('settingsUI.states.get("webui-models").dirty'), false);
@@ -65,6 +72,40 @@ test("feature flag entries use a compact row that cannot inherit the card grid",
     const editor = dom.window.document.querySelector("#card-feature-flags .feature-flag-editor")!;
     assert.ok(editor);
     assert.equal(editor.classList.contains("editor-grid"), false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("feature flag picker offers every server feature and limits personal-only features to people", async () => {
+  const dom = setup();
+  try {
+    dom.window.eval(`settingsUI.configureFlags({
+      loadChoices: async () => [{ scopeId: "personal:ada" }, { scopeId: "channel:C1" }],
+      buildSelector: (choices) => Object.assign(document.createElement("ul"), { id: "offered", textContent: choices.map((c) => c.scopeId).join() }),
+      save: async () => ({ ok: true }),
+    })`);
+    await dom.window.eval(`settingsUI.loadFlags(
+      { featureFlags: [
+        { featureName: "persistent_subagents", label: "Persistent subagents", personalOnly: true, hint: "People only.", enabledScopes: [] },
+        { featureName: "swarms", label: "Swarms", personalOnly: true, enabledScopes: [] },
+        { featureName: "team_scopes", label: "Team scopes", enabledScopes: [] },
+      ] },
+      "org:test",
+    )`);
+    await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
+    const doc = dom.window.document;
+    const select = doc.getElementById("feature-flag-name") as HTMLSelectElement;
+    assert.deepEqual(
+      [...select.options].map((option) => option.textContent),
+      ["Persistent subagents", "Swarms", "Team scopes"],
+    );
+    assert.equal(select.value, "persistent_subagents");
+    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada");
+    assert.equal(doc.querySelector("#card-feature-flags .hint:not(#feature-flag-list)")!.textContent, "People only.");
+    select.value = "team_scopes";
+    select.dispatchEvent(new dom.window.Event("change"));
+    assert.equal(doc.getElementById("offered")!.textContent, "personal:ada,channel:C1");
   } finally {
     dom.window.close();
   }

@@ -1,3 +1,4 @@
+import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
@@ -34,12 +35,11 @@ import type { BrokerFetch } from "./credential-broker.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
-import type { InviteMailer } from "../admin/invite-email.ts";
+import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { MetricsSink } from "../admin/metrics-sink.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
@@ -107,6 +107,7 @@ export interface ServerDeps {
   managedSlack?: ManagedSlack;
   slackInstallation?: SlackInstallationStore;
   slackInstallationFetch?: typeof fetch;
+  slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
@@ -146,7 +147,7 @@ export interface ServerDeps {
   harnessId?: string;
   harnessCarriedModelAuth?: ModelProvider;
   admin?: AdminService;
-  inviteMailer?: InviteMailer;
+  inviteMailer?: Mailer;
   emailAuthPrincipals?: readonly string[];
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];
@@ -155,7 +156,6 @@ export interface ServerDeps {
   screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
   errors?: ErrorLog;
-  metrics?: MetricsSink;
   crons?: CronStore;
   loops?: LoopServiceDeps;
   runs?: RunStore;

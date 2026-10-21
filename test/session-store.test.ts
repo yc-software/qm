@@ -7,7 +7,6 @@ import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { byScopeId, rollupsFromSummaries } from "./support/scope-rollup-oracle.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
   assert.equal(sessionOrigin("agent:main:cron:abc"), "cron");
@@ -227,30 +226,21 @@ for (const [name, make] of backends) {
     assert.equal(byThreadOrigin.get(cron!.id), "cron");
   });
 
-  test(`${name}: scopeSessionStats rolls up totals/turns/byType across the whole scope`, async () => {
+  test(`${name}: scopeActivity counts conversations, cron fires and other background per scope`, async () => {
     const store = make();
     const scope = scopeId("personal", "U1");
     const dm = await store.getOrCreateByThread("dm:D1", "dm", scope);
     await store.getOrCreateByThread("agent:main:cron:c1", "dm", scope);
+    await store.getOrCreateByThread("cron:c1:slot2", "dm", scope);
+    await store.getOrCreateByThread("agent:main:webhook:wh1", "dm", scope);
+    await store.getOrCreateByThread("dm:D9", "dm", scopeId("personal", "U9"));
     const { lease } = await store.acquireLease(dm.id);
-    assert.ok(lease);
-    await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
-    await store.append(lease, { type: "user", payload: { text: "again" }, scopeLabel: scope });
-    await store.releaseLease(lease);
+    await store.append(lease!, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
+    await store.releaseLease(lease!);
 
-    const stats = await store.scopeSessionStats(scope, false);
-    assert.equal(stats.total, 2, "both sessions counted");
-    assert.equal(stats.turns, 2, "two user entries across the scope");
-    assert.equal(stats.byType.dm, 1, "the conversation buckets by channel type");
-    assert.equal(stats.byType.cron, 1, "the trigger thread buckets by origin");
-    assert.deepEqual(stats.totalByCategory, { conversation: 1, background: 1, all: 2 });
-
-    const conversationStats = await store.scopeSessionStats(scope, false, "conversation");
-    assert.equal(conversationStats.total, 1);
-    assert.deepEqual(conversationStats.totalByCategory, { conversation: 1, background: 1, all: 2 });
-    const backgroundStats = await store.scopeSessionStats(scope, false, "background");
-    assert.equal(backgroundStats.total, 1);
-    assert.equal(backgroundStats.byType.cron, 1);
+    const rows = new Map((await store.scopeActivity()).map((r) => [r.scopeId, r]));
+    assert.deepEqual([rows.get(scope)?.conversations, rows.get(scope)?.crons, rows.get(scope)?.background], [1, 2, 1]);
+    assert.equal(rows.get(scopeId("personal", "U9"))?.conversations, 1, "every scope gets its own row");
   });
 
   test(`${name}: overheard catch-up entries are NOT counted as turns or as the first/last message`, async () => {
@@ -274,9 +264,6 @@ for (const [name, make] of backends) {
     });
     await store.releaseLease(lease);
 
-    const stats = await store.scopeSessionStats(scope, false);
-    assert.equal(stats.turns, 1, "only the real user turn counts; the two overheard rows do not");
-
     const rows = await store.scopeSessionSummaries(scope, false, { limit: 500 });
     const row = rows.find((r) => r.id === s.id)!;
     assert.equal(row.turns, 1, "summary turns excludes overheard");
@@ -290,14 +277,6 @@ for (const [name, make] of backends) {
       1,
       "retention/usage counts only the real user turn",
     );
-
-    const previews = await store.lastUserMessages([s.id]);
-    assert.equal(
-      previews.get(s.id),
-      "the real question",
-      "lastUserMessages returns the latest real user turn, skipping overheard",
-    );
-    assert.equal((await store.lastUserMessages([])).size, 0, "empty id set → empty map");
   });
 
   test(`${name}: scopeSessionSummaries paginates newest-activity-first`, async () => {
@@ -377,54 +356,16 @@ for (const [name, make] of backends) {
       otherRows.map((r) => r.id),
       [webhook.id],
     );
-
-    const cronStats = await store.scopeSessionStats(scope, false, "background", "cron");
-    assert.equal(cronStats.total, 1);
-    assert.equal(cronStats.byType.cron, 1);
-    assert.deepEqual(cronStats.totalByCategory, { conversation: 0, background: 2, all: 2 });
-
-    const otherStats = await store.scopeSessionStats(scope, false, "background", "other_background");
-    assert.equal(otherStats.total, 1);
-    assert.equal(otherStats.byType.webhook, 1);
   });
 
-  test(`${name}: scopeCronGroups rolls up one row per cron; cronId page filters one cron's fires`, async () => {
+  test(`${name}: cronId page filters one cron's fires`, async () => {
     const store = make();
     const scope = scopeId("channel", "C1");
     const c1a = await store.getOrCreateByThread("cron:c1:slot1", "channel", scope);
     const c1b = await store.getOrCreateByThread("cron:c1:slot2", "channel", scope);
-    const c2 = await store.getOrCreateByThread("agent:main:cron:c2", "channel", scope);
+    await store.getOrCreateByThread("agent:main:cron:c2", "channel", scope);
     await store.getOrCreateByThread("agent:main:webhook:wh1", "channel", scope);
-    await store.getOrCreateByThread("dm:D9", "dm", scopeId("personal", "U9"));
-    const { lease } = await store.acquireLease(c1a.id);
-    await store.append(lease!, { type: "user", payload: { text: "fire" }, scopeLabel: scope });
-    await store.append(lease!, { type: "assistant", payload: { text: "done" }, scopeLabel: scope });
-
-    const groups = await store.scopeCronGroups(scope, false);
-    assert.deepEqual(
-      groups.map((g) => g.cronId).sort(),
-      ["c1", "c2"],
-      "one row per cron, webhook and conversations excluded",
-    );
-    const g1 = groups.find((g) => g.cronId === "c1")!;
-    assert.equal(g1.sessions, 2, "counts every fire session of the cron");
-    assert.equal(g1.turns, 1);
-    assert.equal(g1.messages, 2);
-    assert.equal(g1.scopeId, scope);
-    const g2 = groups.find((g) => g.cronId === "c2")!;
-    assert.deepEqual([g2.sessions, g2.turns, g2.messages], [1, 0, 0], "entry-less fire still counted");
-    assert.equal(g2.lastActivity, c2.createdAt);
-
     const fresh = await store.getOrCreateByThread("cron:c1:slot3", "channel", scope);
-    const regrouped = await store.scopeCronGroups(scope, false);
-    assert.equal(
-      regrouped.find((g) => g.cronId === "c1")!.lastActivity,
-      fresh.createdAt,
-      "a fresh entry-less fire advances the group's last activity past older fires' entries",
-    );
-
-    const cronStats = await store.scopeSessionStats(scope, false, "background", "cron", "c1");
-    assert.equal(cronStats.total, 3, "stats cronId filter counts one cron's fires");
 
     const fires = await store.scopeSessionSummaries(scope, false, { limit: 10, cronId: "c1" });
     assert.deepEqual(
@@ -438,73 +379,6 @@ for (const [name, make] of backends) {
       before: { lastActivity: fires[0]!.lastActivity, id: fires[0]!.id },
     });
     assert.equal(page.length, 1, "cronId filter applies before pagination");
-    assert.deepEqual(await store.scopeCronGroups(scopeId("channel", "other"), false), [], "scope filter applies");
-  });
-
-  test(`${name}: scopeSessionRollups aggregates per scope what the scope index used to count row by row`, async () => {
-    const nowRef = { v: 30_000_000_000 };
-    const t0 = nowRef.v;
-    const store = createMemorySessionStore({ now: () => nowRef.v });
-    const a = scopeId("channel", "A");
-    const b = scopeId("channel", "B");
-    const c = scopeId("personal", "U9");
-    const say = async (id: string, text: string) => {
-      const { lease } = await store.acquireLease(id);
-      await store.append(lease!, { type: "user", payload: { text }, scopeLabel: a });
-      await store.releaseLease(lease!);
-    };
-    const conv1 = await store.getOrCreateByThread("ch:A:t1", "channel", a);
-    await store.getOrCreateByThread("agent:main:webhook:w1", "channel", a);
-    nowRef.v = t0 + 50_000;
-    await store.getOrCreateByThread("agent:main:monitor:m1", "channel", b);
-    nowRef.v = t0 + 100_000;
-    await say(conv1.id, "one");
-    const conv3 = await store.getOrCreateByThread("ch:A:t3", "channel", a);
-    await say(conv3.id, "three");
-    nowRef.v = t0 + 200_000;
-    await store.getOrCreateByThread("ch:A:t2", "channel", a);
-    await store.getOrCreateByThread("dm:D9", "dm", c);
-    nowRef.v = t0 + 300_000;
-    const fire = await store.getOrCreateByThread("cron:c1:fire:abc", "channel", a);
-    await say(fire.id, "fired");
-
-    const rollups = byScopeId(await store.scopeSessionRollups(a, true));
-    assert.deepEqual(rollups, [
-      {
-        scopeId: a,
-        sessions: 3,
-        backgroundSessions: 2,
-        lastActivity: t0 + 300_000,
-        lastConversationActivity: t0 + 200_000,
-        previewSessionId: [conv1.id, conv3.id].sort().at(-1)!,
-      },
-      {
-        scopeId: b,
-        sessions: 0,
-        backgroundSessions: 1,
-        lastActivity: t0 + 50_000,
-        lastConversationActivity: 0,
-        previewSessionId: null,
-      },
-      {
-        scopeId: c,
-        sessions: 1,
-        backgroundSessions: 0,
-        lastActivity: t0 + 200_000,
-        lastConversationActivity: t0 + 200_000,
-        previewSessionId: null,
-      },
-    ]);
-    assert.deepEqual(
-      rollups,
-      rollupsFromSummaries(await store.scopeSessionSummaries(a, true, { limit: 500 })),
-      "the aggregate matches a row-by-row pass over the summaries",
-    );
-    assert.deepEqual(
-      await store.scopeSessionRollups(b, false),
-      rollups.filter((r) => r.scopeId === b),
-      "scope filter applies",
-    );
   });
 
   test(`${name}: forceReleaseLease drops a held lease so a fresh acquire succeeds (reaper path)`, async () => {
@@ -601,7 +475,6 @@ for (const [name, make] of backends) {
     );
     assert.equal(list[0]!.turnSeq, 0, "correlated to the turn's user entry seq");
     assert.equal(list[1]!.truncated, true, "truncated flag round-trips");
-    assert.equal(list[0]!.request, null, "message-array bodies are never stored");
     assert.deepEqual(
       list[0]!.promptEnvelope,
       { system: "you are helpful", tools: [{ name: "execute" }] },
@@ -676,7 +549,7 @@ for (const [name, make] of backends) {
     const meta = await store.listLlmRequests(s.id, { omitRequest: true });
     assert.equal(meta.length, 4, "every row still listed");
     assert.ok(
-      meta.every((r) => r.request === null && r.promptEnvelope === undefined),
+      meta.every((r) => r.promptEnvelope === undefined),
       "bodies omitted",
     );
     assert.ok(
@@ -806,7 +679,7 @@ for (const [name, make] of backends) {
     await store.append(lease, { type: "user", payload: { text: "hi" }, scopeLabel: scope });
     const lastUser = await store.append(lease, { type: "user", payload: { text: "still here" }, scopeLabel: scope });
     await store.append(lease, { type: "assistant", payload: { text: "yo" }, scopeLabel: scope });
-    await store.append(lease, { type: "tool_call", payload: {}, scopeLabel: scope });
+    await store.append(lease, { type: "tool_call", payload: { tool: "execute", callId: "c1" }, scopeLabel: scope });
     await store.releaseLease(lease);
 
     const row = (await store.listByParticipant("U1")).find((x) => x.id === s.id)!;
@@ -838,7 +711,7 @@ for (const [name, make] of backends) {
 
     const { lease } = await store.acquireLease(s.id);
     assert.ok(lease);
-    await store.append(lease, { type: "system", payload: { text: "note" }, scopeLabel: scope });
+    await store.append(lease, { type: "system", payload: { kind: "wake", text: "note" }, scopeLabel: scope });
     await store.releaseLease(lease);
 
     assert.equal(
@@ -958,33 +831,6 @@ for (const [name, make] of backends) {
     await store.addParticipant(session.id, "U1", "My project chat");
     assert.equal((await store.visibleEntries(session.id, "U1")).length, 1);
     assert.equal((await store.listByParticipant("U1"))[0]?.title, "My project chat");
-  });
-
-  test(`${name}: stats' distinct-cron count always equals the rows scopeCronGroups lists`, async () => {
-    const store = make();
-    const scope = scopeId("channel", "C1");
-    await store.getOrCreateByThread("dm:D1", "dm", scope);
-    await store.getOrCreateByThread("agent:main:cron:stable1", "dm", scope);
-    await store.getOrCreateByThread("cron:legacy1:slot1", "dm", scope);
-    await store.getOrCreateByThread("cron:legacy1:slot2", "dm", scope);
-    await store.getOrCreateByThread("cron:legacy2", "dm", scope);
-    await store.getOrCreateByThread("agent:main:webhook:wh1", "dm", scope);
-
-    const stats = await store.scopeSessionStats(scope, false);
-    const groups = await store.scopeCronGroups(scope, false);
-    assert.equal(stats.crons, 3, "distinct crons, not fires");
-    assert.equal(stats.crons, groups.length, "tab count == listable rows (one classifier)");
-    assert.equal(stats.byType.cron, 4, "byType still counts cron sessions (fires)");
-    assert.equal(
-      groups.reduce((n, g) => n + g.sessions, 0),
-      stats.byType.cron,
-      "every counted cron session is listed under some cron",
-    );
-    assert.equal(
-      (await store.scopeSessionStats(scope, false, "conversation")).crons,
-      3,
-      "crons ignores the active filter",
-    );
   });
 
   test(`${name}: keyset cursor pages stitch into the full listing and skip nothing`, async () => {

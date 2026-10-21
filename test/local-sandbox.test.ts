@@ -34,7 +34,7 @@ async function freePort(): Promise<number> {
 
 before(async () => {
   daemonPort = await freePort();
-  daemon = spawn(process.execPath, [join(process.cwd(), "aws/microvm-agent/agent.mjs")], {
+  daemon = spawn(process.execPath, [join(process.cwd(), "cli/templates/aws/microvm-agent/agent.mjs")], {
     env: { ...process.env, AGENT_PORT: String(daemonPort), HOME: guestHome },
     stdio: "ignore",
   });
@@ -313,4 +313,26 @@ test("containerized core joins each sandbox network and reaches the daemon by co
   assert.ok(seen.includes(`http://${h.id}:8080/health`));
   await sb.teardown(h, { destroy: true });
   assert.equal(fake.connections.has(`${localNetworkName(h.id)}|qm-test-core`), false);
+});
+
+test("core attachment trusts the core's actual networks, not docker's connect error", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const fetchImpl: typeof fetch = (input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
+    return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
+  };
+  const layers = rw(scopeId("personal", "U42"));
+  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const first = await sb.provision(layers);
+  const again = await sb.provision(layers);
+  assert.equal(again.id, first.id);
+  fake.connections.delete(`${localNetworkName(first.id)}|qm-test-core`);
+  const refusing = makeSandbox(fake, {
+    coreContainer: "qm-test-core",
+    fetchImpl,
+    dockerExec: async (args: string[]) =>
+      args[1] === "connect" ? { code: 1, stdout: "", stderr: "endpoint already exists" } : fake.dockerExec(args),
+  });
+  await assert.rejects(refusing.provision(layers), /network connect .* failed: endpoint already exists/);
 });

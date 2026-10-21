@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
@@ -82,6 +82,27 @@ test("BROKER_CREDENTIALS fails fast on any malformed entry without echoing secre
     [[{ ...entry, maxRequestsPerDay: 0 }], /maxRequestsPerDay/],
     [[{ ...entry, maxRequestsPerDay: 1.5 }], /maxRequestsPerDay/],
     [[{ ...entry, injection: { header: "x-qm-actor" } }], /reserved/],
+    [
+      [{ ...entry, injection: { ...entry.injection, headers: ["x-api-version"] } }],
+      /injection.headers must be an object/,
+    ],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x api": "1" } } }], /not a valid HTTP header name/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { Host: "evil.example" } } }], /cannot set host/],
+    [
+      [{ ...entry, injection: { ...entry.injection, headers: { "Content-Type": "text/plain" } } }],
+      /cannot set content-type/,
+    ],
+    [[{ ...entry, injection: { ...entry.injection, headers: { Expect: "100-continue" } } }], /cannot set expect/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { Upgrade: "websocket" } } }], /cannot set upgrade/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "a\u0001b" } } }], /valid HTTP header value/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-api-key": "1" } } }], /cannot set x-api-key/],
+    [[{ ...entry, injection: { headers: { Authorization: "Bearer other" } } }], /cannot set authorization/],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "1", "X-V": "2" } } }], /more than once/],
+    [
+      [{ ...entry, injection: { ...entry.injection, headers: { "x-v": "1\r\nx-evil: 1" } } }],
+      /valid HTTP header value/,
+    ],
+    [[{ ...entry, injection: { ...entry.injection, headers: { "x-v": "" } } }], /valid HTTP header value/],
     [[{ ...entry, displayName: "" }], /displayName/],
   ];
   for (const [list, pattern, extra] of cases) {
@@ -166,12 +187,12 @@ test("deployment credentials win lookups in their org and reserve their slugs ag
   assert.deepEqual(stored.writes, ["set:stored"]);
 });
 
-function start(fetchImpl: BrokerFetch, admin = false) {
+function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploymentCreds()) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "deploy-broker-")),
       signingSecret: SECRET,
-      brokerCredentials: deploymentCreds(),
+      brokerCredentials,
     }),
   );
   const deps = {
@@ -258,6 +279,7 @@ test("the broker serves a deployment credential with its pins, injection, usage 
     assert.equal(capped.body.error, "daily_cap_reached");
     assert.equal(calls.length, 2);
     assert.equal(calls[0]!.headers["X-API-KEY"], KEY);
+    assert.equal(calls[0]!.headers["x-api-version"], undefined);
     const usage = await srv.built.credentialUsage.list({ slug: "search" });
     assert.equal(usage.filter((u) => u.status === "ok").length, 2);
     assert.equal(usage.filter((u) => u.status === "denied").length, 4);
@@ -292,9 +314,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const prompt = await built.app.turn(dm("!sysprompt"));
   assert.match(prompt.reply ?? "", /search.*Web search.*api\.search\.example.*POST.*\/search/s);
-  const res = await built.app.turn(
-    dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["service_search"] })}`),
-  );
+  const res = await built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`));
   assert.equal(res.status, "ok", res.reason);
   assert.ok(executed?.AGENT_CREDENTIAL_TOKEN, "expected a broker token");
   assert.doesNotMatch(JSON.stringify(executed), new RegExp(KEY));
@@ -325,4 +345,48 @@ test("a deployment credential cannot back a decision provider", async () => {
   assert.equal(saved.length, 1);
   const listing = (await decisionsResource.get!(ctx({}).deps, ORG)) as { credentials: string[] };
   assert.deepEqual(listing.credentials, ["stored"]);
+});
+
+test("the broker adds a deployment credential's fixed headers, which callers cannot override", async () => {
+  const pinned = {
+    ...entry,
+    slug: "versioned",
+    injection: { ...entry.injection, headers: { "x-api-version": "2025-11-01" } },
+  };
+  const calls: Array<Record<string, string>> = [];
+  const srv = start(
+    async (_url, init) => {
+      calls.push(init.headers);
+      return { status: 200, contentType: "application/json", text: async () => "{}" };
+    },
+    false,
+    deploymentBrokerCredentialsFromEnv(envWith([pinned])),
+  );
+  try {
+    const token = await mintCapabilityToken(
+      {
+        actorId: "U1",
+        scopeId: "personal:U1",
+        aud: CREDENTIAL_BROKER_AUD,
+        credentials: ["versioned"],
+        exp: Date.now() + CAPABILITY_TTL_MS,
+      },
+      SECRET,
+    );
+    const res = await fetch(`${srv.base}/v1/credentials/broker`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-agent-capability": token },
+      body: JSON.stringify({
+        credential: "versioned",
+        method: "POST",
+        url: "https://api.search.example/search",
+        headers: { "X-Api-Version": "1999-01-01", "content-type": "application/json", "x-api-key": "caller" },
+        body: "{}",
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls[0], { "content-type": "application/json", "x-api-version": "2025-11-01", "X-API-KEY": KEY });
+  } finally {
+    await srv.close();
+  }
 });

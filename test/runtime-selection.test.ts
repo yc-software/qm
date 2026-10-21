@@ -15,31 +15,29 @@ const PERSONAL = "personal:alice" as const;
 
 test("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude"]);
-  config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
-  config.setRuntimeSelection(PERSONAL, { harnessId: "claude", modelId: "claude-sonnet-5" });
-  await config.flushScope(ORG);
-  await config.flushScope(PERSONAL);
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "claude", modelId: "claude-sonnet-5" });
 
   assert.equal(config.getRuntimeSelection(ORG)?.revision, 1);
   assert.equal(config.getRuntimeSelection(PERSONAL)?.orgRevision, 1);
 
-  config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-4-8" });
   assert.equal(config.getRuntimeSelection(ORG)?.revision, 2);
   assert.equal(config.getRuntimeSelection(PERSONAL)?.orgRevision, 1);
 
-  config.acknowledgeRuntimeSelection(PERSONAL);
+  await config.acknowledgeRuntimeSelection(PERSONAL);
   assert.equal(config.getRuntimeSelection(PERSONAL)?.orgRevision, 2);
 
-  config.setRuntimeSelection(PERSONAL, null);
+  await config.setRuntimeSelection(PERSONAL, null);
   assert.equal(config.getRuntimeSelection(PERSONAL), null);
 });
 
-test("runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests", () => {
+test("runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude"]);
-  config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-4-8" });
-  config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-5.5" });
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-5.5" });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
   assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, fallback), { harnessId: "pi", modelId: "gpt-5.5" });
@@ -47,16 +45,17 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
     resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "pi", modelId: "claude-sonnet-4-6" }),
     { harnessId: "pi", modelId: "claude-sonnet-4-6" },
   );
+  await config.setApprovedHarnesses(["pi"]);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "mock", modelId: "claude-opus-4-8" }),
+    () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "claude", modelId: "claude-opus-4-8" }),
     /not approved/,
   );
 });
 
-test("runtime resolution carries reasoning and fast-mode defaults into turns", () => {
+test("runtime resolution carries reasoning and fast-mode defaults into turns", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi", "claude"]);
-  config.setRuntimeSelection(ORG, {
+  await config.setApprovedHarnesses(["pi", "claude"]);
+  await config.setRuntimeSelection(ORG, {
     harnessId: "pi",
     modelId: "claude-opus-5",
     effortLevel: "high",
@@ -101,9 +100,9 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", (
   );
 });
 
-test("runtime resolution falls back to the first approved harness when deployment defaults are not approved", () => {
+test("runtime resolution falls back to the first approved harness when deployment defaults are not approved", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["claude"]);
+  await config.setApprovedHarnesses(["claude"]);
   assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, { harnessId: "pi", modelId: "gpt-5.6-sol" }), {
     harnessId: "claude",
     modelId: "claude-opus-5",
@@ -117,14 +116,12 @@ test("runtime resolution reads approvals and selections from shared durable stat
   const reader = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
-  writer.setApprovedHarnesses(["pi"]);
-  await writer.setRuntimeSelectionLatest(ORG, fallback);
-  await writer.flushScope(ORG);
+  await writer.setApprovedHarnesses(["pi"]);
+  await writer.setRuntimeSelection(ORG, fallback);
   assert.deepEqual(await resolveRuntimeChoiceDurable(reader, ORG, PERSONAL, fallback), fallback);
 
-  writer.setApprovedHarnesses(["claude"]);
-  await writer.setRuntimeSelectionLatest(ORG, { harnessId: "claude", modelId: "claude-sonnet-5" });
-  await writer.flushScope(ORG);
+  await writer.setApprovedHarnesses(["claude"]);
+  await writer.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-sonnet-5" });
   assert.deepEqual(await resolveRuntimeChoiceDurable(reader, ORG, PERSONAL, fallback), {
     harnessId: "claude",
     modelId: "claude-sonnet-5",
@@ -139,13 +136,13 @@ test("every write that changes a scope's served model notifies listeners", async
   const config = createMemoryConfigStore("default-org");
   const seen: string[] = [];
   config.onRuntimeSelectionChanged((id) => seen.push(id));
-  config.setApprovedHarnesses(["pi"]);
+  await config.setApprovedHarnesses(["pi"]);
 
-  config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
-  await config.setRuntimeSelectionLatest(PERSONAL, { harnessId: "pi", modelId: "gpt-5.5" });
-  config.setBaseModel(PERSONAL, "gpt-5.6-sol");
-  await config.setRuntimeSelectionLatest(PERSONAL, null);
-  config.acknowledgeRuntimeSelection(PERSONAL);
+  await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-5.5" });
+  await config.setBaseModel(PERSONAL, "gpt-5.6-sol");
+  await config.setRuntimeSelection(PERSONAL, null);
+  await config.acknowledgeRuntimeSelection(PERSONAL);
   assert.deepEqual(seen, [ORG, PERSONAL, PERSONAL, PERSONAL]);
 });
 
@@ -154,16 +151,15 @@ test("a listener that throws cannot break the write that notified it", async () 
   config.onRuntimeSelectionChanged(() => {
     throw new Error("surface unreachable");
   });
-  config.setApprovedHarnesses(["pi"]);
-  await config.setRuntimeSelectionLatest(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
+  await config.setApprovedHarnesses(["pi"]);
+  await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
   assert.equal((await config.getRuntimeSelectionDurable(ORG))?.modelId, "claude-opus-4-8");
 });
 
 test("durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi"]);
-  await config.setRuntimeSelectionLatest(PERSONAL, { harnessId: "pi", modelId: "testvendor/cold-router-model" });
-  await config.flushScope(PERSONAL);
+  await config.setApprovedHarnesses(["pi"]);
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "testvendor/cold-router-model" });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
   assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback), fallback);
@@ -206,12 +202,10 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
 
 test("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["pi"]);
-  config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-sonnet-5" });
-  config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
-  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  await config.flushScope(ORG);
-  await config.flushScope(PERSONAL);
+  await config.setApprovedHarnesses(["pi"]);
+  await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-sonnet-5" });
+  await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
+  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const ctx = { deps: { config, harnessId: "pi" } };
   assert.match(
     (await availableRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" }))!,
@@ -225,9 +219,8 @@ test("explicit runtime validation rejects a revoked scoped model and unsupported
 
 test("runtime availability preserves the existing harness normalization of inherited scheduled effort", async () => {
   const config = createMemoryConfigStore("default-org");
-  config.setApprovedHarnesses(["claude"]);
-  config.setWebuiModels(ORG, ["claude-sonnet-5"]);
-  await config.flushScope(ORG);
+  await config.setApprovedHarnesses(["claude"]);
+  await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const choice = {
     harnessId: "claude" as const,
     modelId: "claude-sonnet-5",

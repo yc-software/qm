@@ -87,3 +87,39 @@ test("sent mail resolves the connected Google account slot", async () => {
     accountType: "company",
   });
 });
+
+test("Gmail upstream failures map to reconnect, not found, or retry responses without upstream bodies", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const [upstream, status, message] of [
+      [401, 409, "Reconnect Google to read sent mail."],
+      [403, 409, "Reconnect Google to read sent mail."],
+      [404, 404, "Couldn't load sent mail from Gmail. Try again."],
+      [500, 502, "Couldn't load sent mail from Gmail. Try again."],
+    ] as const) {
+      let code = 0;
+      let body = "";
+      globalThis.fetch = async () => new Response("secret upstream detail", { status: upstream });
+      await gmailSent({
+        actor: { p: "eve@example.com" },
+        url: new URL("http://localhost/v1/connectors/gmail/sent/m1"),
+        params: { messageId: "m1" },
+        res: {
+          setHeader() {},
+          getHeader() {},
+          writeHead(value: number) {
+            code = value;
+          },
+          end(value: string) {
+            body = value;
+          },
+        },
+        deps: { connectorTokens: { connectorDerivedAuth: async () => ({ accessToken: "token" }) } },
+      } as unknown as ApiCtx);
+      assert.equal(code, status);
+      assert.deepEqual(JSON.parse(body), { error: "gmail_unavailable", message });
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

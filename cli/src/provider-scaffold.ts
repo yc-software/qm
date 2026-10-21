@@ -69,8 +69,9 @@ ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
   // always required), "slack" (the Slack surface, runs inside the core process),
   // "web-ui" (a browser chat UI), "admin" (the operator dashboard), "portal"
-  // (the public sign-in front door), and "auth" (the built-in sign-in broker that
-  // emails one-time links; drop it to sign in through an external OIDC provider).
+  // (the public sign-in front door), "auth" (the built-in sign-in broker that
+  // emails one-time links; drop it to sign in through an external OIDC provider),
+  // and "egress-proxy" (the TLS proxy that enforces sandbox egress policy).
   "services": [${values.services.map((service) => JSON.stringify(service)).join(", ")}],
 
   // Extra plugins to run alongside the services. A prebuilt image runs with
@@ -82,8 +83,7 @@ ${values.providerFields}
   "skills": [],
 
   // Non-secret env overrides, per service. HARNESS "pi" runs real agent turns
-  // against the base model selected by "modelProvider" above. "mock" runs the
-  // whole stack with fake turns and no model calls.
+  // against the base model selected by "modelProvider" above.
   "env": ${values.env}${values.secretEnv}${values.sandbox}
 }
 `;

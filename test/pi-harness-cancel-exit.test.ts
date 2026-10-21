@@ -278,7 +278,10 @@ for (const shutdown of [false, true]) {
       const stoppedEntries = entries.filter(
         (entry) => entry.type === "assistant" || (entry.payload as { kind?: unknown } | null)?.kind === "turn_stopped",
       );
-      const partial = findTrailingPartialTurn(entries, "do the thing");
+      const partial = findTrailingPartialTurn(
+        entries.map((entry) => (entry.type === "user" ? { ...entry, payload: { runId: "run-1" } } : entry)),
+        "run-1",
+      );
       if (shutdown) {
         assert.deepEqual(stoppedEntries, [], "shutdown must not close the turn with a stop marker");
         assert.equal((entries[2]!.payload as { interrupted?: unknown }).interrupted, true);
@@ -295,3 +298,61 @@ for (const shutdown of [false, true]) {
     }
   });
 }
+
+function thinkingThenStall(signal: AbortSignal | null | undefined): Response {
+  const events = textReplyEvents("Cache is warm.").slice(0, 1);
+  events.push(
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "**Checking** the " } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "cache" } },
+  );
+  const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal?.addEventListener("abort", () => controller.error(abortShapedError()), { once: true });
+      controller.enqueue(new TextEncoder().encode(body));
+    },
+  });
+  return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+test("reasoning streams before its thinking entry is persisted, and a cancel mid-reasoning persists it under the streamed id", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const controller = new AbortController();
+  const sink = { entries: [] as Array<{ seq: number; type: string; payload: unknown }> };
+  const streamed: Array<{ step: string; index: number; chunk: string; persistedSoFar: number }> = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) =>
+    thinkingThenStall(init?.signal)) as typeof globalThis.fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      cancelTurn("reasoning-stream", controller.signal, sink, {
+        onReasoningDelta: (step, index, chunk) => {
+          streamed.push({
+            step,
+            index,
+            chunk,
+            persistedSoFar: sink.entries.filter((e) => e.type === "thinking").length,
+          });
+          if (chunk === "cache") controller.abort();
+        },
+      }),
+    );
+    assert.equal(result.stopped, true);
+    assert.equal(streamed.map((s) => s.chunk).join(""), "**Checking** the cache");
+    assert.ok(
+      streamed.every((s) => s.persistedSoFar === 0),
+      "reasoning is visible before the block is persisted",
+    );
+    const persisted = sink.entries.filter((e) => e.type === "thinking");
+    assert.equal(persisted.length, 1);
+    const payload = persisted[0]!.payload as { thinking: string; step: { id: string; index: number } };
+    assert.equal(payload.thinking, "**Checking** the cache");
+    assert.deepEqual(
+      new Set(streamed.map((s) => `${s.step}:${s.index}`)),
+      new Set([`${payload.step.id}:${payload.step.index}`]),
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

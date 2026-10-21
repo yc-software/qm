@@ -37,7 +37,7 @@ async function bootAndClose(): Promise<void> {
 before(async () => {
   if (!URL) return;
   const p = await pool();
-  await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
+  await p.query("DROP TABLE IF EXISTS runs, tool_calls, turn_metrics CASCADE");
   await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();
 });
@@ -45,7 +45,7 @@ before(async () => {
 after(async () => {
   if (!URL) return;
   const p = await pool();
-  await p.query("DROP TABLE IF EXISTS runs, tool_calls CASCADE");
+  await p.query("DROP TABLE IF EXISTS runs, tool_calls, turn_metrics CASCADE");
   await p.query("DELETE FROM qm_schema_migrations WHERE id LIKE 'runs/store/%'").catch(() => undefined);
   await p.end();
 });
@@ -88,5 +88,35 @@ test("tool_calls: a boot with the current key leaves the constraint untouched", 
   const afterPk = await pkColumns(p);
   assert.deepEqual(afterPk?.columns, ["run_id", "attempt", "call_index"]);
   assert.equal(afterPk?.oid, beforePk?.oid, "constraint not dropped and recreated on a routine boot");
+  await p.end();
+});
+
+test("turn_metrics: the retired table drops on boot and run history is untouched", { skip }, async () => {
+  const p = await pool();
+  await bootAndClose();
+  await p.query(
+    "INSERT INTO tool_calls(run_id, attempt, call_index, output, created_at) VALUES ('r3', 1, 0, 'out', 100)",
+  );
+  await p.query("DELETE FROM qm_schema_migrations WHERE id = 'runs/store/0010-drop-turn-metrics'");
+  await p.query(`CREATE TABLE turn_metrics(
+      id BIGSERIAL PRIMARY KEY, ts BIGINT NOT NULL, scope_label TEXT NOT NULL, run_id TEXT,
+      status TEXT NOT NULL, total_ms INT NOT NULL)`);
+  await p.query("CREATE INDEX turn_metrics_by_run ON turn_metrics(run_id)");
+  await p.query(
+    "INSERT INTO turn_metrics(ts, scope_label, run_id, status, total_ms) VALUES (1, 'personal:a', 'r3', 'ok', 5)",
+  );
+  const snapshot = async () => [
+    (await p.query("SELECT * FROM runs ORDER BY id")).rows,
+    (await p.query("SELECT * FROM tool_calls ORDER BY run_id, attempt, call_index")).rows,
+  ];
+  const before = await snapshot();
+  const { close } = createPostgresRunStore(URL!);
+  await migrateRegisteredPgSchemas(URL!);
+  await close();
+  const { rows } = await p.query(
+    "SELECT to_regclass('turn_metrics') AS t, to_regclass('turn_metrics_id_seq') AS s, to_regclass('turn_metrics_by_run') AS i",
+  );
+  assert.deepEqual(rows, [{ t: null, s: null, i: null }]);
+  assert.deepEqual(await snapshot(), before);
   await p.end();
 });

@@ -177,7 +177,7 @@ const ITEM = {
   snippet: "can you review my launch post?",
   receivedAt: 1234,
   draft: { body: "Looking now — back to you within the hour." },
-  slack: { channelId: "C1", ts: "1.2" },
+  slack: { channelId: "C1", ts: "1.2", isDirectMessage: false },
 };
 
 async function inboxLoop(w: World): Promise<Loop> {
@@ -347,7 +347,7 @@ test("listing returns the ledger view with per-state counts and filters", async 
   assert.equal(body.items.length, 1);
   assert.equal(body.items[0]!.state, "held");
   assert.equal(body.items[0]!.dedupeKey, "C1:1.2");
-  assert.deepEqual(body.items[0]!.sourcePayload.slack, { channelId: "C1", ts: "1.2" });
+  assert.deepEqual(body.items[0]!.sourcePayload.slack, { channelId: "C1", ts: "1.2", isDirectMessage: false });
   assert.deepEqual(body.counts, { held: 1 });
   const heldOnly = await call(w, { method: "GET", path: `/v1/loops/${loop.id}/items?state=held` });
   assert.equal((heldOnly.body as { items: unknown[] }).items.length, 1);
@@ -604,8 +604,7 @@ test("the inbox resolver reports no loop until sync is set up", async () => {
   assert.equal((before.body as { loop: Loop | null }).loop, null);
   const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
   assert.equal(created.status, 200);
-  const body = created.body as { loop: Loop; syncCron: { id: string; taskVersion: number } };
-  assert.equal(body.syncCron.taskVersion, INBOX_SYNC_TASK_VERSION);
+  const body = created.body as { loop: Loop; syncCron: { id: string } };
   assert.equal(body.loop.surface, "inbox:gmail");
   const stored = w.crons.get(body.syncCron.id)!;
   assert.equal(stored.ownerScopeId, "personal:josh");
@@ -621,11 +620,20 @@ test("sync-cron is created once, refreshes stale task text, and disables on requ
   const created = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
   const syncCron = (created.body as { syncCron: { id: string } }).syncCron;
   const stored = w.crons.get(syncCron.id)!;
-  w.crons.set(syncCron.id, { ...stored, action: "Inbox sync v0. old", enabled: false });
+  const loopId = (created.body as { loop: Loop }).loop.id;
+  const current = renderSourceInboxTask(loopId, "gmail");
+  w.crons.set(syncCron.id, {
+    ...stored,
+    action: current.replace(
+      `Inbox sync v${INBOX_SYNC_TASK_VERSION}.`,
+      `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Older wording.`,
+    ),
+    enabled: false,
+  });
   const refreshed = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: {} });
-  const after = (refreshed.body as { syncCron: { id: string; taskVersion: number; enabled: boolean } }).syncCron;
+  const after = (refreshed.body as { syncCron: { id: string; enabled: boolean } }).syncCron;
   assert.equal(after.id, syncCron.id);
-  assert.equal(after.taskVersion, INBOX_SYNC_TASK_VERSION);
+  assert.equal(w.crons.get(syncCron.id)!.action, current);
   assert.equal(after.enabled, true);
   assert.equal(w.crons.size, 2);
   const disabled = await call(w, { method: "POST", path: "/v1/loops/inbox/sync-cron", body: { enabled: false } });
@@ -652,7 +660,7 @@ test("a send carrying the draft it saw is refused when the agent redrafted in be
     body: { kind: "send", args: { proposal: { body: "what I saw" }, expectedProposalAt: seenAt } },
   });
   assert.equal(stale.status, 409);
-  assert.match((stale.body as { message: string }).message, /draft changed/);
+  assert.equal((stale.body as { error: string }).error, "draft_changed");
   assert.equal(w.sent.length, 0, "nothing reached Slack");
   const fresh = (await w.loops.items.get(item.id))!.proposal!;
   assert.equal(fresh.by, "agent", "the stale edit did not overwrite the newer draft");
@@ -689,7 +697,7 @@ test("an edit carrying the draft it was based on is refused when the agent redra
     body: { kind: "edit", args: { proposal: { body: "typed over the old one" }, expectedProposalAt: basedOn } },
   });
   assert.equal(stale.status, 409);
-  assert.match((stale.body as { message: string }).message, /draft changed/);
+  assert.equal((stale.body as { error: string }).error, "draft_changed");
   assert.deepEqual((await w.loops.items.get(item.id))!.proposal!.data, { body: "newer agent draft" });
 });
 
@@ -704,7 +712,11 @@ test("a person's own typed mention stays live, while a capability caller's is di
   });
   assert.equal(human.status, 200, JSON.stringify(human.body));
   assert.equal((w.sent.at(-1)!.body as { text: string }).text, "Heads up <!channel>");
-  const second = await seed(w, { ...ITEM, sourceKey: "t2", slack: { channelId: "C1", ts: "9.9" } });
+  const second = await seed(w, {
+    ...ITEM,
+    sourceKey: "t2",
+    slack: { channelId: "C1", ts: "9.9", isDirectMessage: false },
+  });
   const agent = await call(w, {
     method: "POST",
     path: `/v1/loops/${second.loop.id}/items/${second.item.id}/action`,
@@ -777,6 +789,7 @@ test("a conversational send refuses a stale draft before starting an agent turn"
     body: { message: "Send it", expectedProposalAt: item.proposal!.at - 1 },
   });
   assert.equal(out.status, 409);
+  assert.equal((out.body as { error: string }).error, "draft_changed");
   assert.deepEqual(w.followUps, []);
   assert.deepEqual(w.sent, []);
   const accepted = await call(w, {
@@ -856,7 +869,7 @@ test("Slack thread keys reuse a legacy item's identity and edits", async () => {
             ...ITEM,
             sourceKey: "D1:1.0",
             receivedAt: 2000,
-            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0" },
+            slack: { channelId: "D1", ts: "2.0", threadTs: "1.0", isDirectMessage: true },
             draft: { body: "Agent replacement" },
           },
         ],
@@ -1069,7 +1082,7 @@ test("only a person overrides triage, and archiving a whole group resolves its m
   await call(w, {
     method: "POST",
     path: `/v1/loops/${loop.id}/items`,
-    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3" } }] },
+    body: { items: [{ ...ITEM, sourceKey: "C2:1.3", slack: { channelId: "C2", ts: "1.3", isDirectMessage: false } }] },
   });
   await w.loops.store.update(loop.id, {
     triage: { prioritize: { enabled: true }, consolidate: { enabled: true } },

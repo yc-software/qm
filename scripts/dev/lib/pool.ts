@@ -1,7 +1,8 @@
 import { mkdirSync, readdirSync, chmodSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { bestEffort, readEnvFile } from "./util.ts";
+import { readEnvFile } from "../../../cli/src/util.ts";
+import { bestEffort } from "./util.ts";
 import type { SlotPorts } from "./types.ts";
 
 const CONFIG_HOME = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -51,7 +52,7 @@ export interface SlotTokens {
 }
 
 export function slotTokens(slot: string, store = poolStore()): SlotTokens {
-  const env = readEnvFile(join(store, `${slot}.env`));
+  const env = Object.fromEntries(readEnvFile(join(store, `${slot}.env`)));
   return {
     botToken: env.SLACK_BOT_TOKEN ?? "",
     appToken: env.SLACK_APP_TOKEN ?? "",

@@ -7,7 +7,7 @@ import { ensureDeps } from "../scripts/dev/lib/deps.ts";
 import { spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envSha, errMessage, formatAge, readEnvFile } from "../scripts/dev/lib/util.ts";
+import { envSha, errMessage, formatAge } from "../scripts/dev/lib/util.ts";
 import {
   clearSlotFlag,
   ensureStore,
@@ -306,7 +306,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const fromCaller = await assembleEnv({
     worktree,
     callerEnv: { ANTHROPIC_API_KEY: "from-caller", BOTH: "caller" },
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -321,7 +320,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
     const legacyHarness = await assembleEnv({
       worktree,
       callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: legacy },
-      allowMock: false,
       log,
       probeLoginShell: async () => "",
     });
@@ -344,7 +342,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const implicit = await assembleEnv({
     worktree,
     callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_HOME: defaultCodexHome },
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -356,7 +353,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const companyChatGPT = await assembleEnv({
     worktree,
     callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_AUTH_FILE: oauthAuthFile },
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -367,7 +363,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const claude = await assembleEnv({
     worktree,
     callerEnv: { HARNESS: "claude" },
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -377,7 +372,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const fromLiveEnv = await assembleEnv({
     worktree,
     callerEnv: {},
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -393,7 +387,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const fromShell = await assembleEnv({
     worktree,
     callerEnv: {},
-    allowMock: false,
     log,
     probeLoginShell: async () => "from-shell",
   });
@@ -404,7 +397,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   const fromDotenv = await assembleEnv({
     worktree,
     callerEnv: {},
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
@@ -413,20 +405,17 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
 
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
-    assembleEnv({ worktree, callerEnv: {}, allowMock: false, log, probeLoginShell: async () => "" }),
+    assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
     /ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login/,
   );
   const openaiOnly = await assembleEnv({
     worktree,
     callerEnv: { OPENAI_API_KEY: "sk-openai" },
-    allowMock: false,
     log,
     probeLoginShell: async () => "",
   });
   assert.equal(openaiOnly.harness, "pi");
   assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
-  const mock = await assembleEnv({ worktree, callerEnv: {}, allowMock: true, log, probeLoginShell: async () => "" });
-  assert.equal(mock.harness, "mock");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
   rmSync(worktree, { recursive: true, force: true });
@@ -475,22 +464,14 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
     /CODEX_AUTH_FILE is unusable/,
   );
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use mock, pi, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use mock, pi, or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use mock, pi, or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi or claude/);
+  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use pi or claude/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {
   assert.equal(envSha({ A: "1", B: "2" }), envSha({ B: "2", A: "1" }));
   assert.notEqual(envSha({ A: "1" }), envSha({ A: "2" }));
-});
-
-test("readEnvFile keeps everything after the first '=' verbatim and skips bad keys", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-env-"));
-  writeFileSync(join(dir, "x.env"), "GOOD=a=b=c\nHASH=abc#def\n1BAD=x\n# comment\nEMPTY=\n");
-  const env = readEnvFile(join(dir, "x.env"));
-  assert.deepEqual(env, { GOOD: "a=b=c", HASH: "abc#def", EMPTY: "" });
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("leaseOrgId reads the stale lease's booted org", () => {

@@ -13,12 +13,6 @@ export function approvalDeliveryRecipient(actor: { externalId?: string } | undef
   return id && !id.startsWith("system:") ? id : undefined;
 }
 
-function dmThreadTs(request: NonNullable<PendingApprovalRecord["request"]>): string | undefined {
-  if (request.conversation?.kind !== "dm" || !request.deliveryTarget) return undefined;
-  const [channel, threadTs] = request.deliveryTarget.split(":");
-  return channel?.startsWith("D") && threadTs ? threadTs : undefined;
-}
-
 export function createApprovalStore(
   backing: DurableMap<PendingApprovalRecord>,
   deliveries: Pick<DeliveryStore, "enqueue">,
@@ -27,7 +21,7 @@ export function createApprovalStore(
     if (record.request?.surface !== "slack") return;
     const actorId = approvalDeliveryRecipient(record.request.actor);
     if (!actorId) return;
-    const threadTs = dmThreadTs(record.request);
+    const threadTs = record.request.conversation?.kind === "dm" ? record.request.slackSource?.replyThreadTs : undefined;
     await deliveries.enqueue({
       destination: {
         ...principalDestination(actorId, actorId),

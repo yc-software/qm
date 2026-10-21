@@ -22,7 +22,7 @@ test("channel header pin defaults off with no org setting", async () => {
 
 test("an org default of on applies to channels without an explicit choice", async () => {
   const store = await freshStore();
-  await store.setChannelHeaderPinLatest(org, true);
+  await store.setChannelHeaderPin(org, true);
   assert.equal(store.getChannelHeaderPin(channel), true);
   assert.equal(await store.getChannelHeaderPinDurable(channel), true);
   assert.equal(await store.getChannelHeaderPinDefaultDurable(), true);
@@ -31,8 +31,8 @@ test("an org default of on applies to channels without an explicit choice", asyn
 
 test("an explicit channel off beats an org default of on", async () => {
   const store = await freshStore();
-  await store.setChannelHeaderPinLatest(org, true);
-  await store.setChannelHeaderPinLatest(channel, false);
+  await store.setChannelHeaderPin(org, true);
+  await store.setChannelHeaderPin(channel, false);
   assert.equal(store.getChannelHeaderPin(channel), false);
   assert.equal(await store.getChannelHeaderPinDurable(channel), false);
   assert.equal(await store.getChannelHeaderPinOverrideDurable(channel), false);
@@ -42,9 +42,9 @@ test("an explicit channel off beats an org default of on", async () => {
 
 test("clearing a channel override reverts it to the org default", async () => {
   const store = await freshStore();
-  await store.setChannelHeaderPinLatest(org, true);
-  await store.setChannelHeaderPinLatest(channel, false);
-  await store.setChannelHeaderPinLatest(channel, null);
+  await store.setChannelHeaderPin(org, true);
+  await store.setChannelHeaderPin(channel, false);
+  await store.setChannelHeaderPin(channel, null);
   assert.equal(await store.getChannelHeaderPinDurable(channel), true);
   assert.equal(await store.getChannelHeaderPinOverrideDurable(channel), null);
 });
@@ -53,18 +53,18 @@ test("changing the org default notifies listeners with the org scope", async () 
   const store = await freshStore();
   const seen: ScopeId[] = [];
   store.onChannelHeaderPinChanged((id) => seen.push(id));
-  await store.setChannelHeaderPinLatest(org, true);
-  await store.setChannelHeaderPinLatest(channel, true);
+  await store.setChannelHeaderPin(org, true);
+  await store.setChannelHeaderPin(channel, true);
   assert.deepEqual(seen, [org, channel]);
 });
 
 test("explicit overrides survive a scope refresh", async () => {
   const store = await freshStore();
-  await store.setChannelHeaderPinLatest(org, true);
-  await store.setChannelHeaderPinLatest(channel, false);
+  await store.setChannelHeaderPin(org, true);
+  await store.setChannelHeaderPin(channel, false);
   await store.refreshScope(channel);
   assert.equal(store.getChannelHeaderPin(channel), false);
-  await store.setChannelHeaderPinLatest(channel, null);
+  await store.setChannelHeaderPin(channel, null);
   await store.refreshScope(channel);
   assert.equal(store.getChannelHeaderPin(channel), true);
 });

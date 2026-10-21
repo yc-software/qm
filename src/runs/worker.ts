@@ -20,6 +20,7 @@ import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../uti
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
 import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
+import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
   runs: RunStore;
@@ -34,6 +35,30 @@ export const LEASE_LOST_CONSECUTIVE = 3;
 const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
 
 export async function processRun(
+  deps: ProcessDeps,
+  run: Run,
+  opts?: { background?: boolean; shutdown?: AbortSignal },
+): Promise<TurnResult> {
+  const { trace, ...request } = run.request;
+  return traceQueued(
+    trace,
+    "run",
+    {
+      "messaging.system": "qm",
+      "messaging.destination.name": "runs",
+      "messaging.message.id": run.id,
+      "messaging.message.retry.count": Math.max(0, run.attempts - 1),
+      "messaging.message.receive.latency":
+        run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
+      "qm.surface": request.surface,
+      "qm.origin": resolveTurnOrigin(request).kind,
+    },
+    () => attemptRun(deps, { ...run, request }, opts),
+    (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+  );
+}
+
+async function attemptRun(
   deps: ProcessDeps,
   run: Run,
   opts?: { background?: boolean; shutdown?: AbortSignal },
@@ -80,12 +105,11 @@ export async function processRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    if (run.request.swarm) {
+    if (run.request.swarm && !run.request.swarmGoal) {
       const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
       workDeadline = setTimeout(() => cancel.abort(), turnMs);
     }
     if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
-    const queueMs = run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined;
     started = true;
     const result = await deps.orchestrator.handleTurn({
       ...run.request,
@@ -98,7 +122,6 @@ export async function processRun(
       background: opts?.background ?? false,
       cancel: cancel.signal,
       ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
-      ...(queueMs !== undefined ? { queueMs } : {}),
       ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
     });
     stopBeat();

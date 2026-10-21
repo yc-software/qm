@@ -15,6 +15,7 @@ import {
 import type { App } from "../src/api/app.ts";
 import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 async function fixture() {
   let now = Date.now();
@@ -22,6 +23,7 @@ async function fixture() {
   const grants = createMemoryMap<KeychainGrant>();
   const asks = createMemoryMap<KeychainAsk>();
   const keychain = createKeychain({
+    lock: createMemoryAdvisoryLock(),
     creds: createMemoryMap(),
     grants,
     asks,

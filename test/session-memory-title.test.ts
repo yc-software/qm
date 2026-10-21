@@ -95,7 +95,7 @@ test("participant can read child history and title across memory checkpoints", a
   assert.equal(listed.children[0]?.lastSaid, "PRIVATE_SENTINEL");
 });
 
-test("reset source title does not enter fresh child task", async () => {
+test("explicit source title changes reach fresh child tasks without copying history", async () => {
   const r = await rig();
   await r.sessions.updateTitle(r.room.id, "PRIVATE_SENTINEL");
   const { lease } = await r.sessions.acquireLease(r.room.id);
@@ -106,20 +106,20 @@ test("reset source title does not enter fresh child task", async () => {
     payload: { text: "PRIVATE_SENTINEL" },
   });
   await r.sessions.append(lease, {
-    type: "system",
+    type: "user",
     scopeLabel: scope,
     payload: {
-      kind: "memory_context",
-      fingerprint: "new",
-      snapshot: { audience: "safe-audience" },
-      throughSeq: old.seq,
+      text: "new audience turn",
+      memoryContext: { kind: "memory_context", snapshot: { audience: "safe-audience" }, throughSeq: old.seq },
     },
   });
   await r.sessions.releaseLease(lease);
+  await r.sessions.updateTitle(r.room.id, "Current parent");
   const opened = await r.syscallsFor((await r.sessions.get(r.room.id))!).open({ task: "safe task", name: "safe name" });
   assert.ok(opened.ok);
   const child = (await r.sessions.get(opened.sessionId))!;
   const run = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  assert.match(run.request.text, /Current parent/);
   assert.doesNotMatch(run.request.text, /PRIVATE_SENTINEL/);
 });
 test("participant sees child title in session write response", async () => {

@@ -623,3 +623,38 @@ for (const abort of ["shutdown", "stop"] as const) {
     }
   });
 }
+
+test("a request rejected as too long retries once without its inline documents instead of failing the turn", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  const requests: string[] = [];
+  const dataBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const body = String(init?.body);
+    requests.push(body);
+    if (body.includes(dataBase64))
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "prompt is too long: 1320000 tokens > 1000000 maximum" },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    return sse(textReplyEvents("answered without the inline file"));
+  }) as typeof fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      turnInput("oversized-documents", sink, {
+        documents: [{ name: "contract.pdf", mimeType: "application/pdf", dataBase64, artifactId: "doc-big" }],
+      }),
+    );
+    assert.equal(result.reply, "answered without the inline file");
+    assert.ok(requests[0]!.includes(dataBase64));
+    assert.equal(requests.filter((body) => body.includes(dataBase64)).length, 1, "the document is sent only once");
+    assert.match(requests.at(-1)!, /contract\.pdf/);
+    assert.match(requests.at(-1)!, /doc-big/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

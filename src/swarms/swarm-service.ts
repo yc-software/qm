@@ -11,13 +11,16 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { canonicalJson } from "../util/objects.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../harness/goal.ts";
+import { Check } from "typebox/value";
 import {
   assertSwarmOpen,
   SWARM_LIMITS,
+  swarmExpired,
   type Swarm,
   type SwarmMember,
   type SwarmMessage,
@@ -42,6 +45,7 @@ interface SpawnInput extends SpawnRuntimeFields {
   forumSandboxId?: string;
   settings?: Partial<SwarmSettings>;
   backend?: string;
+  goal?: unknown;
 }
 
 interface MessageInput {
@@ -50,6 +54,7 @@ interface MessageInput {
   text: string;
   replyTo?: string;
   notify?: boolean;
+  goal?: unknown;
 }
 
 interface Authority {
@@ -71,7 +76,7 @@ export interface SwarmService {
     board?: Swarm["board"];
     backend: Swarm["backend"];
     settings: SwarmSettings;
-    expiresAt: number;
+    expiresAt?: number;
   }>;
   context(caller: SwarmCaller, context: unknown): Promise<SwarmMember>;
   spawn(caller: SwarmCaller, input: SpawnInput): Promise<SwarmMember[]>;
@@ -84,6 +89,18 @@ export interface SwarmService {
 
 function boundedText(value: string, max: number, name: string): void {
   if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value) > max) throw new Error(`invalid ${name}`);
+}
+
+function swarmGoal(input: unknown): GoalCreateInput | undefined {
+  if (input === undefined) return undefined;
+  if (!Check(GoalCreateParams, input) || Object.keys(input).some((key) => !(key in GoalCreateParams.properties)))
+    throw new Error("invalid goal");
+  goalFromParams(input);
+  return {
+    objective: input.objective,
+    ...(input.floor ? { floor: input.floor } : {}),
+    ...(input.token_cap !== undefined ? { token_cap: input.token_cap } : {}),
+  };
 }
 
 function canonicalAudience(input: MessageInput["audience"], max: number): MessageInput["audience"] {
@@ -163,6 +180,7 @@ function dispatchContract(input: OrchestratorInput) {
     fastMode: input.fastMode,
     turnWallClockMs: input.turnWallClockMs,
     swarm: input.swarm,
+    swarmGoal: input.swarmGoal,
     sessionParticipantIds: input.sessionParticipantIds,
   };
 }
@@ -177,7 +195,6 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     background: true,
     cancel: true,
     shutdown: true,
-    queueMs: true,
     runStartedAt: true,
   };
   return (
@@ -331,7 +348,7 @@ export function createSwarmService(deps: {
       settings,
       backend: provider.name,
       createdAt,
-      expiresAt: createdAt + settings.lifetimeMs,
+      ...(settings.lifetimeMs === undefined ? {} : { expiresAt: createdAt + settings.lifetimeMs }),
       ...(forumSandboxId ? {} : { board: { sandboxId: randomUUID() } }),
       members: [
         {
@@ -353,13 +370,16 @@ export function createSwarmService(deps: {
   }
 
   function dispatchRequest(swarm: Swarm, message: SwarmMessage, recipient: SwarmMember): OrchestratorInput {
+    const { turnWallClockMs, ...template } = swarm.template;
     return {
-      ...swarm.template,
+      ...template,
+      ...(message.goal || turnWallClockMs === undefined ? {} : { turnWallClockMs }),
       ...recipient.runtime,
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
       origin: { kind: "automation", screenData: message.text },
       text: `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`,
       swarm: { swarmId: swarm.id, messageId: message.id, recipientId: recipient.id },
+      ...(message.goal ? { swarmGoal: { ...message.goal, assignedAt: message.createdAt } } : {}),
       sessionParticipantIds: swarm.participants,
     };
   }
@@ -372,7 +392,7 @@ export function createSwarmService(deps: {
         if (!recipient || recipient.state === "reserved") continue;
         const control = controlState(swarm, recipient.id);
         if (control === "paused") continue;
-        if (recipient.state === "failed" || control === "stopped" || Date.now() >= swarm.expiresAt) {
+        if (recipient.state === "failed" || control === "stopped" || swarmExpired(swarm)) {
           await step(() =>
             store.update(swarm.id, (current) => {
               current.messages.find((item) => item.id === message.id)!.notifications[recipientId] = { state: "failed" };
@@ -483,12 +503,7 @@ export function createSwarmService(deps: {
               const failed = current.members.find((peer) => peer.id === member.id)!;
               if (failed.state !== "reserved") return;
               failed.error = errMessage(error).slice(0, 500);
-              if (
-                provisioningTimedOut ||
-                Date.now() >= deadline ||
-                failed.attempts >= 3 ||
-                Date.now() >= current.expiresAt
-              ) {
+              if (provisioningTimedOut || Date.now() >= deadline || failed.attempts >= 3 || swarmExpired(current)) {
                 failed.state = "failed";
                 failed.cleanupPending = true;
               }
@@ -579,7 +594,7 @@ export function createSwarmService(deps: {
         ...(swarm.board ? { board: swarm.board } : {}),
         backend: swarm.backend,
         settings: swarm.settings,
-        expiresAt: swarm.expiresAt,
+        ...(swarm.expiresAt === undefined ? {} : { expiresAt: swarm.expiresAt }),
       };
     },
     async context(caller, context) {
@@ -601,10 +616,12 @@ export function createSwarmService(deps: {
         if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
         return existing!.members.filter((member) => previous.memberIds.includes(member.id)).map(view);
       }
-      if (existing && (input.settings !== undefined || input.backend !== undefined))
-        throw new Error("settings are only allowed on initial swarm creation");
-      const settings = existing?.settings ?? resolveSwarmSettings(input.settings, defaults);
+      if (existing && input.backend !== undefined) throw new Error("backend is only allowed on initial swarm creation");
+      if (existing && input.settings !== undefined && auth.memberId !== existing.id)
+        throw new Error("only the root session can change swarm settings");
+      const settings = resolveSwarmSettings(input.settings, existing?.settings ?? defaults);
       boundedText(input.text, settings.textBytes, "text");
+      const goal = swarmGoal(input.goal);
       const requestedRuntime = spawnRuntime(input);
       const count = input.count ?? input.contexts?.length ?? 1;
       if (!Number.isSafeInteger(count) || count < 1 || count >= settings.agents) throw new Error("invalid pool size");
@@ -613,7 +630,8 @@ export function createSwarmService(deps: {
       const contexts = Array.from({ length: count }, (_value, index) =>
         jsonContext(input.contexts ? input.contexts[index] : defaultContext, settings.contextBytes),
       );
-      if (!existing && count > settings.notifications) throw new Error("swarm notification budget exhausted");
+      if (!existing && count > (settings.notifications ?? Infinity))
+        throw new Error("swarm notification budget exhausted");
       if (input.forumSandboxId) {
         const forum = await deps.sandboxes.access(auth.actorId, input.forumSandboxId);
         const session = await sessions.get(auth.sessionId);
@@ -625,20 +643,27 @@ export function createSwarmService(deps: {
           if (previous.signature !== fingerprint) throw new Error("requestId reused with different content");
           return;
         }
-        if (
-          canonicalJson(settings) !== canonicalJson(swarm.settings) ||
-          (input.backend !== undefined && input.backend !== swarm.backend)
-        )
-          throw new Error("conflicting initial swarm settings");
+        if (!existing) {
+          if (
+            canonicalJson(settings) !== canonicalJson(swarm.settings) ||
+            (input.backend !== undefined && input.backend !== swarm.backend)
+          )
+            throw new Error("conflicting initial swarm settings");
+        } else if (input.settings !== undefined) {
+          const next = resolveSwarmSettings(input.settings, swarm.settings);
+          if (next.turnMs !== swarm.settings.turnMs) throw new Error("turnMs cannot change after swarm creation");
+          swarm.settings = next;
+          if (next.lifetimeMs !== undefined) swarm.expiresAt = swarm.createdAt + next.lifetimeMs;
+        }
         assertSwarmOpen(swarm);
         const parent = swarm.members.find((member) => member.id === auth.memberId)!;
         if (parent.depth >= swarm.settings.depth) throw new Error("swarm depth budget exhausted");
         if (swarm.members.length + count > swarm.settings.agents) throw new Error("swarm agent budget exhausted");
-        if (Object.keys(swarm.spawnRequests).length >= swarm.settings.spawnRequests)
+        if (Object.keys(swarm.spawnRequests).length >= (swarm.settings.spawnRequests ?? Infinity))
           throw new Error("swarm spawn budget exhausted");
         if (
-          swarm.messages.length >= swarm.settings.messages ||
-          swarm.notificationCount + count > swarm.settings.notifications
+          swarm.messages.length >= (swarm.settings.messages ?? Infinity) ||
+          swarm.notificationCount + count > (swarm.settings.notifications ?? Infinity)
         )
           throw new Error("swarm work budget exhausted");
         const runtime = inheritRuntime(parent.runtime, requestedRuntime);
@@ -670,6 +695,7 @@ export function createSwarmService(deps: {
           actorId: auth.actorId,
           text: input.text,
           audience: members.map((member) => member.id),
+          ...(goal ? { goal } : {}),
           createdAt: Date.now(),
           notifications: Object.fromEntries(members.map((member) => [member.id, { state: "pending" as const }])),
         });
@@ -693,6 +719,8 @@ export function createSwarmService(deps: {
       const { auth, swarm } = await load(caller);
       boundedText(input.text, swarm.settings.textBytes, "text");
       input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
+      const goal = swarmGoal(input.goal);
+      if (goal && input.notify === false) throw new Error("a goal needs notify");
       const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
       const fingerprint = signature(input);
       const previous = swarm.messageRequests[key];
@@ -720,11 +748,17 @@ export function createSwarmService(deps: {
           return;
         }
         assertSwarmOpen(swarm);
-        if (swarm.messages.length >= swarm.settings.messages) throw new Error("swarm message budget exhausted");
+        if (swarm.messages.length >= (swarm.settings.messages ?? Infinity))
+          throw new Error("swarm message budget exhausted");
         if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
           throw new Error("reply target is not in this swarm");
         const recipients = input.notify === false ? [] : audience.filter((peer) => peer !== auth.memberId);
-        if (swarm.notificationCount + recipients.length > swarm.settings.notifications)
+        if (
+          goal &&
+          (!recipients.length || recipients.some((peer) => memberById(swarm, peer)?.parentId !== auth.memberId))
+        )
+          throw new Error("goals can only be assigned to your own workers");
+        if (swarm.notificationCount + recipients.length > (swarm.settings.notifications ?? Infinity))
           throw new Error("swarm notification budget exhausted");
         swarm.notificationCount += recipients.length;
         swarm.messages.push({
@@ -737,6 +771,7 @@ export function createSwarmService(deps: {
           text: input.text,
           audience,
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+          ...(goal ? { goal } : {}),
           createdAt: Date.now(),
           notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),
         });

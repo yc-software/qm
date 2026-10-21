@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function start() {
@@ -358,7 +358,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
-    const runtime = { harnessId: "mock", modelId: "claude-sonnet-5" };
+    const runtime = { harnessId: "pi", modelId: "claude-sonnet-5" };
     const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
       fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
         method: "PUT",

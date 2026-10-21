@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { CoreSession } from "../src/core-bridge.ts";
 import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
@@ -15,7 +16,7 @@ test("a share link paints its conversation from the transcript, without waiting 
     );
     assert.match(h.mainText(), /Deep linked chat/);
     assert.equal(
-      h.requests.filter((p) => p === "/api/sessions").length,
+      h.requests.filter((p) => p.startsWith("/api/sessions?")).length,
       1,
       "boot must not stampede the expensive list route",
     );
@@ -138,14 +139,16 @@ test("a list landing mid-open still keeps the row of the conversation being open
     title: "Other",
     canContinue: true,
   };
-  const h = await harness({ path: "/s/sess-deep", holdApprovals: true, listSessions: [other] });
+  const h = await harness({ path: "/", holdTranscript: true, listSessions: [other] });
   try {
-    const booted = h.boot();
+    void h.boot();
+    h.sessionsState.list = [SESSION, ...h.sessionsState.list];
+    const opened = h.openSession(SESSION as CoreSession);
     while (!h.sessionsState.openingKey) await new Promise((resolve) => setTimeout(resolve, 0));
     h.releaseSessions();
     await h.sessionsReady();
-    h.releaseApprovals();
-    await booted;
+    h.releaseTranscript();
+    await opened;
     assert.ok(
       h.sessionsState.list.some((s) => s.id === SESSION.id),
       "the row must survive a refresh that lands between the open starting and the mount finishing",
@@ -191,9 +194,12 @@ test("the sidebar request overlaps runtime settings and paints if it finishes fi
   const h = await harness({ path: "/settings", holdRuntimeConfig: true, listSessions: [SESSION] });
   const booted = h.boot();
   try {
-    for (let i = 0; i < 100 && !h.requests.includes("/api/sessions"); i++)
+    for (let i = 0; i < 100 && !h.requests.some((p) => p.startsWith("/api/sessions?")); i++)
       await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.ok(h.requests.includes("/api/sessions"), "the list must start while runtime settings are pending");
+    assert.ok(
+      h.requests.some((p) => p.startsWith("/api/sessions?")),
+      "the list must start while runtime settings are pending",
+    );
     h.releaseSessions();
     await h.sessionsReady();
     h.releaseRuntimeConfig();

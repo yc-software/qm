@@ -11,7 +11,7 @@ import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skill
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -208,7 +208,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.match(sys.reply ?? "", /google-workspace/);
   assert.match(sys.reply ?? "", /google-drive-sheets/);
   assert.match(sys.reply ?? "", /github-gitlab/);
-  assert.doesNotMatch(sys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*/);
+  assert.doesNotMatch(sys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
 
   const channelSys = await app.turn({
     surface: "test",
@@ -218,7 +218,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   } as TurnRequest);
   assert.match(channelSys.reply ?? "", /google-workspace/);
   assert.match(channelSys.reply ?? "", /google-drive-sheets/);
-  assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*/);
+  assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
 
   const read = await app.turn({
     surface: "test",

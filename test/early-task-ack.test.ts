@@ -1,13 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "../src/harness/mock-harness.ts";
+import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
-mock.module("../src/harness/mock-harness.ts", {
+mock.module("./support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
     createMockHarness: () => {
@@ -20,7 +20,7 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/build-app.ts");
 
 for (const scenario of [
   { name: "human DM", enabled: true },
@@ -93,7 +93,7 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
       assert.equal((await built.deliveries.pending("slack")).length, 0);
       await turn.emit({
         type: "tool_call",
-        payload: { tool: "slack", action: action === "delegated-read" ? "read" : action },
+        payload: { tool: "slack", callId: `slack-${action}`, action: action === "delegated-read" ? "read" : action },
         scopeLabel: turn.scopeLabel,
       });
       started();

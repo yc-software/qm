@@ -21,7 +21,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   environmentNote,
   inboundIssueList,
-  fileEventPayload,
+  inboundIssuesNote,
   inboundManifest,
   materializeInbound,
   withoutAlreadyIngested,
@@ -33,6 +33,8 @@ import {
   turnFileId,
 } from "../src/core/attachments.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
   assert.equal(turnFileId("run-1", 1, 123), turnFileId("run-1", 1, 123));
@@ -120,16 +122,11 @@ test("inboundIssueList is empty when nothing failed, and names each problem othe
   assert.doesNotMatch(joined, /your own words|NOT received|⚠️|\(note:/);
 });
 
-test("fileEventPayload tags direction and renders admin-readable text via the kind", () => {
-  const inbound = fileEventPayload("in", ["x.png — too many files in one message"]);
-  assert.equal(inbound.kind, "file_event");
-  assert.equal(inbound.direction, "in");
-  assert.match(inbound.text, /did not reach \.\/inbox\//);
-  assert.match(inbound.text, /x\.png/);
-  const outbound = fileEventPayload("out", ["chart.png was too large to send"]);
-  assert.equal(outbound.direction, "out");
-  assert.match(outbound.text, /did not go out/);
-  assert.match(outbound.text, /chart\.png/);
+test("inboundIssuesNote names the files that did not reach the inbox and is empty without issues", () => {
+  assert.equal(inboundIssuesNote([]), "");
+  const text = inboundIssuesNote(["x.png — too many files in one message"]);
+  assert.match(text, /did not reach \.\/inbox\//);
+  assert.match(text, /x\.png/);
 });
 
 test("inboundManifest attributes each file to its poster when the author is known", () => {
@@ -543,7 +540,12 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   const ff = installFakeSprites();
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
-  const sandbox = createSpritesSandbox(ws, { token: "test-token", baseUrl: ff.baseUrl });
+  const sandbox = createSpritesSandbox(ws, {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
+    token: "test-token",
+    baseUrl: ff.baseUrl,
+  });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
   await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
   await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
@@ -563,7 +565,12 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   const ff = installFakeSprites();
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
-  const sandbox = createSpritesSandbox(ws, { token: "test-token", baseUrl: ff.baseUrl });
+  const sandbox = createSpritesSandbox(ws, {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
+    token: "test-token",
+    baseUrl: ff.baseUrl,
+  });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
   const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
   await sandbox.writeFileBytes(handle, "keep.bin", raw);

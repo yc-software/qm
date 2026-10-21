@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import {
@@ -16,8 +16,7 @@ import {
 } from "../src/tools/primitives.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { resolveReachableChannel } from "../src/resolution/scope-reach.ts";
-import { filterHistoryForAudience } from "../src/resolution/context-filter.ts";
-import { scopeId, type Principal, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
+import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -395,22 +394,6 @@ test("reach teardown keeps (does not destroy) a room with its own computer", asy
   assert.ok(
     fakeSprites.names().some((n) => n.startsWith("qm-sandbox-room-ph-")),
     "an operated room's computer is kept, not destroyed",
-  );
-});
-
-test("Trap 1 e2e: the reach tool_result is labeled the session scope and survives the audience filter", async () => {
-  const built = await roomApp();
-  const res = await built.app.turn(dm("!reach #project-alpha echo hello"));
-  assert.equal(res.reply, "hello");
-  const entries = await built.sessions.getEntries(res.sessionId!);
-  const toolResults = entries.filter((e) => e.type === "tool_result");
-  assert.ok(toolResults.length >= 1, "a reach tool_result was recorded");
-  for (const e of toolResults) assert.equal(e.scopeLabel, scopeId("personal", "U1"));
-  const audience: Principal[] = [{ id: "U1", type: "internal" }];
-  const kept = filterHistoryForAudience(entries, audience, scopeId("personal", "U1"), scopeId("org", "default-org"));
-  assert.ok(
-    kept.some((e) => e.type === "tool_result"),
-    "the reach result is not dropped from the DM's own next turn",
   );
 });
 

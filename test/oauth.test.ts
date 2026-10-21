@@ -507,6 +507,48 @@ test("X refresh captures the ROTATED refresh token (single-use) — the connecti
   assert.equal(fresh.expiresAt, 5_000 + 7200_000);
 });
 
+test("token failures keep the provider's error detail", async () => {
+  const failing =
+    (status: number, json: () => Promise<unknown>): FetchLike =>
+    async () => ({ ok: false, status, json });
+  await assert.rejects(
+    exchangeCode("google", "code", "https://app/cb", {
+      client: await googleClient(),
+      fetchImpl: failing(400, async () => ({ error: "invalid_grant", error_description: "Code expired" })),
+      now: 1_000,
+    }),
+    /token exchange failed \(400\): invalid_grant: Code expired$/,
+  );
+  await assert.rejects(
+    makeRefresh({
+      resolveClient: resolve,
+      fetchImpl: failing(401, async () => ({ reason: "Invalid client_id or client_secret", error: "invalid_client" })),
+      now: () => 1_000,
+    })("api.x.com", { accessToken: "old", refreshToken: "rt", expiresAt: 0 }),
+    /x token refresh failed \(401\): invalid_client: Invalid client_id or client_secret$/,
+  );
+  await assert.rejects(
+    exchangeCode("google", "code", "https://app/cb", {
+      client: await googleClient(),
+      fetchImpl: failing(401, async () => ({
+        error: { code: "refresh_token_reused", message: "Refresh token already used" },
+      })),
+      now: 1_000,
+    }),
+    /token exchange failed \(401\): refresh_token_reused: Refresh token already used$/,
+  );
+  await assert.rejects(
+    exchangeCode("google", "code", "https://app/cb", {
+      client: await googleClient(),
+      fetchImpl: failing(502, async () => {
+        throw new SyntaxError("Unexpected token <");
+      }),
+      now: 1_000,
+    }),
+    /token exchange failed \(502\)$/,
+  );
+});
+
 test("oauth flow store — a short opaque state resolves once, then expires", async () => {
   const store = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000 });
   const flowId = await store.start({

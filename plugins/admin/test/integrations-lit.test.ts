@@ -74,6 +74,59 @@ test("Connector editor renders guides and keeps fields and focus stable while ty
     dom.window.close();
   }
 });
+const PICKER_CATALOG =
+  '[{provider:"github",setupGuide:{url:"https://example.com",console:"GitHub",steps:["Create app"]},redirectPath:"github/callback",scopes:["repo"]},{provider:"zoom",configured:true,setupGuide:{url:"https://example.com",console:"Zoom",steps:["Create app"]},redirectPath:"zoom/callback",scopes:[]}]';
+function configurePicker(dom: JSDOM, connectors: string) {
+  dom.window.eval(
+    `ui.configure({api:async(m,p)=>p==="/api/connector-catalog"?{ok:true,data:{catalog:${PICKER_CATALOG}}}:{ok:true,data:{connectors:${connectors}}},orgScope:()=>"org:test",connectorName:id=>id,fmtTime:x=>x})`,
+  );
+}
+test("Connector picker lists the catalog, follows the draft, and locks while editing", async () => {
+  const dom = setup();
+  try {
+    configurePicker(dom, '[{provider:"github",clientId:"gid"}]');
+    await dom.window.eval("ui.loadConnectors()");
+    const doc = dom.window.document;
+    doc.getElementById("add-oauth-app")!.click();
+    const select = doc.getElementById("conn-provider") as HTMLSelectElement;
+    assert.deepEqual(
+      [...select.options].map((o) => [o.value, o.textContent!.trim()]),
+      [
+        ["github", "github"],
+        ["zoom", "zoom (configured)"],
+      ],
+    );
+    assert.equal(select.value, "github");
+    assert.equal(select.disabled, false);
+    select.value = "zoom";
+    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    assert.equal(dom.window.eval("ui.connectors.draft.provider"), "zoom");
+    assert.match(doc.getElementById("conn-guide")!.textContent!, /oauth\/zoom\/callback/);
+    dom.window.eval('ui.connectors.edit({provider:"github",clientId:"gid"})');
+    assert.equal(select.value, "github");
+    assert.equal(select.disabled, true);
+    dom.window.eval('ui.connectors.edit({provider:"zoom",inherited:true})');
+    assert.equal(select.value, "zoom");
+    assert.equal(select.disabled, false);
+  } finally {
+    dom.window.close();
+  }
+});
+test("Connector picker settles on a real provider when the catalog arrives after the editor opens", async () => {
+  const dom = setup();
+  try {
+    const doc = dom.window.document;
+    doc.getElementById("add-oauth-app")!.click();
+    configurePicker(dom, "[]");
+    await dom.window.eval("ui.loadConnectors()");
+    const select = doc.getElementById("conn-provider") as HTMLSelectElement;
+    assert.equal(dom.window.eval("ui.connectors.draft.provider"), "github");
+    assert.equal(select.value, "github");
+    assert.match(doc.getElementById("conn-guide")!.textContent!, /oauth\/github\/callback/);
+  } finally {
+    dom.window.close();
+  }
+});
 test("Connector saves use captured payloads and retain edits made during a request", async () => {
   let resolve!: (value: any) => void;
   const bodies: unknown[] = [];

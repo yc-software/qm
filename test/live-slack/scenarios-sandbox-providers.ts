@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { SandboxBackendName } from "../../src/sandbox/sandbox-routing.ts";
+import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../../src/util/objects.ts";
+import { headSlice, tailSlice } from "../../src/util/text.ts";
 import type { Scenario } from "./harness.ts";
 
 const providerCoverage: Record<SandboxBackendName, true> = {
@@ -26,8 +28,16 @@ export function succeededWithStdout(p: Record<string, unknown>, stdout: string):
   );
 }
 
+function describeExecuteResult(p: Record<string, unknown>): string {
+  const result = typeof p.result === "string" ? redactSecrets(p.result) : p.result;
+  const shown =
+    typeof result === "string" && result.length > 400 ? `${headSlice(result, 150)}…${tailSlice(result, 250)}` : result;
+  return JSON.stringify({ isError: p.isError, code: p.code, timedOut: p.timedOut, result: shown });
+}
+
 export function assertSandboxExecution(entries: readonly unknown[], sandboxId: string, stdout: string): void {
   const calls = new Set<string>();
+  const unmatched: string[] = [];
   let executed = false;
   for (const entry of entries) {
     if (!isObj(entry) || !isObj(entry.payload)) continue;
@@ -37,10 +47,13 @@ export function assertSandboxExecution(entries: readonly unknown[], sandboxId: s
       calls.add(p.callId);
       continue;
     }
-    if (entry.type === "tool_result" && calls.has(p.callId) && succeededWithStdout(p, stdout)) executed = true;
+    if (entry.type !== "tool_result" || !calls.has(p.callId)) continue;
+    if (succeededWithStdout(p, stdout)) executed = true;
+    else unmatched.push(describeExecuteResult(p));
   }
   assert.ok(calls.size, `no execute call targeted ${sandboxId}`);
-  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}`);
+  const seen = unmatched.length ? `; results: ${unmatched.join(" | ")}` : "; no result recorded";
+  assert.ok(executed, `no successful execute result with exact stdout on ${sandboxId}${seen}`);
 }
 
 export const sandboxProviderScenarios: Scenario[] = sandboxProviders.map((backend) => ({

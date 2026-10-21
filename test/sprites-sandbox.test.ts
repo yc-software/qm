@@ -33,6 +33,8 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
+    initializationStore: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
@@ -264,6 +266,27 @@ test("force-through strips agent-supplied proxy vars", async () => {
   assert.equal(h.env?.FOO, "keep");
 });
 
+test("force-through makes git send proxy credentials up front, keeping turn git config", async () => {
+  const s = make({ egressProxyUrl: "https://proxy.example.com" });
+  const h = await s.provision(layers, {
+    egressToken: await proxyToken(),
+    env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Turn User" },
+  });
+  const r = await s.run(h, "echo $GIT_HTTP_PROXY_AUTHMETHOD; git config --get user.name");
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split("\n"), ["basic", "Turn User"]);
+  assert.deepEqual(
+    [h.env?.GIT_CONFIG_COUNT, h.env?.GIT_CONFIG_KEY_0, h.env?.GIT_CONFIG_VALUE_0],
+    ["1", "user.name", "Turn User"],
+  );
+});
+
+test("git proxy auth from the proxy env stays off when egress is not forced", async () => {
+  const h = await sandbox.provision(layers, { egressToken: "ignored" });
+  const r = await sandbox.run(h, 'echo "${GIT_HTTP_PROXY_AUTHMETHOD:-unset}"');
+  assert.equal(r.stdout.trim(), "unset");
+});
+
 test("force-through fails closed if the policy readback doesn't bind", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
@@ -451,7 +474,7 @@ for (const submitted of [false, true]) {
   }
 }
 
-test("exec diagnostics retain known transport reasons without raw error causes", async (t) => {
+test("exec diagnostics keep the provider's transport reason but not its URL or raw cause", async (t) => {
   const h = await sandbox.provision(layers);
   let reason = "";
   t.mock.method(SpriteCommand.prototype, "start", async () => {
@@ -462,7 +485,7 @@ test("exec diagnostics retain known transport reasons without raw error causes",
   for (reason of ["TypeError", "unclassified provider failure"]) {
     await assert.rejects(sandbox.run(h, "echo ignored"), (error: Error) => {
       assert.match(error.message, /script not submitted/);
-      assert.ok(error.message.endsWith(reason === "TypeError" ? "TypeError" : "unknown transport error"));
+      assert.ok(error.message.endsWith(`WebSocket error: ${reason}`));
       assert.doesNotMatch(inspect(error), /example-secret|example\.invalid|token=/);
       return true;
     });

@@ -5,6 +5,7 @@ import { streamedAnswer } from "./timeline.ts";
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { postCallText, postResultOk } from "./surface-post.ts";
 import type { RuntimeChange, RuntimeConfig } from "./runtime-config-cache.ts";
+import type { ChatBrowseStatus } from "./session-list.ts";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, Usage } from "@earendil-works/pi-ai";
@@ -151,6 +152,52 @@ export interface CoreSession {
   forkBoundarySeq?: number;
   parentSessionId?: string;
   surface?: string;
+  subagents?: { running: number; waiting: number };
+}
+
+export interface SessionPageQuery {
+  limit: number;
+  before?: string | null;
+  status?: ChatBrowseStatus;
+  surface?: string;
+  scope?: string | null;
+  q?: string;
+}
+
+export interface SessionPage {
+  sessions: CoreSession[];
+  pinned?: CoreSession[];
+  nextCursor: string | null;
+  hasArchived?: boolean;
+}
+
+export function fetchSessionPage(query: SessionPageQuery): Promise<SessionPage> {
+  const qs = new URLSearchParams({ limit: String(query.limit) });
+  if (query.before) qs.set("before", query.before);
+  if (query.status && query.status !== "active") qs.set("status", query.status);
+  if (query.surface) qs.set("surface", query.surface);
+  if (query.scope) qs.set("scope", query.scope);
+  if (query.q?.trim()) qs.set("q", query.q.trim());
+  return api<SessionPage>(`/api/sessions?${qs.toString()}`);
+}
+
+export async function fetchSessionChildren(id: string): Promise<CoreSession[] | null> {
+  try {
+    return (await api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/children`)).sessions;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function fetchSessionRow(ref: { id: string } | { threadRef: string }): Promise<CoreSession | null> {
+  const qs = new URLSearchParams("id" in ref ? { id: ref.id } : { threadRef: ref.threadRef });
+  try {
+    return (await api<{ session: CoreSession }>(`/api/sessions/row?${qs.toString()}`)).session;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export function inheritedTranscript(
@@ -409,7 +456,6 @@ export interface SessionEntry {
     | "text"
     | "tool_call"
     | "tool_result"
-    | "soul"
     | "system"
     | "approval_request"
     | "approval_resolved"
@@ -445,9 +491,17 @@ export interface WorkBlock {
   finishedAt?: number;
   stale?: boolean;
   activity: ToolActivity[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   pendingApprovals?: PendingApproval[];
   goal?: GoalStripState;
   runtime?: TurnRuntime;
+}
+
+interface LiveReasoning {
+  step: string;
+  index: number;
+  text: string;
 }
 
 export interface TurnRuntime {
@@ -517,6 +571,7 @@ export interface RunPoll {
     status: string;
     reply?: string;
     reason?: string;
+    refusalKind?: string;
     stopped?: boolean;
     pendingApprovals?: PendingApproval[];
     attachments?: Array<{ name: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
@@ -527,6 +582,8 @@ export interface RunPoll {
   stale?: boolean;
   replyComplete?: boolean;
   activity?: unknown[];
+  reasoning?: LiveReasoning[];
+  attempt?: number;
   startedAt?: number | null;
   finishedAt?: number | null;
 }
@@ -1455,6 +1512,21 @@ function parseActivity(raw: unknown): ToolActivity[] {
   return out;
 }
 
+function mergeReasoning(work: WorkBlock | undefined, block: LiveReasoning, offset = 0): boolean {
+  if (!work || typeof block.step !== "string" || !Number.isSafeInteger(block.index) || typeof block.text !== "string")
+    return false;
+  const blocks = work.reasoning ?? [];
+  const at = blocks.findIndex((b) => b.step === block.step && b.index === block.index);
+  const current = at >= 0 ? blocks[at]!.text : "";
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > current.length) return false;
+  const text = current.slice(0, offset) + block.text;
+  if (text.length <= current.length) return false;
+  const next = { step: block.step, index: block.index, text };
+  work.reasoning =
+    at >= 0 ? blocks.map((b, i) => (i === at ? next : b)) : [...blocks.filter((b) => b.step === block.step), next];
+  return true;
+}
+
 function setWorkStale(work: WorkBlock | undefined, stale: boolean, notify?: () => void): void {
   if (!work || (work.stale ?? false) === stale) return;
   work.stale = stale;
@@ -1493,6 +1565,12 @@ function applyRun(
     if ((work?.activity.length ?? 0) > beforeActivity) st.lastProgressAt = now();
     notify?.();
   }
+  if (work && typeof run.attempt === "number" && work.attempt !== run.attempt) {
+    if (work.attempt !== undefined && work.reasoning?.length) work.reasoning = [];
+    work.attempt = run.attempt;
+  }
+  if (Array.isArray(run.reasoning) && run.reasoning.map((block) => mergeReasoning(work, block)).some(Boolean))
+    notify?.();
   setWorkStale(work, run.stale === true, notify);
   if (work && run.goal && JSON.stringify(run.goal) !== JSON.stringify(work.goal)) {
     work.goal = run.goal;
@@ -1520,7 +1598,7 @@ function applyRun(
   }
   const approvals = res?.pendingApprovals ?? [];
   const paused = approvals.length > 0;
-  const approvalDenied = approvalDeniedMessage(res?.reason);
+  const approvalDenied = res?.refusalKind === "approval_denied";
   const quiet = res?.status === "silent" || res?.status === "react";
   if (work) {
     work.finishedAt = typeof run.finishedAt === "number" ? run.finishedAt : Date.now();
@@ -1541,7 +1619,7 @@ function applyRun(
   }
   if (approvalDenied) {
     (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(stream, partial, st, approvalDenied);
+    finish(stream, partial, st, "Denied.");
     return "terminal";
   }
   if (!paused && !quiet && (run.status === "failed" || (res && res.status !== "ok"))) {
@@ -1688,6 +1766,13 @@ async function streamRunViaSse(
           return "fallback";
         if (value.offset > Math.max(st.startOffset + st.acc.length, value.startOffset ?? 0)) return "fallback";
         applyStreamText(stream, partial, st, value.delta, value.offset, value.startOffset ?? 0);
+      } else if (event.name === "reasoning") {
+        const value = event.value as { step: string; index: number; offset: number; delta: string };
+        const work = (partial as AssistantWork).work;
+        if (mergeReasoning(work, { step: value.step, index: value.index, text: value.delta }, value.offset)) {
+          st.lastProgressAt = now();
+          notify?.();
+        }
       } else if (event.name === "run") {
         const run = event.value as RunPoll;
         // Completion must carry the final result, including files and approvals.
@@ -1797,13 +1882,6 @@ function deliveredFilesFromAttachments(
       ...(typeof a.sizeBytes === "number" ? { sizeBytes: a.sizeBytes } : {}),
       ...(a.artifactId ? { artifactId: a.artifactId } : {}),
     }));
-}
-
-function approvalDeniedMessage(reason?: string): string | null {
-  const trimmed = reason?.trim();
-  if (!trimmed) return null;
-  if (trimmed === "approval denied") return "Denied.";
-  return trimmed.startsWith("approval denied for ") ? "Denied." : null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -2165,6 +2243,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     const payload = e.payload as {
       text?: string;
       display?: string;
+      tool?: string;
       callId?: string;
       attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
       files?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;

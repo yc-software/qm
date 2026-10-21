@@ -8,7 +8,7 @@ import { portHolders } from "../lib/proc.ts";
 import { resolveSocketPath, supervisorReachable, supervisorRequest } from "../lib/client.ts";
 import { EXIT, CHILD_ORDER } from "../lib/types.ts";
 import { errMessage } from "../lib/util.ts";
-import type { StatusReport } from "../lib/types.ts";
+import type { CanaryReply, StatusReport } from "../lib/types.ts";
 
 interface Check {
   id: string;
@@ -17,6 +17,23 @@ interface Check {
   detail: string;
   remedy?: string;
   autoFixable?: boolean;
+}
+
+export function eventDeliveryCheck(canary: CanaryReply): Check {
+  const unconfigured = !canary.ok && canary.code === "unconfigured";
+  let remedy: string | undefined;
+  if (!canary.ok) {
+    remedy = unconfigured
+      ? "set CANARY_CHANNEL in the slot env (a channel the bot is in), then dev down && dev up"
+      : "events are not arriving: dev up --rotate (stolen/stale app), or check the slack log";
+  }
+  return {
+    id: "event-delivery",
+    ok: canary.ok,
+    severity: unconfigured ? "warn" : "critical",
+    detail: canary.ok ? `canary round trip ${canary.rttMs}ms` : `canary failed: ${canary.reason}`,
+    remedy,
+  };
 }
 
 export async function runDoctor(opts: { json: boolean; fix: boolean; store: string; slack: boolean }): Promise<number> {
@@ -119,25 +136,8 @@ export async function runDoctor(opts: { json: boolean; fix: boolean; store: stri
               ? "check for other instances; reconnect and verify with dev up --rotate"
               : undefined,
         });
-        const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as {
-          ok: boolean;
-          rttMs?: number;
-          reason?: string;
-        };
-        const unconfigured = !canary.ok && /no canary channel configured/.test(canary.reason ?? "");
-        let eventDeliveryRemedy: string | undefined;
-        if (!canary.ok) {
-          eventDeliveryRemedy = unconfigured
-            ? "set CANARY_CHANNEL in the slot env (a channel the bot is in), then dev down && dev up"
-            : "events are not arriving: dev up --rotate (stolen/stale app), or check the slack log";
-        }
-        checks.push({
-          id: "event-delivery",
-          ok: canary.ok,
-          severity: unconfigured ? "warn" : "critical",
-          detail: canary.ok ? `canary round trip ${canary.rttMs}ms` : `canary failed: ${canary.reason}`,
-          remedy: eventDeliveryRemedy,
-        });
+        const canary = (await supervisorRequest(sock, "POST", "/canary", {}, 40_000)).body as CanaryReply;
+        checks.push(eventDeliveryCheck(canary));
       }
       const gitNow = gitHead(worktree);
       checks.push({

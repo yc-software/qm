@@ -49,7 +49,7 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "claude", "mock"] as const;
+export const HARNESS_IDS = ["pi", "claude"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
@@ -415,12 +415,7 @@ export function modelIdReserved(id: string): boolean {
 
 export function validateModelOverlay(value: unknown): RegisteredModel {
   const spec = parseRegisteredModel(value);
-  if (
-    REGISTRY_BY_ID.has(spec.id) ||
-    builtinModel(spec.id) ||
-    isCustomModelId(spec.id) ||
-    OPENROUTER_CATALOG_MODELS.has(spec.id)
-  )
+  if (REGISTRY_BY_ID.has(spec.id) || builtinModel(spec.id) || OPENROUTER_CATALOG_MODELS.has(spec.id))
     throw new Error("model id is already registered");
   if (isEmbeddingModel(spec)) return spec;
   const template = resolveBuiltinModel(spec.template);
@@ -450,7 +445,7 @@ export function setModelOverlays(
       }
       if (isEmbeddingModel(spec)) {
         if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
-        else if (!isCustomModelId(id)) next.set(id, spec);
+        else next.set(id, spec);
         continue;
       }
       const template = resolveBuiltinModel(spec.template);
@@ -459,7 +454,7 @@ export function setModelOverlays(
           id,
           "Builtin template is unavailable or has a different provider; ask an administrator to repair this model",
         );
-      } else if (isCustomModelId(id) || OPENROUTER_CATALOG_MODELS.has(id)) {
+      } else if (OPENROUTER_CATALOG_MODELS.has(id)) {
         unavailable.set(id, "Model id conflicts with another provider; ask an administrator to repair this model");
       } else if (verificationFailures.has(id)) unavailable.set(id, verificationFailures.get(id)!);
       else next.set(id, spec);
@@ -682,13 +677,17 @@ export function contextTokenBudgetForModel(id: string): number | undefined {
   return Math.min(CONTEXT_BUDGET_CAP_TOKENS, Math.floor((window - output) * CONTEXT_BUDGET_FRACTION));
 }
 
+export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
+  return model.cost.input > 0 || model.cost.output > 0;
+}
+
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
-  if (id && modelRequestOverrides(id)) return harness === "pi" || harness === "mock";
-  if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));
+  if (id && modelRequestOverrides(id)) return harness === "pi";
+  if (id && isGatewayModelId(id)) return harness === "pi" && Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
-  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && (harness === "pi" || harness === "mock");
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi" || harness === "mock";
-  if (harness === "pi" || harness === "mock") return Boolean(resolveModel(id));
+  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && harness === "pi";
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi";
+  if (harness === "pi") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
   return false;

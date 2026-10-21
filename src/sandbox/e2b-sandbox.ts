@@ -3,8 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
-import { createNoopAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -36,13 +35,7 @@ import {
   type E2bSession,
   runE2bScript,
 } from "./e2b-client.ts";
-import {
-  createHomeSnapshotOps,
-  createMemorySnapshotStore,
-  HOME_SNAPSHOT_PRUNE,
-  snapshotDue,
-  type HomeSnapshotStore,
-} from "./home-snapshot.ts";
+import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -79,7 +72,7 @@ export interface StoredE2bSandbox {
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
 export interface E2bSandboxOptions extends BlobStagingOptions {
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   client: E2bClient;
   namePrefix?: string;
   defaultTimeoutSec?: number;
@@ -91,7 +84,7 @@ export interface E2bSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store?: DurableMap<StoredE2bSandbox>;
+  store: DurableMap<StoredE2bSandbox>;
   snapshots?: HomeSnapshotStore;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -109,10 +102,9 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (info?.memoryMb) observed.memoryMb = info.memoryMb;
   };
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
-  const store = opts.store ?? createMemoryMap<StoredE2bSandbox>();
-  const snapshots = opts.snapshots ?? createMemorySnapshotStore();
+  const store = opts.store;
   const localQueue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock ?? createNoopAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
     localQueue(scope, () => advisoryLock.withLock(`e2b-provision:${scope}`, action));
 
@@ -125,26 +117,32 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   };
 
-  const homeSnapshots = createHomeSnapshotOps<E2bSession>({
-    label: "e2b",
-    homeDir: HOME_DIR,
-    homeTarPath: HOME_TAR,
-    prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`)],
-    store: snapshots,
-    io: {
-      runCommand: (session, script, timeoutMs) => session.runCommand(script, { timeoutMs }),
-      readFileBytes: (session, abs) => session.readFileBytes(abs),
-      writeFileBytes: (session, abs, data) => session.writeFileBytes(abs, data),
-    },
-  });
+  const homeSnapshots = opts.snapshots
+    ? createHomeSnapshotOps<E2bSession>({
+        label: "e2b",
+        homeDir: HOME_DIR,
+        homeTarPath: HOME_TAR,
+        prunePaths: [
+          ...SNAPSHOT_PRUNE,
+          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
+        ],
+        store: opts.snapshots,
+        io: {
+          runCommand: (session, script, timeoutMs) => session.runCommand(script, { timeoutMs }),
+          readFileBytes: (session, abs) => session.readFileBytes(abs),
+          writeFileBytes: (session, abs, data) => session.writeFileBytes(abs, data),
+        },
+      })
+    : undefined;
 
   async function snapshotHome(scope: string, session: E2bSession): Promise<void> {
+    if (!homeSnapshots) return;
     await homeSnapshots.snapshotHome(scope, session);
     await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
   }
 
-  const hydrateHome = (scope: string, session: E2bSession): Promise<boolean> =>
-    homeSnapshots.hydrateHome(scope, session);
+  const hydrateHome = async (scope: string, session: E2bSession): Promise<boolean> =>
+    homeSnapshots ? homeSnapshots.hydrateHome(scope, session) : false;
 
   async function ensureSession(
     scope: string,
@@ -197,11 +195,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       if (stored?.nativePause) {
         if (!stored.recoverySnapshotId)
           throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
-        try {
-          onStatus?.("Restoring the sandbox from its recovery snapshot…");
-        } catch (error) {
-          void error;
-        }
+        onStatus?.("Restoring the sandbox from its recovery snapshot…");
         let session: E2bSession;
         try {
           session = await client.create({
@@ -225,11 +219,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         });
         return adopt(session);
       }
-      try {
-        onStatus?.("Creating the sandbox…");
-      } catch (error) {
-        void error;
-      }
+      onStatus?.("Creating the sandbox…");
       const session = await client.create({ metadata: { name }, autoPause: true });
       sessionByName.set(name, session);
       await store.put(scope, {
@@ -430,10 +420,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       const turnEnv = Object.fromEntries(
         Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
       );
-      const env = {
-        ...turnEnv,
-        ...(forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!) : {}),
-      };
+      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
       const handle: SandboxHandle = {
         id: name,
         rootDir: workspaceDir,
@@ -510,12 +497,16 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
 
     exportFiles: execExport.exportFiles,
 
-    async persistHomeSnapshot(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
-      scopeByName.set(name, scopeId);
-      const { session } = await ensureSession(scopeId, name);
-      await snapshotHome(scopeId, session);
-    },
+    ...(homeSnapshots
+      ? {
+          async persistHomeSnapshot(scopeId: string): Promise<void> {
+            const name = sandboxScopeName(prefix, scopeId);
+            scopeByName.set(name, scopeId);
+            const { session } = await ensureSession(scopeId, name);
+            await snapshotHome(scopeId, session);
+          },
+        }
+      : {}),
 
     async computerStatus(scopeId: string): Promise<ComputerStatus> {
       const name = sandboxScopeName(prefix, scopeId);
