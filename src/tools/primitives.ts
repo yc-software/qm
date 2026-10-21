@@ -1007,6 +1007,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       signal?.throwIfAborted();
       const { handle, resource, crossScope } = await machine(sandboxId);
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
+      const root = `${handle.rootDir.replace(/\/+$/, "")}/`;
+      if (path.startsWith(root)) path = path.slice(root.length);
       return timed("file_op", async () => {
         const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
         if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };

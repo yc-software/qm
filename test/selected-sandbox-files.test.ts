@@ -146,3 +146,10 @@ test("naming the default sandbox explicitly persists exactly like omitting it", 
   await h.ctx.write("notes.md", "explicit", "sb1");
   assert.deepEqual(new Set(h.stored.map((e) => `${e.scope} ${e.path}`)), new Set([`${conversation} notes.md`]));
 });
+
+test("an absolute path inside a computer's workspace reads like its workspace-relative path", async () => {
+  const h = harness({ access: plan("sb1", conversation) });
+  assert.equal((await h.ctx.read("/workspace/notes.md", undefined, "sb1")).content, "selected copy");
+  assert.equal((await h.ctx.read("/workspace/notes.md")).content, "default copy");
+  assert.equal((await h.ctx.read("/elsewhere/notes.md", undefined, "sb1")).content, null);
+});

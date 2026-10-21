@@ -3867,13 +3867,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ): Promise<string[]> {
     const out: string[] = [];
     for (const path of (paths ?? []).slice(0, GOAL_EVIDENCE_FILES)) {
+      const missing = path.startsWith("/")
+        ? "[missing: no such file in the computer's workspace; only workspace files can be read, so copy it there or name it relative to the workspace]"
+        : "[missing: no such file]";
       const content = tc
         ? await tc.read(path, signal, sandboxId).then(
-            (r) => r.content,
-            () => null,
+            (r) => r.content ?? missing,
+            (e: unknown) => `[unreadable: ${errMessage(e)}]`,
           )
-        : null;
-      let body = content ?? "[missing: no such file]";
+        : missing;
+      let body = content;
       if (body.length > GOAL_EVIDENCE_FILE_CHARS)
         body = `${body.slice(0, GOAL_EVIDENCE_FILE_CHARS)}\n[truncated at ${GOAL_EVIDENCE_FILE_CHARS} of ${body.length} chars]`;
       out.push(`<file path="${path.replace(/"/g, "")}">\n${body}\n</file>`);
