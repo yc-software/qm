@@ -516,6 +516,13 @@ test("explicit live context verifies reactions and never substitutes mirrored da
   await fulfiller.fulfillSurfaceContext(client, request);
   assert.match(outcome.error, /truncated channel history/);
   assert.equal(outcome.result, undefined);
+  historyClient.conversations.replies = async () => {
+    throw new Error("missing_scope");
+  };
+  await fulfiller.fulfillSurfaceContext(client, request);
+  assert.match(outcome.error, /missing_scope/);
+  assert.equal(outcome.result, undefined);
+  historyClient.conversations.replies = async () => ({ messages: [{ ts: "1.0", text: "waiting", user: "U1" }] });
   request.query.conversationTarget = "C1";
   historyClient.conversations.history = async () => {
     throw new Error("live source unavailable");

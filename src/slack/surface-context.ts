@@ -258,8 +258,6 @@ export function createSurfaceContextFulfiller(deps: {
           ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
-      if (q.live === true && threadTs && outcomes[0]?.status === "fulfilled" && outcomes[0].value.hasMore)
-        throw new Error("Live Slack thread context includes truncated channel history; read the channel separately.");
       const byTs = new Map<string, SlackHistoryMessage>();
       const notes = new Set<string>();
       let hasMore = false;
@@ -279,6 +277,8 @@ export function createSurfaceContextFulfiller(deps: {
       const raw = [...byTs.values()];
       const failure = outcomes.find((outcome) => outcome.status === "rejected");
       if (q.live === true && failure?.status === "rejected") throw failure.reason;
+      if (q.live === true && threadTs && outcomes[0]?.status === "fulfilled" && outcomes[0].value.hasMore)
+        throw new Error("Live Slack thread context includes truncated channel history; read the channel separately.");
       if (!raw.length && failure?.status === "rejected") throw failure.reason;
       const note = [...notes].join(" ");
       const nameById = new Map<string, string>();
