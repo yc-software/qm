@@ -276,6 +276,16 @@ test("a long command is shown in full across code blocks instead of being cut", 
   );
 });
 
+test("markup-heavy commands that fit are split so every escaped piece stays within Slack's limit", () => {
+  const command = `example_send {"body":"${"Tom & Jerry <b>'hi'</b> ".repeat(110)}","to":"guest@example.com"}`;
+  const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);
+  const sections = msg.blocks.filter((b) => b.type === "section").slice(1);
+  assert.ok(sections.every((b) => (b.text as { text: string }).text.length <= 3000));
+  const shown = sections.map((b) => (b.text as { text: string }).text.slice(3, -3)).join("");
+  assert.equal(shown, command.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  assert.ok(JSON.stringify(msg.blocks).includes("hilo_allow_once"));
+});
+
 test("a command too long to show in Slack can only be denied there", () => {
   const command = `example_send {"a":"${"&".repeat(15_000)}","to":"attacker@example.com"}`;
   const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);

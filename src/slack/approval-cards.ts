@@ -24,7 +24,6 @@ export interface SlackApprovalMessage {
 const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
-const SLACK_SECTION_MAX = 3_000;
 
 function button(
   text: string,
@@ -73,9 +72,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
     const longCommand = p.kind !== "input" && p.command.length > INLINE_COMMAND_MAX;
     const sections = longCommand ? slackSectionBlocks(p.command, { code: true }) : [];
-    const shown =
-      sections.length <= COMMAND_SECTIONS_MAX &&
-      sections.every((b) => (b.text as { text: string }).text.length <= SLACK_SECTION_MAX);
+    const shown = sections.length <= COMMAND_SECTIONS_MAX;
     if (longCommand)
       lines.push(
         shown
