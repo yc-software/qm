@@ -28,8 +28,9 @@ function workspaceRel(rel: string): string {
 }
 
 export function posixJoin(base: string, rel: string): string {
-  const clean = workspaceRel(rel);
-  return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
+  const root = base.replace(/\/+$/, "");
+  const clean = workspaceRel(root && rel.startsWith(`${root}/`) ? rel.slice(root.length) : rel);
+  return clean ? `${root}/${clean}` : base;
 }
 
 export interface ExecFileOpsDeps {

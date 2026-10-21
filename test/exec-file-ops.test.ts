@@ -78,6 +78,13 @@ test("posixJoin rejects parent path segments", () => {
   assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /must stay inside the workspace/);
 });
 
+test("posixJoin resolves an absolute path inside the workspace instead of nesting it", () => {
+  assert.equal(posixJoin("/root/workspace", "/root/workspace/a/b.txt"), "/root/workspace/a/b.txt");
+  assert.equal(posixJoin("/root/workspace/", "/root/workspace/a.txt"), "/root/workspace/a.txt");
+  assert.equal(posixJoin("/root/workspace", "/root/workspaces/a.txt"), "/root/workspace/root/workspaces/a.txt");
+  assert.throws(() => posixJoin("/root/workspace", "/root/workspace/../x"), /must stay inside the workspace/);
+});
+
 test("concurrent imports keep separate archives through extraction and cleanup", { timeout: 10_000 }, async () => {
   const rootDir = await mkdtemp(join(tmpdir(), "qm-import-'"));
   const handle = { id: "test", rootDir };
