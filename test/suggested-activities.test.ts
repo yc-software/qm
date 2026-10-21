@@ -245,14 +245,6 @@ test("fire results cannot point at another personal scope or an unrelated thread
   }
 });
 
-test("legacy three-item results are still served", async () => {
-  const f = fixture();
-  f.output(JSON.stringify(activities.slice(0, 3)));
-  await f.service.get("alice", []);
-  await f.settle();
-  assert.deepEqual(await f.service.get("alice", []), { activities: activities.slice(0, 3), pending: false });
-});
-
 test("dismissed suggestions stay hidden across restarts, leave the reserve, and reach the next run's task", async () => {
   const f = fixture();
   await f.service.get("alice", []);

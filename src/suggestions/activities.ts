@@ -40,7 +40,6 @@ export interface SuggestedActivityResult {
 
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
 const GENERATED_COUNT = 5;
-const MIN_GENERATED_COUNT = 3;
 const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
@@ -84,7 +83,7 @@ export function createSuggestedActivityService(deps: {
       if (typeof text !== "string") continue;
       try {
         const activities = parseSuggestedActivities(text);
-        if (activities.length < MIN_GENERATED_COUNT || activities.length > GENERATED_COUNT) continue;
+        if (activities.length !== GENERATED_COUNT) continue;
         return { runs, activities, firedAt: run.firedAt };
       } catch {
         continue;
