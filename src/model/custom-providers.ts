@@ -102,6 +102,7 @@ export interface CustomRuntimeModel {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  compat?: { supportsStore: false };
 }
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -113,7 +114,15 @@ function customProviderApi(protocol: CustomProviderProtocol): CustomRuntimeModel
   return "openai-completions";
 }
 
+function customProviderCompat(provider: CustomProviderSpec): CustomRuntimeModel["compat"] {
+  if (provider.protocol === "openai" && new URL(provider.baseUrl).hostname === "generativelanguage.googleapis.com") {
+    return { supportsStore: false };
+  }
+  return undefined;
+}
+
 function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): CustomRuntimeModel {
+  const compat = customProviderCompat(provider);
   return {
     id: `custom/${provider.id}/${m.id}`,
     upstreamId: m.id,
@@ -126,6 +135,7 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
     cost: { input: m.input ?? 0, output: m.output ?? 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: m.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: m.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(compat ? { compat } : {}),
   };
 }
 
@@ -190,13 +200,14 @@ export function customModelsJson(): { providers: Record<string, unknown> } | und
           api: customProviderApi(spec.protocol),
           models: [...registry.values()]
             .filter((m) => m.provider === spec.id)
-            .map(({ id, name, reasoning, contextWindow, maxTokens, cost }) => ({
+            .map(({ id, name, reasoning, contextWindow, maxTokens, cost, compat }) => ({
               id,
               name,
               reasoning,
               contextWindow,
               maxTokens,
               cost,
+              ...(compat ? { compat } : {}),
             })),
         },
       ]),
