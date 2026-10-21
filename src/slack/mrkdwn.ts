@@ -1,3 +1,4 @@
+import { xmlEscape } from "../util/message-tag.ts";
 import { safeChunks } from "./safe-cut.ts";
 export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
@@ -243,6 +244,11 @@ function reformatTables(text: string, keep: (s: string) => string): string {
   return out.join("\n");
 }
 
-export function slackSectionBlocks(text: string): Array<Record<string, unknown>> {
-  return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
+export function slackSectionBlocks(text: string, opts?: { code?: boolean }): Array<Record<string, unknown>> {
+  if (!opts?.code)
+    return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
+  return safeChunks(text.replace(/`/g, "'"), 2_800).map((chunk) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: `\`\`\`${xmlEscape(chunk)}\`\`\`` },
+  }));
 }

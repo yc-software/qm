@@ -281,6 +281,9 @@ test("a command too long to show in Slack can only be denied there", () => {
   const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);
   assert.ok(!JSON.stringify(msg.blocks).includes("hilo_allow_once"));
   assert.ok(JSON.stringify(msg.blocks).includes("hilo_deny"));
-  assert.match(JSON.stringify(msg.blocks), /too long to show in Slack\. Review and approve it in QM/);
+  assert.match(
+    JSON.stringify(msg.blocks),
+    /too long to show in Slack\. Open this conversation in QM on the web to review and approve it/,
+  );
   assert.ok(!JSON.stringify(msg.blocks).includes("attacker@example.com"));
 });

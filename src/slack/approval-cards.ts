@@ -1,6 +1,5 @@
 import { clip, inlineCode } from "./util.ts";
-import { safeChunks } from "./safe-cut.ts";
-import { xmlEscape } from "../util/message-tag.ts";
+import { slackSectionBlocks } from "./mrkdwn.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -25,7 +24,6 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 const SLACK_SECTION_MAX = 3_000;
-const COMMAND_CHUNK = 2_800;
 
 function button(
   text: string,
@@ -73,16 +71,16 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     if (p.summary) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
     const longCommand = p.kind !== "input" && p.command.length > INLINE_COMMAND_MAX;
-    const sections = longCommand
-      ? safeChunks(p.command.replace(/`/g, "'"), COMMAND_CHUNK).map((piece) => ({
-          type: "section",
-          text: { type: "mrkdwn", text: `\`\`\`${xmlEscape(piece)}\`\`\`` },
-        }))
-      : [];
+    const sections = longCommand ? slackSectionBlocks(p.command, { code: true }) : [];
     const shown =
-      sections.length <= COMMAND_SECTIONS_MAX && sections.every((b) => b.text.text.length <= SLACK_SECTION_MAX);
+      sections.length <= COMMAND_SECTIONS_MAX &&
+      sections.every((b) => (b.text as { text: string }).text.length <= SLACK_SECTION_MAX);
     if (longCommand)
-      lines.push(shown ? "*Command:*" : "*Command:* too long to show in Slack. Review and approve it in QM.");
+      lines.push(
+        shown
+          ? "*Command:*"
+          : "*Command:* too long to show in Slack. Open this conversation in QM on the web to review and approve it.",
+      );
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
