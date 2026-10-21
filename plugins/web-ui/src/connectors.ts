@@ -368,7 +368,7 @@ function drawConnectors(): void {
   const accountsLoading = connectorsLoading && !connectorsEverLoaded;
   const keysLoadingFresh = keysLoading && !keysEverLoaded;
   const loading = accountsLoading || keysLoadingFresh;
-  const entries = Object.entries(connectorProviders);
+  const entries = Object.entries(connectorProviders).filter(([, p]) => p.connected || p.needsReconnect || !p.mcpLabel);
   const connectorCards = entries.map(([id, p]) => {
     const meta = CONNECTOR_LABELS[id] ?? { name: p.mcpLabel ?? id, hosts: "" };
     const connected = Boolean(p.connected);

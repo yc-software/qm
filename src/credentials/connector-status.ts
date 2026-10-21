@@ -1,9 +1,10 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "./keychain.ts";
+import { connectorAccountSlots } from "./connector-accounts.ts";
 import {
-  ACCOUNT_TYPES,
+  connectorProvider,
+  connectorProviderEntries,
   oauthProviderEntries,
-  PROVIDERS,
   type OAuthClientResolver,
   type OAuthProviderConfig,
 } from "../connectors/oauth.ts";
@@ -83,12 +84,13 @@ export async function providerTokenStatuses(
   tokens: ConnectorTokenStore,
   principalId: string,
 ): Promise<Array<{ name: string; provider: OAuthProviderConfig; hosts: HostTokenStatus[] }>> {
-  const all = await Promise.all(
+  const slots = await connectorAccountSlots(tokens, principalId);
+  return Promise.all(
     oauthProviderEntries().map(async ([name, provider]) => {
       const hosts = await Promise.all(
         provider.hosts.map(async (host) => {
           const statuses = await Promise.all(
-            ACCOUNT_TYPES.map((accountType) => tokens.connectorTokenStatus(host, principalId, accountType)),
+            slots(host).map((accountType) => tokens.connectorTokenStatus(host, principalId, accountType)),
           );
           return { host, ...bestOAuthTokenStatus(statuses) };
         }),
@@ -96,7 +98,6 @@ export async function providerTokenStatuses(
       return { name, provider, hosts };
     }),
   );
-  return all.filter(({ provider, hosts }) => !provider.mcpLabel || hosts.some((h) => h.connected));
 }
 
 export async function refreshConnectorStatus(
@@ -106,6 +107,7 @@ export async function refreshConnectorStatus(
 ): Promise<ConnectorStatusRecord> {
   const providers: Record<string, ConnectorStatusEntry> = {};
   for (const { name, provider, hosts } of await providerTokenStatuses(tokens, principalId)) {
+    if (provider.mcpLabel && !hosts.some((h) => h.connected)) continue;
     const entry = hosts.reduce<ConnectorStatusEntry>((acc, status) => mergeStatus(acc, status), { connected: false });
     providers[name] = provider.mcpLabel ? { ...entry, mcpLabel: provider.mcpLabel } : entry;
   }
@@ -113,12 +115,12 @@ export async function refreshConnectorStatus(
 }
 
 export function connectorLabel(name: string): string {
-  return PROVIDERS[name]?.label ?? name.charAt(0).toUpperCase() + name.slice(1);
+  return connectorProvider(name)?.label ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export async function configuredConnectorProviders(resolveClient: OAuthClientResolver): Promise<string[]> {
   const configured = await Promise.all(
-    Object.keys(PROVIDERS).map(async (provider) => {
+    connectorProviderEntries().map(async ([provider]) => {
       try {
         await resolveClient(provider, {});
         return provider;

@@ -2270,7 +2270,7 @@ const apiRoutes: readonly WebRoute[] = [
       const { res, user } = c;
       const provider = c.params.provider!;
       const callback = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(provider)}/callback`;
-      const body = await readJson<{ returnTo?: unknown }>(c.req, res);
+      const body = await readJson<{ returnTo?: unknown; accountType?: unknown }>(c.req, res);
       if (!body) return;
       const returnTo =
         typeof body?.returnTo === "string" &&
@@ -2281,6 +2281,7 @@ const apiRoutes: readonly WebRoute[] = [
           ? body.returnTo
           : "/keychain";
       const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });
+      if (typeof body.accountType === "string" && body.accountType) params.set("accountType", body.accountType);
       const corePath = `/v1/connectors/oauth/${encodeURIComponent(provider)}/start?${params.toString()}`;
       return relayCore(res, "GET", corePath);
     },
@@ -2290,12 +2291,13 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/connectors/revoke",
     handle: async (c) => {
       const { req, res, user } = c;
-      const p = await readJson<{ provider?: unknown; host?: unknown }>(req, res, false);
+      const p = await readJson<{ provider?: unknown; host?: unknown; accountType?: unknown }>(req, res, false);
       if (!p) return;
       const provider = typeof p.provider === "string" ? p.provider : "";
       const host = typeof p.host === "string" ? p.host : "";
       if (!provider && !host) return json(res, 400, { error: "bad_request", message: "provider or host required" });
-      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }) });
+      const accountType = typeof p.accountType === "string" && p.accountType ? { accountType: p.accountType } : {};
+      const rawBody = JSON.stringify({ principalId: user, ...(provider ? { provider } : { host }), ...accountType });
       return relayCore(res, "POST", "/v1/connectors/oauth/revoke", rawBody);
     },
   },

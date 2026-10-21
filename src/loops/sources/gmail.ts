@@ -1,6 +1,6 @@
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
-import { isAccountType } from "../../connectors/oauth.ts";
+import { isAccountType, type AccountType } from "../../connectors/oauth.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
@@ -23,7 +23,7 @@ const GMAIL_HOST = "gmail.googleapis.com";
 
 interface GmailMeta {
   threadId: string;
-  accountType?: "default" | "personal" | "company";
+  accountType?: AccountType;
   messageId?: string;
   rfcMessageId?: string;
   to?: string[];
@@ -36,7 +36,7 @@ function parseGmailMeta(v: unknown): GmailMeta | undefined {
   const threadId = clip(v.threadId, 200);
   if (!threadId) return undefined;
   if (v.accountType !== undefined && !isAccountType(v.accountType)) return undefined;
-  const accountType = v.accountType as GmailMeta["accountType"];
+  const accountType = v.accountType;
   const messageId = clipOpt(v.messageId, 200);
   const rfcMessageId = clipOpt(v.rfcMessageId, 400);
   const to = addressList(v.to);

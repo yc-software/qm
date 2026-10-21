@@ -1,7 +1,15 @@
 import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
-import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
+import type { CustomOAuthProvider } from "./custom-provider.ts";
+import {
+  connectorProvider,
+  isBuiltInProvider,
+  createSecretClientResolver,
+  hostsOverlap,
+  oauthProvider,
+  oauthProviderEntries,
+} from "./oauth.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
 
 export interface StoredConnectorClient {
@@ -16,6 +24,15 @@ export interface StoredConnectorClient {
   enabled: boolean;
   updatedBy?: string;
   updatedAt: number;
+}
+
+export function customProviderConflict(p: CustomOAuthProvider): string | null {
+  if (isBuiltInProvider(p.provider) || (oauthProvider(p.provider) && !connectorProvider(p.provider)))
+    return `provider name ${p.provider} is already used by another connector`;
+  const taken = oauthProviderEntries().find(
+    ([name, other]) => name !== p.provider && hostsOverlap(other.hosts, p.hosts),
+  );
+  return taken ? `hosts overlap the ${taken[0]} connector` : null;
 }
 
 export interface ConnectorClientInput {
@@ -128,7 +145,7 @@ export function createConnectorClientResolver(opts: {
 }): OAuthClientResolver {
   const envResolver = createSecretClientResolver(opts.secrets);
   return async (providerName, ctx): Promise<ResolvedClient> => {
-    if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
+    if (!connectorProvider(providerName)) throw new Error(`unknown OAuth provider: ${providerName}`);
     const orgId = configOrgId();
     const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
     if (rec) {

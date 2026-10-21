@@ -77,7 +77,8 @@ import {
   renderConnectedAppsBlock,
   renderSandboxProfiles,
 } from "./environment-facts.ts";
-import { PROVIDERS } from "../connectors/oauth.ts";
+import { connectorProviderEntries } from "../connectors/oauth.ts";
+import { accountSlots, PERSONAL_FIRST_ACCOUNT_TYPES } from "../credentials/connector-accounts.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -243,7 +244,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
@@ -1512,22 +1512,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const inventory = tokens.listConnectorsByOwners
             ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
             : undefined;
-          for (const host of CONNECTOR_HOSTS) {
-            for (const accountType of ["personal", undefined, "company"]) {
+          const slots = accountSlots(inventory ?? []);
+          for (const host of connectorProviderEntries().flatMap(([, p]) => p.hosts)) {
+            for (const accountType of slots(host, PERSONAL_FIRST_ACCOUNT_TYPES)) {
               const status = inventory
                 ? inventory.find(
-                    (credential) =>
-                      credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
+                    (credential) => credential.host === host && (credential.accountType ?? "default") === accountType,
                   )
                 : await tokens.connectorTokenStatus(host, actor.id, accountType);
               const healthy = status?.connected && !status.needsReconnect;
               const operatorFallback =
-                accountType === undefined &&
+                accountType === "default" &&
                 tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
               if (!healthy && !operatorFallback) continue;
               addCredential(
                 {
-                  handle: `connector:${host}:${accountType ?? "default"}`,
+                  handle: `connector:${host}:${accountType}`,
                   scope: isolateOwnerKeychain ? "owner" : "scoped",
                   resolve: async () => {
                     await authorizeOwnerCredentials();
@@ -1539,7 +1539,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 `${
                   !healthy && operatorFallback
                     ? `${host}, configured operator fallback; availability checked on use`
-                    : `${host} connector, account ${accountType ?? "default"}`
+                    : `${host} connector, account ${accountType}`
                 }; ${connectorTokenNote(host)}`,
                 healthy && status && "credentialId" in status ? status.credentialId : undefined,
                 actor.id,

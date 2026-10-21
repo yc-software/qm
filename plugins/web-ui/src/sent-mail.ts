@@ -16,7 +16,7 @@ interface SentThreadMessage {
 }
 
 export interface SentEmail {
-  accountType?: "default" | "personal" | "company";
+  accountType?: string;
   id: string;
   threadId: string;
   to: string;

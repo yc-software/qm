@@ -1,5 +1,6 @@
 import type { DerivedOAuthAuth, Keychain } from "../credentials/keychain.ts";
 import type { ModelProvider } from "./pi-models.ts";
+import { MODEL_LOGIN_ACCOUNT_TYPE } from "../connectors/oauth.ts";
 
 type UserCredentialKind = "apikey" | "oauth";
 
@@ -50,8 +51,6 @@ const AI_OAUTH_HOSTS: Record<"anthropic" | "openai", string> = {
   anthropic: "claude.ai",
   openai: "auth.openai.com",
 };
-/** Segregates AI subscription logins from any other connector use of the same host. */
-const AI_ACCOUNT_TYPE = "individual-model";
 
 function serviceFor(provider: ModelProvider): string {
   return `model-${provider}`;
@@ -83,7 +82,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
   async function oauthCredential(userId: string, provider: ModelProvider): Promise<UserModelCredential | null> {
     const host = oauthHostFor(provider);
     if (!host) return null;
-    const status = await keychain.connectorTokenStatus(host, userId, AI_ACCOUNT_TYPE);
+    const status = await keychain.connectorTokenStatus(host, userId, MODEL_LOGIN_ACCOUNT_TYPE);
     if (!status.connected) return null;
     return {
       provider,
@@ -123,7 +122,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
       if (!secret) throw new Error("API key is required");
       // One connection per provider: an API key replaces a subscription login.
       const host = oauthHostFor(provider);
-      if (host) await keychain.deleteConnectorToken(host, userId, AI_ACCOUNT_TYPE);
+      if (host) await keychain.deleteConnectorToken(host, userId, MODEL_LOGIN_ACCOUNT_TYPE);
       await keychain.save({ ownerId: userId, service: serviceFor(provider), secret, origin: ORIGIN });
     },
 
@@ -141,7 +140,7 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
           ...(tokens.accountId ? { accountId: tokens.accountId } : {}),
           ...(tokens.expiresAt !== undefined ? { expiresAt: tokens.expiresAt } : {}),
         },
-        AI_ACCOUNT_TYPE,
+        MODEL_LOGIN_ACCOUNT_TYPE,
       );
       // One connection per provider: a subscription login replaces an API key.
       const apiKeyMeta = await findApiKey(userId, provider);
@@ -151,12 +150,12 @@ export function createUserModelCredentialStore(input: { keychain: Keychain }): U
     async derivedOAuth(userId, provider) {
       const host = oauthHostFor(provider);
       if (!host) return null;
-      return keychain.connectorDerivedAuth(host, userId, AI_ACCOUNT_TYPE);
+      return keychain.connectorDerivedAuth(host, userId, MODEL_LOGIN_ACCOUNT_TYPE);
     },
 
     async delete(userId, provider) {
       const host = oauthHostFor(provider);
-      if (host) await keychain.deleteConnectorToken(host, userId, AI_ACCOUNT_TYPE);
+      if (host) await keychain.deleteConnectorToken(host, userId, MODEL_LOGIN_ACCOUNT_TYPE);
       const meta = await findApiKey(userId, provider);
       if (meta) await keychain.remove(userId, meta.id);
     },

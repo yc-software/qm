@@ -564,7 +564,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/connectors/oauth/revoke",
         summary:
-          'disconnect an OAuth connector — body {provider} (e.g. "google") or {host}, optional principalId (a conversation member; default you). Deletes the stored token across account slots; reversible by reconnecting',
+          'disconnect an OAuth connector — body {provider} (e.g. "google") or {host}, optional principalId (a conversation member; default you), optional accountType to disconnect only that named account. Without accountType, deletes the stored token across all account slots; reversible by reconnecting',
       },
     ],
   },
@@ -574,7 +574,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/connectors/oauth/consent/mint",
         summary:
-          "mint a chat-first connect link for an OAuth provider, for YOURSELF (the current actor) only — use $AGENT_OAUTH_CONSENT_TOKEN. To get anyone else connected, don't mint anything: point them at the durable /connect/<provider>/self-connect page on the org's web UI, where signing in as themselves is the identity (no token; a refused mint's error message carries the full URL). A new login stays private to its owner; using it in a shared conversation requires a separate explicit credential grant.",
+          "mint a chat-first connect link for an OAuth provider, for YOURSELF (the current actor) only — use $AGENT_OAUTH_CONSENT_TOKEN. Body {provider, accountType?}: accountType names the connection slot (omit for default), e.g. a Slack workspace or a Google email, so one app can hold several accounts; the connection then appears as credential handle connector:<host>:<accountType> for each of the provider's hosts (name lowercased); select one account per host in a command. To get anyone else connected, don't mint anything: point them at the durable /connect/<provider>/self-connect page on the org's web UI, where signing in as themselves is the identity (no token; a refused mint's error message carries the full URL). A new login stays private to its owner; using it in a shared conversation requires a separate explicit credential grant.",
       },
       {
         method: "POST",

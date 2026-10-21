@@ -10,7 +10,9 @@ import {
   scopesFor,
   generateCodeVerifier,
   codeChallengeS256,
-  PROVIDERS,
+  connectorProviderEntries,
+  oauthProvider,
+  setStoredOAuthProviders,
   type FetchLike,
   type ResolvedClient,
   type OAuthState,
@@ -40,7 +42,7 @@ const googleClient = (): Promise<ResolvedClient> => resolve("google", {});
 test("authorizeUrl builds a consent URL with client id, scopes, redirect, state", async () => {
   const url = authorizeUrl("google", { redirectUri: "https://app/cb", state: "st-1", client: await googleClient() });
   const u = new URL(url);
-  assert.equal(u.origin + u.pathname, PROVIDERS.google!.authUrl);
+  assert.equal(u.origin + u.pathname, oauthProvider("google")!.authUrl);
   assert.equal(u.searchParams.get("client_id"), "gid");
   assert.equal(u.searchParams.get("redirect_uri"), "https://app/cb");
   assert.equal(u.searchParams.get("state"), "st-1");
@@ -79,7 +81,7 @@ test("the env resolver pins the Google hosted-domain for the company account-typ
 
 test("exchangeCode returns a token for the provider's hosts (default authorization_code adapter)", async () => {
   const fetchImpl: FetchLike = async (url, init) => {
-    assert.equal(url, PROVIDERS.google!.tokenUrl);
+    assert.equal(url, oauthProvider("google")!.tokenUrl);
     assert.match(init.body, /grant_type=authorization_code/);
     return {
       ok: true,
@@ -92,7 +94,7 @@ test("exchangeCode returns a token for the provider's hosts (default authorizati
     fetchImpl,
     now: 1_000,
   });
-  assert.deepEqual(hosts, PROVIDERS.google!.hosts);
+  assert.deepEqual(hosts, oauthProvider("google")!.hosts);
   assert.equal(token.accessToken, "at");
   assert.equal(token.refreshToken, "rt");
   assert.equal(token.expiresAt, 1_000 + 3600_000);
@@ -119,7 +121,7 @@ test("refresh dispatches by host (calendar host → google provider)", async () 
   };
   const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
   await refresh("www.googleapis.com", { accessToken: "x", refreshToken: "rt" });
-  assert.equal(hit, PROVIDERS.google!.tokenUrl);
+  assert.equal(hit, oauthProvider("google")!.tokenUrl);
 });
 
 test("google company-slot exchange verifies the id_token hosted domain server-side", async () => {
@@ -178,7 +180,7 @@ test("google company-slot exchange verifies the id_token hosted domain server-si
 
 test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
   const good: FetchLike = async (url, init) => {
-    assert.equal(url, PROVIDERS.github!.tokenUrl);
+    assert.equal(url, oauthProvider("github")!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
     assert.match(init.body, /grant_type=refresh_token/);
     return {
@@ -213,7 +215,7 @@ test("github refresh asks for JSON and surfaces GitHub's 200-with-error bodies",
 
 test("github exchange asks for JSON and surfaces GitHub's 200-with-error bodies", async () => {
   const errBody: FetchLike = async (url, init) => {
-    assert.equal(url, PROVIDERS.github!.tokenUrl);
+    assert.equal(url, oauthProvider("github")!.tokenUrl);
     assert.equal(init.headers.accept, "application/json");
     assert.match(init.body, /grant_type=authorization_code/);
     return {
@@ -248,11 +250,11 @@ test("Slack uses oauth.v2.access and keeps the USER token, scopes in user_scope"
   const url = new URL(
     authorizeUrl("slack", { redirectUri: "https://app/cb", state: "s", client: await resolve("slack", {}) }),
   );
-  assert.equal(url.searchParams.get("user_scope"), PROVIDERS.slack!.scopes.join(" "));
+  assert.equal(url.searchParams.get("user_scope"), oauthProvider("slack")!.scopes.join(" "));
   assert.equal(url.searchParams.get("scope"), null);
 
   const fetchImpl: FetchLike = async (u) => {
-    assert.equal(u, PROVIDERS.slack!.tokenUrl);
+    assert.equal(u, oauthProvider("slack")!.tokenUrl);
     return {
       ok: true,
       status: 200,
@@ -311,7 +313,7 @@ test("Slack/Notion reject a degenerate ok-but-no-token response (no empty token 
 
 test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async () => {
   const fetchImpl: FetchLike = async (u, init) => {
-    assert.equal(u, PROVIDERS.notion!.tokenUrl);
+    assert.equal(u, oauthProvider("notion")!.tokenUrl);
     assert.match(init.headers.authorization ?? "", /^Basic /);
     assert.match(init.body, /"grant_type":"authorization_code"/);
     return { ok: true, status: 200, json: async () => ({ access_token: "notion-tok" }) };
@@ -329,7 +331,7 @@ test("Notion exchanges via HTTP Basic + JSON body and does not refresh", async (
 
 test("Linear refreshes via the standard refresh_token grant", async () => {
   const fetchImpl: FetchLike = async (u, init) => {
-    assert.equal(u, PROVIDERS.linear!.tokenUrl);
+    assert.equal(u, oauthProvider("linear")!.tokenUrl);
     assert.match(init.body, /grant_type=refresh_token/);
     assert.match(init.body, /refresh_token=rt-old/);
     return {
@@ -348,8 +350,8 @@ test("Linear refreshes via the standard refresh_token grant", async () => {
 
 test("scopesFor: BYO client scopes override the provider default", async () => {
   const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
-  assert.deepEqual(scopesFor(PROVIDERS.google!, byo), ["only.this"]);
-  assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
+  assert.deepEqual(scopesFor(oauthProvider("google")!, byo), ["only.this"]);
+  assert.deepEqual(scopesFor(oauthProvider("google")!, await googleClient()), oauthProvider("google")!.scopes);
 });
 
 test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
@@ -408,7 +410,7 @@ test("authorizeUrl adds code_challenge + S256 only when a challenge is supplied"
 });
 
 test("only X opts into PKCE; the other providers leave the seam inert (regression guard)", () => {
-  for (const [name, p] of Object.entries(PROVIDERS)) {
+  for (const [name, p] of connectorProviderEntries()) {
     if (name === "x") assert.equal(p.pkce, true, "X requires PKCE");
     else assert.notEqual(p.pkce, true, `${name} must not enable PKCE`);
   }
@@ -567,4 +569,42 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
   const stale = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
   const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
   assert.equal(await stale.finish(staleId), null, "expired");
+});
+
+test("a stored provider refreshes by host through the generic adapters and stops resolving once removed", async () => {
+  const huddle = {
+    provider: "huddle",
+    label: "Huddle",
+    authUrl: "https://huddle.example/oauth/authorize",
+    tokenUrl: "https://huddle.example/oauth/token",
+    hosts: ["api.huddle.example"],
+    scopes: [],
+    clientAuth: "basic" as const,
+  };
+  const client: ResolvedClient = { id: "zid", secret: "zsecret", clientRef: "org:test:huddle" };
+  const fetchImpl: FetchLike = async (url, init) => {
+    assert.equal(url, "https://huddle.example/oauth/token");
+    assert.equal(init.headers.authorization, `Basic ${Buffer.from("zid:zsecret").toString("base64")}`);
+    assert.match(init.body, /grant_type=refresh_token&refresh_token=old-rt&client_id=zid$/);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "zat2", refresh_token: "new-rt", expires_in: 3600 }),
+    };
+  };
+  const refresh = makeRefresh({ resolveClient: async () => client, fetchImpl, now: () => 1_000 });
+  setStoredOAuthProviders([huddle]);
+  try {
+    const consent = new URL(authorizeUrl("huddle", { redirectUri: "https://qm.example/cb", state: "s", client }));
+    assert.equal(consent.searchParams.has("scope"), false);
+    const fresh = await refresh("api.huddle.example", { accessToken: "old", refreshToken: "old-rt", expiresAt: 0 });
+    assert.deepEqual(fresh, { accessToken: "zat2", refreshToken: "new-rt", expiresAt: 1_000 + 3600_000 });
+    setStoredOAuthProviders([]);
+    await assert.rejects(
+      refresh("api.huddle.example", { accessToken: "old", refreshToken: "old-rt" }),
+      /unknown provider/,
+    );
+  } finally {
+    setStoredOAuthProviders([]);
+  }
 });

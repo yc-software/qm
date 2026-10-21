@@ -41,8 +41,13 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await put({ credentialScope: "other" })).status, 400);
   assert.equal((await put({ credentialScope: "per-user" })).status, 400);
   assert.equal(
-    (await put({ credentialScope: "per-user", credentialHost: "accounts.example.com", credentialAccountType: "other" }))
-      .status,
+    (
+      await put({
+        credentialScope: "per-user",
+        credentialHost: "accounts.example.com",
+        credentialAccountType: "not a slot!",
+      })
+    ).status,
     400,
   );
   for (const credentialHost of ["", " accounts.example.com", "accounts.example.com/path", "host@evil", 1]) {
@@ -82,6 +87,8 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.credentialScope, "per-user");
   assert.equal((await store.get("crm"))?.credentialHost, "accounts.example.com");
   assert.equal((await store.get("crm"))?.credentialAccountType, "personal");
+  assert.equal((await put({ auth: "bearer", credentialAccountType: "Ops@Example.com" })).status, 200);
+  assert.equal((await store.get("crm"))?.credentialAccountType, "ops@example.com");
   assert.equal((await store.get("crm"))?.bearerToken, "catalog-secret");
   assert.equal((await put({ credentialScope: "shared" })).status, 200);
   assert.equal((await store.get("crm"))?.credentialScope, "shared");

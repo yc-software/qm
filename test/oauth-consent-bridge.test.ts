@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { PROVIDERS, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
+import { oauthProvider, openOAuthState, type FetchLike } from "../src/connectors/oauth.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import {
   mintCapabilityToken,
@@ -96,7 +96,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
   let exchanged = 0;
   const fetchImpl: FetchLike = async (url, init) => {
     exchanged++;
-    assert.equal(url, PROVIDERS.google!.tokenUrl);
+    assert.equal(url, oauthProvider("google")!.tokenUrl);
     assert.match(init.body, /grant_type=authorization_code/);
     return {
       ok: true,
@@ -117,7 +117,7 @@ test("mint → intended teammate redeems → callback connects them; the link is
     const decision = (await res.json()) as { status: string; authorizeUrl: string };
     assert.equal(decision.status, "authorize");
     const consent = new URL(decision.authorizeUrl);
-    assert.equal(consent.origin + consent.pathname, PROVIDERS.google!.authUrl);
+    assert.equal(consent.origin + consent.pathname, oauthProvider("google")!.authUrl);
     assert.equal(consent.searchParams.get("client_id"), "gid");
     const state = await openOAuthState(consent.searchParams.get("state") ?? "", { secret: SECRET });
     assert.equal(state.principalId, "U1");

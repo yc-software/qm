@@ -5,7 +5,13 @@
 // model-provider credential, not like a personal connector.
 
 import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
-import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
+import {
+  accountNameRule,
+  connectorProvider,
+  connectorProviderEntries,
+  hostsOverlap,
+  parseAccountName,
+} from "../../../connectors/oauth.ts";
 import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -82,8 +88,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
-  if (oauthUser && PROVIDERS[id]) {
-    return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
+  if (oauthUser && connectorProvider(id)) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is already used by a connector` });
   }
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
@@ -93,9 +99,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (
     oauthUser &&
     typeof credentialHost === "string" &&
-    Object.values(PROVIDERS).some((p) =>
-      p.hosts.some((h) => credentialHost === h || credentialHost.endsWith(`.${h}`) || h.endsWith(`.${credentialHost}`)),
-    )
+    connectorProviderEntries().some(([, p]) => hostsOverlap(p.hosts, [credentialHost]))
   ) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",
@@ -109,12 +113,11 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   let oauthAuthorizeUrl = httpsUrl(b.oauthAuthorizeUrl) ?? (oauthUser ? existing?.oauthAuthorizeUrl : undefined);
   let oauthTokenUrl = httpsUrl(b.oauthTokenUrl) ?? (oauthUser ? existing?.oauthTokenUrl : undefined);
-  const credentialAccountType = b.credentialAccountType ?? existing?.credentialAccountType ?? "default";
-  if (!isAccountType(credentialAccountType)) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "credentialAccountType must be default, personal, or company",
-    });
+  const credentialAccountType = parseAccountName(
+    b.credentialAccountType ?? existing?.credentialAccountType ?? "default",
+  );
+  if (!credentialAccountType) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: accountNameRule("credentialAccountType") });
   }
   if (
     credentialScope === "per-user" &&

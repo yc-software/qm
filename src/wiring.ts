@@ -415,6 +415,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { tokenFor } from "./loops/sources/adapter.ts";
 
 export interface Runtime {
   start(): void;
@@ -2490,11 +2491,7 @@ export function buildApp(
     keychain
       ? {
           searchToken: async (source, viewer) =>
-            source === "slack" && viewer
-              ? ((await keychain.connectorAccessToken("slack.com", viewer, "personal")) ??
-                (await keychain.connectorAccessToken("slack.com", viewer)) ??
-                keychain.connectorAccessToken("slack.com", viewer, "company"))
-              : null,
+            source === "slack" && viewer ? tokenFor(keychain, "slack.com", viewer) : null,
         }
       : {},
   );
@@ -2776,6 +2773,9 @@ export function buildApp(
     30 * 60_000,
     { label: "Composio consent returns", immediate: true },
   );
+  const connectorProviderSync = createUntrackedSweeper(() => configStore.syncConnectorProviders(), 30_000, {
+    label: "connector-providers",
+  });
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer
@@ -2909,6 +2909,7 @@ export function buildApp(
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
       drain.start();
+      connectorProviderSync.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
     startBackground,
@@ -2936,6 +2937,7 @@ export function buildApp(
       ]).catch(swallowAs("wiring: worker drain failed", undefined));
       await releaseInFlightRuns();
       await drain.stop();
+      await connectorProviderSync.stop();
       stopStreamSync();
       await Promise.all(
         [

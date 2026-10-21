@@ -268,7 +268,7 @@ const SETTINGS_RESOURCES = {
     "browseMaxSteps",
   ],
   credentials: [],
-  connectors: ["connectors"],
+  connectors: ["connectors", "connectorProviders"],
   onboarding: ["baseModel", "runtime"],
 } satisfies Record<string, string[]>;
 

@@ -28,6 +28,7 @@ export function withOperatorTokenFallback(
       store.setConnectorToken(host, principalId, token, accountType),
     deleteConnectorToken: (host, principalId, accountType) =>
       store.deleteConnectorToken(host, principalId, accountType),
+    deleteConnectorTokensForHosts: (hosts) => store.deleteConnectorTokensForHosts(hosts),
     connectorTokenStatus: (host, principalId, accountType) =>
       store.connectorTokenStatus(host, principalId, accountType),
     connectorDerivedAuth: (host, principalId, accountType) =>

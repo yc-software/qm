@@ -10,7 +10,7 @@ import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
+import { oauthProvider, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
@@ -55,7 +55,7 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
   let exchanged = false;
   const fetchImpl: FetchLike = async (url, init) => {
     exchanged = true;
-    assert.equal(url, PROVIDERS.google!.tokenUrl);
+    assert.equal(url, oauthProvider("google")!.tokenUrl);
     assert.match(init.body, /grant_type=authorization_code/);
     assert.match(init.body, /code=code-123/);
     return {
@@ -72,7 +72,7 @@ test("OAuth start, unsigned callback, status, and revoke are principal-bound", a
     const startRes = await fetch(`${srv.base}${startPath}`, { headers: sign("GET", startPath) });
     assert.equal(startRes.status, 200);
     const startBody = (await startRes.json()) as { authorizeUrl: string; hosts: string[] };
-    assert.deepEqual(startBody.hosts, PROVIDERS.google!.hosts);
+    assert.deepEqual(startBody.hosts, oauthProvider("google")!.hosts);
     const consent = new URL(startBody.authorizeUrl);
     const state = consent.searchParams.get("state");
     assert.ok(state);
@@ -140,6 +140,83 @@ test("revoke clears a connector linked under a non-default account type", async 
       providers: Record<string, { connected?: boolean }>;
     };
     assert.equal(after.providers.google?.connected, false);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("named connection slots: start, callback, status, and per-account revoke", async () => {
+  let email = "ops@example.com";
+  const srv = start(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ access_token: `at-${email}`, refresh_token: "rt", expires_in: 3600 }),
+  }));
+  try {
+    const redirectUri = `${srv.base}/v1/connectors/oauth/google/callback`;
+    const startFor = async (accountType: string) => {
+      const path = `/v1/connectors/oauth/google/start?principalId=U1&redirectUri=${encodeURIComponent(redirectUri)}&accountType=${encodeURIComponent(accountType)}`;
+      return fetch(`${srv.base}${path}`, { headers: sign("GET", path) });
+    };
+    const connect = async (accountType: string) => {
+      const res = await startFor(accountType);
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { authorizeUrl: string; accountType: string };
+      const consent = new URL(body.authorizeUrl);
+      const callbackPath = `/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(consent.searchParams.get("state")!)}`;
+      return { body, consent, callback: await fetch(`${srv.base}${callbackPath}`) };
+    };
+
+    const invalid = await startFor("not/a slot");
+    assert.equal(invalid.status, 400);
+    assert.match(((await invalid.json()) as { message: string }).message, /^accountType must be 1-64 characters/);
+
+    const ops = await connect(" Ops@Example.com ");
+    assert.equal(ops.body.accountType, "ops@example.com");
+    assert.equal(ops.callback.status, 200);
+
+    email = "me@example.com";
+    const fallback = await connect("default");
+    assert.equal(fallback.callback.status, 200);
+
+    const tokens = srv.built.connectorTokens;
+    assert.equal(
+      await tokens.connectorAccessToken("gmail.googleapis.com", "U1", "ops@example.com"),
+      "at-ops@example.com",
+    );
+    assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-me@example.com");
+
+    const revoke = async (body: Record<string, unknown>) => {
+      const raw = JSON.stringify({ principalId: "U1", provider: "google", ...body });
+      return fetch(`${srv.base}/v1/connectors/oauth/revoke`, {
+        method: "POST",
+        headers: sign("POST", "/v1/connectors/oauth/revoke", raw),
+        body: raw,
+      });
+    };
+    assert.equal((await revoke({ accountType: "bad slot" })).status, 400);
+    const one = await revoke({ accountType: "ops@example.com" });
+    assert.equal(one.status, 200);
+    assert.equal(((await one.json()) as { accountType?: string }).accountType, "ops@example.com");
+    assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1", "ops@example.com"), null);
+    assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1"), "at-me@example.com");
+
+    await tokens.setConnectorToken("slack.com", "U1", { accessToken: "slack-ws", accountType: "globex" }, "globex");
+    const statusPath = "/v1/connectors/oauth/status?principalId=U1";
+    const status = (await (await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) })).json()) as {
+      providers: Record<string, { connected?: boolean }>;
+    };
+    assert.equal(
+      status.providers.slack?.connected,
+      true,
+      "a connector held only under a named slot reads as connected",
+    );
+
+    await tokens.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "at-x", accountType: "x" }, "x");
+    assert.equal((await revoke({})).status, 200);
+    for (const account of [undefined, "x", "ops@example.com"])
+      assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1", account), null);
+    assert.equal(await tokens.connectorAccessToken("slack.com", "U1", "globex"), "slack-ws");
   } finally {
     await srv.close();
   }
@@ -243,7 +320,7 @@ test("authorize state stays inside the tightest provider limit and still carries
   }
 });
 
-test("OAuth status lists a linked per-user MCP sign-in under its display name", async (t) => {
+test("OAuth status lists per-user MCP sign-ins under their display name, linked or not", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   const srv = start(async () => {
     throw new Error("no token exchange expected");
@@ -266,10 +343,12 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
       const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
       assert.equal(res.status, 200);
       return (await res.json()) as {
-        providers: Record<string, { connected?: boolean; mcpLabel?: string; available?: boolean }>;
+        providers: Record<string, { label?: string; connected?: boolean; mcpLabel?: string; available?: boolean }>;
       };
     };
-    assert.equal((await read()).providers.orders, undefined, "unlinked MCP sign-ins stay out of the list");
+    const unlinked = (await read()).providers.orders;
+    assert.deepEqual([unlinked?.label, unlinked?.connected], ["Orders", false]);
+    assert.ok(Object.values((await read()).providers).every((p) => typeof p.label === "string" && p.label !== ""));
 
     await srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
       accessToken: "orders-token",

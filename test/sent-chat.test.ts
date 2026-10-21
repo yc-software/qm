@@ -62,6 +62,13 @@ test("sent chats are durable, idempotent, and isolated to the signed-in owner", 
   ctx.body = { ...(ctx.body as object), accountType: "personal" };
   await ensureSentChat(ctx);
   assert.notEqual(response!.item.id, original.id);
+  const personalItem = response!.item.id;
+  ctx.body = { ...(ctx.body as object), accountType: "Ops@Example.com" };
+  await ensureSentChat(ctx);
+  assert.notEqual(response!.item.id, personalItem);
+  const named = (await items.get(response!.item.id))!.sourcePayload!.gmail as { accountType: string };
+  assert.equal(named.accountType, "ops@example.com");
+  ctx.body = { ...(ctx.body as object), accountType: "personal" };
   ctx.actor = { p: "bob" } as ApiCtx["actor"];
   await ensureSentChat(ctx);
   assert.notEqual(response!.item.id, original.id);
@@ -189,7 +196,7 @@ test("sent chat preserves long quoted recipient headers and rejects oversized in
     { to: "x".repeat(8001) },
     { cc: "x".repeat(8001) },
     { to: "a@example.com\r\nBcc: b@example.com" },
-    { accountType: "forged" },
+    { accountType: "forged slot" },
     { accountType: ["default"] },
   ]) {
     ctx.body = { threadId: "t", ...invalid };

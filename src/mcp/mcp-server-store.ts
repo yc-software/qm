@@ -16,7 +16,7 @@ export interface McpServer {
   auth: McpServerAuthMode;
   credentialScope?: "shared" | "per-user";
   credentialHost?: string;
-  credentialAccountType?: "default" | "personal" | "company";
+  credentialAccountType?: string;
   bearerToken?: string;
   clientId?: string;
   clientSecret?: string;

@@ -1,6 +1,8 @@
 import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import { connectorAccountSlots, PERSONAL_FIRST_ACCOUNT_TYPES } from "../../credentials/connector-accounts.ts";
+import type { ConnectorTokenStore } from "../../credentials/keychain.ts";
 
-export interface ConnectorTokenSource {
+export interface ConnectorTokenSource extends Pick<ConnectorTokenStore, "listConnectorsByOwners"> {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
 }
 
@@ -192,9 +194,9 @@ export function parseCommonFields(raw: Record<string, unknown>): CommonSourceFie
 }
 
 export async function tokenFor(tokens: ConnectorTokenSource, host: string, owner: string): Promise<string | null> {
-  return (
-    (await tokens.connectorAccessToken(host, owner, "personal")) ??
-    (await tokens.connectorAccessToken(host, owner)) ??
-    (await tokens.connectorAccessToken(host, owner, "company"))
-  );
+  for (const accountType of (await connectorAccountSlots(tokens, owner))(host, PERSONAL_FIRST_ACCOUNT_TYPES)) {
+    const token = await tokens.connectorAccessToken(host, owner, accountType);
+    if (token) return token;
+  }
+  return null;
 }

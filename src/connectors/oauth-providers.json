@@ -1,0 +1,227 @@
+[
+  {
+    "provider": "google",
+    "label": "Google Workspace",
+    "description": "Gmail, Calendar, Drive, Sheets",
+    "authUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+    "tokenUrl": "https://oauth2.googleapis.com/token",
+    "hosts": [
+      "gmail.googleapis.com",
+      "www.googleapis.com",
+      "sheets.googleapis.com",
+      "docs.googleapis.com",
+      "slides.googleapis.com"
+    ],
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/drive",
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/tasks",
+      "openid",
+      "email"
+    ],
+    "authParams": {
+      "access_type": "offline",
+      "prompt": "consent"
+    },
+    "acceptJson": false,
+    "rejectErrorBody": false,
+    "clientIdEnv": "GOOGLE_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "GOOGLE_OAUTH_CLIENT_SECRET",
+    "hostedDomainEnv": "GOOGLE_WORKSPACE_DOMAIN",
+    "docsUrl": "https://console.cloud.google.com/auth/clients",
+    "setupConsole": "Google Cloud Console → APIs & Services → Credentials",
+    "setupSteps": [
+      "Create an OAuth 2.0 Client ID (type: Web application).",
+      "Add the redirect URI shown below to 'Authorized redirect URIs' on YOUR client.",
+      "Enable the Gmail, Calendar, Drive, Sheets, Docs, Slides, and Tasks APIs for the project.",
+      "Choose admin-consent (domain-wide) vs per-user consent on the OAuth consent screen.",
+      "Paste the Client ID + Client secret below; we validate by dry-running the consent URL."
+    ],
+    "scopesRationale": "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; openid+email identify the account."
+  },
+  {
+    "provider": "slack",
+    "label": "Slack",
+    "description": "Channels & messages",
+    "authUrl": "https://slack.com/oauth/v2/authorize",
+    "tokenUrl": "https://slack.com/api/oauth.v2.access",
+    "hosts": ["slack.com"],
+    "scopes": [
+      "users:read",
+      "channels:read",
+      "channels:history",
+      "groups:read",
+      "groups:history",
+      "im:read",
+      "im:write",
+      "im:history",
+      "mpim:read",
+      "mpim:write",
+      "mpim:history",
+      "chat:write",
+      "canvases:read",
+      "canvases:write",
+      "search:read",
+      "search:read.im",
+      "search:read.mpim"
+    ],
+    "scopeParam": "user_scope",
+    "tokenAdapter": "slack",
+    "clientIdEnv": "SLACK_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "SLACK_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://api.slack.com/apps",
+    "setupConsole": "Slack API → Your Apps → OAuth & Permissions",
+    "setupSteps": [
+      "Create a Slack app (from scratch) in your workspace.",
+      "Under OAuth & Permissions, add the redirect URL shown below.",
+      "Add the requested USER token scopes under 'User Token Scopes'.",
+      "Install the app to the workspace.",
+      "Paste the Client ID + Client secret below."
+    ],
+    "scopesRationale": "User-token scopes let the agent read/post, search, and edit canvases as the connecting user, not a bot."
+  },
+  {
+    "provider": "notion",
+    "label": "Notion",
+    "description": "Pages & databases",
+    "authUrl": "https://api.notion.com/v1/oauth/authorize",
+    "tokenUrl": "https://api.notion.com/v1/oauth/token",
+    "hosts": ["api.notion.com"],
+    "scopes": [],
+    "authParams": {
+      "owner": "user"
+    },
+    "tokenAdapter": "notion",
+    "clientIdEnv": "NOTION_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "NOTION_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://www.notion.so/profile/integrations",
+    "setupConsole": "Notion → My integrations → New integration (Public)",
+    "setupSteps": [
+      "Create a public OAuth integration.",
+      "Add the redirect URI shown below to the integration's redirect URIs.",
+      "Configure the capabilities the integration needs.",
+      "Paste the Client ID (OAuth client ID) + the OAuth client secret below."
+    ],
+    "scopesRationale": "Notion grants access per selected pages at consent time (no OAuth scope list)."
+  },
+  {
+    "provider": "linear",
+    "label": "Linear",
+    "description": "Issues & projects",
+    "authUrl": "https://linear.app/oauth/authorize",
+    "tokenUrl": "https://api.linear.app/oauth/token",
+    "hosts": ["api.linear.app"],
+    "scopes": ["read", "write"],
+    "acceptJson": false,
+    "rejectErrorBody": false,
+    "clientIdEnv": "LINEAR_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "LINEAR_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://linear.app/settings/api/applications",
+    "setupConsole": "Linear → Settings → API → OAuth applications",
+    "setupSteps": [
+      "Create an OAuth application.",
+      "Add the redirect URI shown below as a callback URL.",
+      "Select the read/write scopes.",
+      "Paste the Client ID + Client secret below."
+    ],
+    "scopesRationale": "read/write let the agent query and update issues, projects, and comments."
+  },
+  {
+    "provider": "dropbox",
+    "label": "Dropbox",
+    "description": "Files & folders",
+    "authUrl": "https://www.dropbox.com/oauth2/authorize",
+    "tokenUrl": "https://api.dropboxapi.com/oauth2/token",
+    "hosts": ["api.dropboxapi.com", "content.dropboxapi.com"],
+    "scopes": [
+      "account_info.read",
+      "files.metadata.read",
+      "files.content.read",
+      "files.content.write",
+      "sharing.read",
+      "sharing.write"
+    ],
+    "authParams": {
+      "token_access_type": "offline"
+    },
+    "acceptJson": false,
+    "rejectErrorBody": false,
+    "clientIdEnv": "DROPBOX_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "DROPBOX_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://www.dropbox.com/developers/apps/create",
+    "setupConsole": "Dropbox App Console → Create app",
+    "setupSteps": [
+      "Create an app: Scoped access, Full Dropbox access.",
+      "On the app's OAuth 2 section, add the redirect URI shown below.",
+      "On the Permissions tab, enable account_info.read, files.metadata.read, files.content.read, files.content.write, sharing.read, sharing.write — then Submit.",
+      "Paste the App key (Client ID) + App secret (Client secret) below."
+    ],
+    "scopesRationale": "files.content/metadata read+write back browse/download/upload; sharing.read/write let the agent manage shared links; account_info.read identifies the account."
+  },
+  {
+    "provider": "github",
+    "label": "GitHub",
+    "description": "Repos, issues & PRs",
+    "authUrl": "https://github.com/login/oauth/authorize",
+    "tokenUrl": "https://github.com/login/oauth/access_token",
+    "hosts": ["api.github.com"],
+    "scopes": ["repo", "read:org"],
+    "consentMode": "github_app",
+    "clientIdEnv": "GITHUB_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "GITHUB_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://github.com/settings/applications/new",
+    "setupConsole": "GitHub → Settings → Developer settings → OAuth Apps (or GitHub App)",
+    "setupSteps": [
+      "Register a new OAuth App (or a GitHub App for installation tokens).",
+      "Set the Authorization callback URL to the redirect URI shown below.",
+      "Select the repo/org scopes the agent needs.",
+      "Paste the Client ID + Client secret below."
+    ],
+    "scopesRationale": "repo/read:org back the GitHub skills (PRs, issues, org-visible repos) as the connecting user."
+  },
+  {
+    "provider": "x",
+    "label": "X (Twitter)",
+    "description": "Posts & profile",
+    "authUrl": "https://x.com/i/oauth2/authorize",
+    "tokenUrl": "https://api.x.com/2/oauth2/token",
+    "hosts": ["api.x.com"],
+    "scopes": ["tweet.read", "tweet.write", "users.read", "offline.access"],
+    "clientAuth": "basic",
+    "pkce": true,
+    "clientIdEnv": "X_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "X_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://developer.x.com/en/portal/projects-and-apps",
+    "setupConsole": "X Developer Portal → Projects & Apps → your app → User authentication settings",
+    "setupSteps": [
+      "Set up User authentication: OAuth 2.0, type Confidential client, App permissions Read and write.",
+      "Add the Callback URI shown below to the app's Callback URLs.",
+      "Under Keys and tokens, generate the OAuth 2.0 Client ID and Client Secret.",
+      "Paste the Client ID + Client secret below."
+    ],
+    "scopesRationale": "tweet.read/users.read back reads; tweet.write lets the connecting user post as themselves; offline.access issues a refresh token so the 2-hour access token renews."
+  },
+  {
+    "provider": "zoom",
+    "label": "Zoom",
+    "description": "Meetings",
+    "authUrl": "https://zoom.us/oauth/authorize",
+    "tokenUrl": "https://zoom.us/oauth/token",
+    "hosts": ["api.zoom.us"],
+    "scopes": [],
+    "clientAuth": "basic",
+    "clientIdEnv": "ZOOM_OAUTH_CLIENT_ID",
+    "clientSecretEnv": "ZOOM_OAUTH_CLIENT_SECRET",
+    "docsUrl": "https://marketplace.zoom.us/",
+    "setupConsole": "Zoom App Marketplace → Develop → Build App → General app",
+    "setupSteps": [
+      "Create a General app and choose User-managed. Until it is published, only users in your Zoom account can connect it.",
+      "Add the redirect URI shown below as the OAuth redirect URL and to the OAuth allow list, with strict mode on.",
+      "Under Scopes, add meeting:read:meeting, meeting:read:list_meetings, meeting:write:meeting, meeting:update:meeting, meeting:delete:meeting, and user:read:user.",
+      "Paste the Client ID + Client secret below — the Development credentials unless the app is published."
+    ],
+    "scopesRationale": "Zoom grants the scopes configured on the app rather than a requested list; the meeting scopes let the agent find, create, reschedule, and cancel meetings the connecting user hosts or schedules, and user:read:user reads their Zoom profile and timezone."
+  }
+]

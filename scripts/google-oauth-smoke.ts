@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp } from "../src/wiring.ts";
 import { loadConfig } from "../src/config.ts";
 import { createServer } from "../src/api/server.ts";
-import { PROVIDERS } from "../src/connectors/oauth.ts";
+import { oauthProvider } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
@@ -111,7 +111,7 @@ async function runWorkspaceReadSmoke(input: {
 
 async function probeGoogleTokenEndpoint(redirectUri: string): Promise<string> {
   if (process.env.GOOGLE_OAUTH_SMOKE_SKIP_PROVIDER_PROBE === "1") return "skipped";
-  const res = await fetch(PROVIDERS.google!.tokenUrl, {
+  const res = await fetch(oauthProvider("google")!.tokenUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -158,7 +158,7 @@ if (missing.length > 0) {
   process.exit(2);
 }
 
-const provider = PROVIDERS.google;
+const provider = oauthProvider("google");
 if (!provider) throw new Error("google OAuth provider is not registered");
 
 const interactive = process.env.GOOGLE_OAUTH_SMOKE_INTERACTIVE === "1";
