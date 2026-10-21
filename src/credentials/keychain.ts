@@ -12,7 +12,7 @@ import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
-import { envKey } from "./connector-token.ts";
+import { connectorTokenNote, envKey } from "./connector-token.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -1712,7 +1712,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
 function connectorDescription(cm: ConnectorMeta): string {
   return `connected app ${cm.host}, account ${cm.accountType ?? "default"}${
     cm.needsReconnect ? ", NEEDS RECONNECT — owner must reconnect the app before use" : ""
-  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}`;
+  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}; ${connectorTokenNote(cm.host)}`;
 }
 
 export const MAX_CREDENTIAL_FILES = 500;

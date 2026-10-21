@@ -158,7 +158,9 @@ test("a pack bundle may ship a root SKILL.md of its own", async () => {
   assert.equal(files.get(`${root}/.packs/s1/SKILL.md`), "pack readme");
 });
 
-test("skill shortlist favors relevant and visibly used skills without global usage signals", () => {
+const names = (index: string) => [...index.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
+
+test("skills index lists every skill in a message-independent order, visibly used ones first", () => {
   const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
   for (const r of skills) r.skill!.manifest.description = "General task";
   skills[19]!.skill!.manifest.description = "Prepare telescope observations";
@@ -166,11 +168,13 @@ test("skill shortlist favors relevant and visibly used skills without global usa
   const duplicate = structuredClone(skills[0]!);
   duplicate.skill!.manifest.description = "shadowed description";
   const visible = [...skills, duplicate, { skill: null, shadowed: [] }];
-  const index = skillsIndex(visible, [], "telescope", ["skill-17"]);
-  assert.match(index, /Showing 12 of 20/);
-  assert.ok(index.indexOf("**skill-19**") < index.indexOf("**skill-17**"));
-  assert.doesNotMatch(index, /skill-18|shadowed description|lastUsedAt/);
-  assert.match(index, /skills action list/);
+  const index = skillsIndex(visible, [], ["skill-17"]);
+  const shown = names(index);
+  assert.equal(shown.length, 20);
+  assert.deepEqual(shown.slice(0, 3), ["skill-17", "skill-00", "skill-01"]);
+  assert.doesNotMatch(index, /shadowed description|lastUsedAt|shortened|omitted/);
+  assert.match(index, /- \*\*skill-19\*\* — Prepare telescope observations/);
+  assert.match(index, /skills action read/);
   assert.equal(rankedSkills(visible).length, 20);
   assert.deepEqual(
     rankedSkills(visible, "telescope", [], true).map((r) => r.skill!.manifest.name),
@@ -180,36 +184,57 @@ test("skill shortlist favors relevant and visibly used skills without global usa
   assert.equal(skillsIndex([{ skill: null, shadowed: [] }]), "");
 });
 
-test("pinned skills lead the shortlist regardless of the message and count toward the cap", () => {
-  const skills = Array.from({ length: 20 }, (_, i) => {
+test("an index over budget shortens descriptions, then drops them, then leaves trailing skills out", () => {
+  const skills = Array.from({ length: 30 }, (_, i) => {
     const r = res(`skill-${String(i).padStart(2, "0")}`, "body");
-    r.skill!.manifest.description = i === 5 ? "drafting telescope notes" : "something else";
+    r.skill!.manifest.description = `${"word ".repeat(40)}end`;
     return r;
   });
-  const names = (index: string) => [...index.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
+  const body = (index: string) => index.split("\n").slice(2);
+  const full = skillsIndex(skills);
+  assert.doesNotMatch(full, /shortened|omitted/);
 
-  const unpinned = names(skillsIndex(skills, [], "telescope"));
-  assert.ok(!unpinned.includes("skill-19"), "a non-matching skill falls past the cap without a pin");
+  const shortened = skillsIndex(skills, [], [], [], 4_000);
+  assert.ok(body(shortened).join("\n").length <= 4_000);
+  assert.match(shortened, /30 descriptions are shortened/);
+  assert.deepEqual(names(shortened), names(full));
+  assert.ok(body(shortened).every((line) => /^- \*\*skill-\d+\*\* — word.*…$/.test(line)));
 
-  const index = skillsIndex(skills, [], "telescope", [], ["skill-19", "missing-skill", "skill-18"]);
-  assert.match(index, /Showing 12 of 20/);
-  const shown = names(index);
+  const namesOnly = skillsIndex(skills, [], [], [], 1_000);
+  assert.match(namesOnly, /Descriptions are omitted to fit the list\./);
+  assert.deepEqual(names(namesOnly), names(full));
+  assert.ok(body(namesOnly).every((line) => /^- \*\*skill-\d+\*\*$/.test(line)));
+
+  const truncated = skillsIndex(skills, [], ["skill-29"], ["skill-07"], 200);
+  assert.match(truncated, /and 17 skills are left out; find them with skills action search/);
+  assert.deepEqual(names(truncated).slice(0, 3), ["skill-07", "skill-29", "skill-00"]);
+  assert.equal(names(truncated).length, 13);
+});
+
+test("pinned skills lead the index", () => {
+  const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
+  for (const r of skills) r.skill!.manifest.description = "General task";
+
+  const unpinned = names(skillsIndex(skills));
+  assert.equal(unpinned.at(-1), "skill-19");
+
+  const shown = names(skillsIndex(skills, [], [], ["skill-19", "missing-skill", "skill-18"]));
   assert.deepEqual(
     shown.slice(0, 2),
     ["skill-19", "skill-18"],
     "pins lead in their configured order; unknown names are ignored",
   );
-  assert.equal(shown[2], "skill-05", "ranking resumes after the pins");
-  assert.equal(shown.length, 12);
-  assert.equal(new Set(shown).size, 12, "a pinned skill is not listed twice");
+  assert.equal(shown[2], "skill-00", "the rest follow the pins");
+  assert.equal(shown.length, 20);
+  assert.equal(new Set(shown).size, 20, "a pinned skill is not listed twice");
 
   assert.deepEqual(parsePinnedSkills([" voice ", "voice", "drafts"]), { value: ["voice", "drafts"] });
   assert.ok("error" in parsePinnedSkills(undefined), "a missing list is an error, not a clear");
   assert.ok("error" in parsePinnedSkills(["../etc"]));
-  assert.ok("error" in parsePinnedSkills(["a", "b", "c", "d", "e", "f", "g"]), "pins leave room for ranked skills");
+  assert.ok("error" in parsePinnedSkills(["a", "b", "c", "d", "e", "f", "g"]), "at most six pins");
 });
 
-test("a natural-language Gmail request keeps its relevant bundled skill in the shortlist", () => {
+test("the bundled skills fit the default index budget with full descriptions", () => {
   const entries = readdirSync(new URL("../skills-seed/", import.meta.url), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) => {
@@ -224,6 +249,8 @@ test("a natural-language Gmail request keeps its relevant bundled skill in the s
         throw error;
       }
     });
-  const shortlist = skillsIndex(entries, [], "Please check my Gmail inbox and tell me what I need to do today");
-  assert.match(shortlist, /\*\*google-workspace\*\*/);
+  const index = skillsIndex(entries);
+  assert.equal(names(index).length, entries.length);
+  assert.match(index, /\*\*google-workspace\*\*/);
+  assert.doesNotMatch(index, /shortened|omitted|left out/);
 });

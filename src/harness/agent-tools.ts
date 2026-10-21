@@ -1052,9 +1052,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "skill",
     label: "skill",
     description:
-      "Load a skill by name before relying on it; use list or search to discover names outside the shortlist. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
+      "Load a skill by name before relying on it; use list or search for any left out of the per-turn index. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
     parameters: Type.Object({
-      name: Type.String({ description: "Skill name from the shortlist, list, or search." }),
+      name: Type.String({ description: "Skill name from the skills index, list, or search." }),
       source: Type.Optional(
         Type.String({ description: "Use the same source as the discovery call to read that exact skill." }),
       ),
@@ -2949,7 +2949,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "context it is shared by ALL of that person's sessions, not tied to the session that " +
       "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
       "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. To keep a skill in this scope's per-turn skills shortlist, " +
+      "pins in the web UI, native pinning in Slack. To list a skill first in this scope's per-turn skills index, " +
       'pin it instead of writing guidance: PUT $AGENT_API_URL/v1/pinned-skills with header "x-agent-capability: $AGENT_API_TOKEN" ' +
       'and body {"names": [...]}, the full list. `edit` swaps one exact passage `old` for `new` ' +
       "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +

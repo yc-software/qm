@@ -1650,6 +1650,7 @@ test("manifest merges credential representations without conflating login identi
   assert.match(rendered, /`connector:gmail\.googleapis\.com:default`(?! \(execute scope)/);
   assert.match(rendered, /NEEDS RECONNECT/);
   assert.match(rendered, /token expires at/);
+  assert.ok(rendered.includes("token in `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`"));
   assert.match(rendered, /account work, EXPIRED/);
   assert.match(rendered, /account personal, expires at/);
   assert.notEqual(credentialHandle(first), credentialHandle(second));
