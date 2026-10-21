@@ -91,7 +91,7 @@ export interface EnqueueResult {
 export interface RunStore {
   readonly maxClaims?: number;
 
-  subscribeAvailable?(listener: () => boolean | void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;
