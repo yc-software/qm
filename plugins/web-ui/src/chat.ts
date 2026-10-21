@@ -19,7 +19,7 @@ import {
   thinkingPresentation,
   sessionPresentation,
 } from "./activity-presentation";
-import { loadGeneratedActivities } from "./generated-activities";
+import { dismissGeneratedActivity, loadGeneratedActivities } from "./generated-activities";
 import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
@@ -1652,14 +1652,21 @@ export function createChatSurface(
       !chatState.sessionId &&
       (chatState.scopeId === null || chatState.scopeId === `personal:${appState.me?.user}`) &&
       !agent.state.isStreaming;
+    const me = appState.me;
+    const redrawSuggestions = () => {
+      if (appState.me === me && chatState.agent === agent && !chatState.sessionId) drawActiveChat(agent);
+    };
     const suggestions = showSuggestions
-      ? suggestedActivities(
-          appState.me?.suggestedActivities,
-          (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
-          Boolean(
+      ? suggestedActivities(me?.suggestedActivities, {
+          onSelect: (activity) => ctx.composer.fillSuggestedPrompt(activity.prompt, agent),
+          ...(me?.suggestedActivitiesGeneration
+            ? { onDismiss: (activity) => dismissGeneratedActivity(me, activity, redrawSuggestions) }
+            : {}),
+          redraw: redrawSuggestions,
+          collapsed: Boolean(
             ctx.composer.state.draft || ctx.composer.state.attachments.length || ctx.composer.state.processingFiles,
           ),
-        )
+        })
       : nothing;
     let content: TemplateResult;
     if (ctx.inbox) {

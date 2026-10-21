@@ -11,7 +11,7 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
-const activities = ["app", "brief", "deck"].map((id) => ({
+const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
   title: `Build my ${id}`,
   prompt: "Help me with this project. ".repeat(40).trim(),
@@ -29,6 +29,7 @@ function fixture() {
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
     ...singleProcessDeps(),
+    now: () => time,
     crons,
     deliveries,
     identity: createIdentityService(),
@@ -86,7 +87,7 @@ function fixture() {
 
 test("normal personal cron produces durable suggestions without a notification destination", async () => {
   const f = fixture();
-  const initial = await f.service.get("alice", [], "America/Los_Angeles");
+  const initial = await f.service.get("alice", [], { timezone: "America/Los_Angeles" });
   assert.equal(initial.pending, true);
   await f.settle();
   const cron = (await f.crons.list())[0]!;
@@ -149,7 +150,7 @@ test("the nightly fire skips when no new session was opened since the last refre
   const cron = (await f.crons.list())[0]!;
   assert.equal(await f.service.skipFire(cron), "no new sessions opened since the last refresh");
   f.advance(60_000);
-  await f.service.get("alice", [], "UTC", true);
+  await f.service.get("alice", [], { poll: true });
   assert.equal(await f.service.skipFire(cron), "no new sessions opened since the last refresh");
   f.advance(60_000);
   await f.service.get("alice", []);
@@ -209,7 +210,7 @@ test("the newest valid run wins over older ones", async () => {
   await f.settle();
   const newer = activities.map((activity) => ({ ...activity, title: `${activity.title} today` }));
   f.output(JSON.stringify(newer));
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  f.advance(5);
   await f.deps.scheduler.runNow((await f.crons.list())[0]!.id);
   await f.settle();
   assert.deepEqual(await f.service.get("alice", []), { activities: newer, pending: false });
@@ -242,4 +243,77 @@ test("fire results cannot point at another personal scope or an unrelated thread
     });
     assert.deepEqual(await f.service.get("alice", []), { activities: [], pending: false });
   }
+});
+
+test("legacy three-item results are still served", async () => {
+  const f = fixture();
+  f.output(JSON.stringify(activities.slice(0, 3)));
+  await f.service.get("alice", []);
+  await f.settle();
+  assert.deepEqual(await f.service.get("alice", []), { activities: activities.slice(0, 3), pending: false });
+});
+
+test("dismissed suggestions stay hidden across restarts, leave the reserve, and reach the next run's task", async () => {
+  const f = fixture();
+  await f.service.get("alice", []);
+  await f.settle();
+  assert.equal(await f.service.dismiss("alice", "brief"), true);
+  assert.equal(await f.service.dismiss("alice", "missing"), false);
+  assert.equal(await f.service.dismiss("bob", "brief"), false);
+  const remaining = activities.filter((activity) => activity.id !== "brief");
+  assert.deepEqual(await createSuggestedActivityService(f.deps).get("alice", []), {
+    activities: remaining,
+    pending: false,
+  });
+  assert.deepEqual((await f.service.get("bob", [])).activities, []);
+  const cron = (await f.crons.list()).find((candidate) => candidate.owner === "alice")!;
+  assert.ok(cron.action!.includes(JSON.stringify(["Build my brief"])));
+  await f.crons.update(cron.id, { action: "My custom research task" });
+  await f.service.dismiss("alice", "deck");
+  assert.equal((await f.crons.get(cron.id))!.action, "My custom research task");
+});
+
+test("dismissed fallback seeds are hidden too", async () => {
+  const f = fixture();
+  f.output("invalid");
+  await f.service.get("alice", activities);
+  await f.settle();
+  assert.equal(await f.service.dismiss("alice", "app"), true);
+  assert.deepEqual((await f.service.get("alice", activities)).activities, activities.slice(1));
+});
+
+test("a refresh runs once per batch of dismissals and never while a run is in flight", async () => {
+  const f = fixture();
+  await f.service.get("alice", []);
+  await f.settle();
+  const cron = (await f.crons.list())[0]!;
+  f.advance(60_000);
+  assert.equal((await f.service.get("alice", [], { poll: true, refresh: true })).pending, false);
+  await f.service.dismiss("alice", "app");
+  f.advance(1_000);
+  await f.service.dismiss("alice", "brief");
+  f.advance(1_000);
+  const fresh = activities.map((activity) => ({ ...activity, id: `${activity.id}-next` }));
+  f.output(JSON.stringify(fresh));
+  const results = await Promise.all([
+    f.service.get("alice", [], { poll: true, refresh: true }),
+    f.service.get("alice", [], { poll: true, refresh: true }),
+  ]);
+  assert.deepEqual(
+    results.map((result) => result.pending),
+    [true, true],
+  );
+  await f.settle();
+  assert.equal(f.calls.length, 2);
+  f.advance(1_000);
+  assert.deepEqual(await f.service.get("alice", [], { poll: true, refresh: true }), {
+    activities: fresh,
+    pending: false,
+  });
+  await f.service.dismiss("alice", "app-next");
+  f.advance(1_000);
+  await f.crons.beginFire(cron.id, { fireKey: "in-flight", threadRef: "in-flight", firedAt: 0, status: "running" });
+  assert.equal((await f.service.get("alice", [], { poll: true, refresh: true })).pending, true);
+  await f.settle();
+  assert.equal(f.calls.length, 2);
 });

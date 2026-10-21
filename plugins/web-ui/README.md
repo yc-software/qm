@@ -93,8 +93,8 @@ subsequent runs happen around 2am in the browser's timezone, with the minute
 staggered by user. The cron runner uses the normal owner-scoped session, runtime
 selection, memory, history, tools, and authorized data access. It has no delivery
 destination. The standing task in `src/suggestions/activities.ts` asks it to research
-relevant context, avoid mutations or notifications, and return three validated
-activity objects. Draft prompts use a natural, collaborative voice, such as "Let's...",
+relevant context, avoid mutations or notifications, and return five validated
+activity objects: three are shown and two wait in reserve. Draft prompts use a natural, collaborative voice, such as "Let's...",
 with relevant facts and uncertainties as neutral context, without attributing knowledge,
 feelings, or beliefs to the user. They preserve explicit user
 preferences and scope while leaving the approach to the responding agent. It does not
@@ -106,6 +106,17 @@ previous result while a refresh runs and briefly polls for the first/new result;
 opening another chat does not normally invoke a model. Failed initial generations
 can retry after five minutes. Existing cron queueing, run persistence, authorization,
 fire history, and failure handling apply.
+
+When generation is enabled, each suggestion has a low-contrast dismiss button that
+strengthens on row hover or keyboard focus. Dismissing collapses that row while the next
+reserve suggestion expands into the list with the same height-and-fade motion the list
+uses when it collapses and reappears around a draft. The core stores dismissals on the
+user's suggestion profile (the 30 most recent IDs and titles), filters them out of every
+later response on every device, and adds their titles to the managed cron task so the
+next run avoids them; user-edited cron tasks are left alone. Three seconds after the last
+dismissal in a burst, the browser asks for a refresh. The core starts one immediate run
+of the user's suggestions cron only when a dismissal is newer than the latest run and no
+run is in flight. Until it lands, fewer rows show; new rows then expand in.
 
 Cadence is reevaluated hourly. Ten or more user messages in sampled recent private
 conversations within 24 hours increases refreshes to every four hours; otherwise it

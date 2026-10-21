@@ -1,26 +1,51 @@
-import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
+import { parseSuggestedActivities, type SuggestedActivity } from "../../chassis/src/suggested-activities.ts";
 import { api } from "./core-bridge";
 import { swallowAs } from "../../chassis/src/errors.ts";
 import type { Me } from "./shell-state";
 
+const REFRESH_DEBOUNCE_MS = 3_000;
 const requests = new WeakMap<Me, { until: number; pending: Promise<void> }>();
+const dismissed = new Set<string>();
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
-export function loadGeneratedActivities(me: Me, onChange?: () => void): Promise<void> {
+export function loadGeneratedActivities(me: Me, onChange?: () => void, refresh = false): Promise<void> {
   if (!me.suggestedActivitiesGeneration) return Promise.resolve();
   const cached = requests.get(me);
-  if (cached && cached.until > Date.now()) return cached.pending.then(onChange);
-  const pending = (async () => {
+  if (!refresh && cached && cached.until > Date.now()) return cached.pending.then(onChange);
+  const request = { until: Date.now() + 5 * 60_000, pending: Promise.resolve() };
+  request.pending = (async () => {
     for (let attempt = 0; attempt < 19; attempt++) {
       const response = await api<{ activities: unknown; pending?: boolean }>("/api/suggested-activities", {
         method: "POST",
-        body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, poll: attempt > 0 }),
+        body: JSON.stringify({
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          poll: refresh || attempt > 0,
+          ...(refresh && attempt === 0 ? { refresh: true } : {}),
+        }),
       });
-      me.suggestedActivities = parseSuggestedActivities(JSON.stringify(response.activities));
+      if (requests.get(me) !== request) return;
+      me.suggestedActivities = parseSuggestedActivities(JSON.stringify(response.activities)).filter(
+        (activity) => !dismissed.has(activity.id),
+      );
       onChange?.();
       if (!response.pending) return;
       await new Promise((resolve) => setTimeout(resolve, 10_000));
     }
   })().catch(swallowAs("web-ui: load generated activities", undefined));
-  requests.set(me, { until: Date.now() + 5 * 60_000, pending });
-  return pending;
+  requests.set(me, request);
+  return request.pending;
+}
+
+export function dismissGeneratedActivity(me: Me, activity: SuggestedActivity, onChange: () => void): void {
+  dismissed.add(activity.id);
+  me.suggestedActivities = me.suggestedActivities?.filter((candidate) => candidate.id !== activity.id);
+  onChange();
+  clearTimeout(refreshTimer);
+  const saved = api("/api/suggested-activities/dismiss", {
+    method: "POST",
+    body: JSON.stringify({ id: activity.id }),
+  }).catch(swallowAs("web-ui: dismiss suggested activity", undefined));
+  refreshTimer = setTimeout(() => {
+    void saved.then(() => loadGeneratedActivities(me, onChange, true));
+  }, REFRESH_DEBOUNCE_MS);
 }
