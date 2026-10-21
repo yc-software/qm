@@ -455,11 +455,11 @@ test("an unknown artifact is a not_found; a bad scope id is a bad_request; an un
   assert.equal(missing.ok, false);
   if (!missing.ok) {
     assert.equal(missing.code, "not_found");
-    assert.match(missing.message, /POST \/v1\/files\/uploads/);
+    assert.match(missing.message, /publish the file with files action write first/);
   }
   const path = await svc.shareArtifact({ type: "file", id: "artifacts/F1/doc.md", scope: "org" }, cap("U1"));
   assert.equal(path.ok, false);
-  if (!path.ok) assert.match(path.message, /POST \/v1\/files\/uploads/);
+  if (!path.ok) assert.match(path.message, /files action write/);
 
   const badScope = await svc.shareArtifact({ type: "file", id: "F1", scope: "not-a-scope" }, cap("U1"));
   assert.equal(badScope.ok, false);

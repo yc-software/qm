@@ -49,7 +49,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         ? { content: "data", sourceScopeId: "personal:U1" }
         : { content: null, sourceScopeId: null };
     },
-    async write() {},
+    async write() {
+      return {};
+    },
     async publish(input) {
       return {
         id: "dep-1",
@@ -3538,7 +3540,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
   ])
     assert.ok(!names.includes(name));
   for (const [name, valid, invalid] of [
-    ["files", { action: "write", path: "a", data: "" }, { action: "write", path: "a" }],
+    ["files", { action: "write", path: "a", data: "" }, { action: "write", data: "x" }],
     ["files", { action: "read", path: "a" }, { action: "read", path: "a", data: "oops" }],
     [
       "files",
@@ -3573,6 +3575,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
     ...fakeToolContext(),
     async write(...args: Parameters<ToolContext["write"]>) {
       writes.push(args);
+      return {};
     },
     async setDeploymentPublic(id: string, isPublic: boolean) {
       publicChanges.push({ id, isPublic });
@@ -3589,7 +3592,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
   assert.ok(Check(files.parameters, pathShare));
   const rejected = await call(files, pathShare);
-  assert.match(textOut(rejected), /upload it with POST \/v1\/files\/uploads first/);
+  assert.match(textOut(rejected), /publish it with files action write/);
   assert.deepEqual(writes, [["notes", "", undefined]]);
   const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
   const apps = tools.find((tool) => tool.name === "apps")!;
@@ -3638,8 +3641,9 @@ test("resource actions preserve sharing targets, transfer semantics and file con
 
   const before = writes.length;
   await call(files, { action: "read", path: "notes", data: "unexpected" });
+  assert.equal(writes.length, before, "read never writes");
   await call(files, { action: "write", path: "notes" });
-  assert.equal(writes.length, before);
+  assert.deepEqual(writes.at(-1), ["notes", undefined, undefined], "write without data publishes the existing file");
 });
 
 test("a files read approval cannot authorize writes or sharing", async () => {

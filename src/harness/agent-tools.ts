@@ -1177,29 +1177,50 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
+      "Save a file to durable Files storage and get back its Files ID. With `data`, writes those contents to `path` " +
+      "in the workspace and publishes them; without `data`, publishes the existing sandbox file at `path` (any type, " +
+      "up to 100 MiB). Share the returned ID with files action share, or send it with attach.",
     parameters: Type.Object({
       path: Type.String({ description: "Relative path within the workspace." }),
-      data: Type.String({ description: "File contents, including an empty string to empty the file." }),
+      data: Type.Optional(
+        Type.String({
+          description:
+            "File contents to write, including an empty string to empty the file. Omit to publish the file already at `path`.",
+        }),
+      ),
       sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       const sandboxNote = params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {};
+      const inputBytes = params.data !== undefined ? { bytes: params.data.length } : {};
       await recordCall(callId, {
         tool: "files",
         action: "write",
         path: params.path,
-        bytes: params.data.length,
+        ...inputBytes,
         ...sandboxNote,
       });
       try {
-        await tc.write(params.path, params.data, params.sandbox_id);
+        const result = await tc.write(params.path, params.data, params.sandbox_id);
+        const bytes = result.bytes ?? params.data?.length ?? 0;
+        const verb = params.data !== undefined ? "wrote" : "published";
         return recordResult(
           callId,
-          { tool: "files", action: "write", path: params.path, bytes: params.data.length, ...sandboxNote },
-          text(`wrote ${params.path} (${params.data.length} bytes)`),
+          {
+            tool: "files",
+            action: "write",
+            path: params.path,
+            bytes,
+            ...(result.fileId ? { fileId: result.fileId } : {}),
+            ...sandboxNote,
+          },
+          text(
+            result.fileId
+              ? `${verb} ${params.path} (${bytes} bytes) to Files; Files ID ${result.fileId}`
+              : `wrote ${params.path} (${bytes} bytes) to the workspace only (no Files store here)`,
+          ),
         );
       } catch (e) {
         const msg = errMessage(e);
@@ -3133,7 +3154,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
     if (type === "file")
       description =
-        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
+        "Share an existing Files record by ID. To get an ID for a sandbox file, publish it with files action write (omit `data`).";
     if (move)
       description =
         "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";

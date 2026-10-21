@@ -795,7 +795,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           code: "not_found",
           message:
             req.type === "file"
-              ? `no Files record "${req.id}"; put the file in Files first using POST /v1/files/uploads, then share its ID`
+              ? `no Files record "${req.id}"; publish the file with files action write first (omit data to publish an existing sandbox file), then share its ID`
               : `no ${req.type} "${req.id}"`,
         };
 
