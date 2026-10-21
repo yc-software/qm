@@ -190,6 +190,25 @@ test("guidance updates managed task text while preserving user edits", async () 
   assert.equal((await f.crons.get(id))!.action, "My custom research task");
 });
 
+test("a task edited and later reverted to the standard instructions is managed again", async () => {
+  const f = fixture();
+  await f.service.get("alice", []);
+  await f.settle();
+  const id = (await f.crons.list())[0]!.id;
+  const standard = (await f.crons.get(id))!.action!;
+  await f.crons.update(id, { action: "My custom research task" });
+  const service = createSuggestedActivityService({ ...f.deps, context: "Changed guidance" });
+  await service.get("alice", []);
+  assert.equal((await f.crons.get(id))!.action, "My custom research task");
+  await f.crons.update(id, { action: standard.replace("No special deployment context.", "Older guidance") });
+  await service.get("alice", []);
+  assert.match((await f.crons.get(id))!.action!, /Changed guidance/);
+  await service.dismiss("alice", "brief");
+  const action = (await f.crons.get(id))!.action!;
+  assert.ok(action.includes(JSON.stringify(["Build my brief"])));
+  assert.equal((await f.store.get("alice"))!.managedAction, action);
+});
+
 test("old valid results are returned while a newer refresh is running", async () => {
   const f = fixture();
   await f.service.get("alice", []);

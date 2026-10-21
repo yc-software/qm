@@ -56,8 +56,9 @@ export function createSuggestedActivityService(deps: {
   const owned = (cron: Cron | null, principalId: string): cron is Cron =>
     !!cron && cron.owner === principalId && cron.ownerScopeId === scopeId("personal", principalId);
 
+  const managedPrefix = `${SUGGESTED_ACTIVITIES_TASK}\n\nDeployment guidance:\n`;
   const actionFor = (seeds: SuggestedActivity[], dismissed: DismissedActivity[] = []) =>
-    `${SUGGESTED_ACTIVITIES_TASK}\n\nDeployment guidance:\n${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}${
+    `${managedPrefix}${deps.context ?? "No special deployment context."}\n\nFallback seed activities:\n${JSON.stringify(seeds)}${
       dismissed.length
         ? `\n\nThe owner dismissed these suggestions. Do not suggest them or close variants again:\n${JSON.stringify(dismissed.map((entry) => entry.title))}`
         : ""
@@ -65,7 +66,8 @@ export function createSuggestedActivityService(deps: {
 
   const syncAction = async (cron: Cron, profile: SuggestedActivityProfile) => {
     const action = actionFor(profile.seeds ?? [], profile.dismissed);
-    if (cron.action !== profile.managedAction || action === cron.action) return;
+    if (action === cron.action) return;
+    if (cron.action !== profile.managedAction && !cron.action?.startsWith(managedPrefix)) return;
     await deps.crons.update(cron.id, { action });
     await deps.store.merge(cron.owner, { managedAction: action });
   };
