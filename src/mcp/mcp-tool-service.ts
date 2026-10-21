@@ -135,7 +135,7 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
 }
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
-  if (!server.attestActor) return {};
+  if (!server.attestActor || server.credentialScope === "per-user") return {};
   if (!principalId) throw new Error(`MCP server ${server.id} needs a signed-in person`);
   return { "x-qm-actor": principalId, ...(approval ? { "x-qm-approval": approval } : {}) };
 }
