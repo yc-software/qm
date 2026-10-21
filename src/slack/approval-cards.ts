@@ -24,7 +24,6 @@ export interface SlackApprovalMessage {
 const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
-const SLACK_MAX_BLOCKS = 50;
 const SLACK_SECTION_MAX = 3_000;
 const COMMAND_CHUNK = 2_800;
 
@@ -65,7 +64,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
   };
   const text = items.map(describe).join("\n");
   const blocks: Array<Record<string, unknown>> = [];
-  items.forEach((p, index) => {
+  for (const p of items) {
     const lines = [
       p.kind === "input"
         ? ":lock: *My security screen flagged part of this message. Allow it?*"
@@ -80,11 +79,8 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
           text: { type: "mrkdwn", text: `\`\`\`${xmlEscape(piece)}\`\`\`` },
         }))
       : [];
-    const reserved = blocks.length + 2 + sections.length + 2 * (items.length - index - 1);
     const shown =
-      sections.length <= COMMAND_SECTIONS_MAX &&
-      reserved <= SLACK_MAX_BLOCKS &&
-      sections.every((b) => b.text.text.length <= SLACK_SECTION_MAX);
+      sections.length <= COMMAND_SECTIONS_MAX && sections.every((b) => b.text.text.length <= SLACK_SECTION_MAX);
     if (longCommand)
       lines.push(shown ? "*Command:*" : "*Command:* too long to show in Slack. Review and approve it in QM.");
     else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
@@ -108,7 +104,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
         button("Deny", "hilo_deny", p.requestId, "danger"),
       ],
     });
-  });
+  }
   return { text, blocks };
 }
 

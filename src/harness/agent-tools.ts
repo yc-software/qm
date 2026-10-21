@@ -4573,7 +4573,7 @@ function withToolApprovalGate(
         declaredReason = await declaredApprovalReason(tool, params);
       } catch (error) {
         reportFailure("tool approval: needsApproval check", error, tool.name);
-        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_check_failed" });
+        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_check_failed", error: errMessage(error) });
         return rec.recordResult(
           callId,
           { tool: tool.name, blocked: "approval_check_failed" },

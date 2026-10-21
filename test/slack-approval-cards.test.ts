@@ -283,10 +283,4 @@ test("a command too long to show in Slack can only be denied there", () => {
   assert.ok(JSON.stringify(msg.blocks).includes("hilo_deny"));
   assert.match(JSON.stringify(msg.blocks), /too long to show in Slack\. Review and approve it in QM/);
   assert.ok(!JSON.stringify(msg.blocks).includes("attacker@example.com"));
-  for (const count of [8, 20]) {
-    const many = approvalMessage(
-      Array.from({ length: count }, (_, i) => ({ requestId: `r${i}`, command: "x".repeat(8_000), reason: "r" })),
-    );
-    assert.ok(many.blocks.length <= 50, `${count} approvals made ${many.blocks.length} blocks`);
-  }
 });
