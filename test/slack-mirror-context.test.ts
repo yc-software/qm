@@ -512,6 +512,11 @@ test("explicit live context verifies reactions and never substitutes mirrored da
   assert.deepEqual(calls, [{ channel: "C1", limit: 200, latest: "3.0", inclusive: false }]);
   assert.equal(outcome.result.hasMore, true);
   assert.equal(outcome.result.nextBefore, "1.0");
+  request.query.conversationTarget = "C1:1.0";
+  await fulfiller.fulfillSurfaceContext(client, request);
+  assert.match(outcome.error, /truncated channel history/);
+  assert.equal(outcome.result, undefined);
+  request.query.conversationTarget = "C1";
   historyClient.conversations.history = async () => {
     throw new Error("live source unavailable");
   };
@@ -521,6 +526,14 @@ test("explicit live context verifies reactions and never substitutes mirrored da
   request.query.conversationTarget = "C1:1.0";
   await fulfiller.fulfillSurfaceContext(client, request);
   assert.match(outcome.error, /live source unavailable/);
+  assert.equal(outcome.result, undefined);
+  request.query.conversationTarget = "C1";
+  historyClient.conversations.history = async () => ({
+    messages: [{ ts: "2.0", subtype: "channel_join", text: "joined", user: "U1" }],
+    has_more: true,
+  });
+  await fulfiller.fulfillSurfaceContext(client, request);
+  assert.match(outcome.error, /only filtered messages/);
   assert.equal(outcome.result, undefined);
 });
 

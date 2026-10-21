@@ -258,6 +258,8 @@ export function createSurfaceContextFulfiller(deps: {
           ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
+      if (q.live === true && threadTs && outcomes[0]?.status === "fulfilled" && outcomes[0].value.hasMore)
+        throw new Error("Live Slack thread context includes truncated channel history; read the channel separately.");
       const byTs = new Map<string, SlackHistoryMessage>();
       const notes = new Set<string>();
       let hasMore = false;
@@ -281,6 +283,8 @@ export function createSurfaceContextFulfiller(deps: {
       const note = [...notes].join(" ");
       const nameById = new Map<string, string>();
       const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
+      if (q.live === true && hasMore && !shaped.length)
+        throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
       if (q.live === true) for (const message of shaped) message.reactions ??= [];
       await post({
         ...buildContextWindow(shaped, {

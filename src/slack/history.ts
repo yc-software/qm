@@ -221,8 +221,6 @@ export function createSlackHistoryReader(deps: {
       const page = await liveHistory(client, channel, threadTs, before, expandThreads);
       if (threadTs && page.hasMore)
         throw new Error("Live Slack thread exceeds the history limit; its replies could not be read completely.");
-      if (page.hasMore && !page.raw.length)
-        throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
       return page;
     }
     if (deps.source !== "mirror") {
