@@ -87,7 +87,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   if (!AUTH_MODES.includes(auth)) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
-  const approval = b.approval ?? "annotations";
+  const approval = b.approval ?? (await ctx.deps.mcpServers.get(id))?.approval ?? "annotations";
   if (!APPROVAL_POLICIES.includes(approval)) {
     return sendJson(ctx.res, 400, {
       error: "bad_request",

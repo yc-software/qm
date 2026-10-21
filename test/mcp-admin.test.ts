@@ -91,6 +91,8 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await put({ approval: "all" })).status, 200);
   assert.equal((await store.get("crm"))?.approval, "all");
   assert.equal((await put({})).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all", "an update that omits the policy keeps it");
+  assert.equal((await put({ approval: "annotations" })).status, 200);
   assert.equal((await store.get("crm"))?.approval, undefined);
 });
 

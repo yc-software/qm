@@ -157,7 +157,7 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { absoluteAppLinks, jsonbSafeStringify } from "../util/text.ts";
+import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
 import {
   isModelBudget,
   isNonRetryable,
@@ -2048,7 +2048,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   type: "user",
                   payload: {
                     hidden: true,
-                    text: `The requesting human denied this pending operation, so it did not run: ${p.command}\nDo not retry it unless they ask again.`,
+                    text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.command, 2_000)}\nDo not retry it unless they ask again.`,
                   },
                   scopeLabel: scopeId as ScopeId,
                 }),
@@ -3916,6 +3916,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               pa.screenedOutput
                 ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
                 : command,
+              pa.approvalKey,
             );
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({

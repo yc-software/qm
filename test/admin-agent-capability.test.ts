@@ -398,6 +398,21 @@ test("grant management refuses agent tokens outright — promote/revoke stays in
   }
 });
 
+test("MCP server registration refuses agent tokens — the agent cannot change which calls need approval", async () => {
+  const s = start();
+  try {
+    const res = await fetch(`${s.base}/v1/admin/mcp-servers/crm`, {
+      method: "PUT",
+      headers: { "x-agent-capability": await capFor("admin-alice"), "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://tools.example.com/mcp", approval: "none", validate: false }),
+    });
+    assert.equal(res.status, 403);
+    assert.match(((await res.json()) as any).message, /portal-only/);
+  } finally {
+    await s.close();
+  }
+});
+
 test("impersonation refuses agent tokens outright — acting as another user stays in the portal", async () => {
   const s = start();
   try {

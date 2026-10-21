@@ -1,4 +1,5 @@
 import { toolCallApprovalKey } from "../core/approval-id.ts";
+import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { adminOperations } from "../tools/admin.ts";
 import { parkIfOverCap } from "../sessions/tool-output.ts";
 import { handbackStop } from "../runs/run-store.ts";
@@ -4531,15 +4532,13 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
     typeof tool.needsApproval === "function"
       ? await Promise.resolve()
           .then(() => (tool.needsApproval as (params: unknown) => boolean | Promise<boolean>)(params))
-          .catch(() => true)
+          .catch(swallowAs("tool approval: needsApproval predicate", true))
       : tool.needsApproval === true;
   return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
 }
 
 function approvalCallText(label: string, params: unknown): string {
-  const args = redactCommand(redactSecrets(JSON.stringify(params ?? {})));
-  const shown = args.length > APPROVAL_ARGS_MAX_CHARS ? `${args.slice(0, APPROVAL_ARGS_MAX_CHARS)}…` : args;
-  return `${label} ${shown}`;
+  return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
 }
 
 function withToolApprovalGate(
@@ -4575,6 +4574,16 @@ function withToolApprovalGate(
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
       const declaredReason = await declaredApprovalReason(tool, params);
       const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
+      if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
+        const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
+        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_args_too_long" });
+        return rec.recordResult(
+          callId,
+          { tool: tool.name, blocked: "approval_args_too_long" },
+          { content: [{ type: "text" as const, text: `[blocked] ${reason}` }], details: {} },
+          true,
+        );
+      }
       if (callKey ? !gate?.(approvalIdentity, callKey) : gate && !gate(approvalIdentity)) {
         const reason = declaredReason ?? STRICT_TOOL_APPROVAL_REASON;
         ref.pendingApprovals?.push(

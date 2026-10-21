@@ -65,7 +65,9 @@ test("approvalMessage clamps a huge purpose so the section block stays under Sla
   const section = msg.blocks.find((b) => b.type === "section") as any;
   const text: string = section.text.text;
   assert.ok(text.length <= 3000, `section text is ${text.length} chars`);
-  assert.match(text, /\*Command:\* `x/);
+  assert.match(text, /\*Command:\*$/m);
+  assert.ok(msg.blocks.length <= 10);
+  assert.ok(msg.blocks.every((b) => b.type !== "section" || (b.text as { text: string }).text.length <= 3000));
 });
 
 test("approvalMessage leads with the agent's purpose when present", () => {
@@ -255,4 +257,17 @@ test("a quarantine-release card offers only Allow once and Deny, with the screen
   const rendered = JSON.stringify(msg.blocks);
   assert.match(rendered, /instruction in untrusted data/);
   assert.match(rendered, /Blocked content preview/);
+});
+
+test("a long command is shown in full across code blocks instead of being cut", () => {
+  const command = `example_send {"body":"${"a".repeat(6_000)}","to":"<b@example.com>"}`;
+  const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);
+  const shown = msg.blocks
+    .filter((b) => b.type === "section")
+    .slice(1)
+    .map((b) => (b.text as { text: string }).text.slice(3, -3))
+    .join("");
+  assert.equal(shown, command.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
+  assert.ok(msg.blocks.every((b) => b.type !== "section" || (b.text as { text: string }).text.length <= 3000));
+  assert.equal(msg.blocks.at(-1)!.type, "actions");
 });

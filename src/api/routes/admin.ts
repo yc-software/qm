@@ -77,6 +77,8 @@ const timed =
 
 const GRANTS = "admin grant changes (promote/revoke) are portal-only — the agent cannot manage who governs the org";
 const IMPERSONATE = "impersonating a user is portal-only — the agent cannot act as another person";
+const MCP_SERVERS =
+  "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
 
 const routes: Route<ApiCtx>[] = [
@@ -92,7 +94,13 @@ const routes: Route<ApiCtx>[] = [
     { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
     { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
     { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
-    { method: "PUT", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: putMcpServer },
+    {
+      method: "PUT",
+      path: "/v1/admin/mcp-servers/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MCP_SERVERS } },
+      handle: putMcpServer,
+    },
     { method: "DELETE", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: deleteMcpServer },
     { method: "DELETE", path: "/v1/admin/model-providers/:provider", auth: "either", handle: deleteModelProvider },
     { method: "POST", path: "/v1/admin/model-registry/lookup", auth: "either", handle: lookupRegistryModel },

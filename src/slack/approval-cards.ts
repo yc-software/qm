@@ -1,4 +1,5 @@
 import { clip, inlineCode } from "./util.ts";
+import { safeCutIndex } from "./safe-cut.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -20,6 +21,22 @@ export interface SlackApprovalMessage {
 }
 
 const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
+const INLINE_COMMAND_MAX = 1_800;
+const COMMAND_CHUNK = 2_800;
+const COMMAND_SECTIONS_MAX = 6;
+
+function commandSections(command: string): Array<Record<string, unknown>> {
+  const sections: Array<Record<string, unknown>> = [];
+  let rest = command.replace(/`/g, "'").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  while (rest && sections.length < COMMAND_SECTIONS_MAX) {
+    const cut = rest.length > COMMAND_CHUNK ? safeCutIndex(rest, COMMAND_CHUNK) : rest.length;
+    sections.push({ type: "section", text: { type: "mrkdwn", text: `\`\`\`${rest.slice(0, cut)}\`\`\`` } });
+    rest = rest.slice(cut);
+  }
+  if (rest)
+    sections.push({ type: "context", elements: [{ type: "mrkdwn", text: "…cut here; see the full command in QM." }] });
+  return sections;
+}
 
 function button(
   text: string,
@@ -66,12 +83,14 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     ];
     if (p.summary) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
-    if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
+    const longCommand = p.kind !== "input" && p.command.length > INLINE_COMMAND_MAX;
+    if (p.kind !== "input") lines.push(longCommand ? "*Command:*" : `*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: clip(lines.join("\n"), 2900) },
     });
+    if (longCommand) blocks.push(...commandSections(p.command));
     blocks.push({
       type: "actions",
       block_id: `${APPROVAL_BLOCK_PREFIX}${p.requestId || "unknown"}`.slice(0, 255),
