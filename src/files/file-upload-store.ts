@@ -23,7 +23,7 @@ export interface FileUploadStore {
   insert(upload: FileUpload): Promise<void>;
   get(id: string): Promise<FileUpload | null>;
   transition(id: string, from: FileUploadState[], to: FileUploadState): Promise<boolean>;
-  touch(id: string, at: number): Promise<void>;
+  touch(id: string, at: number): Promise<boolean>;
   active(actorId: string, now: number): Promise<FileUpload[]>;
   expired(now: number): Promise<FileUpload[]>;
 }
@@ -41,8 +41,8 @@ export class FileUploadError extends Error {
 
 export const MAX_ACTIVE_UPLOADS = 4;
 const MAX_ACTIVE_UPLOAD_BYTES = 500 * 1024 ** 3;
-const ACTIVE =
-  "SELECT data,state FROM file_uploads WHERE actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2) ORDER BY expires_at";
+const HOLDS_QUOTA =
+  "actor_id=$1 AND state NOT IN ('complete','aborted','failed') AND NOT (state='pending' AND expires_at <= $2)";
 
 export function createPostgresFileUploadStore(connectionString: string): FileUploadStore {
   const db = createPgPool(connectionString, [
@@ -77,10 +77,13 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     async insert(upload) {
       await withPgTransaction(await db.pool(), async (client) => {
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`file-uploads:${upload.actorId}`]);
-        const active = (await client.query(ACTIVE, [upload.actorId, upload.createdAt])).rows.map(decode);
+        const result = await client.query(
+          `SELECT count(*) AS count, coalesce(sum(size_bytes),0) AS bytes FROM file_uploads WHERE ${HOLDS_QUOTA}`,
+          [upload.actorId, upload.createdAt],
+        );
         if (
-          active.length >= MAX_ACTIVE_UPLOADS ||
-          active.reduce((sum, row) => sum + row.sizeBytes, upload.sizeBytes) > MAX_ACTIVE_UPLOAD_BYTES
+          Number(result.rows[0].count) >= MAX_ACTIVE_UPLOADS ||
+          Number(result.rows[0].bytes) + upload.sizeBytes > MAX_ACTIVE_UPLOAD_BYTES
         )
           throw new FileUploadError(
             `active upload quota exceeded: at most ${MAX_ACTIVE_UPLOADS} unfinished uploads or ${MAX_ACTIVE_UPLOAD_BYTES / 1024 ** 3} GiB at once. Finish or abort (DELETE /v1/files/uploads/:id) one of the uploads listed here; unfinished uploads are aborted 24 hours after they start`,
@@ -104,13 +107,19 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
       );
     },
     async touch(id, at) {
-      await db.query(
-        "UPDATE file_uploads SET data=jsonb_set(data,'{lastActivityAt}',to_jsonb($2::bigint)) WHERE id=$1 AND state='pending'",
-        [id, at],
+      return (
+        (
+          await db.query(
+            "UPDATE file_uploads SET data=jsonb_set(data,'{lastActivityAt}',to_jsonb($2::bigint)) WHERE id=$1 AND state='pending'",
+            [id, at],
+          )
+        ).rowCount === 1
       );
     },
     async active(actorId, now) {
-      return (await db.q(ACTIVE, [actorId, now])).map(decode);
+      return (
+        await db.q(`SELECT data,state FROM file_uploads WHERE ${HOLDS_QUOTA} ORDER BY expires_at`, [actorId, now])
+      ).map(decode);
     },
     async expired(now) {
       return (

@@ -276,7 +276,7 @@ test("publisher shows what holds a full quota and can list and abort those uploa
     const refused = await run(source);
     assert.equal(refused.code, 1);
     assert.match(refused.out, /quota is full/);
-    assert.match(refused.out, new RegExp(`${stuck} .*stuck\\.bin`));
+    assert.ok(refused.out.split("\n").some((line) => line.startsWith(stuck) && line.endsWith("stuck.bin")));
     assert.match(refused.out, /1970-01-01 00:01/);
     assert.match(refused.out, /2 more unfinished upload/);
     assert.match(refused.out, /--abort ID/);

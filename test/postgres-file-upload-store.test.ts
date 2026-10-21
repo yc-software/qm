@@ -146,8 +146,8 @@ test(
     await store.insert(aborted);
     await store.transition(aborted.id, ["pending"], "aborted");
     await store.insert(row(now + 60_000, `other-${actorId}`));
-    await store.touch(live.id, now + 5_000);
-    await store.touch(aborted.id, now + 5_000);
+    assert.ok(await store.touch(live.id, now + 5_000));
+    assert.equal(await store.touch(aborted.id, now + 5_000), false);
     assert.deepEqual(await store.active(actorId, now), [{ ...live, lastActivityAt: now + 5_000 }]);
     assert.equal((await store.get(aborted.id))!.lastActivityAt, now);
   },

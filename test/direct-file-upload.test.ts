@@ -27,7 +27,9 @@ function fixture() {
     },
     async touch(id, at) {
       const row = rows.get(id);
-      if (row?.state === "pending") row.lastActivityAt = at;
+      if (row?.state !== "pending") return false;
+      row.lastActivityAt = at;
+      return true;
     },
     async active(actorId, now) {
       return [...rows.values()].filter(

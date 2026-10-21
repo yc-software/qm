@@ -206,7 +206,7 @@ export function createDirectFileUploads(options: {
       const length = Math.min(row.partSize, row.sizeBytes - (partNumber - 1) * row.partSize);
       const expiresIn = Math.min(URL_TTL_SECONDS, Math.floor((row.expiresAt - now()) / 1000));
       if (expiresIn < 1) throw new FileUploadError("upload expired", 409);
-      await store.touch(id, now());
+      if (!(await store.touch(id, now()))) throw new FileUploadError("upload is not pending or has expired", 409);
       const checksum = row.checksums[partNumber - 1]!;
       const url = await presign(
         new UploadPartCommand({
