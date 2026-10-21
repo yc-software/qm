@@ -47,7 +47,7 @@ export interface SwarmMessage {
   replyTo?: string;
   goal?: GoalCreateInput;
   createdAt: number;
-  notifications: Record<string, { state: "pending" | "queued" | "failed"; runId?: string }>;
+  notifications: Record<string, { state: "pending" | "queued" | "handed" | "failed"; runId?: string }>;
 }
 
 export interface Swarm {

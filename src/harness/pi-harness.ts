@@ -131,7 +131,6 @@ import {
   createFloorCapPolicy,
   bankGoalTurn,
   enforceGoal,
-  goalFloorUnmet,
   goalPausedNote,
   goalSteeringNote,
   meterGoalCall,
@@ -1856,6 +1855,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
 
           entry.ref.goal = turn.goal ?? null;
           entry.ref.goalMeter = grindMeter;
+          entry.ref.goalInbox = turn.goalInbox;
           entry.ref.goalRound = turn.continueTurn ? 1 : 0;
           const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
           const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
@@ -2245,13 +2245,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             );
             if (wallClock === "ok") await recoverFailedRound();
             const goalAfterPrompt = entry.ref.goal;
-            if (
-              wallClock === "ok" &&
-              goalAfterPrompt &&
-              (goalAfterPrompt.status === "active" || goalFloorUnmet(goalAfterPrompt, grindMeter)) &&
-              !userAborted &&
-              !turn.cancel?.aborted
-            ) {
+            if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
               wallClock = await enforceGoal({
                 goal: goalAfterPrompt,
                 meter: grindMeter,
@@ -2275,6 +2269,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                         }),
                     }
                   : {}),
+                ...(turn.goalInbox ? { inbox: turn.goalInbox } : {}),
                 beforePrompt: async (note) => {
                   console.error(
                     `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,

@@ -186,6 +186,18 @@ the user for the goal and messages it when it needs a decision. Each goal messag
 installs a fresh goal once (a retried delivery does not reinstall it), so sending
 a goal again replaces a paused or finished one and starts a new token budget.
 
+While a goal turn runs, messages sent to that worker do not wait for the turn to
+end. The turn checks for the worker's queued messages after each tool call (at
+most every few seconds) and each time the worker ends a reply, including the reply
+that would end the turn. It screens them like a mid-turn message and hands them
+over in order, on the tool result or with the next prompt. When the turn returns
+without being stopped or cancelled, it marks them handed in the swarm and
+withdraws their queued turns, so they never run again; if the turn fails or is
+stopped first they stay queued and run as their own turns. A goal in one of them replaces the running goal at once,
+so a parent can redirect a busy worker; its work floor counts from when the
+message was sent. A message the screen blocks stays queued, with every message
+after it, and runs as its own turn later.
+
 ### Ask, read, and tail
 
 `GET /v1/swarm?read=1&after=0&waitMs=0` returns at most 32 messages. Advance `after`

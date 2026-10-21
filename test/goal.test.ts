@@ -23,6 +23,8 @@ import {
   type GovernorVerdict,
   goalPausedNote,
   GovernorUndecided,
+  supersedeGoal,
+  type GoalInbox,
 } from "../src/harness/goal.ts";
 import { createGrindMeter, grindState, meterGrindCall } from "../src/harness/grind.ts";
 
@@ -488,4 +490,181 @@ test("goal active time banks each turn and excludes idle and paused gaps", () =>
   const meter = createGrindMeter(resumedAt);
   assert.equal(goalFloorUnmet(goal, meter, resumedAt + 11 * 60_000), true, "floor judged on 19m active, not 131m wall");
   assert.equal(goalFloorUnmet(goal, meter, resumedAt + 12 * 60_000), false);
+});
+
+function inboxOf(next: () => string | undefined, onAcknowledge?: (goal: GoalRecord) => void): GoalInbox {
+  let count = 0;
+  return {
+    async receive() {
+      const text = next();
+      return text ? [{ id: `m${++count}`, text }] : [];
+    },
+    async acknowledge(_ids, goal) {
+      onAcknowledge?.(goal);
+    },
+  };
+}
+
+test("a goal message that arrives mid-turn replaces the running goal at the next reply, with no new turn", async () => {
+  const goal = createGoalRecord({ objective: "survey lane A", floor: { minMs: 3_600_000 }, now: 1_000 });
+  const governed: string[] = [];
+  const notes: string[] = [];
+  const inbox: Array<string | undefined> = [undefined, "Swarm message m2: switch to lane B"];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(1_000),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => goal.status !== "active" || notes.length >= GOAL_GOVERNOR_ROUNDS + 2,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    govern: async () => (governed.push(goal.objective), { verdict: "continue", reasons: "keep going" }),
+    inbox: inboxOf(
+      () => inbox.shift(),
+      (current) => supersedeGoal(current, { objective: "survey lane B", assignedAt: 2_000 }),
+    ),
+  });
+  assert.doesNotMatch(notes[0]!, /switch to lane B/);
+  assert.match(notes[1]!, /^Swarm message m2: switch to lane B[\s\S]*survey lane B/);
+  assert.equal(goal.objective, "survey lane B");
+  assert.equal(goal.createdAt, 2_000);
+  assert.equal(goal.floor, undefined, "the replacement brings its own budget");
+  assert.deepEqual(governed, ["survey lane B"], "the governor judges the replacement, not the superseded goal");
+});
+
+test("messages waiting when a goal turn would end are handed over instead of left to start a later goal", async () => {
+  const goal = createGoalRecord({ objective: "done already" });
+  goal.status = "complete";
+  const notes: string[] = [];
+  const inbox: Array<string | undefined> = ["Swarm message m3: thanks, also check the index"];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => false,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    inbox: inboxOf(() => inbox.shift()),
+  });
+  assert.deepEqual(notes, ["Swarm message m3: thanks, also check the index"]);
+});
+
+test("superseding ignores an assignment older than the running goal", () => {
+  const goal = createGoalRecord({ objective: "newer", now: 5_000 });
+  assert.equal(supersedeGoal(goal, { objective: "older", assignedAt: 4_000 }), false);
+  assert.equal(supersedeGoal(goal, { objective: "newer", assignedAt: 5_000 }), false, "the same message twice");
+  assert.equal(goal.objective, "newer");
+  goal.status = "complete";
+  goal.completionNote = "shipped";
+  goal.activeMs = 99;
+  assert.equal(supersedeGoal(goal, { objective: "next", token_cap: 10, assignedAt: 6_000 }), true);
+  assert.deepEqual(goal, createGoalRecord({ objective: "next", capTokens: 10, now: 6_000 }));
+});
+
+test("a replacement goal starts its turn and spend floors from zero", async () => {
+  const goal = createGoalRecord({ objective: "lane A", now: 0 });
+  const meter = createGrindMeter(0);
+  Object.assign(meter, { turns: 20, usd: 2, unpricedCalls: 1 });
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter,
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => notes.length >= 1,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    inbox: inboxOf(
+      () => "Swarm message m4: lane B",
+      (current) => supersedeGoal(current, { objective: "lane B", floor: { minTurns: 10, minUsd: 1 }, assignedAt: 1 }),
+    ),
+  });
+  assert.equal(goal.objective, "lane B");
+  assert.ok(goalFloorUnmet(goal, meter));
+  assert.deepEqual([meter.turns, meter.usd, meter.unpricedCalls], [0, 0, 0]);
+});
+
+test("a replacement adopted mid-turn counts its floor from when it was sent, not from when it was handed over", () => {
+  const turnStartedAt = 0;
+  const goal = createGoalRecord({ objective: "lane A", now: 0 });
+  const sentAt = 40 * 60_000;
+  const adoptedAt = 60 * 60_000;
+  assert.ok(supersedeGoal(goal, { objective: "lane B", floor: { minMs: 30 * 60_000 }, assignedAt: sentAt }));
+  assert.equal(goalActiveMs(goal, turnStartedAt, adoptedAt), 20 * 60_000);
+  assert.equal(goalFloorUnmet(goal, createGrindMeter(turnStartedAt), sentAt + 30 * 60_000), false);
+});
+
+test("a goal replaced mid-prompt gets its own wind-down when its cap runs out", async () => {
+  const goal = createGoalRecord({ objective: "lane A", capTokens: 10, now: 0 });
+  goal.tokensUsed = 10;
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(0),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => notes.length >= 3,
+    beforePrompt: () => {},
+    prompt: async (note) => {
+      notes.push(note);
+      if (notes.length === 1) {
+        supersedeGoal(goal, { objective: "lane B", token_cap: 10, assignedAt: 1 });
+        goal.tokensUsed = 10;
+      }
+      return "ok";
+    },
+  });
+  assert.match(notes[0]!, /token cap is exhausted[\s\S]*lane A/);
+  assert.match(notes[1]!, /token cap is exhausted[\s\S]*lane B/);
+  assert.equal(notes.length, 2);
+});
+
+test("messages received while the turn is being stopped are not acknowledged", async () => {
+  const goal = createGoalRecord({ objective: "lane A" });
+  let stopped = false;
+  const acknowledged: string[] = [];
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => stopped,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    inbox: {
+      async receive() {
+        stopped = true;
+        return [{ id: "m5", text: "Swarm message m5" }];
+      },
+      async acknowledge(ids) {
+        acknowledged.push(...ids);
+      },
+    },
+  });
+  assert.deepEqual(acknowledged, []);
+  assert.deepEqual(notes, []);
+});
+
+test("a goal turn keeps going when its inbox cannot be read", async () => {
+  const goal = createGoalRecord({ objective: "lane A" });
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => notes.length >= 2,
+    beforePrompt: () => {},
+    prompt: async (note) => (notes.push(note), "ok"),
+    inbox: {
+      receive: async () => {
+        throw new Error("swarm store unavailable");
+      },
+      acknowledge: async () => {},
+    },
+  });
+  assert.equal(notes.length, 2);
+  assert.match(notes[0]!, /Continue working toward it/);
 });

@@ -251,6 +251,7 @@ export interface Orchestrator {
     actor: Principal;
     conversation: Conversation;
     sessionId?: string;
+    verifiedSwarm?: boolean;
   }): Promise<"allow" | "block" | "unscreened">;
   regenerateTitle(
     sessionId: string,

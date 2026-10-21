@@ -644,3 +644,75 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
     await built.runtime.stop();
   }
 });
+
+for (const stopped of [false, true])
+  test(`a replacement goal sent to a busy worker takes over its running goal turn (turn ${stopped ? "stopped" : "finishes"})`, async () => {
+    const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+    try {
+      const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
+      await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+      const rootTurn = await built.app.turn({
+        surface: "test",
+        actor: { externalId: "U1" },
+        conversation: { kind: "dm", threadRef: `swarm-goal-replace-root-${stopped}` },
+        origin: { kind: "human" },
+        text: "Coordinate work",
+      });
+      const root = (await built.sessions.get(rootTurn.sessionId!))!;
+      const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
+      const caller = { kind: "human" as const, actorId: "U1", sessionId: root.id, runId: rootRun.id };
+      const [member] = await built.app.swarms!.spawn(caller, {
+        requestId: "replace-worker",
+        text: "Work lane A",
+        goal: { objective: "Exhaust lane A", floor: { minMs: 3_600_000 } },
+      });
+      await built.app.swarms!.sweep();
+      const worker = (await built.runs.list()).find((run) => run.request.swarm)!;
+      const seen: Array<{ objective?: string; input: string }> = [];
+      let replacement: { id: string } | undefined;
+      let heldUntilTurnEnd = false;
+      exerciseTurn = async (turn) => {
+        if (!turn.input.startsWith("Swarm ") && !turn.goalContinuation) return;
+        seen.push({ objective: turn.goal?.objective, input: turn.input });
+        if (!replacement) {
+          replacement = await built.app.swarms!.send(caller, {
+            requestId: "replace-goal",
+            audience: [member!.id],
+            text: "Drop lane A and take lane B",
+            goal: { objective: "Exhaust lane B" },
+          });
+          await built.app.swarms!.sweep();
+          assert.ok((await built.runs.list()).some((run) => run.request.swarm?.messageId === replacement!.id));
+          return;
+        }
+        if (turn.goal?.objective === "Exhaust lane B") {
+          const queued = await built.app.swarms!.queuedMessages(worker.request);
+          heldUntilTurnEnd = queued.some((message) => message.id === replacement!.id);
+          if (stopped) return { stopped: true };
+          turn.goal!.status = "complete";
+          return;
+        }
+      };
+      built.runtime.start();
+      const completed = await built.runs.waitFor(worker.id, 15_000);
+      assert.equal(completed.status, "done", JSON.stringify(completed.result));
+      const handed = seen.find((turn) => turn.input.includes("Drop lane A and take lane B"));
+      assert.ok(handed, JSON.stringify(seen));
+      assert.equal(handed.objective, "Exhaust lane B");
+      assert.match(handed.input, /assigns you a new goal[\s\S]*Exhaust lane B/);
+      assert.ok(heldUntilTurnEnd, "a shown message stays queued until the turn that showed it has finished");
+      const state = (await built.app.swarms!.read(caller, { after: 0 })).find(
+        (message) => message.id === replacement!.id,
+      )?.notifications[member!.id]?.state;
+      if (stopped) assert.notEqual(state, "handed", "a stopped turn leaves what it showed queued");
+      else {
+        assert.equal(state, "handed");
+        assert.ok(!(await built.runs.list()).some((run) => run.request.swarm?.messageId === replacement!.id));
+      }
+      const goals = await built.sessions.goals([completed.result!.sessionId!]);
+      assert.equal(goals.get(completed.result!.sessionId!)?.objective, "Exhaust lane B");
+    } finally {
+      exerciseTurn = undefined;
+      await built.runtime.stop();
+    }
+  });

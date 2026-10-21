@@ -5,6 +5,7 @@ import { createGrindMeter } from "../src/harness/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import {
   GovernorUndecided,
+  supersedeGoal,
   bankGoalTurn,
   goalContinuationPrompt,
   goalFloorUnmet,
@@ -511,4 +512,55 @@ test("goal get says when a spend floor is waived", async () => {
   ref.goalMeter!.unpricedCalls = 1;
   const report = await get.execute("c2", {});
   assert.match(textOf(report as never), /Work floor .*spend floor waived.* — met/);
+});
+
+test("swarm messages ride on the next tool result and can replace the goal", async () => {
+  const { ref, create, get } = toolbox();
+  await create.execute("c1", { objective: "lane A", floor: { minTurns: 5 } });
+  const saved: string[] = [];
+  ref.emit = async (entry) => {
+    if (entry.type === "tool_result") saved.push(JSON.stringify(entry.payload));
+    return undefined;
+  };
+  let pending = [{ id: "m2", text: "Swarm agent message m2: take lane B" }];
+  const acknowledged: string[] = [];
+  ref.goalMeter = createGrindMeter();
+  ref.goalMeter.turns = 9;
+  ref.goalInbox = {
+    async receive() {
+      const out = pending;
+      pending = [];
+      return out;
+    },
+    async acknowledge(ids, goal) {
+      acknowledged.push(...ids);
+      supersedeGoal(goal, { objective: "lane B", assignedAt: goal.createdAt + 1 });
+    },
+  };
+  const result = await get.execute("g1", {});
+  assert.match(textOf(result as never), /take lane B/);
+  assert.match(saved.at(-1)!, /take lane B/, "the message is saved with the tool result that carried it");
+  assert.deepEqual(acknowledged, ["m2"]);
+  assert.equal(ref.goal?.objective, "lane B");
+  assert.equal(ref.goalMeter.turns, 0, "the replacement's turn floor starts from zero");
+  pending = [{ id: "m3", text: "too soon" }];
+  assert.doesNotMatch(
+    textOf((await get.execute("g2", {})) as never),
+    /too soon/,
+    "the inbox is polled at most every few seconds",
+  );
+});
+
+test("a completion decided after the goal was replaced is dropped, not applied to the new goal", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "lane A" });
+  ref.governGoal = async () => {
+    ref.goal!.objective = "lane B";
+    ref.goal!.createdAt += 1;
+    return { verdict: "complete", reasons: "lane A proven" };
+  };
+  const res = await update.execute("u1", { status: "complete", note: "lane A evidence" });
+  assert.match(textOf(res as never), /replaced this one while the governor was deciding/);
+  assert.equal(ref.goal?.status, "active");
+  assert.equal(ref.goal?.objective, "lane B");
 });
