@@ -124,7 +124,7 @@ test("connected-apps block: names linked per-user MCP sign-ins by label", () => 
     },
   };
   const out = renderConnectedAppsBlock(rec, ["google"], "https://qm.example/keychain");
-  assert.match(out, /Connected: Google, Orders\./);
+  assert.match(out, /Connected: Google Workspace, Orders\./);
   assert.doesNotMatch(out, /Available to connect: .*Orders/);
 
   const mcpOnly = renderConnectedAppsBlock(rec, [], "https://qm.example/keychain");

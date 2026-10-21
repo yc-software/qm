@@ -355,6 +355,7 @@ export interface ConnectorTokenStore {
   listConnectorsByOwners?(ownerIds: string[]): Promise<Map<string, ConnectorMeta[]>>;
   setConnectorToken(host: string, principalId: string, token: OAuthToken, accountType?: string): Promise<void>;
   deleteConnectorToken(host: string, principalId: string, accountType?: string): Promise<void>;
+  deleteConnectorTokensForHosts(hosts: readonly string[]): Promise<number>;
   connectorTokenStatus(host: string, principalId: string, accountType?: string): Promise<OAuthTokenStatus>;
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
   /**
@@ -1115,13 +1116,14 @@ export function createKeychain(deps: {
     return grant;
   }
 
-  async function deleteCredential(id: string): Promise<void> {
+  async function deleteCredentials(ids: readonly string[]): Promise<void> {
+    const doomed = new Set(ids);
     for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
+      if (doomed.has(grant.credentialId) && grant.status === "active") {
         await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
       }
     }
-    await deps.creds.delete(id);
+    for (const id of ids) await deps.creds.delete(id);
   }
 
   return {
@@ -1205,7 +1207,7 @@ export function createKeychain(deps: {
       const rec = await getOwned(ownerId, id);
       if (!rec) return false;
       if (rec.managed || rec.kind === "broker") return false;
-      await deleteCredential(id);
+      await deleteCredentials([id]);
       return true;
     },
 
@@ -1459,7 +1461,14 @@ export function createKeychain(deps: {
     },
 
     async deleteConnectorToken(host, principalId, accountType) {
-      await deleteCredential(oauthId(host, principalId, accountType));
+      await deleteCredentials([oauthId(host, principalId, accountType)]);
+    },
+
+    async deleteConnectorTokensForHosts(hosts) {
+      const rows = await deps.creds.selectEntries({ omit: ["secretEnc"], where: { field: "host", anyOfFold: hosts } });
+      const ids = rows.filter(([, rec]) => rec.managed === "connector").map(([id]) => id);
+      await deleteCredentials(ids);
+      return ids.length;
     },
 
     async connectorTokenStatus(host, principalId, accountType) {

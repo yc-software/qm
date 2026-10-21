@@ -5,8 +5,9 @@ import {
   authorizeUrl,
   exchangeCode,
   openOAuthState,
-  PROVIDERS,
+  connectorProviderEntries,
   oauthProvider,
+  resolveOAuthProvider,
   withPublicOAuthClients,
   sealOAuthState,
   createSecretClientResolver,
@@ -115,6 +116,8 @@ async function connectorProviderStatus(
       return [
         name,
         {
+          label: provider.label,
+          ...(provider.description ? { description: provider.description } : {}),
           ...(provider.mcpLabel ? { mcpLabel: provider.mcpLabel } : {}),
           hosts,
           connected: hosts.some((h) => h.connected && !h.needsReconnect),
@@ -154,6 +157,8 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
       throw new Error("OAuth state was already used or replay protection is unavailable");
     }
     const accountType = state.accountType ?? "default";
+    if (!(await resolveOAuthProvider(oauthRoute.provider)))
+      throw new Error(`unknown OAuth provider: ${oauthRoute.provider}`);
     const client = await resolverFor(deps)(oauthRoute.provider, { accountType });
     const { hosts, token } = await exchangeCode(oauthRoute.provider, code, state.redirectUri, {
       client,
@@ -212,7 +217,7 @@ async function consentRedeem(ctx: ApiCtx): Promise<void> {
   }
   const rec = peeked.rec;
   if (rec.orgId !== undefined && rec.orgId !== configOrgId()) return sendJson(res, 200, { status: "invalid" });
-  if (!oauthProvider(rec.provider)) return sendJson(res, 200, { status: "invalid" });
+  if (!(await resolveOAuthProvider(rec.provider))) return sendJson(res, 200, { status: "invalid" });
   if (!samePerson(clicker, rec.principalId)) {
     const clickerConnected = await principalHasProvider(deps, rec.provider, clicker);
     audit(deps, {
@@ -281,7 +286,7 @@ async function consentMint(ctx: ApiCtx): Promise<void> {
     intendedPrincipalId?: unknown;
   };
   const provider = typeof b.provider === "string" ? b.provider : "";
-  if (!oauthProvider(provider))
+  if (!(await resolveOAuthProvider(provider)))
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${provider}` });
   const accountType = parseAccountType(typeof b.accountType === "string" ? b.accountType : null);
   const base = deps.publicUrl ? deps.publicUrl.replace(/\/$/, "") : "";
@@ -352,7 +357,7 @@ async function oauthStart(ctx: ApiCtx): Promise<void> {
   const oauthRoute = parseOAuthRoute(pathname)!;
   if (!deps.connectorTokens)
     return sendJson(res, 501, { error: "not_configured", message: "connector token store not wired" });
-  const provider = oauthProvider(oauthRoute.provider);
+  const provider = await resolveOAuthProvider(oauthRoute.provider);
   if (!provider)
     return sendJson(res, 404, { error: "not_found", message: `unknown OAuth provider: ${oauthRoute.provider}` });
   const principalId = url.searchParams.get("principalId") ?? "";
@@ -481,8 +486,10 @@ async function setToken(ctx: ApiCtx): Promise<void> {
 async function catalog(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([name, p]) => ({
+    connectorProviderEntries().map(async ([name, p]) => ({
       provider: name,
+      label: p.label,
+      ...(p.description ? { description: p.description } : {}),
       hosts: p.hosts,
       scopes: p.scopes,
       consentMode: p.consentMode,

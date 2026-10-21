@@ -39,7 +39,9 @@ import {
   type ServiceCredentialInput,
 } from "../../credentials/keychain.ts";
 import { parseBotLedger } from "../../surface-cache/channel-policy-store.ts";
-import { authorizeUrl, PROVIDERS, type ConsentMode } from "../../connectors/oauth.ts";
+import { authorizeUrl, resolveConnectorProvider, type ConsentMode } from "../../connectors/oauth.ts";
+import { customProviderConflict } from "../../connectors/connector-client-store.ts";
+import { parseCustomOAuthProvider } from "../../connectors/custom-provider.ts";
 import { resolverFor } from "./connectors.ts";
 import { encodeRef, serviceCredRef } from "../../acl/resource-ref.ts";
 import { audit } from "./shared.ts";
@@ -865,11 +867,11 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         delete?: unknown;
       };
       const provider = typeof b.provider === "string" ? b.provider : "";
-      if (!PROVIDERS[provider]) return { error: `unknown OAuth provider: ${provider}` };
       if (b.delete === true) {
         await deps.config!.deleteConnectorClient(scope, provider);
         return { ok: true };
       }
+      if (!(await resolveConnectorProvider(provider))) return { error: `unknown OAuth provider: ${provider}` };
       if (typeof b.clientId !== "string" || typeof b.clientSecret !== "string") {
         return { error: "connectors requires { provider, clientId, clientSecret }" };
       }
@@ -893,6 +895,61 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       } catch (e) {
         return { error: errMessage(e), code: "connector_invalid" };
       }
+      return { ok: true };
+    },
+  },
+  {
+    id: "connector-providers",
+    kind: "custom",
+    target: "org",
+    readKey: "connectorProviders",
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.listConnectorProviders() : []),
+    apply: async (ctx, actor, scope) => {
+      const bad = orgOnly(scope, "connector providers are org-wide");
+      if (bad) return bad;
+      const { deps } = ctx;
+      const config = deps.config!;
+      await config.syncConnectorProviders();
+      const b = ctx.body as { provider?: unknown; delete?: unknown };
+      const stored = (await config.listConnectorProviders()).find((p) => p.provider === b.provider);
+      const record = (action: string, provider: string) =>
+        audit(deps, {
+          principalId: actor.id,
+          action: `connector-provider.${action}`,
+          resource: provider,
+          scopeLabel: scope,
+        });
+      if (b.delete === true) {
+        if (!stored)
+          return { error: `unknown connector provider: ${String(b.provider)}`, code: "not_found", status: 404 };
+        if ((await config.listConnectorClients(scope)).some((c) => c.provider === stored.provider))
+          return {
+            error: `remove the ${stored.provider} OAuth app before deleting its provider`,
+            code: "provider_in_use",
+            status: 409,
+          };
+        await deps.connectorTokens?.deleteConnectorTokensForHosts(stored.hosts);
+        await config.deleteConnectorProvider(stored.provider);
+        record("delete", stored.provider);
+        return { ok: true };
+      }
+      const parsed = parseCustomOAuthProvider(ctx.body);
+      if ("error" in parsed) return parsed;
+      const conflict = customProviderConflict(parsed);
+      if (conflict) return { error: conflict };
+      if (
+        stored &&
+        (stored.authUrl !== parsed.authUrl ||
+          stored.tokenUrl !== parsed.tokenUrl ||
+          [...stored.hosts].sort().join(" ") !== [...parsed.hosts].sort().join(" "))
+      )
+        return {
+          error: "authUrl, tokenUrl and hosts cannot change; delete the provider and add it again",
+          code: "provider_immutable",
+          status: 409,
+        };
+      await config.setConnectorProvider(parsed, actor.id);
+      record(stored ? "update" : "create", parsed.provider);
       return { ok: true };
     },
   },

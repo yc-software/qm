@@ -243,7 +243,7 @@ test("authorize state stays inside the tightest provider limit and still carries
   }
 });
 
-test("OAuth status lists a linked per-user MCP sign-in under its display name", async (t) => {
+test("OAuth status lists per-user MCP sign-ins under their display name, linked or not", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   const srv = start(async () => {
     throw new Error("no token exchange expected");
@@ -266,10 +266,12 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
       const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
       assert.equal(res.status, 200);
       return (await res.json()) as {
-        providers: Record<string, { connected?: boolean; mcpLabel?: string; available?: boolean }>;
+        providers: Record<string, { label?: string; connected?: boolean; mcpLabel?: string; available?: boolean }>;
       };
     };
-    assert.equal((await read()).providers.orders, undefined, "unlinked MCP sign-ins stay out of the list");
+    const unlinked = (await read()).providers.orders;
+    assert.deepEqual([unlinked?.label, unlinked?.connected], ["Orders", false]);
+    assert.ok(Object.values((await read()).providers).every((p) => typeof p.label === "string" && p.label !== ""));
 
     await srv.built.connectorTokens.setConnectorToken("api.orders.example", "U1", {
       accessToken: "orders-token",

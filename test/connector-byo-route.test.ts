@@ -208,10 +208,24 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
   const srv = start();
   try {
     const { catalog } = (await (await fetch(`${srv.base}/v1/connectors/catalog`)).json()) as {
-      catalog: Array<{ provider: string; setupGuide: { url: string; steps: string[] }; consentMode: string }>;
+      catalog: Array<{
+        provider: string;
+        label: string;
+        description: string;
+        setupGuide: { url: string; steps: string[] };
+        consentMode: string;
+      }>;
     };
-    const names = catalog.map((c) => c.provider).sort();
-    assert.deepEqual(names, ["dropbox", "github", "google", "linear", "notion", "slack", "x", "zoom"]);
+    assert.deepEqual(catalog.map((c) => [c.provider, c.label, c.description]).sort(), [
+      ["dropbox", "Dropbox", "Files & folders"],
+      ["github", "GitHub", "Repos, issues & PRs"],
+      ["google", "Google Workspace", "Gmail, Calendar, Drive, Sheets"],
+      ["linear", "Linear", "Issues & projects"],
+      ["notion", "Notion", "Pages & databases"],
+      ["slack", "Slack", "Channels & messages"],
+      ["x", "X (Twitter)", "Posts & profile"],
+      ["zoom", "Zoom", "Meetings"],
+    ]);
     const google = catalog.find((c) => c.provider === "google")!;
     assert.ok(google.setupGuide.steps.length >= 3);
     assert.match(google.setupGuide.url, /^https:\/\//);

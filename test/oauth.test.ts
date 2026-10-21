@@ -11,6 +11,7 @@ import {
   generateCodeVerifier,
   codeChallengeS256,
   PROVIDERS,
+  setStoredOAuthProviders,
   type FetchLike,
   type ResolvedClient,
   type OAuthState,
@@ -567,4 +568,42 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
   const stale = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
   const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
   assert.equal(await stale.finish(staleId), null, "expired");
+});
+
+test("a stored provider refreshes by host through the generic adapters and stops resolving once removed", async () => {
+  const huddle = {
+    provider: "huddle",
+    label: "Huddle",
+    authUrl: "https://huddle.example/oauth/authorize",
+    tokenUrl: "https://huddle.example/oauth/token",
+    hosts: ["api.huddle.example"],
+    scopes: [],
+    clientAuth: "basic" as const,
+  };
+  const client: ResolvedClient = { id: "zid", secret: "zsecret", clientRef: "org:test:huddle" };
+  const fetchImpl: FetchLike = async (url, init) => {
+    assert.equal(url, "https://huddle.example/oauth/token");
+    assert.equal(init.headers.authorization, `Basic ${Buffer.from("zid:zsecret").toString("base64")}`);
+    assert.match(init.body, /grant_type=refresh_token&refresh_token=old-rt&client_id=zid$/);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: "zat2", refresh_token: "new-rt", expires_in: 3600 }),
+    };
+  };
+  const refresh = makeRefresh({ resolveClient: async () => client, fetchImpl, now: () => 1_000 });
+  setStoredOAuthProviders([huddle]);
+  try {
+    const consent = new URL(authorizeUrl("huddle", { redirectUri: "https://qm.example/cb", state: "s", client }));
+    assert.equal(consent.searchParams.has("scope"), false);
+    const fresh = await refresh("api.huddle.example", { accessToken: "old", refreshToken: "old-rt", expiresAt: 0 });
+    assert.deepEqual(fresh, { accessToken: "zat2", refreshToken: "new-rt", expiresAt: 1_000 + 3600_000 });
+    setStoredOAuthProviders([]);
+    await assert.rejects(
+      refresh("api.huddle.example", { accessToken: "old", refreshToken: "old-rt" }),
+      /unknown provider/,
+    );
+  } finally {
+    setStoredOAuthProviders([]);
+  }
 });
