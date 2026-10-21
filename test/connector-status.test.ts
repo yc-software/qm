@@ -132,7 +132,7 @@ test("refresh: chooses a usable account status over a lapsed account for the sam
 });
 
 test("labels: known providers get friendly names; unknown is capitalized", () => {
-  assert.equal(connectorLabel("google"), "Google");
+  assert.equal(connectorLabel("google"), "Google Workspace");
   assert.equal(connectorLabel("github"), "GitHub");
   assert.equal(connectorLabel("acme"), "Acme");
 });

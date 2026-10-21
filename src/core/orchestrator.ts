@@ -76,7 +76,7 @@ import {
   renderConnectedAppsBlock,
   renderSandboxProfiles,
 } from "./environment-facts.ts";
-import { PROVIDERS } from "../connectors/oauth.ts";
+import { connectorProviderEntries } from "../connectors/oauth.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -242,7 +242,6 @@ const SESSION_GONE_REASON = "this conversation is no longer available — start 
 
 const DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS = 6_000;
 
-const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 const INSTANCE_CACHE_MAX_ENTRIES = 5_000;
 const DIRECTORY_INDEX_CACHE_MAX_ENTRIES = 100;
 
@@ -1510,7 +1509,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const inventory = tokens.listConnectorsByOwners
             ? ((await tokens.listConnectorsByOwners([actor.id])).get(actor.id) ?? [])
             : undefined;
-          for (const host of CONNECTOR_HOSTS) {
+          for (const host of connectorProviderEntries().flatMap(([, p]) => p.hosts)) {
             for (const accountType of ["personal", undefined, "company"]) {
               const status = inventory
                 ? inventory.find(

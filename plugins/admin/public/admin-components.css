@@ -225,6 +225,9 @@
   align-items: center;
   border-color: var(--border);
 }
+:where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-row.is-editing {
+  padding: 12px 10px;
+}
 
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-title strong,
 :where(html body[data-admin-kit="true"]) :is(#app-view #main, dialog) .credential-main > strong {

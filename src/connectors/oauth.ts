@@ -1,4 +1,5 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
+import type { CustomOAuthProvider } from "./custom-provider.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
@@ -43,12 +44,13 @@ type OAuthRefreshAdapter = (args: OAuthAdapterArgs & { token: OAuthToken }) => P
 
 export interface OAuthProviderConfig {
   label: string;
+  description?: string;
   hosts: string[];
   authUrl: string;
   tokenUrl: string;
   scopes: string[];
-  clientIdEnv: string;
-  clientSecretEnv: string;
+  clientIdEnv?: string;
+  clientSecretEnv?: string;
   redirectPath: string;
   consentMode: ConsentMode;
   egressRule: string[];
@@ -240,7 +242,8 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
 
 export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   google: {
-    label: "Google",
+    label: "Google Workspace",
+    description: "Gmail, Calendar, Drive, Sheets",
     hosts: [
       "gmail.googleapis.com",
       "www.googleapis.com",
@@ -291,6 +294,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   slack: {
     label: "Slack",
+    description: "Channels & messages",
     hosts: ["slack.com"],
     authUrl: "https://slack.com/oauth/v2/authorize",
     tokenUrl: "https://slack.com/api/oauth.v2.access",
@@ -338,6 +342,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   notion: {
     label: "Notion",
+    description: "Pages & databases",
     hosts: ["api.notion.com"],
     authUrl: "https://api.notion.com/v1/oauth/authorize",
     tokenUrl: "https://api.notion.com/v1/oauth/token",
@@ -365,6 +370,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   linear: {
     label: "Linear",
+    description: "Issues & projects",
     hosts: ["api.linear.app"],
     authUrl: "https://linear.app/oauth/authorize",
     tokenUrl: "https://api.linear.app/oauth/token",
@@ -389,6 +395,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   dropbox: {
     label: "Dropbox",
+    description: "Files & folders",
     hosts: ["api.dropboxapi.com", "content.dropboxapi.com"],
     authUrl: "https://www.dropbox.com/oauth2/authorize",
     tokenUrl: "https://api.dropboxapi.com/oauth2/token",
@@ -422,6 +429,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   github: {
     label: "GitHub",
+    description: "Repos, issues & PRs",
     hosts: ["api.github.com"],
     authUrl: "https://github.com/login/oauth/authorize",
     tokenUrl: "https://github.com/login/oauth/access_token",
@@ -447,7 +455,8 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 
   x: {
-    label: "X",
+    label: "X (Twitter)",
+    description: "Posts & profile",
     hosts: ["api.x.com"],
     authUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
@@ -476,6 +485,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
 
   zoom: {
     label: "Zoom",
+    description: "Meetings",
     hosts: ["api.zoom.us"],
     authUrl: "https://zoom.us/oauth/authorize",
     tokenUrl: "https://zoom.us/oauth/token",
@@ -515,12 +525,58 @@ export interface PublicOAuthClient {
 
 const publicClients = new Map<string, PublicOAuthClient>();
 const publicProviders = new Map<string, OAuthProviderConfig>();
+const storedProviders = new Map<string, OAuthProviderConfig>();
+let reloadStoredProviders: (() => Promise<void>) | undefined;
+
+export function setStoredOAuthProviderReload(reload: () => Promise<void>): void {
+  reloadStoredProviders = reload;
+}
+
+async function lookupWithReload<T>(lookup: () => T | undefined): Promise<T | undefined> {
+  const cached = lookup();
+  if (cached !== undefined || !reloadStoredProviders) return cached;
+  await reloadStoredProviders();
+  return lookup();
+}
+
+function customProviderConfig(p: CustomOAuthProvider): OAuthProviderConfig {
+  const adapters = makeTokenAdapters({
+    acceptJson: true,
+    rejectErrorBody: true,
+    label: p.provider,
+    clientAuth: p.clientAuth,
+  });
+  return {
+    label: p.label,
+    ...(p.description ? { description: p.description } : {}),
+    hosts: p.hosts,
+    authUrl: p.authUrl,
+    tokenUrl: p.tokenUrl,
+    scopes: p.scopes,
+    redirectPath: `${p.provider}/callback`,
+    consentMode: "standard",
+    egressRule: p.hosts,
+    ...(p.scopeParam ? { scopeParam: p.scopeParam } : {}),
+    ...(p.authParams ? { authParams: p.authParams } : {}),
+    ...(p.pkce ? { pkce: true } : {}),
+    exchange: adapters.exchange,
+    refresh: adapters.refresh,
+    setupGuide: { console: p.label, url: p.docsUrl ?? "", steps: p.setupSteps ?? [] },
+  };
+}
+
+export function setStoredOAuthProviders(providers: CustomOAuthProvider[]): void {
+  storedProviders.clear();
+  for (const p of providers) {
+    if (!isBuiltInProvider(p.provider)) storedProviders.set(p.provider, customProviderConfig(p));
+  }
+}
 
 export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
   publicClients.clear();
   publicProviders.clear();
   for (const c of clients) {
-    if (PROVIDERS[c.name]) continue;
+    if (connectorProvider(c.name)) continue;
     publicClients.set(c.name, c);
     publicProviders.set(c.name, {
       label: c.label,
@@ -528,8 +584,6 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
       authUrl: c.authUrl,
       tokenUrl: c.tokenUrl,
       scopes: c.scopes,
-      clientIdEnv: "",
-      clientSecretEnv: "",
       redirectPath: `${c.name}/callback`,
       consentMode: "standard",
       egressRule: [],
@@ -541,17 +595,37 @@ export function setPublicOAuthClients(clients: PublicOAuthClient[]): void {
   }
 }
 
+export function hostsOverlap(a: readonly string[], b: readonly string[]): boolean {
+  return a.some((x) => b.some((y) => x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`)));
+}
+
+export function isBuiltInProvider(name: string): boolean {
+  return Object.hasOwn(PROVIDERS, name);
+}
+
+export function connectorProvider(name: string): OAuthProviderConfig | undefined {
+  return isBuiltInProvider(name) ? PROVIDERS[name] : storedProviders.get(name);
+}
+
+export function connectorProviderEntries(): Array<[string, OAuthProviderConfig]> {
+  return [...Object.entries(PROVIDERS), ...storedProviders.entries()];
+}
+
 export function oauthProviderEntries(): Array<[string, OAuthProviderConfig]> {
-  return [...Object.entries(PROVIDERS), ...publicProviders.entries()];
+  return [...connectorProviderEntries(), ...publicProviders.entries()];
 }
 
 export function oauthProvider(name: string): OAuthProviderConfig | undefined {
-  return PROVIDERS[name] ?? publicProviders.get(name);
+  return connectorProvider(name) ?? publicProviders.get(name);
+}
+
+export function resolveOAuthProvider(name: string): Promise<OAuthProviderConfig | undefined> {
+  return lookupWithReload(() => oauthProvider(name));
 }
 
 export function withPublicOAuthClients(resolve: OAuthClientResolver): OAuthClientResolver {
   return async (provider, ctx) => {
-    const c = publicClients.get(provider);
+    const c = connectorProvider(provider) ? undefined : publicClients.get(provider);
     return c ? { id: c.clientId, secret: "", clientRef: `public:${provider}` } : resolve(provider, ctx);
   };
 }
@@ -569,8 +643,10 @@ export type OAuthClientResolver = (provider: string, ctx: { accountType?: Accoun
 
 export function createSecretClientResolver(secrets: SecretSource = createEnvSecretSource()): OAuthClientResolver {
   return async (providerName) => {
-    const p = PROVIDERS[providerName];
+    const p = connectorProvider(providerName);
     if (!p) throw new Error(`unknown OAuth provider: ${providerName}`);
+    if (!p.clientIdEnv || !p.clientSecretEnv)
+      throw new Error("provider not configured — add its OAuth app under Admin → Connectors");
     const [id, secret, hostedDomain] = await Promise.all([
       secrets.get(p.clientIdEnv),
       secrets.get(p.clientSecretEnv),
@@ -671,7 +747,7 @@ export function authorizeUrl(
     q.set("code_challenge", opts.codeChallenge);
     q.set("code_challenge_method", "S256");
   }
-  q.set(p.scopeParam ?? "scope", scopes.join(" "));
+  if (scopes.length) q.set(p.scopeParam ?? "scope", scopes.join(" "));
   for (const [k, v] of Object.entries(p.authParams ?? {})) q.set(k, v);
   if (accountType === "company" && opts.client.hostedDomain) q.set("hd", opts.client.hostedDomain);
   return `${p.authUrl}?${q.toString()}`;
@@ -704,11 +780,11 @@ export async function exchangeCode(
   });
 }
 
-function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | null {
-  for (const [name, config] of [...Object.entries(PROVIDERS), ...publicProviders]) {
+function providerForHost(host: string): { name: string; config: OAuthProviderConfig } | undefined {
+  for (const [name, config] of oauthProviderEntries()) {
     if (config.hosts.some((h) => host === h || host.endsWith(`.${h}`))) return { name, config };
   }
-  return null;
+  return undefined;
 }
 
 export function makeRefresh(opts: {
@@ -717,7 +793,7 @@ export function makeRefresh(opts: {
   now?: () => number;
 }): OAuthRefresh {
   return async (host, token, ctx) => {
-    const match = providerForHost(host);
+    const match = await lookupWithReload(() => providerForHost(host));
     if (!match) throw new Error(`cannot refresh ${host} (unknown provider)`);
     if (match.config.refresh === null) throw new Error(`${match.name} tokens do not refresh — reconnect`);
     if (!token.refreshToken) throw new Error(`cannot refresh ${host} (no refresh token)`);

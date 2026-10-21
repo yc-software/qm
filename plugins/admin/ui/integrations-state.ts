@@ -1,5 +1,6 @@
 import { openDesktopBrowser } from "../../chassis/src/desktop-browser.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
+import type { CustomProvider } from "./oauth-providers.ts";
 export type Api = (
   method: string,
   path: string,
@@ -67,6 +68,7 @@ export function loadScope(data: any, scope: string) {
 }
 export type Connector = {
   provider: string;
+  label?: string;
   configured?: boolean;
   clientId?: string;
   enabled?: boolean;
@@ -81,6 +83,7 @@ export type Connector = {
 export class ConnectorsState {
   catalog: Connector[] = [];
   list: Connector[] = [];
+  providers: CustomProvider[] = [];
   editor = false;
   editing = "";
   draft = { provider: "", clientId: "", clientSecret: "", enabled: true };
@@ -143,6 +146,7 @@ export class ConnectorsState {
         "err",
       );
     this.list = result.data.connectors || [];
+    this.providers = result.data.connectorProviders || [];
     if (!this.editing && !this.catalog.some((c) => c.provider === this.draft.provider))
       this.draft.provider = this.catalog[0]?.provider || "";
     this.render();
@@ -179,7 +183,7 @@ export class ConnectorsState {
     if (
       !confirm(
         "Delete the OAuth client for " +
-          context.connectorName(provider) +
+          connectorLabel(provider) +
           "? This hides the connector in everyone's web UI; existing links stop working.",
       )
     )
@@ -198,6 +202,9 @@ export class ConnectorsState {
   }
 }
 export const connectors = new ConnectorsState();
+export function connectorLabel(provider: string) {
+  return connectors.catalog.find((c) => c.provider === provider)?.label || context.connectorName(provider);
+}
 export class SlackInstallationState {
   data: Record<string, any> = {};
   editor = false;

@@ -20,6 +20,8 @@ import {
   type PublicConnectorClient,
   type DecryptedConnectorClient,
 } from "../connectors/connector-client-store.ts";
+import type { CustomOAuthProvider, StoredOAuthProvider } from "../connectors/custom-provider.ts";
+import { setStoredOAuthProviderReload, setStoredOAuthProviders } from "../connectors/oauth.ts";
 import { errMessage } from "../util/errors.ts";
 
 export interface PersistedSoul {
@@ -206,6 +208,10 @@ export interface ScopedConfigStore {
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
+  listConnectorProviders(): Promise<StoredOAuthProvider[]>;
+  setConnectorProvider(provider: CustomOAuthProvider, updatedBy: string): Promise<void>;
+  deleteConnectorProvider(provider: string): Promise<void>;
+  syncConnectorProviders(): Promise<void>;
   scopeConfigPresence(id: ScopeId): Promise<ScopeConfigPresence>;
   refreshScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
@@ -213,6 +219,7 @@ export interface ScopedConfigStore {
 
 export interface ConfigStoreMaps {
   connectorClients?: DurableMap<StoredConnectorClient>;
+  connectorProviders?: DurableMap<StoredOAuthProvider>;
   souls?: DurableMap<PersistedSoul>;
   soulHistory?: DurableMap<PersistedSoulRevision>;
   commandPolicies?: DurableMap<ScopedRow<"policy", CommandPolicy>>;
@@ -241,6 +248,7 @@ export interface ConfigStoreMaps {
 
 const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   connectorClients: "connector_clients",
+  connectorProviders: "connector_providers",
   souls: "soul_configs",
   soulHistory: "soul_history",
   commandPolicies: "command_policies",
@@ -295,7 +303,7 @@ export function createMemoryConfigStore(
       await write();
       apply();
     });
-  type SettingKey = Exclude<keyof ConfigStoreMaps, "connectorClients">;
+  type SettingKey = Exclude<keyof ConfigStoreMaps, "connectorClients" | "connectorProviders">;
   type Row<M extends SettingKey> = NonNullable<ConfigStoreMaps[M]> extends DurableMap<infer R> ? R : never;
   const setting = <M extends SettingKey, T>(
     name: M,
@@ -389,6 +397,11 @@ export function createMemoryConfigStore(
   const connectorClients = opts.connectorClients ?? createMemoryMap<StoredConnectorClient>();
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
+  const connectorProviders = opts.connectorProviders ?? createMemoryMap<StoredOAuthProvider>();
+  const providerSyncQueue = createKeyedQueue();
+  const syncConnectorProviders = (): Promise<void> =>
+    providerSyncQueue("sync", async () => setStoredOAuthProviders(await connectorProviders.all()));
+  setStoredOAuthProviderReload(syncConnectorProviders);
 
   const org = scopeId("org", orgId);
   const purposeFields = (id: ScopeId, row?: PersistedBaseModel | null) =>
@@ -523,6 +536,7 @@ export function createMemoryConfigStore(
         hydrated = (async () => {
           const identity = await deploymentIdentity.putIfAbsent("singleton", { orgId });
           if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
+          await syncConnectorProviders();
           for (const r of await soulStore.all()) {
             souls.set(r.scopeId, { content: r.content, version: r.version });
             if (r.history?.length) soulHistory.set(r.scopeId, r.history);
@@ -879,6 +893,16 @@ export function createMemoryConfigStore(
         enabled: rec.enabled,
       };
     },
+    listConnectorProviders: () => connectorProviders.all(),
+    async setConnectorProvider(provider, updatedBy) {
+      await connectorProviders.put(provider.provider, { ...provider, updatedBy, updatedAt: Date.now() });
+      await syncConnectorProviders();
+    },
+    async deleteConnectorProvider(provider) {
+      await connectorProviders.delete(provider);
+      await syncConnectorProviders();
+    },
+    syncConnectorProviders,
     async scopeConfigPresence(id) {
       const stores = {
         soul: soulStore,

@@ -194,3 +194,159 @@ test("Slack connection validates token drafts before submitting", async () => {
   assert.equal(called, false);
   assert.equal(s.message, "Both Slack tokens are required.");
 });
+const ASANA = {
+  provider: "asana",
+  label: "Asana",
+  authUrl: "https://app.asana.com/-/oauth_authorize",
+  tokenUrl: "https://app.asana.com/-/oauth_token",
+  hosts: ["app.asana.com"],
+  scopes: [],
+  clientAuth: "body",
+};
+function providerApi(dom: JSDOM, initial: unknown[]) {
+  dom.window
+    .eval(`window.puts=[];window.saved=${JSON.stringify(initial)};window.reply=null;window.apps=[];window.confirm=()=>true;
+    ui.configure({orgScope:()=>"org:test",connectorName:id=>id,fmtTime:x=>x,api:async(m,p,b)=>{
+      if(m==="PUT"){puts.push([p,b]);if(reply)return reply;
+        saved=b.delete?saved.filter(x=>x.provider!==b.provider):[...saved.filter(x=>x.provider!==b.provider),b];return{ok:true,data:{ok:true}}}
+      if(p==="/api/connector-catalog")return{ok:true,data:{catalog:[{provider:"github",label:"GitHub",redirectPath:"github/callback"},...saved.map(x=>({provider:x.provider,label:x.label,redirectPath:x.provider+"/callback",scopes:x.scopes,setupGuide:{console:x.label,url:"",steps:[]}}))]}};
+      return{ok:true,data:{connectors:apps,connectorProviders:saved}}}})`);
+  return {
+    puts: () => JSON.parse(dom.window.eval("JSON.stringify(puts)") as string),
+    reply: (value: unknown) => dom.window.eval(`reply=${JSON.stringify(value)}`),
+  };
+}
+function type(dom: JSDOM, id: string, value: string) {
+  const el = dom.window.document.getElementById(id) as HTMLInputElement;
+  el.value = value;
+  el.dispatchEvent(new dom.window.Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+}
+const settle = () => new Promise((r) => setTimeout(r, 0));
+test("Custom provider form shows server errors, saves the record, and feeds the OAuth app picker", async () => {
+  const dom = setup();
+  try {
+    const api = providerApi(dom, []);
+    await dom.window.eval("ui.loadConnectors()");
+    const doc = dom.window.document;
+    assert.equal(doc.getElementById("op-list")!.textContent!.trim(), "No custom providers.");
+    doc.getElementById("add-oauth-provider")!.click();
+    assert.equal(doc.getElementById("op-editor")!.classList.contains("hidden"), false);
+    const status = () => doc.getElementById("st-oauth-providers")!.textContent;
+    const save = async () => {
+      doc.getElementById("op-save")!.click();
+      await settle();
+    };
+    type(dom, "op-name", "asana");
+    assert.match(
+      doc.getElementById("op-redirect")!.textContent!,
+      /http:\/\/localhost\/v1\/connectors\/oauth\/asana\/callback/,
+    );
+    type(dom, "op-label", " Asana ");
+    type(dom, "op-auth-url", "https://app.asana.com/-/oauth_authorize");
+    type(dom, "op-token-url", "https://app.asana.com/-/oauth_token");
+    type(dom, "op-hosts", "https://app.asana.com/api/1.0");
+    type(dom, "op-client-auth", "body");
+    api.reply({
+      ok: false,
+      status: 400,
+      data: { message: "hosts.0: must be a bare hostname such as api.example.com" },
+    });
+    await save();
+    assert.equal(status(), "hosts.0: must be a bare hostname such as api.example.com");
+    assert.equal(doc.getElementById("op-editor")!.classList.contains("hidden"), false);
+    api.reply({ ok: false, status: 502, data: null });
+    await save();
+    assert.equal(status(), "Save failed. (HTTP 502)");
+    api.reply(null);
+    type(dom, "op-hosts", "app.asana.com\n");
+    type(dom, "op-auth-params", "access_type");
+    await save();
+    assert.equal(status(), "Use key=value for authorization parameters, one per line.");
+    assert.equal(api.puts().length, 2);
+    type(dom, "op-auth-params", "");
+    await save();
+    await settle();
+    assert.deepEqual(api.puts().at(-1), ["/api/scopes/org%3Atest/connector-providers", ASANA]);
+
+    assert.equal(status(), "Saved. Add its OAuth app above to make it linkable.");
+    assert.equal(doc.getElementById("op-editor")!.classList.contains("hidden"), true);
+    doc.getElementById("add-oauth-provider")!.click();
+    type(dom, "op-name", "asana");
+    await save();
+    assert.equal(status(), "A provider named asana already exists.");
+    assert.equal(api.puts().length, 3);
+    doc.getElementById("op-reset")!.click();
+    assert.match(doc.getElementById("op-list")!.textContent!, /Asana\s*asana\s*app\.asana\.com\s*No OAuth app/);
+    doc.body.insertAdjacentHTML("beforeend", '<section id="card-built-in-connectors"></section>');
+    dom.window.eval("ui.mountBuiltIns()");
+    doc.getElementById("add-oauth-app")!.click();
+    const picker = doc.getElementById("conn-provider") as HTMLSelectElement;
+    assert.deepEqual(
+      [...picker.options].map((o) => [o.value, o.textContent!.trim()]),
+      [
+        ["github", "GitHub"],
+        ["asana", "Asana"],
+      ],
+    );
+    type(dom, "conn-provider", "asana");
+    assert.match(doc.getElementById("conn-guide")!.textContent!, /oauth\/asana\/callback/);
+    assert.equal(doc.querySelector("#conn-guide a"), null);
+    assert.equal(
+      doc.getElementById("built-in-connectors")!.textContent!.replace(/\s+/g, " ").trim(),
+      "GitHub Requires an OAuth app Not configured",
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+test("Custom provider edit locks identity fields, keeps unmanaged fields, and delete updates the list", async () => {
+  const dom = setup();
+  try {
+    const api = providerApi(dom, [{ ...ASANA, authParams: { prompt: "consent" }, updatedBy: "admin", updatedAt: 1 }]);
+    await dom.window.eval("ui.loadConnectors()");
+    const doc = dom.window.document;
+    const button = (label: string) =>
+      [...doc.querySelectorAll<HTMLButtonElement>("#op-list button")].find((b) => b.textContent!.trim() === label)!;
+    button("Edit").click();
+    for (const id of ["op-name", "op-auth-url", "op-token-url", "op-hosts"])
+      assert.equal((doc.getElementById(id) as HTMLInputElement).disabled, true);
+    assert.equal((doc.getElementById("op-label") as HTMLInputElement).disabled, false);
+    assert.equal((doc.getElementById("op-hosts") as HTMLTextAreaElement).value, "app.asana.com");
+    assert.equal((doc.getElementById("op-auth-params") as HTMLTextAreaElement).value, "prompt=consent");
+    type(dom, "op-scopes", "default, email");
+    type(dom, "op-client-auth", "basic");
+    doc.getElementById("op-save")!.click();
+    await settle();
+    await settle();
+    assert.deepEqual(api.puts().at(-1)[1], {
+      ...ASANA,
+      scopes: ["default", "email"],
+      clientAuth: "basic",
+      authParams: { prompt: "consent" },
+    });
+    assert.equal(doc.getElementById("st-oauth-providers")!.textContent, "Saved");
+    dom.window.eval('apps=[{provider:"asana",clientId:"id"}]');
+    await dom.window.eval("ui.loadConnectors()");
+    assert.match(doc.getElementById("op-list")!.textContent!, /OAuth app set/);
+    button("Delete").click();
+    assert.equal(doc.getElementById("st-oauth-providers")!.textContent, "Delete the Asana OAuth app above first.");
+    dom.window.eval("apps=[]");
+    await dom.window.eval("ui.loadConnectors()");
+    api.reply({ ok: false, status: 409, data: { message: "remove the asana OAuth app before deleting its provider" } });
+    button("Delete").click();
+    await settle();
+    assert.equal(
+      doc.getElementById("st-oauth-providers")!.textContent,
+      "remove the asana OAuth app before deleting its provider",
+    );
+    api.reply(null);
+    button("Delete").click();
+    await settle();
+    await settle();
+    assert.deepEqual(api.puts().at(-1)[1], { provider: "asana", delete: true });
+    assert.equal(doc.getElementById("op-list")!.textContent!.trim(), "No custom providers.");
+    assert.equal(doc.getElementById("st-oauth-providers")!.textContent, "Deleted");
+  } finally {
+    dom.window.close();
+  }
+});

@@ -3,7 +3,16 @@ import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { slackMark } from "../../web-ui/src/slack-mark.ts";
 import { repeat } from "lit/directives/repeat.js";
-import { states, connectors, installation, emoji, context, type SlackSetting } from "./integrations-state.ts";
+import {
+  states,
+  connectors,
+  installation,
+  emoji,
+  context,
+  connectorLabel,
+  type SlackSetting,
+} from "./integrations-state.ts";
+import { providers, providerCard } from "./oauth-providers.ts";
 export {
   configure,
   owns,
@@ -207,7 +216,7 @@ cards["card-connectors"] = () => {
     >
       <div class="sc-form-head">
         <p class="hint" id="conn-form-title">
-          ${s.editing ? "Editing " + context.connectorName(s.editing) : "Add a connector"}
+          ${s.editing ? "Editing " + connectorLabel(s.editing) : "Add a connector"}
         </p>
         <span class=${"badge " + (s.editing ? "info" : "muted")} id="conn-form-mode"
           >${s.editing ? "Editing" : "New"}</span
@@ -226,7 +235,7 @@ cards["card-connectors"] = () => {
             (c) => c.provider,
             (c) =>
               html`<option value=${c.provider} .selected=${c.provider === s.draft.provider}>
-                ${context.connectorName(c.provider) + (c.configured ? " (configured)" : "")}
+                ${connectorLabel(c.provider) + (c.configured ? " (configured)" : "")}
               </option>`,
           )}
         </select></label
@@ -283,6 +292,7 @@ cards["card-connectors"] = () => {
     </div>
   </section>`;
 };
+cards["card-oauth-providers"] = providerCard;
 cards["card-slack-installation"] = () => {
   const s = installation,
     d = s.data;
@@ -449,7 +459,7 @@ function connectorRows() {
       html`<div class=${classMap({ "credential-row": true, "is-editing": c.provider === connectors.editing })}>
         <div class="credential-main">
           <div class="credential-title">
-            <strong>${context.connectorName(c.provider)}</strong><span class="credential-slug">${c.provider}</span>
+            <strong>${connectorLabel(c.provider)}</strong><span class="credential-slug">${c.provider}</span>
           </div>
           <div class="hint">
             ${c.inherited ? "Configured by deployment secrets" : "client " + (c.clientId || "None") + (c.updatedBy ? " · by " + c.updatedBy : "") + (c.updatedAt ? " · " + context.fmtTime(c.updatedAt) : "")}
@@ -459,7 +469,7 @@ function connectorRows() {
           </div>
         </div>
         <div class="credential-actions">
-          ${c.inherited ? html`<button type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="rowbtn danger" title="Delete connector" aria-label=${"Delete " + context.connectorName(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
+          ${c.inherited ? html`<button type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="rowbtn danger" title="Delete connector" aria-label=${"Delete " + connectorLabel(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
         </div>
       </div>`,
   );
@@ -467,9 +477,13 @@ function connectorRows() {
 function connectorGuide() {
   const c = connectors.catalog.find((c) => c.provider === connectors.draft.provider);
   if (!c?.setupGuide) return nothing;
-  return html`<a href=${c.setupGuide.url} target="_blank" rel="noopener noreferrer"
-      >${"Open " + c.setupGuide.console + " ↗"}</a
-    >
+  return html`${
+      c.setupGuide.url
+        ? html`<a href=${c.setupGuide.url} target="_blank" rel="noopener noreferrer"
+            >${"Open " + c.setupGuide.console + " ↗"}</a
+          >`
+        : nothing
+    }
     <div>${"Callback URL: " + location.origin + "/v1/connectors/oauth/" + c.redirectPath}</div>
     <div>${c.scopes?.length ? "Scopes: " + c.scopes.join(", ") : "Scopes are selected in the provider."}</div>
     <ol>
@@ -477,18 +491,19 @@ function connectorGuide() {
     </ol>`;
 }
 function builtIns() {
+  const builtIn = connectors.catalog.filter((c) => !connectors.providers.some((p) => p.provider === c.provider));
   return html`<section class="card" id="card-built-in-connectors">
     <div class="head"><h2>Built-in connectors</h2></div>
-    <div class=${connectors.catalog.length ? "" : "hint"} id="built-in-connectors">
+    <div class=${builtIn.length ? "" : "hint"} id="built-in-connectors">
       ${
-        connectors.catalog.length
+        builtIn.length
           ? repeat(
-              connectors.catalog,
+              builtIn,
               (c) => c.provider,
               (c) =>
                 html`<div class="credential-row">
                   <div class="credential-main">
-                    <strong>${context.connectorName(c.provider)}</strong>
+                    <strong>${connectorLabel(c.provider)}</strong>
                     <div class="hint">${c.configured ? "Available to users" : "Requires an OAuth app"}</div>
                   </div>
                   ${badge(c.configured ? "Configured" : "Not configured", c.configured ? "ok" : "muted")}
@@ -593,7 +608,14 @@ export function mountCards() {
     const fragment = document.createDocumentFragment();
     const draw = () => render(template(), fragment);
     if (id === "card-connectors") connectors.render = draw;
-    else if (id === "card-slack-installation") installation.render = draw;
+    else if (id === "card-oauth-providers") {
+      const previous = connectors.render;
+      providers.render = draw;
+      connectors.render = () => {
+        previous();
+        draw();
+      };
+    } else if (id === "card-slack-installation") installation.render = draw;
     else {
       const key = (
         {
