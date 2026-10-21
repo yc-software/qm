@@ -1,12 +1,8 @@
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { hashId } from "../util/crypto.ts";
 
-const TOOL_CALL_KEY_PREFIX = "tool-call:";
-
 export function commandApprovalId(sessionId: string, command: string, approvalKey?: string): string {
-  return hashId(
-    approvalKey?.startsWith(TOOL_CALL_KEY_PREFIX) ? [sessionId, command, approvalKey] : [sessionId, command],
-  );
+  return hashId(approvalKey ? [sessionId, command, approvalKey] : [sessionId, command]);
 }
 
 export function inputApprovalId(sessionId: string, request: unknown): string {

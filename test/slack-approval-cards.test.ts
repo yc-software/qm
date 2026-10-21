@@ -65,7 +65,7 @@ test("approvalMessage clamps a huge purpose so the section block stays under Sla
   const section = msg.blocks.find((b) => b.type === "section") as any;
   const text: string = section.text.text;
   assert.ok(text.length <= 3000, `section text is ${text.length} chars`);
-  assert.match(text, /\*Command:\*$/m);
+  assert.match(text, /\*Command:\* too long to show in Slack/);
   assert.ok(msg.blocks.length <= 10);
   assert.ok(msg.blocks.every((b) => b.type !== "section" || (b.text as { text: string }).text.length <= 3000));
 });
@@ -281,9 +281,12 @@ test("a command too long to show in Slack can only be denied there", () => {
   const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);
   assert.ok(!JSON.stringify(msg.blocks).includes("hilo_allow_once"));
   assert.ok(JSON.stringify(msg.blocks).includes("hilo_deny"));
-  assert.match(JSON.stringify(msg.blocks), /Review and approve it in QM/);
-  const many = approvalMessage(
-    Array.from({ length: 8 }, (_, i) => ({ requestId: `r${i}`, command: "x".repeat(8_000), reason: "r" })),
-  );
-  assert.ok(many.blocks.length <= 50);
+  assert.match(JSON.stringify(msg.blocks), /too long to show in Slack\. Review and approve it in QM/);
+  assert.ok(!JSON.stringify(msg.blocks).includes("attacker@example.com"));
+  for (const count of [8, 20]) {
+    const many = approvalMessage(
+      Array.from({ length: count }, (_, i) => ({ requestId: `r${i}`, command: "x".repeat(8_000), reason: "r" })),
+    );
+    assert.ok(many.blocks.length <= 50, `${count} approvals made ${many.blocks.length} blocks`);
+  }
 });

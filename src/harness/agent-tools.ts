@@ -19,7 +19,7 @@ import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { splitToScope } from "../api/artifact-share.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../memory/disclosure.ts";
 import { computerVerdict } from "../sandbox/sandbox.ts";
@@ -4572,6 +4572,7 @@ function withToolApprovalGate(
       try {
         declaredReason = await declaredApprovalReason(tool, params);
       } catch (error) {
+        reportFailure("tool approval: needsApproval check", error, tool.name);
         await rec.recordCall(callId, { tool: tool.name, blocked: "approval_check_failed" });
         return rec.recordResult(
           callId,

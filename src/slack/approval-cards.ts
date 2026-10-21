@@ -1,5 +1,5 @@
 import { clip, inlineCode } from "./util.ts";
-import { slackSectionBlocks } from "./mrkdwn.ts";
+import { safeChunks } from "./safe-cut.ts";
 import { xmlEscape } from "../util/message-tag.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
@@ -25,6 +25,8 @@ const APPROVAL_BLOCK_PREFIX = "hilo_approval:";
 const INLINE_COMMAND_MAX = 1_800;
 const COMMAND_SECTIONS_MAX = 6;
 const SLACK_MAX_BLOCKS = 50;
+const SLACK_SECTION_MAX = 3_000;
+const COMMAND_CHUNK = 2_800;
 
 function button(
   text: string,
@@ -72,21 +74,26 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     if (p.summary) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
     const longCommand = p.kind !== "input" && p.command.length > INLINE_COMMAND_MAX;
-    const sections = longCommand ? slackSectionBlocks(`\`\`\`${xmlEscape(p.command.replace(/`/g, "'"))}\`\`\``) : [];
-    const reserved = blocks.length + 3 + sections.length + 2 * (items.length - index - 1);
-    const shown = sections.length <= COMMAND_SECTIONS_MAX && reserved <= SLACK_MAX_BLOCKS;
-    if (p.kind !== "input") lines.push(longCommand ? "*Command:*" : `*Command:* ${inlineCode(p.command)}`);
+    const sections = longCommand
+      ? safeChunks(p.command.replace(/`/g, "'"), COMMAND_CHUNK).map((piece) => ({
+          type: "section",
+          text: { type: "mrkdwn", text: `\`\`\`${xmlEscape(piece)}\`\`\`` },
+        }))
+      : [];
+    const reserved = blocks.length + 2 + sections.length + 2 * (items.length - index - 1);
+    const shown =
+      sections.length <= COMMAND_SECTIONS_MAX &&
+      reserved <= SLACK_MAX_BLOCKS &&
+      sections.every((b) => b.text.text.length <= SLACK_SECTION_MAX);
+    if (longCommand)
+      lines.push(shown ? "*Command:*" : "*Command:* too long to show in Slack. Review and approve it in QM.");
+    else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: clip(lines.join("\n"), 2900) },
     });
     if (longCommand && shown) blocks.push(...sections);
-    if (longCommand && !shown)
-      blocks.push({
-        type: "context",
-        elements: [{ type: "mrkdwn", text: "Too long to show in Slack. Review and approve it in QM." }],
-      });
     blocks.push({
       type: "actions",
       block_id: `${APPROVAL_BLOCK_PREFIX}${p.requestId || "unknown"}`.slice(0, 255),
