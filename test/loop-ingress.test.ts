@@ -315,6 +315,67 @@ test("Gmail history pagination advances only after durable ingestion, and expire
   assert.equal((entries.at(-1) as any).sourcePayload.gmail.rfcMessageId, "<original>");
 });
 
+test("unreadable Gmail metadata retains the history interval for a durable retry", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+  const w = await world();
+  let readable = false;
+  const starts: string[] = [];
+  const client = createGmailPushClient({ connectorAccessToken: async () => "fixture" }, gmailConfig, async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("profile")) return Response.json({ emailAddress: "alice@example.com", historyId: "20" });
+    if (url.pathname.endsWith("watch")) return Response.json({ historyId: "10", expiration: "9999999" });
+    if (url.pathname.endsWith("history")) {
+      starts.push(url.searchParams.get("startHistoryId")!);
+      return Response.json({
+        historyId: "20",
+        history:
+          url.searchParams.get("startHistoryId") === "10"
+            ? [{ messagesAdded: ["first", "unreadable", "sent", "deleted"].map((id) => ({ message: { id } })) }]
+            : [],
+      });
+    }
+    const id = url.pathname.split("/").at(-1)!;
+    if (id === "deleted") return new Response("", { status: 404 });
+    return Response.json(
+      id === "unreadable" && !readable
+        ? {}
+        : {
+            id,
+            threadId: `thread-${id}`,
+            internalDate: "1000",
+            labelIds: [id === "sent" ? "SENT" : "INBOX"],
+            snippet: "Review this",
+          },
+    );
+  });
+  const deps = { ...w.deps, gmailConfig, gmailClient: client, verifyGoogle: async () => true };
+  const ingress = createLoopIngress(deps);
+  const source = await ingress.create(w.loop, { kind: "gmail" });
+  await ingress.receive("gmail", {
+    headers: {},
+    rawBody: JSON.stringify({
+      message: {
+        data: Buffer.from(JSON.stringify({ emailAddress: "alice@example.com", historyId: "20" })).toString("base64"),
+      },
+    }),
+  });
+  await ingress.process(source.id);
+  assert.equal((await w.sources.get(source.id))?.gmail?.historyId, "10");
+  assert.equal((await w.deliveries.all())[0]?.attempts, 1);
+  assert.equal((await w.deliveries.all())[0]?.completedAt, undefined);
+  assert.equal((await w.items.byLoop(w.loop.id)).length, 1);
+  readable = true;
+  t.mock.timers.tick(120_000);
+  await createLoopIngress(deps).process(source.id);
+  assert.deepEqual(starts, ["10", "10"]);
+  assert.equal((await w.sources.get(source.id))?.gmail?.historyId, "20");
+  assert.ok((await w.deliveries.all())[0]?.completedAt);
+  assert.deepEqual((await w.items.byLoop(w.loop.id)).map((item) => item.sourceKey).sort(), [
+    "thread-first",
+    "thread-unreadable",
+  ]);
+});
+
 test("ingestion configuration rejects nonowners and unattended callers", async () => {
   const w = await world();
   const route = loopIngressRoutes.find((route) => "method" in route && route.method === "POST")!;

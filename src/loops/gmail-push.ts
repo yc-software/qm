@@ -81,11 +81,11 @@ export function createGmailPushClient(tokens: ConnectorTokenSource, config: Gmai
             if (error instanceof GmailApiError && error.status === 404) continue;
             throw error;
           }
+          const at = Number(message.internalDate);
+          if (!message.threadId || !Number.isFinite(at)) throw new Error("Gmail returned invalid message metadata");
           if (!message.labelIds?.includes("INBOX")) continue;
           const headers = message.payload?.headers ?? [];
           const header = (name: string) => headers.find((entry) => entry.name.toLowerCase() === name)?.value;
-          const at = Number(message.internalDate);
-          if (!message.threadId || !Number.isFinite(at)) throw new Error("Gmail returned invalid message metadata");
           await ingest([
             {
               loopId,
