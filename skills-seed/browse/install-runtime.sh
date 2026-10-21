@@ -1,7 +1,4 @@
 #!/bin/sh
-# Installs the browse runner's Python driver at /opt/browser-engine/venv.
-# The image build and the browse skill both run this, so versions live only here.
-# The browser itself is remote (CDP), so no local Chromium is needed for the runner.
 set -eu
 VENV=/opt/browser-engine/venv
 if "$VENV/bin/python" -c 'import browser_use, playwright' 2>/tmp/browse-runtime-probe.txt; then
