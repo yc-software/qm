@@ -4088,7 +4088,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             interrupted,
           );
         } catch (e) {
-          await ref.saveGoal?.(goal);
+          await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a failed wait", undefined));
           return recordCoreAuthoredResult(
             callId,
             { tool: "goal", action: "update", error: "inbox_unavailable", goal },
