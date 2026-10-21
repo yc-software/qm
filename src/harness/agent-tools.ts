@@ -4529,11 +4529,7 @@ export interface ToolApprovalDeclaration {
 
 async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unknown): Promise<string | undefined> {
   const needed =
-    typeof tool.needsApproval === "function"
-      ? await Promise.resolve()
-          .then(() => (tool.needsApproval as (params: unknown) => boolean | Promise<boolean>)(params))
-          .catch(swallowAs(`tool approval: ${(tool as { name?: string }).name ?? "tool"} needsApproval`, true))
-      : tool.needsApproval === true;
+    typeof tool.needsApproval === "function" ? await tool.needsApproval(params) : tool.needsApproval === true;
   return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
 }
 
@@ -4572,7 +4568,26 @@ function withToolApprovalGate(
         ? `${tool.name}:${resourceAction ?? "invalid"}`
         : tool.name;
       const commandLabel = resourceAction ? `${tool.name} ${resourceAction}` : tool.name;
-      const declaredReason = await declaredApprovalReason(tool, params);
+      let declaredReason: string | undefined;
+      try {
+        declaredReason = await declaredApprovalReason(tool, params);
+      } catch (error) {
+        await rec.recordCall(callId, { tool: tool.name, blocked: "approval_check_failed" });
+        return rec.recordResult(
+          callId,
+          { tool: tool.name, blocked: "approval_check_failed" },
+          {
+            content: [
+              {
+                type: "text" as const,
+                text: `[error] could not check whether this call needs approval: ${errMessage(error)}`,
+              },
+            ],
+            details: {},
+          },
+          true,
+        );
+      }
       const callKey = declaredReason ? toolCallApprovalKey(approvalIdentity, params) : undefined;
       if (callKey && canonicalJson(params ?? {}).length > APPROVAL_ARGS_MAX_CHARS) {
         const reason = `the arguments are too long to show on an approval card (over ${APPROVAL_ARGS_MAX_CHARS} characters); split the work into smaller calls`;
