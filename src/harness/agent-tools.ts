@@ -40,6 +40,7 @@ import {
   GOAL_STEP_BACK_PROMPT,
   type GoalGovernor,
   type GoalRecord,
+  type GovernorVerdict,
 } from "./goal.ts";
 import {
   toolLabelOf,
@@ -4091,23 +4092,30 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         p.note ?? "",
         ...(await goalEvidenceFiles(ref.current, p.files, ref.abortSignal, p.sandbox_id)),
       ].join("\n");
-      const verdict = ref.governGoal
-        ? await ref
-            .governGoal({
+      let verdict: GovernorVerdict;
+      try {
+        verdict = ref.governGoal
+          ? await ref.governGoal({
               objective: goal.objective,
               trigger: "completion",
               recentWork: ref.goalRecentWork?.() ?? "",
               evidence,
               ...(goal.governor ? { previous: goal.governor } : {}),
             })
-            .catch((e: unknown) => ({
-              verdict: "continue" as const,
-              reasons: `the governor failed (${errMessage(e)}); request completion again`,
-            }))
-        : {
-            verdict: "continue" as const,
-            reasons: "no independent governor is available on this runtime; keep working",
-          };
+          : {
+              verdict: "continue",
+              reasons: "no independent governor is available on this runtime; keep working",
+            };
+      } catch (e) {
+        return recordCoreAuthoredResult(
+          callId,
+          { tool: "goal", action: "update", error: "governor_undecided", goal },
+          text(
+            `The governor could not reach a decision (${errMessage(e)}). This is not a rejection and nothing was recorded against the goal; it stays active. Request completion again with the same evidence.`,
+          ),
+          true,
+        );
+      }
       if (verdict.verdict !== "complete") {
         const applied = applyGovernorVerdict(goal, verdict);
         await ref.saveGoal?.(goal);

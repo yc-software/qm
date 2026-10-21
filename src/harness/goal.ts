@@ -32,6 +32,7 @@ import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 import { withoutWire } from "./context-compaction.ts";
+import { swallowAs } from "../util/errors.ts";
 
 type GoalStatus = "active" | "paused" | "complete" | "cancelled";
 
@@ -318,7 +319,6 @@ export function goalWorkDigest(lines: ReadonlyArray<string>, maxChars = GOAL_WOR
   return kept.reverse().join("\n");
 }
 
-/** A fresh-context judge call. Fails closed to "continue". */
 export async function governGoal(
   judge: (system: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>,
   input: GoalGovernorInput,
@@ -336,22 +336,24 @@ export async function governGoal(
     .filter(Boolean)
     .join("\n");
   const reply = (await judge(GOAL_GOVERNOR_SYSTEM_PROMPT, prompt, signal)) ?? "";
-  let verdict: GovernorVerdict["verdict"] = "continue";
-  let reasons = "the governor's reply was not parseable";
+  let parsed: { verdict?: unknown; reasons?: unknown } | undefined;
   try {
-    const parsed = JSON.parse(reply.slice(reply.indexOf("{"), reply.lastIndexOf("}") + 1)) as {
-      verdict?: unknown;
-      reasons?: unknown;
-    };
-    if (["continue", "complete", "step_back", "pause"].includes(parsed.verdict as string))
-      verdict = parsed.verdict as GovernorVerdict["verdict"];
-    reasons = typeof parsed.reasons === "string" && parsed.reasons.trim() ? parsed.reasons.trim() : "no reasons given";
+    parsed = JSON.parse(reply.slice(reply.indexOf("{"), reply.lastIndexOf("}") + 1)) as typeof parsed;
   } catch {
-    /* fail closed below */
+    parsed = undefined;
   }
+  if (!parsed || !GOVERNOR_VERDICTS.includes(parsed.verdict as GovernorVerdict["verdict"]))
+    throw new GovernorUndecided(reply.trim() ? "its reply was not a verdict" : "it returned no reply");
+  let verdict = parsed.verdict as GovernorVerdict["verdict"];
+  const reasons =
+    typeof parsed.reasons === "string" && parsed.reasons.trim() ? parsed.reasons.trim() : "no reasons given";
   if (verdict === "complete" && input.trigger !== "completion") verdict = "continue";
   return { verdict, reasons };
 }
+
+const GOVERNOR_VERDICTS: ReadonlyArray<GovernorVerdict["verdict"]> = ["continue", "complete", "step_back", "pause"];
+
+export class GovernorUndecided extends Error {}
 
 /**
  * Record a verdict on the goal and return the one that took effect. A pause is
@@ -525,10 +527,9 @@ export async function enforceGoal<T>(opts: {
     ) {
       rounds = 0;
       lastCheck = now();
-      const verdict = await opts
-        .govern(opts.goal.governor)
-        .catch((e: unknown) => ({ verdict: "continue" as const, reasons: `the governor failed (${String(e)})` }));
-      applyGovernorVerdict(opts.goal, verdict.verdict === "complete" ? { ...verdict, verdict: "continue" } : verdict);
+      const verdict = await opts.govern(opts.goal.governor).catch(swallowAs("goal: checkpoint governor", undefined));
+      if (verdict)
+        applyGovernorVerdict(opts.goal, verdict.verdict === "complete" ? { ...verdict, verdict: "continue" } : verdict);
     }
     rounds++;
     if (opts.goal.status === "paused") note = goalGovernorPausePrompt(opts.goal);
