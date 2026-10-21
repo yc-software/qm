@@ -247,7 +247,8 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
+  callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
     timeoutMs: number,
@@ -1239,9 +1240,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.sessionHistory.open(seq);
     },
 
-    async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+    async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      return deps.mcp.call(name, args, deps.createdBy, approval);
+    },
+
+    async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
+      if (!deps.mcp) throw new Error("no MCP connectors are configured");
+      return deps.mcp.needsApproval(name, args, deps.createdBy);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

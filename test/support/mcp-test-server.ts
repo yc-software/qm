@@ -17,6 +17,8 @@ interface McpRequest {
   path: string;
   rpc?: string;
   authorization?: string;
+  actor?: string;
+  approval?: string;
 }
 
 export interface McpTestServer {
@@ -123,6 +125,8 @@ export async function startMcpTestServer(
       path,
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
+      ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
+      ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });

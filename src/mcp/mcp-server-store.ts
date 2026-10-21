@@ -32,6 +32,8 @@ export interface McpServer {
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
   }>;
   approval?: McpApprovalPolicy;
+  catalog?: boolean;
+  attestActor?: boolean;
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;

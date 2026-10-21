@@ -14,7 +14,11 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
-const MAX_RESULT_CHARS = 60_000;
+const MAX_RESULT_CHARS = 1_000_000;
+const CATALOG_TTL_MS = 60_000;
+const CATALOG_MAX_TOOLS = 5_000;
+const CATALOG_SEARCH_LIMIT = 50;
+const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
 
 function modelInputSchema(schema: Record<string, unknown>): Record<string, unknown> {
@@ -66,6 +70,7 @@ export interface McpToolDescriptor {
   readOnly: boolean;
   needsApproval: boolean;
   signIn?: true;
+  catalog?: true;
 }
 
 export interface McpToolService {
@@ -73,15 +78,74 @@ export interface McpToolService {
   toolDefs(): McpToolDescriptor[];
   toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]>;
   /** Call a namespaced tool. Returns the tool's text output (clamped). */
-  call(name: string, args: Record<string, unknown>, principalId?: string): Promise<string>;
+  call(name: string, args: Record<string, unknown>, principalId?: string, approval?: string): Promise<string>;
+  needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
   /** Probe a server config without persisting it. Returns its tool names. */
-  probe(server: McpServer): Promise<string[]>;
+  probe(server: McpServer, principalId?: string): Promise<string[]>;
   close(): void;
 }
 
 class SignInRequired extends Error {}
+
+type RemoteTool = NonNullable<McpServer["tools"]>[number];
+
+function catalogDescriptor(server: McpServer): McpToolDescriptor {
+  return {
+    name: server.id.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    serverId: server.id,
+    remoteName: "",
+    catalog: true,
+    description: `${server.name}: a catalog of tools behind one interface. Search for a tool, describe it to see its parameters, then invoke it. Tools marked "needs approval" pause until the person approves that exact call.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: {
+          type: "string",
+          enum: CATALOG_OPERATIONS,
+          description: "search finds tools; describe shows one tool's parameters; invoke runs one tool.",
+        },
+        query: {
+          type: "string",
+          description: "search: words to match in tool names and descriptions; omit to list every tool.",
+        },
+        tool: { type: "string", description: "describe and invoke: a tool name from search." },
+        arguments: {
+          type: "object",
+          description: "invoke: the tool's arguments, matching its parameters from describe.",
+        },
+      },
+      required: ["operation"],
+    },
+    readOnly: server.readOnly,
+    needsApproval: false,
+  };
+}
+
+function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
+  if (server.attestActor && !principalId) throw new Error(`MCP server ${server.id} needs a signed-in person`);
+  return {
+    ...(server.attestActor && principalId ? { "x-qm-actor": principalId } : {}),
+    ...(approval ? { "x-qm-approval": approval } : {}),
+  };
+}
+
+function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = tools.filter((t) => {
+    const text = `${t.name} ${t.description}`.toLowerCase();
+    return words.every((w) => text.includes(w));
+  });
+  if (!hits.length) return `No ${server.name} tools match "${query}".`;
+  const lines = hits.slice(0, CATALOG_SEARCH_LIMIT).map((t) => {
+    const summary = (t.description.split("\n")[0] ?? "").slice(0, 200);
+    return `- ${t.name}${mcpToolNeedsApproval(server, t.annotations) ? " (needs approval)" : ""}: ${summary}`;
+  });
+  if (hits.length > CATALOG_SEARCH_LIMIT)
+    lines.push(`…and ${hits.length - CATALOG_SEARCH_LIMIT} more; narrow the query.`);
+  return lines.join("\n");
+}
 
 function authOf(server: McpServer): McpAuth {
   if (server.auth === "bearer") return { mode: "bearer", token: server.bearerToken ?? "" };
@@ -102,6 +166,7 @@ export function createMcpToolService(opts: {
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let perUserServers = new Map<string, McpServer>();
+  const catalogs = new Map<string, { tools: RemoteTool[]; expiresAt: number }>();
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -148,6 +213,62 @@ export function createMcpToolService(opts: {
     return createMcpClient({ url: server.url, auth: { mode: "bearer", token } });
   }
 
+  async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
+    const key = `${server.id}\0${server.attestActor ? (principalId ?? "") : ""}`;
+    const cached = catalogs.get(key);
+    if (cached && cached.expiresAt > now()) return cached.tools;
+    const client = await callerClient(server, principalId);
+    const tools = await client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS });
+    for (const [k, v] of catalogs) if (v.expiresAt <= now()) catalogs.delete(k);
+    catalogs.set(key, { tools, expiresAt: now() + CATALOG_TTL_MS });
+    return tools;
+  }
+
+  async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
+    if (typeof name !== "string" || !name) throw new Error("tool is required");
+    const tools = await catalogTools(server, principalId);
+    const loose = (n: string) => n.toLowerCase().replace(/-/g, "_");
+    const entry = tools.find((t) => t.name === name) ?? tools.find((t) => loose(t.name) === loose(name));
+    if (!entry) throw new Error(`Unknown ${server.name} tool: ${name}. Search for it first.`);
+    return entry;
+  }
+
+  async function callCatalog(
+    server: McpServer,
+    args: Record<string, unknown>,
+    principalId: string | undefined,
+    approval: string | undefined,
+  ): Promise<string> {
+    if (args.operation === "search") {
+      const query = typeof args.query === "string" ? args.query : "";
+      return catalogSearch(server, await catalogTools(server, principalId), query);
+    }
+    const entry = await catalogEntry(server, principalId, args.tool);
+    if (args.operation === "describe") {
+      return JSON.stringify(
+        {
+          name: entry.name,
+          description: entry.description,
+          needsApproval: mcpToolNeedsApproval(server, entry.annotations),
+          parameters: entry.inputSchema,
+        },
+        null,
+        2,
+      );
+    }
+    if (args.operation !== "invoke") throw new Error(`operation must be one of ${CATALOG_OPERATIONS.join(", ")}`);
+    const input = args.arguments ?? {};
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("arguments must be an object");
+    const client = await callerClient(server, principalId);
+    const result = await client.callTool(
+      entry.name,
+      input as Record<string, unknown>,
+      headersFor(server, principalId, approval),
+    );
+    record("call", `${server.id}/${entry.name}`, approval ? "ok approved" : "ok", principalId);
+    return mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
+  }
+
   async function refresh(): Promise<void> {
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
@@ -157,6 +278,10 @@ export function createMcpToolService(opts: {
     for (const server of servers) {
       try {
         let tools: NonNullable<McpServer["tools"]>;
+        if (server.catalog) {
+          next.push(catalogDescriptor(server));
+          continue;
+        }
         if (server.auth === "oauth-user") {
           nextPerUser.set(server.id, server);
           next.push({
@@ -171,7 +296,7 @@ export function createMcpToolService(opts: {
           });
           tools = server.tools ?? [];
           if (!tools.length) continue;
-        } else tools = await clientFor(server).listTools();
+        } else tools = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
         for (const tool of tools) {
           next.push({
             name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
@@ -227,12 +352,25 @@ export function createMcpToolService(opts: {
   return {
     toolDefs: () => snapshot,
     toolDefsFor,
-    async call(name, args, principalId) {
+    async needsApproval(name, args, principalId) {
+      const def = snapshot.find((t) => t.name === name);
+      if (!def) throw new Error(`unknown MCP tool: ${name}`);
+      if (!def.catalog) return def.needsApproval;
+      if (args.operation !== "invoke") return false;
+      const server = await opts.servers.get(def.serverId);
+      if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+      return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+    },
+    async call(name, args, principalId, approval) {
       const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
       try {
+        if (def.catalog) {
+          const text = await callCatalog(server, args, principalId, approval);
+          return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;
+        }
         const client = await callerClient(server, principalId);
         if (def.signIn) {
           const tools = await client.listTools();
@@ -242,8 +380,8 @@ export function createMcpToolService(opts: {
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
           return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;
         }
-        const result = await client.callTool(def.remoteName, args);
-        record("call", `${def.serverId}/${def.remoteName}`, "ok", principalId);
+        const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
+        record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
         const text = mcpResultText(result) || JSON.stringify(result.structuredContent ?? "") || "";
         return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated]` : text;
       } catch (e) {
@@ -256,8 +394,11 @@ export function createMcpToolService(opts: {
       }
     },
     refresh,
-    async probe(server) {
-      const tools = await createMcpClient({ url: server.url, auth: authOf(server) }).listTools();
+    async probe(server, principalId) {
+      const tools = await createMcpClient({ url: server.url, auth: authOf(server) }).listTools({
+        headers: headersFor(server, principalId),
+        ...(server.catalog ? { maxTools: CATALOG_MAX_TOOLS } : {}),
+      });
       return tools.map((t) => t.name);
     },
     close() {

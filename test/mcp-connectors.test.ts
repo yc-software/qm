@@ -175,6 +175,73 @@ test("destructive annotations mark MCP tools for approval unless the server over
   service.close();
 });
 
+test("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "find-company", description: "Find a company by name", inputSchema: { type: "object" } },
+      {
+        name: "send-email",
+        description: "Send an email to founders\nLong detail",
+        inputSchema: { type: "object", properties: { to: { type: "string" } } },
+        annotations: { destructiveHint: true },
+      },
+    ],
+    call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "yc", name: "Catalog", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  assert.deepEqual(
+    service.toolDefs().map((d) => [d.name, d.catalog]),
+    [["yc", true]],
+  );
+  assert.equal(
+    mcp.requests.filter((r) => r.rpc === "tools/list").length,
+    0,
+    "a catalog is listed per person, not at refresh",
+  );
+  assert.equal(
+    await service.call("yc", { operation: "search", query: "email" }, "alice@example.com"),
+    "- send-email (needs approval): Send an email to founders",
+  );
+  assert.match(
+    await service.call("yc", { operation: "describe", tool: "send_email" }, "alice@example.com"),
+    /"needsApproval": true/,
+  );
+  assert.equal(
+    await service.needsApproval("yc", { operation: "invoke", tool: "send-email" }, "alice@example.com"),
+    true,
+  );
+  assert.equal(
+    await service.needsApproval("yc", { operation: "invoke", tool: "find-company" }, "alice@example.com"),
+    false,
+  );
+  assert.equal(await service.needsApproval("yc", { operation: "search" }, "alice@example.com"), false);
+  await assert.rejects(
+    service.needsApproval("yc", { operation: "invoke", tool: "nope" }, "alice@example.com"),
+    /Unknown Catalog tool/,
+  );
+  assert.equal(
+    await service.call(
+      "yc",
+      { operation: "invoke", tool: "send-email", arguments: { to: "x" } },
+      "alice@example.com",
+      "tool-call:abc",
+    ),
+    'send-email {"to":"x"}',
+  );
+  const calls = mcp.requests.filter((r) => r.rpc === "tools/call");
+  assert.deepEqual(
+    calls.map((r) => [r.actor, r.approval]),
+    [["alice@example.com", "tool-call:abc"]],
+  );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
+  assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com"));
+  await assert.rejects(service.call("yc", { operation: "search" }), /needs a signed-in person/);
+  service.close();
+});
+
 test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(createMemoryMap<McpServer>());

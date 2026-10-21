@@ -27,8 +27,8 @@ export type McpAuth =
   | { mode: "client-credentials"; clientId: string; clientSecret: string };
 
 export interface McpClient {
-  listTools(): Promise<McpRemoteTool[]>;
-  callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>;
+  listTools(opts?: { headers?: Record<string, string>; maxTools?: number }): Promise<McpRemoteTool[]>;
+  callTool(name: string, args: Record<string, unknown>, headers?: Record<string, string>): Promise<CallToolResult>;
 }
 
 export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient {
@@ -44,10 +44,15 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
         })
       : undefined;
 
-  async function session<T>(op: string, work: (client: Client) => Promise<T>): Promise<T> {
+  async function session<T>(
+    op: string,
+    work: (client: Client) => Promise<T>,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<T> {
+    const headers = { ...extraHeaders, ...(auth.mode === "bearer" ? { authorization: `Bearer ${auth.token}` } : {}) };
     const transport = new StreamableHTTPClientTransport(endpoint, {
       ...(authProvider ? { authProvider } : {}),
-      ...(auth.mode === "bearer" ? { requestInit: { headers: { authorization: `Bearer ${auth.token}` } } } : {}),
+      ...(Object.keys(headers).length ? { requestInit: { headers } } : {}),
       fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
     });
     const client = new Client({ name: "qm", version: "1.0.0" });
@@ -64,26 +69,32 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
   }
 
   return {
-    listTools: () =>
-      session("tools/list", async (client) => {
-        const tools: McpRemoteTool[] = [];
-        let cursor: string | undefined;
-        do {
-          const page = await client.listTools(cursor === undefined ? undefined : { cursor });
-          for (const t of page.tools)
-            tools.push({
-              name: t.name,
-              description: t.description ?? "",
-              inputSchema: t.inputSchema,
-              ...(t.annotations ? { annotations: t.annotations } : {}),
-            });
-          cursor = page.nextCursor;
-        } while (cursor && tools.length < MAX_TOOLS);
-        return tools.slice(0, MAX_TOOLS);
-      }),
-    async callTool(name, args) {
-      const result = (await session("tools/call", (client) =>
-        client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
+    listTools: (opts) =>
+      session(
+        "tools/list",
+        async (client) => {
+          const tools: McpRemoteTool[] = [];
+          let cursor: string | undefined;
+          do {
+            const page = await client.listTools(cursor === undefined ? undefined : { cursor });
+            for (const t of page.tools)
+              tools.push({
+                name: t.name,
+                description: t.description ?? "",
+                inputSchema: t.inputSchema,
+                ...(t.annotations ? { annotations: t.annotations } : {}),
+              });
+            cursor = page.nextCursor;
+          } while (cursor && tools.length < (opts?.maxTools ?? MAX_TOOLS));
+          return tools.slice(0, opts?.maxTools ?? MAX_TOOLS);
+        },
+        opts?.headers,
+      ),
+    async callTool(name, args, headers) {
+      const result = (await session(
+        "tools/call",
+        (client) => client.callTool({ name, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }),
+        headers,
       )) as CallToolResult;
       if (result.isError) throw new Error(`mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`);
       return result;

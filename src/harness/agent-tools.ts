@@ -139,6 +139,7 @@ export interface ToolContextRef {
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
+  approvedToolCalls?: Map<string, string>;
 }
 
 function text(s: string) {
@@ -4247,7 +4248,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           if (!tc) return text("[error] no active tool context");
           await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
           try {
-            const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>);
+            const out = await tc.callMcpTool(
+              d.name,
+              (params ?? {}) as Record<string, unknown>,
+              ref.approvedToolCalls?.get(callId),
+            );
             return recordExternalResult(
               callId,
               { tool: d.name, mcpServer: d.serverId },
@@ -4264,7 +4269,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }
         },
       }),
-      needsApproval: d.needsApproval === true,
+      needsApproval: d.catalog
+        ? async (params: unknown) => {
+            const tc = ref.current;
+            if (!tc) return true;
+            return tc.mcpToolNeedsApproval(d.name, (isObj(params) ? params : {}) as Record<string, unknown>);
+          }
+        : d.needsApproval === true,
     }));
 
   const clientTools = [...(opts?.clientTools ?? [])]
@@ -4708,7 +4719,14 @@ function withToolApprovalGate(
           true,
         );
       }
-      return (inner as (callId: string, params: unknown) => unknown)(callId, params);
+      if (!callKey) return (inner as (callId: string, params: unknown) => unknown)(callId, params);
+      const approved = (ref.approvedToolCalls ??= new Map());
+      approved.set(callId, callKey);
+      try {
+        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
+      } finally {
+        approved.delete(callId);
+      }
     },
   } as ToolDefinition;
 }

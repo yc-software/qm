@@ -96,6 +96,17 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   }
   const existing = await ctx.deps.mcpServers.get(id);
   const oauthUser = auth === "oauth-user";
+  const catalog = b.catalog === true;
+  const attestActor = b.attestActor === true;
+  if ((catalog || attestActor) && oauthUser) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "catalog and attestActor are not available with oauth-user auth",
+    });
+  }
+  if (attestActor && !catalog) {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "attestActor requires catalog" });
+  }
   if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
@@ -181,6 +192,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
         }
       : {}),
     ...(approval === "annotations" ? {} : { approval }),
+    ...(catalog ? { catalog } : {}),
+    ...(attestActor ? { attestActor } : {}),
     readOnly: b.readOnly !== false,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),
@@ -206,7 +219,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   let toolNames: string[] | undefined;
   if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
-      toolNames = await ctx.deps.mcpToolService.probe(server);
+      toolNames = await ctx.deps.mcpToolService.probe(server, authorized.id);
     } catch (e) {
       return sendJson(ctx.res, 400, {
         error: "unreachable",

@@ -94,6 +94,9 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.approval, "all", "an update that omits the policy keeps it");
   assert.equal((await put({ approval: "annotations" })).status, 200);
   assert.equal((await store.get("crm"))?.approval, undefined);
+  assert.equal((await put({ attestActor: true })).status, 400);
+  assert.equal((await put({ catalog: true, attestActor: true })).status, 200);
+  assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {

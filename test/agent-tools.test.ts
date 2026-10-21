@@ -359,6 +359,9 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async callMcpTool() {
       return "";
     },
+    async mcpToolNeedsApproval() {
+      return false;
+    },
     async awaitClientResult() {
       return "timeout" as const;
     },
@@ -4489,6 +4492,49 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
     cards,
     "an argument set the card cannot show is never offered for approval",
   );
+});
+
+test("a catalog tool asks per call and forwards the approval only on the approved call", async () => {
+  const calls: Array<[Record<string, unknown>, string | undefined]> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      mcpToolNeedsApproval: async (_name, args) => args.operation === "invoke" && args.tool === "send-email",
+      callMcpTool: async (_name, args, approval) => {
+        calls.push([args, approval]);
+        return "ok";
+      },
+    },
+    pendingApprovals: [],
+    scopeLabel: "personal:U1",
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+  };
+  const [catalog] = createAgentTools(ref, {
+    mcpTools: [
+      {
+        name: "yc",
+        serverId: "yc",
+        remoteName: "",
+        catalog: true,
+        description: "Catalog",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: false,
+        needsApproval: false,
+      },
+    ],
+  }).filter((t) => t.name === "yc");
+  const send = { operation: "invoke", tool: "send-email", arguments: { to: "x" } };
+  await call(catalog, { operation: "invoke", tool: "find", arguments: {} });
+  await call(catalog, send);
+  assert.deepEqual(calls, [[{ operation: "invoke", tool: "find", arguments: {} }, undefined]]);
+  const card = ref.pendingApprovals!.at(-1)!;
+  assert.equal(card.command, 'yc {"operation":"invoke","tool":"send-email","arguments":{"to":"x"}}');
+  approved.add(card.approvalKey!);
+  ref.pausedOnApproval = false;
+  await call(catalog, send);
+  assert.deepEqual(calls.at(-1), [send, card.approvalKey]);
+  assert.equal(ref.approvedToolCalls?.size, 0);
 });
 
 test("a tool that needs approval fails closed without an approval gate", async () => {
