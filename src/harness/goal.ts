@@ -65,6 +65,8 @@ export interface GovernorVerdict {
 /** Checkpoint cadence: every N continuation rounds or this much work, whichever comes first. */
 export const GOAL_GOVERNOR_ROUNDS = 3;
 const GOAL_GOVERNOR_INTERVAL_MS = 30 * 60_000;
+/** Every this many hours of active work, the goal pauses to check in with the user. */
+const GOAL_CHECK_IN_HOURS = 4;
 const GOAL_WORK_DIGEST_CHARS = 16_000;
 const GOAL_WORK_LINE_CHARS = 600;
 
@@ -212,7 +214,7 @@ function governorNote(goal: GoalRecord): string {
 /** Injected once when the governor pauses the goal: hand the question to the user and end the turn. */
 function goalGovernorPausePrompt(goal: GoalRecord): string {
   return [
-    `[goal] An independent governor paused this goal because it needs the user:`,
+    `[goal] This goal is paused and needs the user:`,
     `<governor>\n${escapeTags(goal.pauseReason ?? goal.governor?.reasons ?? "")}\n</governor>`,
     `Stop working on it now. End your reply with one short message to the user: where things stand and exactly what you need from them. Their reply resumes the goal.`,
   ].join("\n\n");
@@ -512,12 +514,18 @@ export async function enforceGoal<T>(opts: {
   let rounds = 0;
   let lastCheck = now();
   const floorUnmet = (): boolean => goalFloorUnmet(opts.goal, opts.meter);
+  const checkIns = (ms: number) => Math.floor(ms / (GOAL_CHECK_IN_HOURS * 3_600_000));
   while (outcome === opts.ok && !opts.blocked() && (opts.goal.status === "active" || floorUnmet())) {
     const active = opts.goal.status === "active";
     const capSpent = opts.goal.capTokens !== undefined && opts.goal.tokensUsed >= opts.goal.capTokens;
     if (capSpent && capNoticeSent) break;
     let note: string;
-    if (
+    const worked = checkIns(goalActiveMs(opts.goal, opts.meter.startedAt, now()));
+    if (active && !floorUnmet() && worked > checkIns(opts.goal.activeMs ?? 0)) {
+      opts.goal.status = "paused";
+      opts.goal.updatedAt = now();
+      opts.goal.pauseReason = `This goal has had ${worked * GOAL_CHECK_IN_HOURS} hours of active work. Should I keep going?`;
+    } else if (
       active &&
       !capSpent &&
       opts.govern &&

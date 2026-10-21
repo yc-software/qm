@@ -442,7 +442,7 @@ test("enforceGoal checks in with the governor every few rounds, steps back, then
   assert.equal(notes.length, 2 * n + 1, "a checkpoint every N rounds, then one pause prompt");
   assert.ok(!notes[n - 1]!.includes(GOAL_STEP_BACK_PROMPT));
   assert.ok(notes[n]!.includes(GOAL_STEP_BACK_PROMPT), "the step back is injected verbatim");
-  assert.match(notes[2 * n]!, /governor paused this goal[\s\S]*Approve the StyleUp request/);
+  assert.match(notes[2 * n]!, /This goal is paused and needs the user[\s\S]*Approve the StyleUp request/);
   assert.equal(goal.status, "paused");
   assert.equal(goal.pauseReason, "Approve the StyleUp request in Slack?");
   assert.deepEqual(seenPrevious, [
