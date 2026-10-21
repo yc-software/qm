@@ -352,7 +352,7 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema offers only complete, resume and cancel", () => {
+test("goal update schema offers only complete, resume, cancel and wait", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
   assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);
@@ -514,6 +514,58 @@ test("goal get says when a spend floor is waived", async () => {
   assert.match(textOf(report as never), /Work floor .*spend floor waived.* — met/);
 });
 
+test("wait holds a swarm worker's goal with its clock stopped until a message arrives, then resumes it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const { ref, create, update, saved } = toolbox();
+  await create.execute("c1", { objective: "merge lanes", floor: { minMs: 3_600_000 } });
+  assert.match(
+    textOf((await update.execute("u1", { status: "wait", note: "worker 7" })) as never),
+    /only for swarm workers/,
+  );
+  let polls = 0;
+  const acknowledged: string[] = [];
+  ref.goalInbox = {
+    async receive(goal) {
+      if (goal.status !== "paused") return [];
+      return ++polls === 3 ? [{ id: "m9", text: "Swarm agent message m9: lane C is at 41.2, -70.1" }] : [];
+    },
+    async acknowledge(ids) {
+      acknowledged.push(...ids);
+    },
+  };
+  assert.match(textOf((await update.execute("u2", { status: "wait", note: "  " })) as never), /who or what/);
+  ref.goalMeter = createGrindMeter(Date.now() - 5 * 60_000);
+  ref.goal!.createdAt = ref.goalMeter.startedAt;
+  const waiting = update.execute("u3", { status: "wait", note: "lane C coordinates from worker 7" });
+  for (let i = 0; i < 20 && polls < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  const result = await waiting;
+  assert.match(textOf(result as never), /active again[\s\S]*lane C is at 41\.2/);
+  assert.deepEqual(acknowledged, ["m9"]);
+  assert.equal(saved()?.status, "active");
+  assert.equal(saved()?.activeMs, 5 * 60_000, "the time before the wait is banked and the wait itself is not counted");
+  assert.ok(
+    (saved()?.activeSince ?? 0) >= 1_010_000,
+    "the clock restarts when the goal resumes, not when the wait began",
+  );
+});
+
+test("wait gives up after thirty minutes and resumes the goal so the worker can reassess", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = { receive: async () => [], acknowledge: async () => {} };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 400; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /No swarm message reached you in 30 minutes/);
+  assert.equal(ref.goal?.status, "active");
+});
+
 test("swarm messages ride on the next tool result and can replace the goal", async () => {
   const { ref, create, get } = toolbox();
   await create.execute("c1", { objective: "lane A", floor: { minTurns: 5 } });
@@ -563,4 +615,43 @@ test("a completion decided after the goal was replaced is dropped, not applied t
   assert.match(textOf(res as never), /replaced this one while the governor was deciding/);
   assert.equal(ref.goal?.status, "active");
   assert.equal(ref.goal?.objective, "lane B");
+});
+
+test("wait ends when the turn that started it ends, even if no stop reached the tool", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = { receive: async () => [], acknowledge: async () => {} };
+  ref.abortSignal = new AbortController().signal;
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  ref.abortSignal = undefined;
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /interrupted/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("wait ends and says so when the swarm inbox cannot be read", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = {
+    receive: async () => {
+      throw new Error("swarm store unavailable");
+    },
+    acknowledge: async () => {},
+  };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /could not be read \(swarm store unavailable\)/);
+  assert.equal(ref.goal?.status, "active");
 });

@@ -198,6 +198,11 @@ so a parent can redirect a busy worker; its work floor counts from when the
 message was sent. A message the screen blocks stays queued, with every message
 after it, and runs as its own turn later.
 
+A worker blocked on another agent can call goal action update `"wait"` with a note
+naming what it waits for. The goal's clock stops and the call returns with the
+next message that reaches the worker, resuming the goal, or after 30 minutes so the
+worker can reassess.
+
 ### Ask, read, and tail
 
 `GET /v1/swarm?read=1&after=0&waitMs=0` returns at most 32 messages. Advance `after`

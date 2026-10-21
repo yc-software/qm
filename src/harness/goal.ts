@@ -32,6 +32,7 @@ import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { createGrindMeter, type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 import { withoutWire } from "./context-compaction.ts";
+import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 
 type GoalStatus = "active" | "paused" | "complete" | "cancelled";
@@ -73,6 +74,7 @@ export const GOAL_STEP_BACK_PROMPT =
   "Take a step back, and think through whether this is actually a blocker error. There is likely a way around this issue if you explore a different path.";
 
 export const GOAL_FLOOR_RECHECK_MS = 60_000;
+export const GOAL_WAIT_MAX_MS = 30 * 60_000;
 export const GOAL_INBOX_POLL_MS = 5_000;
 
 export interface GoalInbox {
@@ -180,6 +182,21 @@ export function supersedeGoal(goal: GoalRecord, assigned: GoalCreateInput & { as
   return true;
 }
 
+function parkGoal(goal: GoalRecord, reason: string, turnStartedAt: number, now = Date.now()): void {
+  goal.activeMs = goalActiveMs(goal, turnStartedAt, now);
+  goal.status = "paused";
+  goal.updatedAt = now;
+  goal.pauseReason = reason;
+  delete goal.governor;
+}
+
+export function resumeGoal(goal: GoalRecord, now = Date.now()): void {
+  goal.status = "active";
+  goal.updatedAt = goal.activeSince = now;
+  delete goal.pauseReason;
+  delete goal.governor;
+}
+
 export function goalAssignedNote(goal: GoalCreateInput): string {
   return [
     `[goal] This message assigns you a new goal. It replaces your current goal now; work toward it instead.`,
@@ -204,6 +221,28 @@ export async function takeGoalMessages(
   );
   if (meter && goal.createdAt !== assignedBefore) Object.assign(meter, createGrindMeter(meter.startedAt));
   return messages.map(({ text }) => text).join("\n\n");
+}
+
+export async function waitForGoalMessages(
+  inbox: GoalInbox,
+  goal: GoalRecord,
+  meter: GrindMeter,
+  reason: string,
+  interrupted: () => boolean,
+  pause: (ms: number) => Promise<void> = sleep,
+): Promise<string | undefined> {
+  parkGoal(goal, reason, meter.startedAt);
+  const until = Date.now() + GOAL_WAIT_MAX_MS;
+  let arrived: string | undefined;
+  try {
+    while (goal.status === "paused" && !arrived && !interrupted() && Date.now() < until) {
+      await pause(Math.min(GOAL_INBOX_POLL_MS, until - Date.now()));
+      if (!interrupted()) arrived = await takeGoalMessages(inbox, goal, meter);
+    }
+  } finally {
+    if (goal.status === "paused") resumeGoal(goal);
+  }
+  return arrived;
 }
 
 export function meterGoalCall(goal: GoalRecord, usage: LlmCallUsage | null): void {

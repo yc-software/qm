@@ -38,13 +38,16 @@ import {
   goalIsOpen,
   goalReport,
   GOAL_STEP_BACK_PROMPT,
+  GOAL_WAIT_MAX_MS,
   type GoalGovernor,
   GOAL_INBOX_POLL_MS,
   type GoalInbox,
   type GoalRecord,
   type GovernorVerdict,
   GovernorUndecided,
+  resumeGoal,
   takeGoalMessages,
+  waitForGoalMessages,
 } from "./goal.ts";
 import {
   toolLabelOf,
@@ -3990,10 +3993,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
       "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
     parameters: Type.Object({
-      status: Type.Union([Type.Literal("complete"), Type.Literal("resume"), Type.Literal("cancel")]),
+      status: Type.Union([
+        Type.Literal("complete"),
+        Type.Literal("resume"),
+        Type.Literal("cancel"),
+        Type.Literal("wait"),
+      ]),
       note: Type.String({
         description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request.",
+          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request. wait: what you are waiting on.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
@@ -4005,12 +4013,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       const p = params as {
-        status?: "complete" | "resume" | "cancel";
+        status?: "complete" | "resume" | "cancel" | "wait";
         note: string;
         files?: string[];
         sandbox_id?: string;
       };
-      const status = p.status === "resume" || p.status === "cancel" ? p.status : "complete";
+      const status = p.status === "resume" || p.status === "cancel" || p.status === "wait" ? p.status : "complete";
       await recordCall(callId, {
         tool: "goal",
         action: "update",
@@ -4047,6 +4055,55 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         );
       }
+      if (status === "wait") {
+        if (!ref.goalInbox || goal?.status !== "active") {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "wait_unavailable" },
+            text(
+              goal?.status === "active"
+                ? "Waiting is only for swarm workers on a goal their parent assigned; this goal stays active. Keep working, or poll the swarm for the reply you need."
+                : "No active goal to wait on.",
+            ),
+            true,
+          );
+        }
+        if (!p.note?.trim()) {
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "note_required" },
+            text("Say who or what you are waiting on, and what you asked them for."),
+            true,
+          );
+        }
+        const signal = ref.abortSignal;
+        const interrupted = () => !!signal?.aborted || ref.abortSignal !== signal || !!ref.shutdown?.aborted;
+        let arrived: string | undefined;
+        try {
+          arrived = await waitForGoalMessages(
+            ref.goalInbox,
+            goal,
+            ref.goalMeter ?? createGrindMeter(),
+            p.note.trim(),
+            interrupted,
+          );
+        } catch (e) {
+          await ref.saveGoal?.(goal);
+          return recordCoreAuthoredResult(
+            callId,
+            { tool: "goal", action: "update", error: "inbox_unavailable", goal },
+            text(
+              `Your swarm messages could not be read (${errMessage(e)}), so the wait ended and the goal is active again. Check for the reply with GET /v1/swarm?read=1, or wait again.`,
+            ),
+            true,
+          );
+        }
+        await ref.saveGoal?.(goal);
+        let outcome = `No swarm message reached you in ${GOAL_WAIT_MAX_MS / 60_000} minutes, so the goal is active again. Check on what you were waiting for, work around it if you can, or wait again.`;
+        if (interrupted()) outcome = "The wait was interrupted; the goal is active again.";
+        if (arrived) outcome = `The goal is active again; this reached you while you waited:\n\n${arrived}`;
+        return recordCoreAuthoredResult(callId, { tool: "goal", action: "update", goal }, text(outcome));
+      }
       if (status === "resume") {
         if (goal?.status !== "paused") {
           return recordCoreAuthoredResult(
@@ -4068,11 +4125,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
         }
-        goal.status = "active";
-        goal.updatedAt = goal.activeSince = Date.now();
+        resumeGoal(goal);
         ref.goalOpenedThisTurn = true;
-        delete goal.pauseReason;
-        delete goal.governor;
         await ref.saveGoal?.(goal);
         return recordCoreAuthoredResult(
           callId,
