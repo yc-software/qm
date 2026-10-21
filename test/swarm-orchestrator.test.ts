@@ -19,7 +19,7 @@ import type { TurnRequest } from "../src/types.ts";
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
 
-const fake = installFakeModal({ native: true });
+const fake = installFakeModal();
 mock.module("../src/sandbox/modal-client.ts", {
   namedExports: { ...modalClient, createSdkModalClient: () => fake.client },
 });
@@ -123,7 +123,7 @@ for (const kind of ["command", "security-screen"] as const) {
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(
     testConfig({
-      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret", nativeSnapshotsEnabled: true },
+      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
     }),
   );
   try {

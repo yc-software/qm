@@ -23,7 +23,6 @@ function fixture() {
   const readHistory = createSlackHistoryReader({
     core,
     ids,
-    source: "mirror",
     managed: true,
     setupUrl: "https://qm.test/admin/?setup=slack",
   });
@@ -196,7 +195,6 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
     deps: {
       deliveries: {},
       surfaceCache: cache,
-      slackContextSource: "mirror",
       surfaceContext: {
         pull: async () => ({
           messages: [{ ts: "2.000000", threadTs: "1.000000", text: "reply" }],
@@ -323,8 +321,8 @@ test("deleted messages do not consume context page slots or reappear through fal
   );
 });
 
-test("shared-app shadow compares equal pages while mirror reads retain stored history", async (t) => {
-  const { cache, core, readHistory, client } = fixture();
+test("shared-app mirror reads retain stored history beyond the shared page size", async () => {
+  const { cache, readHistory, client } = fixture();
   const messages = Array.from({ length: 30 }, (_, i) => ({
     ts: `${1000 + i}.000000`,
     text: `message ${i}`,
@@ -332,22 +330,6 @@ test("shared-app shadow compares equal pages while mirror reads retain stored hi
   }));
   await cache.ingest(messages.map((m) => ({ container: "C1", ts: m.ts, text: m.text, authorId: m.user })));
   assert.equal((await readHistory(client, "C1")).raw.length, 30);
-  let resolveReport!: (value: any) => void;
-  const report = new Promise<any>((resolve) => {
-    resolveReport = resolve;
-  });
-  t.mock.method(console, "info", (value: string) => resolveReport(JSON.parse(value)));
-  const shadow = createSlackHistoryReader({ core, ids, source: "shadow", managed: true });
-  const liveClient = {
-    conversations: {
-      history: async () => ({ messages: messages.slice(-15).reverse(), has_more: true }),
-    },
-  };
-  assert.equal((await shadow(liveClient, "C1")).raw.length, 15);
-  const comparison = await report;
-  assert.equal(comparison.matchingMessages, 15);
-  assert.equal(comparison.mirrorMessagesOutsideLiveWindow, 0);
-  assert.equal(comparison.mirrorHasMore, true);
 });
 
 test("thread history keeps file references and authors but only current files are turn attachments", async () => {
@@ -428,24 +410,22 @@ test("automatic context keeps the thread parent and recent exchange but excludes
   );
 });
 
-for (const source of ["live", "mirror"] as const) {
-  test(`own status cards are excluded from ${source} history and backfill`, async () => {
-    const f = fixture();
-    const messages = [
-      { user: "U1", ts: "1", text: "question" },
-      { user: "UBOT", ts: "2", text: "Working", blocks: [{ type: "task_card", task_id: "qm_status:test" }] },
-      { user: "UBOT", ts: "3", text: "ordinary answer" },
-      { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
-    ];
-    const read = createSlackHistoryReader({ core: f.core, ids, source });
-    const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
-    const result = await read(client, "C1", "1");
-    assert.deepEqual(
-      result.raw.map((m) => m.ts),
-      ["1", "3", "4"],
-    );
-    assert.ok(!(await f.cache.readMessages("C1", { limit: 100 })).some((m) => m.ts === "2"));
-    const expanded = await read(client, "C1", undefined, undefined, true);
-    assert.ok(!expanded.raw.some((m) => m.ts === "2"));
-  });
-}
+test("own status cards are excluded from history and backfill", async () => {
+  const f = fixture();
+  const messages = [
+    { user: "U1", ts: "1", text: "question" },
+    { user: "UBOT", ts: "2", text: "Working", blocks: [{ type: "task_card", task_id: "qm_status:test" }] },
+    { user: "UBOT", ts: "3", text: "ordinary answer" },
+    { user: "UOTHER", ts: "4", text: "other bot task", blocks: [{ type: "task_card", task_id: "qm_status:other" }] },
+  ];
+  const read = createSlackHistoryReader({ core: f.core, ids });
+  const client = { conversations: { history: async () => ({ messages }), replies: async () => ({ messages }) } };
+  const result = await read(client, "C1", "1");
+  assert.deepEqual(
+    result.raw.map((m) => m.ts),
+    ["1", "3", "4"],
+  );
+  assert.ok(!(await f.cache.readMessages("C1", { limit: 100 })).some((m) => m.ts === "2"));
+  const expanded = await read(client, "C1", undefined, undefined, true);
+  assert.ok(!expanded.raw.some((m) => m.ts === "2"));
+});

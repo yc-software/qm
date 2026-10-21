@@ -3024,7 +3024,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         );
         if (
           !strictReadOnly &&
-          deps.eagerProvision &&
           sessionUsedTools &&
           !isPollFire &&
           (swarmBinding?.sandboxId || (await deps.sandboxResources?.resolve(memoryScopeId)) !== null)

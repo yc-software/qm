@@ -223,7 +223,6 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
       testConfig({
         modelGateway: config,
         harness: "pi",
-        piSystemCacheSplit: true,
         modelId: "gateway/acme/future",
       }),
     );

@@ -48,8 +48,6 @@ const uploadClient = uploadRoute(async ({ res }) => {
 
 const beginUpload = uploadRoute(async (ctx, uploads, actorId) => {
   const { res, deps, app, capability } = ctx;
-  if (!deps.filesDirectUploadsEnabled)
-    return sendJson(res, 503, { error: "uploads_disabled", message: "new direct uploads are disabled" });
   const body = isObj(ctx.body) ? ctx.body : {};
   const targetScope =
     typeof body.scopeId === "string"
