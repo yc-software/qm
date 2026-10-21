@@ -165,4 +165,6 @@ test("an absolute path outside the workspace reads nothing and says so", async (
       outsideWorkspace: true,
     });
   assert.deepEqual(await h.ctx.read("/workspace/absent.md", undefined, "sb1"), { content: null, sourceScopeId: null });
+  await assert.rejects(h.ctx.write("/etc/notes.md", "x", "sb1"), /not in the computer's workspace/);
+  assert.equal(h.disks.get("selected")!.has("etc/notes.md"), false);
 });

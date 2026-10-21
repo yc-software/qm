@@ -16,7 +16,8 @@ import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
-import { join, posix } from "node:path";
+import { join } from "node:path";
+import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
@@ -155,12 +156,6 @@ interface ReadResult {
   sourceScopeId: ScopeId | null;
   shared?: true;
   outsideWorkspace?: true;
-}
-
-function insideWorkspace(rootDir: string, path: string): string | null {
-  if (!path.startsWith("/")) return null;
-  const rel = posix.relative(posix.normalize(rootDir), posix.normalize(path));
-  return rel && !rel.startsWith("..") ? rel : null;
 }
 
 export interface SkillResult {
@@ -1014,8 +1009,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       signal?.throwIfAborted();
       const { handle, resource, crossScope } = await machine(sandboxId);
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
-      const mapped = insideWorkspace(handle.rootDir, path);
-      const rel = mapped ?? path;
+      const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
+      if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
       return timed("file_op", async () => {
         const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
         if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
@@ -1023,9 +1018,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
           if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
         }
-        return path.startsWith("/") && mapped === null
-          ? { content: null, sourceScopeId: null, outsideWorkspace: true }
-          : { content: null, sourceScopeId: null };
+        return { content: null, sourceScopeId: null };
       });
     },
 
@@ -1081,7 +1074,11 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const { handle, resource, crossScope, durableRef } = await machine(sandboxId);
       if (crossScope) throw new Error("files write needs a computer owned by this conversation");
       const ownerScopeId = resource?.ownerScopeId ?? writableScopeId;
-      const rel = insideWorkspace(handle.rootDir, path) ?? path;
+      const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
+      if (rel === null)
+        throw new Error(
+          `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
+        );
       await once(() =>
         timed("file_op", async () => {
           await deps.sandbox.writeFile(handle, rel, data);
