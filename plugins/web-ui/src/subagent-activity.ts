@@ -50,19 +50,6 @@ export function descendantsOf<T extends SessionLink>(
   return out;
 }
 
-export function subagentCounts(
-  list: readonly SessionLink[],
-  rootId: string | null | undefined,
-): { running: number; waiting: number } {
-  const counts = { running: 0, waiting: 0 };
-  if (!rootId) return counts;
-  for (const { session } of descendantsOf(list, rootId)) {
-    if (session.awaitingInput) counts.waiting++;
-    else if (session.working) counts.running++;
-  }
-  return counts;
-}
-
 export function subagentRows(list: readonly CoreSession[], rootId: string): SubagentRow[] {
   return descendantsOf(list, rootId).map(({ session, depth }) => {
     let state: SubagentState = "done";

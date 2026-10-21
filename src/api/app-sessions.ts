@@ -255,7 +255,7 @@ export function createSessionMethods(
 
   async function decorateSessions(principalId: string, all: Session[]): Promise<Session[]> {
     const visibleById = new Map(all.map((session) => [session.id, session]));
-    const roots = all.filter((session) => !session.parentSessionId).map((session) => session.id);
+    const roots = all.map((session) => session.id);
     const descendants = roots.length ? await deps.sessions.descendantsOf(roots) : [];
     const descendantIds = new Set(descendants.map((d) => d.id));
     const approvalRows: PendingApprovalRecord[] = [];
