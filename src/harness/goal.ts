@@ -123,26 +123,20 @@ export function createGoalRecord(input: {
 
 export const GoalCreateParams = Type.Object({
   objective: Type.String({
-    description:
-      "The concrete end state to pursue, in the user's terms. Verifiable phrasing ('all tests in X pass') beats vague ('improve X').",
+    description: "Concrete, verifiable end state in the user's terms.",
   }),
   floor: Type.Optional(
     Type.Object(
       {
-        minTurns: Type.Optional(Type.Number({ description: "Keep working for at least this many model turns." })),
-        minMs: Type.Optional(Type.Number({ description: "Keep working at least this many milliseconds." })),
-        minTokens: Type.Optional(Type.Number({ description: "Keep working through at least this many tokens." })),
-        minUsd: Type.Optional(Type.Number({ description: "Keep working through at least this much spend (USD)." })),
+        minTurns: Type.Optional(Type.Number({ description: "At least this many model turns." })),
+        minMs: Type.Optional(Type.Number({ description: "At least this many milliseconds." })),
+        minTokens: Type.Optional(Type.Number({ description: "At least this many tokens." })),
+        minUsd: Type.Optional(Type.Number({ description: "At least this much spend (USD)." })),
       },
-      {
-        description:
-          "Work floor — set when the user names a duration/amount ('for 30 minutes'). Completing early is allowed, but the harness keeps prompting for more work until the floor is met.",
-      },
+      { description: "Work floor when the user names a duration/amount; enforced until met." },
     ),
   ),
-  token_cap: Type.Optional(
-    Type.Number({ description: "Wind-down token budget. Set only when the user explicitly caps spend/size." }),
-  ),
+  token_cap: Type.Optional(Type.Number({ description: "Wind-down token budget, only when the user caps spend." })),
 });
 
 export type GoalCreateInput = Static<typeof GoalCreateParams>;

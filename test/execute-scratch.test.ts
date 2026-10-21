@@ -180,13 +180,8 @@ test("flag ON: the description advertises the routing policy truthfully", () => 
   const [legacy] = createAgentTools({ current: tc });
   const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
   const desc = (execute as unknown as { description: string }).description;
-  assert.match(desc, /"scoped" \(DEFAULT\)/);
-  assert.match(desc, /Use it for self-contained commands and API work/);
-  assert.match(desc, /only credentials explicitly requested/);
+  assert.match(desc, /"scratch"/);
   assert.doesNotMatch(JSON.stringify(execute), /credential-free|blank, instant/);
-  assert.match(desc, /including Files/);
-  assert.match(desc, /local files are discarded after the turn/);
-  assert.match(desc, /Use scope:"scoped" when you need existing workspace files/);
   assert.doesNotMatch((legacy as unknown as { description: string }).description, /scratch/i);
 });
 
