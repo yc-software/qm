@@ -281,3 +281,21 @@ test("inbox turns and steering fail closed when the existing feature flag is off
     inboxAccessBody = JSON.stringify({ enabled: true });
   }
 });
+
+test("an incognito flag reaches core only as a literal true", async () => {
+  const cases: Array<[unknown, true | undefined]> = [
+    [true, true],
+    [false, undefined],
+    ["true", undefined],
+    [undefined, undefined],
+  ];
+  for (const [incognito, forwarded] of cases) {
+    const response = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: "hello", threadRef: "web:alice:incognito", incognito }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal(turns.at(-1)?.incognito, forwarded);
+  }
+});

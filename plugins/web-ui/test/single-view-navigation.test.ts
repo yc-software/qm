@@ -137,7 +137,8 @@ test("background canvas updates preserve non-chat detail routes", async () => {
 test("single and multiview headers render mutually exclusive tools and pane controls", async () => {
   known = [];
   await canvas(session("first"));
-  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
+  assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 7);
+  assert.ok(labels().includes("Go incognito"));
   assert.deepEqual(
     labels().filter((label) => /Tools|Split this pane|Open full screen|Close pane/.test(label!)),
     [],

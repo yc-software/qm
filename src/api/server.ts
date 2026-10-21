@@ -21,6 +21,7 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import { INCOGNITO_WRITE_REFUSAL } from "../sessions/incognito.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -61,6 +62,14 @@ async function capabilityAdminDenied(
 }
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+const INCOGNITO_ALLOWED_POSTS = new Set([
+  "/v1/surface-context",
+  "/v1/surface-file",
+  "/v1/memory/search",
+  "/v1/search",
+  "/v1/composio/execute",
+]);
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {
   const h = req.headers[CAPABILITY_HEADER];
@@ -219,6 +228,10 @@ async function gate(
       allowUnsignedSourceAuth,
     ))
   ) {
+    return null;
+  }
+  if (capability?.incognito && method !== "GET" && !INCOGNITO_ALLOWED_POSTS.has(pathname)) {
+    sendJson(res, 403, { error: "incognito", message: INCOGNITO_WRITE_REFUSAL });
     return null;
   }
   let body: unknown = {};

@@ -59,6 +59,7 @@ interface ChatState {
   earlierCount: number;
   loadingEarlier: boolean;
   forkSession: CoreSession | null;
+  incognito: boolean;
   inheritedMessages: ReturnType<typeof entriesToMessages>;
   inheritedExpanded: boolean;
   inheritedLoaded: boolean;
@@ -76,7 +77,7 @@ export interface ChatSurface {
   isStopping(): boolean;
   currentTurnOptions(): TurnOptions;
   turnRuntime(): TurnRuntime | null;
-  newChat(context?: { scopeId: string; name: string | null }): string;
+  newChat(context?: { scopeId: string; name: string | null }, incognito?: boolean): string;
   teardown(): void;
   resetChatState(): void;
   mountContinuable(
@@ -87,6 +88,7 @@ export interface ChatSurface {
     contextName?: string | null,
     session?: CoreSession,
     inheritedMessages?: ReturnType<typeof entriesToMessages>,
+    incognito?: boolean,
   ): void;
   mountReadOnly(
     s: CoreSession,
@@ -111,6 +113,7 @@ export interface ChatSurface {
   resolveCommandApproval(decision: ApprovalDecision): void;
   approvalSummaryView(a: PendingApproval, expanded?: boolean): TemplateResult;
   notePendingSessionOnSend(): void;
+  adoptIncognitoSession(threadRef: string, sessionId: string): void;
   syncPaneState(): void;
   onDelivery(threadRef: string): void;
   resumeIfIdle(): void;

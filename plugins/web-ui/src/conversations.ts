@@ -94,6 +94,7 @@ export function ensureDeliveryStream(): void {
         handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);
         return;
       }
+      if (event.sessionId) for (const conv of live) conv.adoptIncognitoSession(event.threadRef, event.sessionId);
       if (event.state === "metadata") {
         void refreshSessions({ silent: true });
         return;

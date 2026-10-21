@@ -353,6 +353,21 @@ test("a detached child sends no mail; any in-scope session can still be read", a
   assert.ok(read.ok && read.mode === "transcript");
 });
 
+test("another session cannot read or message an incognito session", async () => {
+  const r = await rig();
+  const secret = await r.sessions.getOrCreateByThread("web:U1:incognito", "dm", scope, undefined, "web", undefined, {
+    incognito: true,
+  });
+  await r.sessions.addParticipant(secret.id, "U1");
+  const syscalls = r.syscallsFor(r.room);
+  for (const target of [secret.id, secret.threadRef]) {
+    const read = await syscalls.read({ target });
+    assert.ok(!read.ok, `read by ${target}`);
+    const write = await syscalls.write({ target, text: "hi" });
+    assert.ok(!write.ok, `write by ${target}`);
+  }
+});
+
 test("mail envelope attributes stay well-formed and machine-parseable when the title holds quotes", () => {
   const mail = renderSubagentMail({
     title: 'Poet "one" <b>',

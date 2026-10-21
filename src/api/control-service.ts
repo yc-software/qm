@@ -29,6 +29,7 @@ import {
 import { actsAsScope, isSharedScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
+import { INCOGNITO_WRITE_REFUSAL } from "../sessions/incognito.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -330,6 +331,8 @@ function validateUnattendedGrants(grants: string[]): string | null {
   return null;
 }
 
+const INCOGNITO_FORBIDDEN = { ok: false as const, code: "forbidden" as const, message: INCOGNITO_WRITE_REFUSAL };
+
 export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
   const notifyEdit = (
     cron: Cron,
@@ -345,6 +348,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     });
   return {
     async createCron(req, capability): Promise<CronCreateResult> {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       if (req.unattendedGrants !== undefined) {
         const invalid = validateUnattendedGrants(req.unattendedGrants);
         if (invalid) return { ok: false, code: "bad_request", message: invalid };
@@ -530,6 +534,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async patchCron(id, req, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, before, capability.actorId)))
@@ -570,6 +575,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async noteCron(id, text, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const flattened = flattenFireNote(text);
       if (!flattened)
         return { ok: false, code: "bad_request", message: "the note is empty — say what the next fire should know" };
@@ -623,6 +629,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async deleteCron(id, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
@@ -633,6 +640,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async setCronEnabled(id, enabled, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
@@ -649,6 +657,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async runCron(id, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
@@ -678,6 +687,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async retargetCron(id, destinationKey, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
@@ -702,6 +712,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       if (capability.triggered || !livePersonCapability(capability)) {
         return {
           ok: false,
@@ -751,6 +762,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async disableWebhook(id, capability) {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const webhook = await app.getWebhook(id);
       if (!webhook) return { ok: false, code: "not_found", message: `no webhook ${id}` };
       if (!(await canAdministerWebhook(app, webhook, capability.actorId)))
@@ -771,6 +783,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async writeSoul(content, capability, expectedVersion) {
+      if (capability.incognito) return { ok: false, code: "soul_update_denied", message: INCOGNITO_WRITE_REFUSAL };
       try {
         const version = await app.updateSoul(capability.scopeId, content, capability.actorId, {
           allowSharedScope: true,
@@ -787,6 +800,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     },
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
+      if (capability.incognito) return INCOGNITO_FORBIDDEN;
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)

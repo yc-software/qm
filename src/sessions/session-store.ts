@@ -568,6 +568,7 @@ export interface SessionStore {
     channelName?: string,
     surface?: string,
     clientTools?: Session["clientTools"],
+    opts?: { incognito?: boolean },
   ): Promise<Session>;
   getByThread(threadRef: string): Promise<Session | null>;
   get(sessionId: string): Promise<Session | null>;

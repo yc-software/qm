@@ -570,7 +570,10 @@ export function createSessionMethods(
     },
 
     async listSessions(principalId) {
-      return decorateSessions(principalId, await sessionsForViewer(principalId));
+      return decorateSessions(
+        principalId,
+        (await sessionsForViewer(principalId)).filter((s) => !s.incognito),
+      );
     },
 
     async listSessionPage(principalId, query) {
@@ -1057,6 +1060,8 @@ export function createSessionMethods(
           source.scopeId,
           source.channelName,
           "web",
+          undefined,
+          { incognito: source.incognito === true },
         );
         await Promise.all(
           (projectMembers ?? [principalId]).map((memberId) => deps.sessions.addParticipant(forked.id, memberId)),

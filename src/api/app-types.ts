@@ -290,6 +290,7 @@ export interface App {
   ): Promise<{
     status: Run["status"];
     attempt: number;
+    incognito?: true;
     result: TurnResult | null;
     input?: {
       runId: string;

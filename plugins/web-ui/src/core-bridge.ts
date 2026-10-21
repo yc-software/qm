@@ -153,6 +153,7 @@ export interface CoreSession {
   parentSessionId?: string;
   surface?: string;
   subagents?: { running: number; waiting: number };
+  incognito?: true;
 }
 
 export interface SessionPageQuery {
@@ -593,6 +594,7 @@ export interface TurnOptions {
   harness?: string;
   scopeId?: string | null;
   channelName?: string | null;
+  incognito?: boolean;
 }
 
 export interface ActiveRun {
@@ -1282,6 +1284,7 @@ function turnRequestBody(
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),
     ...(turnOptions.channelName ? { channelName: turnOptions.channelName } : {}),
+    ...(turnOptions.incognito ? { incognito: true } : {}),
     ...(attachments.length ? { attachments } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };

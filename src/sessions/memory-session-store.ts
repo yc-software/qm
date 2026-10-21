@@ -127,7 +127,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools) {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, opts) {
       const existingId = byThread.get(threadRef);
       if (existingId) {
         const s = sessions.get(existingId);
@@ -146,6 +146,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
         ...(surface ? { surface } : {}),
+        ...(opts?.incognito === true ? { incognito: true as const } : {}),
       };
       sessions.set(session.id, session);
       entries.set(session.id, []);
@@ -511,7 +512,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const byScope = new Map<ScopeId, ParticipantScope>();
       for (const id of participants.get(principalId) ?? []) {
         const row = participantSession(id, principalId);
-        if (!row) continue;
+        if (!row || row.incognito) continue;
         const scope = byScope.get(row.scopeId) ?? { scopeId: row.scopeId, sessionCount: 0, lastActivityAt: null };
         if (!scope.channelName && row.channelName) scope.channelName = row.channelName;
         if (row.hasEntries !== false || Boolean(row.title?.trim())) {
@@ -539,6 +540,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         .filter(
           (s) =>
             !s.parentSessionId &&
+            !s.incognito &&
             !(s.surface && automation.has(s.surface)) &&
             ((entries.get(s.id)?.length ?? 0) > 0 || Boolean(s.title?.trim())) &&
             Boolean(s.archived) === (query.archived === true) &&
@@ -651,7 +653,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const out: Session[] = [];
       for (const id of ids) {
         const row = participantSession(id, principalId);
-        if (!row) continue;
+        if (!row || row.incognito) continue;
         if ((row.title ?? "").toLowerCase().includes(lower)) out.push(row);
       }
       return out
@@ -668,7 +670,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         if (!win) continue;
         const indexed = searchIndex.get(sessionId) ?? [];
         const session = sessions.get(sessionId);
-        if (!session) continue;
+        if (!session || session.incognito) continue;
         for (const row of indexed) {
           if (!entryWithinTenure(row, win)) continue;
           const entry = entries.get(sessionId)?.[row.seq];

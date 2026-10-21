@@ -6,6 +6,7 @@ import { acquireLeaseWithin, cronIdOf, sessionCategory, sessionOrigin } from "..
 import { parseSessionWakeRef } from "../src/api/routes/admin/origins.ts";
 import { scopeId } from "../src/types.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
+import { assertIncognitoSessionParity } from "./support/incognito-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
 
 test("sessionOrigin classifies trigger threads by prefix", () => {
@@ -982,4 +983,8 @@ test("renewLease keeps a live turn's lock fresh and refuses stale or superseded 
   const taken = await store.acquireLease(s.id, "turn");
   assert.ok(taken.lease, "an expired lease can still be taken over");
   assert.equal(await store.renewLease(lease!), false, "the superseded holder cannot renew the new lock");
+});
+
+test("memory store: incognito is set at creation, immutable, exposed, and hidden from search", async () => {
+  await assertIncognitoSessionParity(createMemorySessionStore(), "mem-incognito");
 });

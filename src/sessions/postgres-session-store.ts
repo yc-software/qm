@@ -137,6 +137,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
       : {}),
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
+    ...(r.incognito === true ? { incognito: true as const } : {}),
   };
 }
 
@@ -207,7 +208,7 @@ const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => 
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.incognito`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 
@@ -339,7 +340,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
               MAX(${USER_ACTIVITY}) FILTER (WHERE ${HAS_CONTENT}) AS last_activity
          FROM sessions s
          JOIN participants p ON p.session_id = s.id
-        WHERE p.principal_id = $1
+        WHERE p.principal_id = $1 AND NOT s.incognito
         GROUP BY s.scope_id`,
       [principalId],
     );
@@ -355,6 +356,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const where: string[] = [
       "p.principal_id = $1",
       "s.parent_session_id IS NULL",
+      "NOT s.incognito",
       `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
       HAS_CONTENT,
     ];
@@ -1065,6 +1067,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         prepare: [LAST_USER_ACTIVITY_BACKFILL_SQL],
         statements: [],
       },
+      {
+        id: "sessions/store/0045-incognito",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS incognito BOOLEAN NOT NULL DEFAULT FALSE`,
+        ],
+      },
     ],
     [
       {
@@ -1190,7 +1199,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   return {
     leaseTtlMs,
-    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools): Promise<Session> {
+    async getOrCreateByThread(threadRef, type, scopeId, channelName, surface, clientTools, opts): Promise<Session> {
       const heal = async (row: Record<string, unknown>): Promise<Session> => {
         const s = rowToSession(row);
         if (channelName && s.channelName !== channelName) {
@@ -1216,7 +1225,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools, incognito) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb,$11) ON CONFLICT (thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -1228,6 +1237,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           sessionOrigin(threadRef),
           cronIdOf(threadRef),
           clientTools?.length ? JSON.stringify(clientTools) : null,
+          opts?.incognito === true,
         ],
       );
       const rows = await q("SELECT * FROM sessions WHERE thread_ref = $1", [threadRef]);
@@ -1799,7 +1809,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (needle.length < 2) return [];
       const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const rows = await q(
-        participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
+        participantSessionsSql(" AND NOT s.incognito AND COALESCE(p.title, s.title) ILIKE $2") +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
         [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
@@ -1820,6 +1830,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = i.session_id
           WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
+            AND NOT s.incognito
             AND ${SEARCHABLE_ITEM("i")}
             AND ${withinParticipantWindow("i", "p")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC

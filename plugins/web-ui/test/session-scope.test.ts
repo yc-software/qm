@@ -125,3 +125,12 @@ test("zero counts remain hidden in desktop and mobile tools", () => {
   render(sessionTopbarTpl({ crumb: null, title: "Test", onTool: () => {}, toolCount: () => 0 }), host);
   assert.equal(host.querySelectorAll(".session-tool-count").length, 0);
 });
+
+test("an incognito session carries a ghost badge in its heading", () => {
+  const host = document.createElement("div");
+  render(sessionTopbarTpl({ crumb: null, title: "Private", incognito: true, onTool: () => {} }), host);
+  const badge = host.querySelector(".session-heading .session-incognito-badge");
+  assert.equal(badge?.textContent?.trim(), "Incognito");
+  render(sessionTopbarTpl({ crumb: null, title: "Ordinary", onTool: () => {} }), host);
+  assert.equal(host.querySelector(".session-incognito-badge"), null);
+});

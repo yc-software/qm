@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, GitFork, KeyRound, Rocket } from "lucide";
+import { ArrowUpLeft, Box, Brain, Clock3, Ellipsis, Files, Ghost, GitFork, KeyRound, Rocket } from "lucide";
 import { api } from "./core-bridge";
 import { closeFormMenus, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
@@ -84,6 +84,7 @@ export interface SessionTopbarOpts {
   toolCount?: ((tool: SessionTool) => number | null) | null;
   parent?: { title: string; onClick: () => void } | null;
   fork?: { title: string; onClick?: (() => void) | null } | null;
+  incognito?: boolean;
   onTitle?: (() => void) | null;
   onCrumb?: (() => void) | null;
   onTool: (tool: SessionTool) => void;
@@ -121,6 +122,13 @@ export function sessionTopbarTpl(o: SessionTopbarOpts): TemplateResult {
           >
             ${icon(GitFork, 12)}<span>fork</span>
           </button>`
+        : nothing
+    }
+    ${
+      o.incognito
+        ? html`<span class="session-incognito-badge" ${tip("Stays out of your history, memory, and search")}>
+            ${icon(Ghost, 12)}<span>Incognito</span>
+          </span>`
         : nothing
     }
   `;

@@ -1029,7 +1029,8 @@ async function showLinkedSession(
   seq: number | null,
   approvals?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
-  if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
+  if (!linked.incognito && !sessionsState.list.some((s) => s.id === linked.id))
+    sessionsState.list = [linked, ...sessionsState.list];
   revealSessionSurface(linked);
   await openSession(linked, transcript, approvals);
   if (seq !== null)
