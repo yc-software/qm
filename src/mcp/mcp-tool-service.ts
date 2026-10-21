@@ -224,12 +224,15 @@ export function createMcpToolService(opts: {
 
   async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
     const client = await callerClient(server, principalId);
-    const key = `${server.id}\0${principalId ?? ""}`;
+    const perPerson = server.attestActor || server.credentialScope === "per-user";
+    const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
     const cached = catalogs.get(key);
     if (cached) return cached;
     const listing = client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS });
     catalogs.set(key, listing);
-    listing.catch(() => catalogs.delete(key));
+    listing.catch(() => {
+      if (catalogs.peek(key) === listing) catalogs.delete(key);
+    });
     return listing;
   }
 
@@ -363,9 +366,14 @@ export function createMcpToolService(opts: {
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
       if (args.operation !== "invoke") return false;
-      const server = await opts.servers.get(def.serverId);
-      if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
-      return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+      try {
+        const server = await opts.servers.get(def.serverId);
+        if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
+        return mcpToolNeedsApproval(server, (await catalogEntry(server, principalId, args.tool)).annotations);
+      } catch (e) {
+        record("call", callResource(def, args), `approval check error: ${errMessage(e)}`, principalId);
+        throw e;
+      }
     },
     async call(name, args, principalId, approval) {
       const def = snapshot.find((t) => t.name === name);

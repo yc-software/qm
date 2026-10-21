@@ -4456,7 +4456,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ...clientTools,
   ];
   const nativeNames = new Set(tools.map((t) => t.name));
-  const mcpTools = mcpCandidates.filter((t) => !nativeNames.has(t.name));
+  const mcpTools = mcpCandidates.filter((t) => {
+    if (!nativeNames.has(t.name)) return true;
+    console.warn(`[mcp] ${t.name} is hidden because a built-in tool has the same name`);
+    return false;
+  });
   tools.push(...mcpTools);
   const operationFields: Record<string, Record<string, string[]>> = {
     sandbox: {

@@ -104,18 +104,22 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
       message: "catalog and attestActor are not available with oauth-user auth",
     });
   }
-  if (attestActor && (!catalog || (auth !== "bearer" && auth !== "client-credentials"))) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "attestActor requires catalog and bearer or client-credentials auth, so only QM can assert the person",
-    });
-  }
   if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
+  }
+  if (
+    attestActor &&
+    (!catalog || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials"))
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message:
+        "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
+    });
   }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (

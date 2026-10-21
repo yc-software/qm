@@ -100,7 +100,25 @@ test("MCP admin validates and preserves credential scope, without returning secr
     400,
     "an unauthenticated upstream cannot trust the actor",
   );
-  assert.equal((await put({ catalog: true, attestActor: true, auth: "bearer", bearerToken: "t" })).status, 200);
+  assert.equal(
+    (
+      await put({
+        catalog: true,
+        attestActor: true,
+        auth: "bearer",
+        bearerToken: "t",
+        credentialScope: "per-user",
+        credentialHost: "accounts.example.com",
+      })
+    ).status,
+    400,
+    "a per-person token could otherwise assert someone else",
+  );
+  assert.equal(
+    (await put({ catalog: true, attestActor: true, auth: "bearer", bearerToken: "t", credentialScope: "shared" }))
+      .status,
+    200,
+  );
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 

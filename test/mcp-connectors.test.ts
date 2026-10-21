@@ -241,6 +241,17 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
   assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
   await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
+  await service.refresh();
+  const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
+  await Promise.all([
+    service.call("records", { operation: "search" }, "alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com"),
+  ]);
+  assert.equal(
+    mcp.requests.filter((r) => r.rpc === "tools/list").length,
+    lists + 1,
+    "refresh drops the cache and parallel lookups share one listing",
+  );
   service.close();
 });
 
