@@ -1,7 +1,14 @@
 # MCP connector credentials
 
-Administrators register HTTP MCP servers through `PUT /v1/admin/mcp-servers/:id`.
-Registration controls the outbound destination and the tools available to agents.
+Administrators register HTTP MCP servers through `PUT /v1/admin/mcp-servers/:id`
+from an admin session (`/admin/api/mcp-servers/:id` behind the portal); agent tokens
+are refused, so an agent cannot change which tools it may call or which calls need
+approval. Registration controls the outbound destination and the tools available to agents.
+
+`approval` decides which calls pause for a person's approval, bound to the exact
+arguments and good for one call: `annotations` (the default; tools annotated
+`destructiveHint: true` and not `readOnlyHint: true`), `all`, or `none`. An update
+that omits `approval` keeps the current policy.
 
 `credentialScope` selects the identity used for `tools/call`:
 
