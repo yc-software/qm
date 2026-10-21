@@ -617,23 +617,44 @@ test("a completion decided after the goal was replaced is dropped, not applied t
   assert.equal(ref.goal?.objective, "lane B");
 });
 
-test("wait ends when the turn that started it ends, even if no stop reached the tool", async (t) => {
+test("wait ends when its turn's tool signal aborts", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const { ref, create, update } = toolbox();
   await create.execute("c1", { objective: "merge lanes" });
   ref.goalInbox = { receive: async () => [], acknowledge: async () => {} };
-  ref.abortSignal = new AbortController().signal;
+  const turn = new AbortController();
+  ref.abortSignal = turn.signal;
   const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
   for (let i = 0; i < 3; i++) {
     await new Promise((resolve) => setImmediate(resolve));
     t.mock.timers.tick(5_000);
   }
-  ref.abortSignal = undefined;
-  for (let i = 0; i < 3; i++) {
+  turn.abort();
+  for (let i = 0; i < 2; i++) {
     await new Promise((resolve) => setImmediate(resolve));
     t.mock.timers.tick(5_000);
   }
   assert.match(textOf((await waiting) as never), /interrupted/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("a message that arrives during a wait still reaches the worker when saving the goal fails", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = {
+    receive: async () => [{ id: "m1", text: "Swarm agent message: lane B is done" }],
+    acknowledge: async () => {},
+  };
+  ref.saveGoal = async () => {
+    throw new Error("database blip");
+  };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 2; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /lane B is done/);
   assert.equal(ref.goal?.status, "active");
 });
 
