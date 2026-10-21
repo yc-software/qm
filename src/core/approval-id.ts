@@ -14,5 +14,5 @@ export function inputApprovalId(sessionId: string, request: unknown): string {
 }
 
 export function toolCallApprovalKey(tool: string, params: unknown): string {
-  return `${TOOL_CALL_KEY_PREFIX}${hashId([tool, canonicalJson(params ?? null)], 64)}`;
+  return `tool-call:${hashId([tool, canonicalJson(params ?? null)], 64)}`;
 }

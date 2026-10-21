@@ -265,9 +265,25 @@ test("a long command is shown in full across code blocks instead of being cut", 
   const shown = msg.blocks
     .filter((b) => b.type === "section")
     .slice(1)
-    .map((b) => (b.text as { text: string }).text.slice(3, -3))
+    .map((b) => (b.text as { text: string }).text.replace(/```/g, "").replace(/\n/g, ""))
     .join("");
   assert.equal(shown, command.replace(/</g, "&lt;").replace(/>/g, "&gt;"));
   assert.ok(msg.blocks.every((b) => b.type !== "section" || (b.text as { text: string }).text.length <= 3000));
-  assert.equal(msg.blocks.at(-1)!.type, "actions");
+  const actions = msg.blocks.at(-1)!;
+  assert.deepEqual(
+    (actions.elements as Array<{ action_id: string }>).map((e) => e.action_id),
+    ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"],
+  );
+});
+
+test("a command too long to show in Slack can only be denied there", () => {
+  const command = `example_send {"a":"${"&".repeat(15_000)}","to":"attacker@example.com"}`;
+  const msg = approvalMessage([{ requestId: "req-1", command, reason: "needs approval" }]);
+  assert.ok(!JSON.stringify(msg.blocks).includes("hilo_allow_once"));
+  assert.ok(JSON.stringify(msg.blocks).includes("hilo_deny"));
+  assert.match(JSON.stringify(msg.blocks), /Review and approve it in QM/);
+  const many = approvalMessage(
+    Array.from({ length: 8 }, (_, i) => ({ requestId: `r${i}`, command: "x".repeat(8_000), reason: "r" })),
+  );
+  assert.ok(many.blocks.length <= 50);
 });

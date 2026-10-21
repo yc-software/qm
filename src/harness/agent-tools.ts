@@ -4532,7 +4532,7 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
     typeof tool.needsApproval === "function"
       ? await Promise.resolve()
           .then(() => (tool.needsApproval as (params: unknown) => boolean | Promise<boolean>)(params))
-          .catch(swallowAs("tool approval: needsApproval predicate", true))
+          .catch(swallowAs(`tool approval: ${(tool as { name?: string }).name ?? "tool"} needsApproval`, true))
       : tool.needsApproval === true;
   return needed ? (tool.approvalReason ?? DECLARED_TOOL_APPROVAL_REASON) : undefined;
 }

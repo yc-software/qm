@@ -183,6 +183,7 @@ export function createMockHarness(): Harness {
           matched?: string;
           approvalKey?: string;
           grantModes?: { session: boolean; always: boolean };
+          summary?: string;
         }> = [];
         let pausedOnApproval = false;
         const gateTool = (tool: string): boolean => {
@@ -573,6 +574,7 @@ export function createMockHarness(): Harness {
               reason: "this tool asks for approval before each call",
               kind: "approval",
               approvalKey: callKey,
+              summary: "example_send",
               grantModes: { session: false, always: false },
             });
             pausedOnApproval = true;

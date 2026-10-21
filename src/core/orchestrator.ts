@@ -2048,7 +2048,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   type: "user",
                   payload: {
                     hidden: true,
-                    text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.command, 2_000)}\nDo not retry it unless they ask again.`,
+                    text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
                   },
                   scopeLabel: scopeId as ScopeId,
                 }),
