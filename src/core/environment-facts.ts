@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
-import type { SessionEntry } from "../types.ts";
+import type { ListSection, SessionEntry } from "../types.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
@@ -82,33 +82,62 @@ export function renderConnectedAppsBlock(
 
 interface EnvironmentSnapshot {
   hashes: Record<string, string>;
+  entries?: Record<string, Record<string, string>>;
   sessionId: string;
   anchorSeq?: number;
 }
+
+export const renderListSection = (section: ListSection) => [section.head, ...section.entries.values()].join("\n");
+
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 export function environmentDelta(
   blocks: Record<string, string>,
   history: readonly SessionEntry[],
   sessionId: string,
+  lists: Record<string, ListSection> = {},
 ): { text: string; record: EnvironmentSnapshot } {
   const { previous, anchorSeq } = retainedSnapshot(
     history,
     (entry) => (entry.payload as { environmentSnapshot?: EnvironmentSnapshot } | null)?.environmentSnapshot,
   );
-  const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
-  const hashes = Object.fromEntries(
-    Object.entries(current).map(([key, text]) => [key, createHash("sha256").update(text).digest("hex")]),
-  );
-  const record = { hashes, sessionId, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
-  if (!previous) return { text: Object.values(current).join("\n\n"), record };
-  const changed = Object.entries(current).filter(([key]) => previous.hashes[key] !== hashes[key]);
-  const removed = Object.keys(previous.hashes).filter((key) => !(key in current));
+  const current = Object.entries(blocks).filter(([, text]) => text.trim());
+  const listed = Object.entries(lists);
+  const record: EnvironmentSnapshot = {
+    hashes: Object.fromEntries([
+      ...current.map(([key, text]) => [key, sha(text)]),
+      ...listed.map(([key, section]) => [key, sha(section.head)]),
+    ]),
+    entries: Object.fromEntries(
+      listed.map(([key, section]) => [
+        key,
+        Object.fromEntries([...section.entries].map(([name, line]) => [name, sha(line).slice(0, 16)])),
+      ]),
+    ),
+    sessionId,
+    ...(anchorSeq !== undefined ? { anchorSeq } : {}),
+  };
+  const full = [...current.map(([, text]) => text), ...listed.map(([, section]) => renderListSection(section))];
+  if (!previous) return { text: full.join("\n\n"), record };
+  const changed = current.filter(([key]) => previous.hashes[key] !== record.hashes[key]).map(([, text]) => text);
+  const additions = listed.flatMap(([key, section]) => {
+    const seen = previous.hashes[key] === record.hashes[key] ? previous.entries?.[key] : undefined;
+    const now = record.entries![key]!;
+    if (!seen || Object.entries(now).some(([name, hash]) => seen[name] !== undefined && seen[name] !== hash))
+      return [renderListSection(section)];
+    record.entries![key] = { ...seen, ...now };
+    const added = [...section.entries].filter(([name]) => seen[name] === undefined).map(([, line]) => line);
+    const heading = `${section.head.split("\n")[0]} (additions only; earlier entries still apply)`;
+    return added.length ? [[heading, ...added].join("\n")] : [];
+  });
+  const removed = Object.keys(previous.hashes).filter((key) => !(key in record.hashes));
   return {
     text:
-      changed.length || removed.length
+      changed.length || additions.length || removed.length
         ? [
-            "Environment changes: sections below replace their earlier versions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
-            ...changed.map(([, text]) => text),
+            "Environment changes: sections below replace their earlier versions, except sections marked as additions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
+            ...changed,
+            ...additions,
             ...removed.map((key) => `No longer included: ${key}. Do not rely on its earlier inventory.`),
           ].join("\n\n")
         : "",

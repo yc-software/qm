@@ -1703,7 +1703,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ownerId: rec.ownerId,
     host: rec.host ?? rec.service,
     ...(rec.refresh?.accountType ? { accountType: rec.refresh.accountType } : {}),
-    ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
+    ...(rec.expiresAt !== undefined && !hasRefresh ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
     ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
   };

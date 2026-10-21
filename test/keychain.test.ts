@@ -1690,3 +1690,29 @@ test("granted connector keeps account and refresh semantics when owner is absent
   assert.match(rendered, /STANDING grant/);
   assert.doesNotMatch(rendered, /EXPIRED|NEEDS RECONNECT|refresh-token|old-token/);
 });
+
+test("a self-refreshing connector's access-token expiry stays out of the manifest", async () => {
+  const k = kc();
+  const ownerId = "alice@example.com";
+  await k.setConnectorToken("gmail.googleapis.com", ownerId, {
+    accessToken: "private-token",
+    refreshToken: "rt",
+    expiresAt: 5000,
+  });
+  await k.setConnectorToken("calendar.example.com", ownerId, { accessToken: "other-token", expiresAt: 5000 });
+  const connectors = (await k.listConnectorsByOwners([ownerId])).get(ownerId)!;
+  const rendered = renderKeychainManifest(
+    {
+      scopeId: "personal:alice@example.com",
+      conversationKind: "dm",
+      actorId: ownerId,
+      members: [{ id: ownerId, displayName: "Alice" }],
+      entriesByOwner: new Map(),
+      connectorsByOwner: new Map([[ownerId, connectors]]),
+      scopeGrants: [],
+    },
+    1000,
+  );
+  assert.match(rendered, /connected app gmail\.googleapis\.com, account default(?!, token expires)/);
+  assert.match(rendered, /connected app calendar\.example\.com, account default, .*token expires at 1970/);
+});

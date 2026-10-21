@@ -810,3 +810,8 @@ export interface TurnResult {
   sourceAssistantEntrySeq?: number;
   runtime?: TurnRuntime;
 }
+
+export interface ListSection {
+  head: string;
+  entries: ReadonlyMap<string, string>;
+}

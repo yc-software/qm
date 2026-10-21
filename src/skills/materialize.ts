@@ -3,7 +3,7 @@ import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
-import type { ScopeId } from "../types.ts";
+import type { ListSection, ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
 export const SKILLS_ROOT = ".agent-skills";
@@ -153,21 +153,24 @@ export function skillsIndex(
   query = "",
   usedNames: readonly string[] = [],
   pinnedNames: readonly string[] = [],
-): string {
+): ListSection | undefined {
   const provenance = new Set(provenanceScopes);
   const ranked = rankedSkills(resolved, query, usedNames);
   const byName = new Map(ranked.map((r) => [r.skill!.manifest.name, r]));
   const pinned = pinnedNames.flatMap((name) => byName.get(name) ?? []);
   const items = [...new Set([...pinned, ...ranked])].slice(0, SHORTLIST_SIZE);
-  if (!items.length) return "";
-  const lines = items.map((r) => {
-    const m = r.skill!.manifest;
-    const source = provenance.has(r.skill!.scopeId) ? ` [from ${r.skill!.scopeId}]` : "";
-    return `- **${m.name}**${source} — ${m.description}`;
-  });
-  return [
-    "## Skills",
-    `Showing ${items.length} of ${ranked.length} available skills. Use skills action list or search for the rest.`,
-    ...lines,
-  ].join("\n");
+  if (!items.length) return undefined;
+  return {
+    head: [
+      "## Skills",
+      `Showing ${items.length} of ${ranked.length} available skills. Use skills action list or search for the rest.`,
+    ].join("\n"),
+    entries: new Map(
+      items.map((r) => {
+        const m = r.skill!.manifest;
+        const source = provenance.has(r.skill!.scopeId) ? ` [from ${r.skill!.scopeId}]` : "";
+        return [m.name, `- **${m.name}**${source} — ${m.description}`];
+      }),
+    ),
+  };
 }

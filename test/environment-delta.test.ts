@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { environmentDelta, renderSandboxProfiles } from "../src/core/environment-facts.ts";
+import type { ListSection } from "../src/types.ts";
 import { currentTimeBlock, renderStandingObligations } from "../src/core/orchestrator/prompt-blocks.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { Cron, SessionEntry } from "../src/types.ts";
 
-function entry(seq: number, blocks: Record<string, string>, history: SessionEntry[]): SessionEntry {
-  const snapshot = environmentDelta(blocks, history, "s");
+function entry(
+  seq: number,
+  blocks: Record<string, string>,
+  history: SessionEntry[],
+  growing: Record<string, ListSection> = {},
+): SessionEntry {
+  const snapshot = environmentDelta(blocks, history, "s", growing);
   return {
     sessionId: "s",
     seq,
@@ -129,4 +135,40 @@ test("forked entries cannot mistake a resequenced row for the original snapshot 
   assert.ok(
     !JSON.stringify((delta.payload as { environmentSnapshot: unknown }).environmentSnapshot).includes("browse"),
   );
+});
+
+const environmentOf = (e: SessionEntry) => (e.payload as { environment: string }).environment;
+const skills = (names: string[], total = 9, describe = (n: string) => `does ${n}`): ListSection => ({
+  head: `## Skills\nShowing ${names.length} of ${total} available skills.`,
+  entries: new Map(names.map((n) => [n, `- **${n}** — ${describe(n)}`])),
+});
+const whole = (section: ListSection) => [section.head, ...section.entries.values()].join("\n");
+
+test("a growing shortlist sends only entries the model has not seen since the baseline", () => {
+  const first = entry(1, {}, [], { Skills: skills(["browse", "publish", "memory"]) });
+  const second = entry(2, {}, [first], { Skills: skills(["browse", "trace", "memory"]) });
+  const added = environmentOf(second).split("\n\n")[1]!;
+  assert.match(added, /- \*\*trace\*\*/);
+  assert.doesNotMatch(added, /browse|memory|publish|Showing/);
+  const third = entry(3, {}, JSON.parse(JSON.stringify([first, second])), {
+    Skills: skills(["publish", "trace", "browse"]),
+  });
+  assert.equal(environmentOf(third), "");
+  const recount = skills(["publish", "trace", "browse"], 10);
+  assert.equal(
+    environmentOf(entry(4, {}, [first, second, third], { Skills: recount })).split("\n\n")[1],
+    whole(recount),
+  );
+  const edited = skills(["publish", "trace"], 9, (n) => (n === "trace" ? "now traces more" : `does ${n}`));
+  assert.equal(environmentOf(entry(4, {}, [first, second, third], { Skills: edited })).split("\n\n")[1], whole(edited));
+  const reset = environmentDelta({}, forModelContext([third]), "s", { Skills: skills(["publish"]) });
+  assert.equal(reset.text, whole(skills(["publish"])));
+  assert.match(environmentDelta({}, [first], "s").text, /No longer included: Skills/);
+});
+
+test("a baseline that listed the shortlist as a replaced section resends it whole, not as removed", () => {
+  const first = entry(1, { Skills: whole(skills(["browse"])), Where: "## Where you are\nweb" }, []);
+  const next = environmentDelta({ Where: "## Where you are\nweb" }, [first], "s", { Skills: skills(["trace"]) });
+  assert.match(next.text, /\n\n## Skills\nShowing 1 of 9/);
+  assert.doesNotMatch(next.text, /No longer included|## Where you are/);
 });

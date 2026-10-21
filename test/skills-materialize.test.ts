@@ -10,9 +10,15 @@ import {
   rankedSkills,
   renderSkillBody,
   safeSkillDirName,
-  skillsIndex,
+  skillsIndex as shortlist,
 } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
+import { renderListSection } from "../src/core/environment-facts.ts";
+
+const skillsIndex = (...args: Parameters<typeof shortlist>) => {
+  const section = shortlist(...args);
+  return section ? renderListSection(section) : "";
+};
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 const root = ".agent-turn/t1/skills";
