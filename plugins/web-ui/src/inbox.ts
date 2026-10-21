@@ -25,6 +25,8 @@ import {
   ChevronRight,
   Inbox as InboxGlyph,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   Undo2,
@@ -1750,6 +1752,37 @@ function syncLoops(viewId: string) {
   );
 }
 
+const ASSISTANT_HIDDEN_KEY = "web-ui:inbox-assistant-hidden";
+let assistantHidden = ((): boolean => {
+  try {
+    return localStorage.getItem(ASSISTANT_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+function assistantToggleTpl(): TemplateResult {
+  const label = assistantHidden ? "Show assistant" : "Hide assistant";
+  return html`<button
+    class="icon-btn compact subtle inbox-assistant-toggle"
+    type="button"
+    aria-label=${label}
+    aria-expanded=${String(!assistantHidden)}
+    ${tip(label)}
+    @click=${() => {
+      assistantHidden = !assistantHidden;
+      try {
+        localStorage.setItem(ASSISTANT_HIDDEN_KEY, assistantHidden ? "1" : "0");
+      } catch {
+        void 0;
+      }
+      drawAll();
+    }}
+  >
+    ${icon(assistantHidden ? PanelRightOpen : PanelRightClose, 17)}
+  </button>`;
+}
+
 function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
   if (surface.viewId === "sent") {
     const busy = isSentMailLoading();
@@ -2082,7 +2115,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
-      ${triageControlsTpl(item)} ${dismissItemTpl(item)}
+      ${triageControlsTpl(item)} ${dismissItemTpl(item)} ${item.detailLoaded ? assistantToggleTpl() : nothing}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
@@ -2090,7 +2123,11 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         ${detail}
       </div>
     </div>
-    ${item.detailLoaded ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>` : nothing}
+    ${
+      item.detailLoaded && !assistantHidden
+        ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>`
+        : nothing
+    }
   `;
 }
 
@@ -2175,7 +2212,7 @@ function drawFull(): void {
   }
   syncInboxUrl(openSentEmail?.id ?? fullSurface.selectedId);
   const host = fullSurface.host;
-  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded));
+  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded) && !assistantHidden);
   const surface = fullSurface;
   let page: TemplateResult | typeof nothing;
   if (openItem) page = itemPageTpl(openItem);
@@ -2192,16 +2229,24 @@ function drawFull(): void {
         <div class="inbox-index-feed">
           <div class="pane-head">
             <h1 class="pane-title">Inbox</h1>
-            <div class="pane-head-actions">${syncLineTpl(surface)}</div>
+            <div class="pane-head-actions">${syncLineTpl(surface)} ${assistantToggleTpl()}</div>
           </div>
           ${surfaceTpl(surface)}
         </div>
-        ${inboxChat({
-          kind: "inbox",
-          hasEmail: inboxState.selected.some((loop) => loop.sources?.includes("gmail") || loop.source === "gmail"),
-          hasSlack: inboxState.selected.some((loop) => loop.sources?.includes("slack") || loop.source === "slack"),
-          hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
-        })}
+        ${
+          assistantHidden
+            ? nothing
+            : inboxChat({
+                kind: "inbox",
+                hasEmail: inboxState.selected.some(
+                  (loop) => loop.sources?.includes("gmail") || loop.source === "gmail",
+                ),
+                hasSlack: inboxState.selected.some(
+                  (loop) => loop.sources?.includes("slack") || loop.source === "slack",
+                ),
+                hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
+              })
+        }
       </div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));

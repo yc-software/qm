@@ -8267,7 +8267,7 @@ h3.ambient-field-label {
 }
 .inbox-index-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, var(--content-aside-width));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--content-gap);
   width: min(var(--content-wide-width), 100%);
   margin: 0 auto;
@@ -8280,11 +8280,7 @@ h3.ambient-field-label {
 .inbox-index-chat {
   display: flex;
   min-width: 0;
-  min-height: 480px;
-  height: calc(100dvh - 68px);
-  position: sticky;
-  top: 0;
-  align-self: start;
+  height: 520px;
 }
 .inbox-index-conversation {
   display: flex;
@@ -8336,15 +8332,6 @@ h3.ambient-field-label {
   flex-direction: column;
   gap: 0;
   margin: 0;
-}
-@media (max-width: 1099px) {
-  .inbox-index-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .inbox-index-chat {
-    position: static;
-    height: 520px;
-  }
 }
 .inbox-page .inbox-toolbar {
   padding: 0;
@@ -9017,7 +9004,8 @@ h3.ambient-field-label {
     padding-right: 0;
     scrollbar-gutter: auto;
   }
-  .inbox-index-layout {
+  .inbox-index-layout:has(> .inbox-index-chat) {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, var(--content-aside-width));
     width: 100%;
   }
   .inbox-thread-page > .pane-head,
@@ -9036,18 +9024,17 @@ h3.ambient-field-label {
   }
   .inbox-item-aside {
     grid-area: 1 / 2 / span 2;
-    position: sticky;
-    align-self: start;
     width: 100%;
   }
   .inbox-index-chat,
   .inbox-item-aside {
+    position: sticky;
     top: -28px;
+    align-self: start;
     box-sizing: border-box;
-    min-height: 0;
     height: 100dvh;
     margin: -28px 0 -40px;
-    padding: 0;
+    padding: 28px 0 0;
     border-left: 1px solid var(--border);
   }
   .inbox-item-aside > .inbox-chat {
