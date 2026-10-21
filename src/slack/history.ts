@@ -25,6 +25,7 @@ export type SlackHistoryReader = (
   threadTs?: string,
   before?: string,
   expandThreads?: boolean,
+  live?: boolean,
 ) => Promise<SlackHistoryPage>;
 
 const MIRROR_CONTEXT_NOTE =
@@ -215,7 +216,15 @@ export function createSlackHistoryReader(deps: {
 
   const backfilled = new Set<string>();
   let shadowPending = false;
-  return async (client, channel, threadTs, before, expandThreads) => {
+  return async (client, channel, threadTs, before, expandThreads, live) => {
+    if (live) {
+      const page = await liveHistory(client, channel, threadTs, before, expandThreads);
+      if (threadTs && page.hasMore)
+        throw new Error("Live Slack thread exceeds the history limit; its replies could not be read completely.");
+      if (page.hasMore && !page.raw.length)
+        throw new Error("Live Slack history contains only filtered messages; an earlier page could not be located.");
+      return page;
+    }
     if (deps.source !== "mirror") {
       const live = await liveHistory(client, channel, threadTs, before, expandThreads);
       if (deps.source === "shadow" && !shadowPending) {

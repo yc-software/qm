@@ -80,8 +80,10 @@ export function createSurfaceContextFulfiller(deps: {
     channel: string,
     threadTs: string | undefined,
     before: string | undefined,
+    live: boolean,
   ): Promise<{ raw: SlackHistoryMessage[]; hasMore: boolean; note?: string }> {
-    if (deps.readHistory) return deps.readHistory(client, channel, threadTs, before);
+    if (deps.readHistory) return deps.readHistory(client, channel, threadTs, before, false, live);
+    if (live) throw new Error("Live Slack history is unavailable.");
     const page = before ? { latest: before, inclusive: false } : {};
     if (threadTs) {
       const { messages, hasMore } = parseMessageList(
@@ -251,9 +253,9 @@ export function createSurfaceContextFulfiller(deps: {
       );
       const before = typeof q.before === "string" && q.before ? q.before : undefined;
       const outcomes = await Promise.allSettled([
-        fetchContextHistory(client, channel, undefined, before),
+        fetchContextHistory(client, channel, undefined, before, q.live === true),
         threadTs
-          ? fetchContextHistory(client, channel, threadTs, before)
+          ? fetchContextHistory(client, channel, threadTs, before, q.live === true)
           : Promise.resolve<{ raw: SlackHistoryMessage[]; hasMore: boolean }>({ raw: [], hasMore: false }),
       ]);
       const byTs = new Map<string, SlackHistoryMessage>();
@@ -274,10 +276,12 @@ export function createSurfaceContextFulfiller(deps: {
       }
       const raw = [...byTs.values()];
       const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (q.live === true && failure?.status === "rejected") throw failure.reason;
       if (!raw.length && failure?.status === "rejected") throw failure.reason;
       const note = [...notes].join(" ");
       const nameById = new Map<string, string>();
       const shaped = await serializer.shapeRecentMessages(client, raw, "", nameById);
+      if (q.live === true) for (const message of shaped) message.reactions ??= [];
       await post({
         ...buildContextWindow(shaped, {
           count,

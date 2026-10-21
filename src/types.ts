@@ -528,6 +528,7 @@ export interface SurfaceContextQuery {
   viewer?: string;
   before?: string;
   match?: string;
+  live?: boolean;
   searchAll?: string;
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
