@@ -6,7 +6,6 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import {
   materializeSkillTree,
-  parsePinnedSkills,
   rankedSkills,
   renderSkillBody,
   safeSkillDirName,
@@ -194,44 +193,21 @@ test("an index over budget shortens descriptions, then drops them, then leaves t
   const full = skillsIndex(skills);
   assert.doesNotMatch(full, /shortened|omitted/);
 
-  const shortened = skillsIndex(skills, [], [], [], 4_000);
+  const shortened = skillsIndex(skills, [], [], 4_000);
   assert.ok(body(shortened).join("\n").length <= 4_000);
   assert.match(shortened, /30 descriptions are shortened/);
   assert.deepEqual(names(shortened), names(full));
   assert.ok(body(shortened).every((line) => /^- \*\*skill-\d+\*\* — word.*…$/.test(line)));
 
-  const namesOnly = skillsIndex(skills, [], [], [], 1_000);
+  const namesOnly = skillsIndex(skills, [], [], 1_000);
   assert.match(namesOnly, /Descriptions are omitted to fit the list\./);
   assert.deepEqual(names(namesOnly), names(full));
   assert.ok(body(namesOnly).every((line) => /^- \*\*skill-\d+\*\*$/.test(line)));
 
-  const truncated = skillsIndex(skills, [], ["skill-29"], ["skill-07"], 200);
+  const truncated = skillsIndex(skills, [], ["skill-29"], 200);
   assert.match(truncated, /and 17 skills are left out; find them with skills action search/);
-  assert.deepEqual(names(truncated).slice(0, 3), ["skill-07", "skill-29", "skill-00"]);
+  assert.deepEqual(names(truncated).slice(0, 2), ["skill-29", "skill-00"]);
   assert.equal(names(truncated).length, 13);
-});
-
-test("pinned skills lead the index", () => {
-  const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
-  for (const r of skills) r.skill!.manifest.description = "General task";
-
-  const unpinned = names(skillsIndex(skills));
-  assert.equal(unpinned.at(-1), "skill-19");
-
-  const shown = names(skillsIndex(skills, [], [], ["skill-19", "missing-skill", "skill-18"]));
-  assert.deepEqual(
-    shown.slice(0, 2),
-    ["skill-19", "skill-18"],
-    "pins lead in their configured order; unknown names are ignored",
-  );
-  assert.equal(shown[2], "skill-00", "the rest follow the pins");
-  assert.equal(shown.length, 20);
-  assert.equal(new Set(shown).size, 20, "a pinned skill is not listed twice");
-
-  assert.deepEqual(parsePinnedSkills([" voice ", "voice", "drafts"]), { value: ["voice", "drafts"] });
-  assert.ok("error" in parsePinnedSkills(undefined), "a missing list is an error, not a clear");
-  assert.ok("error" in parsePinnedSkills(["../etc"]));
-  assert.ok("error" in parsePinnedSkills(["a", "b", "c", "d", "e", "f", "g"]), "at most six pins");
 });
 
 test("the bundled skills fit the default index budget with full descriptions", () => {

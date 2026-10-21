@@ -2,7 +2,7 @@ import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "..
 import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
-import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
+import { assertSafeSkillName } from "./skill-name.ts";
 import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
@@ -134,19 +134,8 @@ export function rankedSkills(
     .map(({ entry }) => entry);
 }
 
-const MAX_PINNED_SKILLS = 6;
 const SKILLS_INDEX_BUDGET = 12_000;
 const MIN_DESCRIPTION = 60;
-
-export function parsePinnedSkills(raw: unknown): { value: string[] } | { error: string } {
-  if (!Array.isArray(raw) || !raw.every((name) => typeof name === "string"))
-    return { error: "pinned skills require { names: string[] } (an empty list clears them)" };
-  const names = [...new Set(raw.map((name) => name.trim()).filter(Boolean))];
-  const bad = names.find((name) => !isSafeSkillName(name));
-  if (bad) return { error: `not a valid skill name: ${bad}` };
-  if (names.length > MAX_PINNED_SKILLS) return { error: `at most ${MAX_PINNED_SKILLS} skills can be pinned` };
-  return { value: names };
-}
 
 function fitDescriptions(heads: string[], descriptions: string[], budget: number): number {
   const size = (cap: number) =>
@@ -165,14 +154,10 @@ export function skillsIndex(
   resolved: SkillResolution[],
   provenanceScopes: readonly ScopeId[] = [],
   usedNames: readonly string[] = [],
-  pinnedNames: readonly string[] = [],
   budget = SKILLS_INDEX_BUDGET,
 ): string {
   const provenance = new Set(provenanceScopes);
-  const ranked = rankedSkills(resolved, "", usedNames);
-  const byName = new Map(ranked.map((r) => [r.skill!.manifest.name, r]));
-  const pinned = pinnedNames.flatMap((name) => byName.get(name) ?? []);
-  const items = [...new Set([...pinned, ...ranked])];
+  const items = rankedSkills(resolved, "", usedNames);
   if (!items.length) return "";
   const heads = items.map((r) => {
     const source = provenance.has(r.skill!.scopeId) ? ` [from ${r.skill!.scopeId}]` : "";

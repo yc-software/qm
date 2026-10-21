@@ -416,17 +416,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    routes: [
-      { method: "GET", path: "/v1/pinned-skills", summary: "list the skills pinned to this conversation's scope" },
-      {
-        method: "PUT",
-        path: "/v1/pinned-skills",
-        summary:
-          "replace this scope's pinned skills — body {names: string[]} in display order (max 6; [] clears); they always lead the per-turn skills index. Personal pins apply to that person's DMs, channel pins to that channel. Live person turns only",
-      },
-    ],
-  },
-  {
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
