@@ -4529,7 +4529,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
   await call(catalog, send);
   assert.deepEqual(calls, [[{ operation: "invoke", tool: "find", arguments: {} }, undefined]]);
   const card = ref.pendingApprovals!.at(-1)!;
-  assert.equal(card.command, 'yc {"operation":"invoke","tool":"send-email","arguments":{"to":"x"}}');
+  assert.equal(card.command, 'yc {"arguments":{"to":"x"},"operation":"invoke","tool":"send-email"}');
   approved.add(card.approvalKey!);
   ref.pausedOnApproval = false;
   await call(catalog, send);
