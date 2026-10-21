@@ -56,17 +56,14 @@ ENV VIRTUAL_ENV=/opt/agent-venv
 COPY fly/tools/x-api /usr/local/bin/x-api
 RUN chmod +x /usr/local/bin/x-api
 ARG INSTALL_BROWSER_ENGINE=0
-ARG BROWSER_USE_VERSION=0.12.9
+COPY skills-seed/browse/install-runtime.sh /tmp/install-browse-runtime.sh
 RUN if [ "$INSTALL_BROWSER_ENGINE" = "1" ]; then \
       set -eux; \
       apt-get update && apt-get install -y --no-install-recommends \
         chromium ca-certificates fontconfig \
         fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
       && rm -rf /var/lib/apt/lists/*; \
-      python3 -m venv /opt/browser-engine/venv; \
-      /opt/browser-engine/venv/bin/pip install --no-cache-dir --upgrade pip; \
-      /opt/browser-engine/venv/bin/pip install --no-cache-dir "browser-use==${BROWSER_USE_VERSION}"; \
-      /opt/browser-engine/venv/bin/python -c "import browser_use; print('browser-use ok')"; \
+      sh /tmp/install-browse-runtime.sh; \
       /usr/bin/chromium --version; \
       : > /etc/machine-id; \
       : > /var/lib/dbus/machine-id; \

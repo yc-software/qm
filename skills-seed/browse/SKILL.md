@@ -153,26 +153,15 @@ in it; it rides only as a runner argument, never into chat or logs.
 
 ## 2. Run the task with the embedded runner
 
-The runtime normally ships on your computer at `/opt/browser-engine/venv`. Some computer
-images don't include it. A missing runtime never means "no browser available": the browser
-itself is remote, so you only need the Python driver. Check, and install it if absent
-(about 30 seconds; no local Chromium needed):
+The runtime lives at `/opt/browser-engine/venv`. Some computer images don't ship it; a
+missing runtime is not a missing browser (the browser is remote). Run the skill's installer
+first. It does nothing when the runtime is present and takes about 30 seconds otherwise:
 
 ```bash
-if ! /opt/browser-engine/venv/bin/python -c 'import browser_use, playwright' 2>/dev/null; then
-  SUDO=$( [ "$(id -u)" = 0 ] || echo sudo )
-  $SUDO mkdir -p /opt/browser-engine && $SUDO chown "$(id -u)" /opt/browser-engine
-  python3 -m venv /opt/browser-engine/venv
-  /opt/browser-engine/venv/bin/pip install -q --upgrade pip
-  /opt/browser-engine/venv/bin/pip install -q "browser-use==0.12.9" playwright
-  /opt/browser-engine/venv/bin/python -c 'import browser_use, playwright; print("runtime ok")'
-fi
+sh "<skill dir>/install-runtime.sh"
 ```
 
-If the install fails (no network, no write access to `/opt`), use the same commands with
-another writable path such as `$HOME/browser-engine` and substitute that path wherever this
-skill says `/opt/browser-engine`. Only report the browser as unavailable after that fails.
-When the runtime is present, don't reinstall it.
+If it fails, report the browser as unavailable and quote the installer's error output.
 Write the runner once per session, then invoke it per task:
 
 ```bash
