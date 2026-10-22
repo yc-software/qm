@@ -62,11 +62,13 @@ async function capabilityAdminDenied(
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-const NEEDLESS_ESCAPE = /%(?:3[0-9]|[46][1-9a-f]|[57][0-9a]|2[de]|5f|7e)/i;
+function needlessEscape(escaped: string): boolean {
+  const char = String.fromCharCode(Number.parseInt(escaped.slice(0, 2), 16));
+  return encodeURIComponent(char) === char;
+}
 
 function canonicalPath(req: IncomingMessage, pathname: string): boolean {
-  const target = req.url ?? "/";
-  return target.split("?", 1)[0] === pathname && !NEEDLESS_ESCAPE.test(pathname);
+  return (req.url ?? "/").split("?", 1)[0] === pathname && !pathname.split("%").slice(1).some(needlessEscape);
 }
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compilePath, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
+import { apiRoutes } from "../src/api/routes/index.ts";
 
 function matched(path: string, pathname: string): Record<string, string> | null {
   const out: Record<string, string> = {};
@@ -53,4 +54,15 @@ test("findRoute: a custom match route still works and yields empty params", () =
   const found = findRoute([route], "GET", "/d/app/anything/here");
   assert.equal(found?.route, route);
   assert.deepEqual(found?.params, {});
+});
+
+test("each API route's literals survive URL decoding and its own path resolves to it", () => {
+  for (const route of apiRoutes) {
+    if (!("path" in route)) continue;
+    const segments = route.path.split("/");
+    const literals = segments.filter((segment) => !segment.startsWith(":"));
+    assert.deepEqual(literals.map(encodeURIComponent), literals, route.path);
+    const sample = segments.map((segment) => (segment.startsWith(":") ? "x" : segment)).join("/");
+    assert.equal(findRoute(apiRoutes, route.method, sample)?.route, route, `${route.method} ${route.path}`);
+  }
 });
