@@ -194,7 +194,10 @@ function splitProposalReply(reply: string): { text: string; proposal?: Record<st
     parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>).proposal
       : undefined;
-  const text = hit && proposal ? (reply.slice(0, hit.block.start) + reply.slice(hit.block.end)).trim() : reply.trim();
+  const text =
+    hit && proposal
+      ? `${reply.slice(0, hit.block.start).trimEnd()}\n${reply.slice(hit.block.end).trimStart()}`.trim()
+      : reply.trim();
   return {
     text: text || reply.trim(),
     ...(proposal && typeof proposal === "object" && !Array.isArray(proposal)

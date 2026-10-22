@@ -8,7 +8,7 @@ export interface FencedCodeBlock {
 
 function fenceRun(line: string): string | undefined {
   let indent = 0;
-  while (indent < 3 && line[indent] === " ") indent++;
+  while (line[indent] === " " || line[indent] === "\t") indent++;
   const mark = line[indent];
   if (mark !== "`" && mark !== "~") return undefined;
   let run = indent;
@@ -40,28 +40,24 @@ export function fencedCodeBlocks(text: string): FencedCodeBlock[] {
 
 function codeSpans(line: string): Array<[number, number]> {
   const runs: Array<{ start: number; end: number }> = [];
-  const byLength = new Map<number, number[]>();
   for (let tick = line.indexOf("`"); tick !== -1; tick = line.indexOf("`", runs.at(-1)!.end)) {
     let end = tick + 1;
     while (line[end] === "`") end++;
-    const peers = byLength.get(end - tick) ?? [];
-    peers.push(runs.length);
-    byLength.set(end - tick, peers);
     runs.push({ start: tick, end });
   }
-  const spans: Array<[number, number]> = [];
-  const cursors = new Map<number, number>();
-  for (let i = 0; i < runs.length; i++) {
+  const nextSameLength = new Array<number>(runs.length).fill(-1);
+  const lastByLength = new Map<number, number>();
+  for (let i = runs.length - 1; i >= 0; i--) {
     const length = runs[i]!.end - runs[i]!.start;
-    const peers = byLength.get(length)!;
-    let cursor = cursors.get(length) ?? 0;
-    while (cursor < peers.length && peers[cursor]! <= i) cursor++;
-    cursors.set(length, cursor);
-    if (cursor < peers.length) {
-      const close = peers[cursor]!;
-      spans.push([runs[i]!.start, runs[close]!.end]);
-      i = close;
-    }
+    nextSameLength[i] = lastByLength.get(length) ?? -1;
+    lastByLength.set(length, i);
+  }
+  const spans: Array<[number, number]> = [];
+  for (let i = 0; i < runs.length; i++) {
+    const close = nextSameLength[i]!;
+    if (close === -1) continue;
+    spans.push([runs[i]!.start, runs[close]!.end]);
+    i = close;
   }
   return spans;
 }
@@ -76,20 +72,18 @@ function rewriteLine(line: string, baseUrl: string): string {
   });
 }
 
-function rewriteProse(prose: string, baseUrl: string): string {
-  return prose
-    .split("\n")
-    .map((line) => rewriteLine(line, baseUrl))
-    .join("\n");
-}
-
 export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
   if (!baseUrl) return text;
+  const prose = (segment: string) =>
+    segment
+      .split("\n")
+      .map((line) => rewriteLine(line, baseUrl))
+      .join("\n");
   let out = "";
   let cursor = 0;
   for (const block of fencedCodeBlocks(text)) {
-    out += rewriteProse(text.slice(cursor, block.start), baseUrl) + text.slice(block.start, block.end);
+    out += prose(text.slice(cursor, block.start)) + text.slice(block.start, block.end);
     cursor = block.end;
   }
-  return out + rewriteProse(text.slice(cursor), baseUrl);
+  return out + prose(text.slice(cursor));
 }

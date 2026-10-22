@@ -1244,7 +1244,8 @@ test("a language-tagged fence before the json block does not hide it", async () 
 
 test("a follow-up keeps its prose and earlier code blocks in the chat and lifts only the proposal block", async () => {
   const s = service(
-    () => 'Current config:\n```\n{"retries": 3}\n```\nI propose:\n```json\n{"proposal": {"body": "Retry twice"}}\n```',
+    () =>
+      'Current config:\n```\n{"retries": 3}\n```\nI propose:\n    ```json\n    {"proposal": {"body": "Retry twice"}}\n    ```\nLet me know.',
   );
   const loop = await makeLoop(s.loops);
   await s.items.ingest([
@@ -1258,7 +1259,7 @@ test("a follow-up keeps its prose and earlier code blocks in the chat and lifts 
   ]);
   const [item] = await s.items.byLoop(loop.id);
   const next = await s.fire.followUp(loop, item!, "Fewer retries please", "josh");
-  assert.equal(next?.thread?.at(-1)?.text, 'Current config:\n```\n{"retries": 3}\n```\nI propose:');
+  assert.equal(next?.thread?.at(-1)?.text, 'Current config:\n```\n{"retries": 3}\n```\nI propose:\nLet me know.');
   assert.equal(next?.proposal?.data.body, "Retry twice");
 
   const informational = service(() => 'Current config is:\n```json\n{"retries": 3}\n```\nWant me to change anything?');
