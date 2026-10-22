@@ -13,7 +13,7 @@ export function tailSlice(s: string, n: number): string {
 }
 
 export function jsonbSafeStringify(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => (typeof v === "string" ? v.replace(/\u0000/g, "") : v));
+  return JSON.stringify(value, (_k, v) => (typeof v === "string" ? pgTextSafe(v) : v));
 }
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
