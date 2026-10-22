@@ -62,6 +62,13 @@ async function capabilityAdminDenied(
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+const NEEDLESS_ESCAPE = /%(?:3[0-9]|[46][1-9a-f]|[57][0-9a]|2[de]|5f|7e)/i;
+
+function canonicalPath(req: IncomingMessage, pathname: string): boolean {
+  const target = req.url ?? "/";
+  return target.split("?", 1)[0] === pathname && !NEEDLESS_ESCAPE.test(pathname);
+}
+
 function capabilityFromHeaders(req: IncomingMessage): string | null {
   const h = req.headers[CAPABILITY_HEADER];
   return typeof h === "string" && h ? h : null;
@@ -492,6 +499,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
+    }
+    if (!canonicalPath(req, base.pathname)) {
+      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      return void req.resume();
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {

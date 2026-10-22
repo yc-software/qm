@@ -363,6 +363,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     assert.equal(r.status, 403);
   });
 
+  it("a web turn is gated whichever way its path is spelled", async () => {
+    const turn = {
+      surface: "web",
+      text: "hi",
+      actor: { externalId: "U2" },
+      conversation: { kind: "dm", threadRef: "t" },
+    };
+    const identity = { "x-portal-identity": await token("U1") };
+    assert.equal((await post("/v1/turns", turn, identity)).status, 403);
+    assert.equal((await post("/v1/%74urns", turn, identity)).status, 404);
+    assert.equal((await post("/v1/%74urns", turn)).status, 404);
+  });
+
   it("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {
     const r = await post("/v1/turns", {
       surface: "slack",

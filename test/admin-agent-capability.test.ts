@@ -398,6 +398,51 @@ test("grant management refuses agent tokens outright — promote/revoke stays in
   }
 });
 
+test("admin walls hold for every spelling of a path, and encoded params still route", async () => {
+  const s = start();
+  try {
+    const live = await capFor("admin-alice");
+    const unattended = await capFor("admin-alice", { live: false });
+    for (const [path, status] of [
+      ["/v1/admin/grants", 403],
+      ["/v1/%61dmin/grants", 404],
+      ["/v1/admin/gr%61nts", 404],
+    ] as const) {
+      const promote = await fetch(`${s.base}${path}`, {
+        method: "POST",
+        headers: { "x-agent-capability": live, "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: ORG }),
+      });
+      assert.equal(promote.status, status, `promote via ${path}`);
+    }
+    for (const [path, status] of [
+      ["/v1/admin/grants/admin-bob", 403],
+      ["/v1/%61dmin/grants/admin-bob", 404],
+    ] as const) {
+      const revoke = await fetch(`${s.base}${path}?scope=${encodeURIComponent(ORG)}&role=org_admin`, {
+        method: "DELETE",
+        headers: { "x-agent-capability": unattended },
+      });
+      assert.equal(revoke.status, status, `unattended revoke via ${path}`);
+    }
+    const whoami = async (who: string) =>
+      (
+        (await (
+          await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": await capFor(who) } })
+        ).json()) as any
+      ).isAdmin;
+    assert.equal(await whoami("U9"), false);
+    assert.equal(await whoami("admin-bob"), true);
+
+    const scope = await fetch(`${s.base}/v1/admin/scopes/${encodeURIComponent(ORG)}`, {
+      headers: { "x-agent-capability": live },
+    });
+    assert.equal(scope.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
 test("MCP server registration refuses agent tokens — the agent cannot change which calls need approval", async () => {
   const s = start();
   try {
