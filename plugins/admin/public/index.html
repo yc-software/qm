@@ -5118,12 +5118,6 @@
         opacity: 0.45;
         cursor: default;
       }
-      #view-governance #internal-member-overrides {
-        overflow-x: hidden;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-      }
 
       body[data-subview="credentials"] #view-governance section.card.sv-credentials {
         display: block;
@@ -6500,7 +6494,6 @@
                 <template data-governance-card="card-sharing-posture"></template>
                 <template data-governance-card="card-egress"></template>
                 <template data-integrations-card="card-external-slack"></template>
-                <template data-integrations-card="card-internal-member-overrides"></template>
                 <template data-integrations-card="card-channel-header-pin-default"></template>
                 <template data-integrations-card="card-ack-emoji"></template>
                 <div class="governance-group" id="governance-intelligence">
@@ -6648,7 +6641,6 @@
           $("card-sharing-posture"),
           governanceAmbient,
           $("card-external-slack"),
-          $("card-internal-member-overrides"),
           $("card-command-policy"),
           $("card-egress"),
         ].forEach((card) => content.appendChild(card));
@@ -6670,13 +6662,9 @@
         builtIns.innerHTML =
           '<div class="head"><h2>Built-in connectors</h2></div><div class="body" id="built-in-connectors">Loading connectors…</div>';
         $("card-slack-installation").classList.add("sv-slack-settings");
-        [
-          "card-slack-installation",
-          "card-external-slack",
-          "card-internal-member-overrides",
-          "card-channel-header-pin-default",
-          "card-ack-emoji",
-        ].forEach((id) => content.appendChild($(id)));
+        ["card-slack-installation", "card-external-slack", "card-channel-header-pin-default", "card-ack-emoji"].forEach(
+          (id) => content.appendChild($(id)),
+        );
         connectorView.appendChild(builtIns);
         document.querySelectorAll("#view-governance section.card > .foot > .viewlink").forEach((link) => {
           link.closest("section.card").querySelector(":scope > .head").appendChild(link);
@@ -8506,7 +8494,6 @@
         "ambient-policy": "st-ambient-policy",
         egress: "st-egress",
         "external-slack-participants": "st-external-slack-participants",
-        "internal-member-overrides": "st-internal-member-overrides",
         "org-ambient": "st-governance-org-ambient",
         "channel-header-pin-default": "st-channel-header-pin-default",
         runtime: "st-runtime",
@@ -8519,7 +8506,6 @@
         branding: "st-branding",
       };
       const SAVE_RELOADS = new Set([
-        "internal-member-overrides",
         "auto-flagger",
         "soul",
         "external-slack-participants",
@@ -8649,32 +8635,6 @@
               : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
             confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
             danger: !!body.on,
-          });
-        }
-        if (key === "internal-member-overrides") {
-          const norm = (list) => [
-            ...new Set((Array.isArray(list) ? list : []).map((m) => String(m).trim().toLowerCase()).filter(Boolean)),
-          ];
-          const before = norm(JSON.parse(sectionSnapshots.get(key) || "{}").members);
-          const after = norm(body.members);
-          const added = after.filter((m) => !before.includes(m));
-          const removed = before.filter((m) => !after.includes(m));
-          if (!added.length && !removed.length) return Promise.resolve(true);
-          const show = (list) => (list.length ? list.join(", ") : "none");
-          return reviewGovernanceChange({
-            title: "Change internal member overrides?",
-            subtitle: "These users count as internal members throughout the organization, not just for mentions.",
-            facts: [
-              ["Scope", governanceScopeName()],
-              ["Adding", show(added)],
-              ["Removing", show(removed)],
-              ["Total after", String(after.length)],
-            ],
-            warning: added.length
-              ? "These users receive internal-member access. Rooms containing only internal members may use organization credentials, and replies are visible to everyone there. Only add trusted colleagues."
-              : "Removed users without another source of internal membership return to external treatment after the directory refreshes.",
-            confirmLabel: "Apply overrides",
-            danger: added.length > 0,
           });
         }
         return Promise.resolve(true);

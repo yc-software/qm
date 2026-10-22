@@ -66,38 +66,6 @@ cards["card-external-slack"] = () => {
     ${saveFooter(s, "Apply", !s.available)}
   </section>`;
 };
-cards["card-internal-member-overrides"] = () => {
-  const s = states.get("internal-member-overrides")!;
-  return html`<section
-    class=${classMap({ card: true, "sv-slack-settings": true, "setting-row": true, hidden: !s.available, dirty: s.dirty })}
-    id="card-internal-member-overrides"
-  >
-    <div class="head">
-      <h2 id="internal-member-overrides-title">Internal member overrides</h2>
-      <p id="internal-member-overrides-help">
-        Treat listed Slack users as internal members, including guests and people missing from the directory. This
-        grants internal-member access, not just permission to mention the agent. Rooms containing only internal members
-        may use organization credentials. Add only trusted colleagues. Enter one Slack user ID or Slack-profile email
-        per line (commas also accepted).
-      </p>
-    </div>
-    <div class="body">
-      <textarea
-        id="internal-member-overrides"
-        .value=${s.draft.text || ""}
-        @input=${(e: Event) => s.change({ text: (e.target as HTMLTextAreaElement).value })}
-        rows="4"
-        aria-labelledby="internal-member-overrides-title"
-        aria-describedby="internal-member-overrides-help internal-member-overrides-count"
-        spellcheck="false"
-        placeholder="contractor@example.com&#10;U0123ABCDE"
-        style="width: 100%; max-width: 560px; font-family: var(--mono, monospace)"
-      ></textarea>
-      <small class="muted" id="internal-member-overrides-count">${overrideCount(s)}</small>
-    </div>
-    ${saveFooter(s, "Apply", !s.available)}
-  </section>`;
-};
 cards["card-channel-header-pin-default"] = () => {
   const s = states.get("channel-header-pin-default")!;
   return html`<section
@@ -426,10 +394,6 @@ cards["card-slack-installation"] = () => {
     </div>
   </section>`;
 };
-function overrideCount(s: SlackSetting) {
-  const n = s.collect().members!.length;
-  return n ? n + " override" + (n === 1 ? "" : "s") : "No overrides configured.";
-}
 function openConnector(connector?: Parameters<typeof connectors.edit>[0]) {
   connectors.edit(connector);
   document.getElementById("conn-client-id")?.focus();
@@ -598,7 +562,6 @@ export function mountCards() {
       const key = (
         {
           "card-external-slack": "external-slack-participants",
-          "card-internal-member-overrides": "internal-member-overrides",
           "card-channel-header-pin-default": "channel-header-pin-default",
           "card-ack-emoji": "ack-emoji",
         } as Record<string, string>

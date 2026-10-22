@@ -428,35 +428,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
-    id: "internal-member-overrides",
-    kind: "string-list",
-    target: "org",
-    clearable: true,
-    label:
-      "Members listed here (lowercased emails or Slack user ids) are treated as internal even if Slack marks them guest/restricted or the directory sync removed them; use it for contractor accounts that are genuinely internal.",
-    readKey: "internalMemberOverrides",
-    get: (deps) => deps.config!.getInternalMemberOverrides(),
-    apply: async (ctx, actor, scope) => {
-      const bad = orgOnly(scope, "internal member overrides are org-wide");
-      if (bad) return bad;
-      const raw = (ctx.body as { members?: unknown }).members;
-      if (!Array.isArray(raw)) return { error: "internal-member-overrides requires { members: string[] }" };
-      if (raw.length > 500) return { error: "internal-member-overrides accepts at most 500 entries" };
-      if (raw.some((m) => typeof m !== "string" || !m.trim() || m.length > 320))
-        return { error: "each member must be a non-empty string of at most 320 characters" };
-      const before = ctx.deps.config!.getInternalMemberOverrides();
-      await ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
-      const after = ctx.deps.config!.getInternalMemberOverrides();
-      audit(ctx.deps, {
-        principalId: actor.id,
-        action: "identity.internal-override.update",
-        resource: `${before.length}->${after.length}: ${after.join(", ")}`,
-        scopeLabel: scope,
-      });
-      return { ok: true };
-    },
-  },
-  {
     id: "channel-header-pin-default",
     kind: "boolean",
     target: "org",

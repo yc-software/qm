@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildSync } from "esbuild";
 import { JSDOM } from "jsdom";
-import { configure, ConnectorsState, SlackSetting, SlackInstallationState } from "../ui/integrations-state.ts";
+import { configure, ConnectorsState, SlackInstallationState } from "../ui/integrations-state.ts";
 const bundle = buildSync({
   entryPoints: [new URL("../ui/integrations.ts", import.meta.url).pathname],
   bundle: true,
@@ -27,7 +27,7 @@ test("Slack settings are state driven and preserve newer drafts when committing"
   const dom = setup();
   try {
     dom.window.eval(
-      'ui.loadScope({externalSlackParticipants:false,internalMemberOverrides:[],channelHeaderPinDefault:false,ackEmoji:[]},"org:test")',
+      'ui.loadScope({externalSlackParticipants:false,channelHeaderPinDefault:false,ackEmoji:[]},"org:test")',
     );
     const doc = dom.window.document;
     const radio = doc.querySelector<HTMLInputElement>('[name="external-slack-choice"][value="on"]')!;
@@ -42,13 +42,6 @@ test("Slack settings are state driven and preserve newer drafts when committing"
   } finally {
     dom.window.close();
   }
-});
-test("Slack member overrides normalize from the draft and update the count", () => {
-  const s = new SlackSetting("internal-member-overrides");
-  s.load([], "org:test", true);
-  s.change({ text: " User@Example.com,USER@example.com\n U123 " });
-  assert.deepEqual(s.collect(), { members: ["user@example.com", "u123"] });
-  assert.equal(s.dirty, true);
 });
 test("Connector editor renders guides and keeps fields and focus stable while typing", () => {
   const dom = setup();

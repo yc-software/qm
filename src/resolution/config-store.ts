@@ -77,7 +77,6 @@ interface ScopedRuntimeSelection extends RuntimeSelection {
   revision?: number;
 }
 export type PersistedApprovedHarnesses = ScopedRow<"ids", string[]>;
-export type PersistedInternalMemberOverrides = ScopedRow<"members", string[]>;
 interface PersistedSlackEmojiCatalog {
   scopeId: ScopeId;
   emoji: Record<string, string>;
@@ -167,9 +166,6 @@ export interface ScopedConfigStore {
   getApprovedHarnesses(): string[] | null;
   setApprovedHarnesses(ids: string[] | null): Promise<void>;
   getApprovedHarnessesDurable(): Promise<string[] | null>;
-  getInternalMemberOverrides(): string[];
-  setInternalMemberOverrides(members: string[]): Promise<void>;
-  getInternalMemberOverridesDurable(): Promise<string[]>;
   getOrgAmbient(): boolean;
   setOrgAmbient(on: boolean): Promise<void>;
   getOrgAmbientDurable(): Promise<boolean>;
@@ -225,7 +221,6 @@ export interface ConfigStoreMaps {
   channelHeaderPin?: DurableMap<PersistedScopedFlag>;
   baseModels?: DurableMap<PersistedBaseModel>;
   approvedHarnesses?: DurableMap<PersistedApprovedHarnesses>;
-  internalMemberOverrides?: DurableMap<PersistedInternalMemberOverrides>;
   orgAmbient?: DurableMap<PersistedScopedFlag>;
   interactiveFastMode?: DurableMap<PersistedScopedFlag>;
   individualModelAuth?: DurableMap<PersistedModelAccount>;
@@ -253,7 +248,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   channelHeaderPin: "channel_header_pin_flag",
   baseModels: "base_model_configs",
   approvedHarnesses: "approved_harness_configs",
-  internalMemberOverrides: "internal_member_overrides",
   orgAmbient: "org_ambient_flag",
   interactiveFastMode: "interactive_fast_mode_flag",
   individualModelAuth: "individual_model_auth_flag",
@@ -349,7 +343,6 @@ export function createMemoryConfigStore(
     externalSlackParticipants: field("externalSlackParticipants", "on"),
     channelHeaderPin: field("channelHeaderPin", "on"),
     approvedHarnesses: field("approvedHarnesses", "ids", true),
-    internalMemberOverrides: field("internalMemberOverrides", "members", true),
     orgAmbient: field("orgAmbient", "on", true),
     interactiveFastMode: field("interactiveFastMode", "on", true),
     individualModelAuth: field("individualModelAuth", "on", true),
@@ -780,12 +773,6 @@ export function createMemoryConfigStore(
     },
     setApprovedHarnesses: (ids) => settings.approvedHarnesses.set(org, ids ? [...ids] : null),
     getApprovedHarnessesDurable: async () => (await settings.approvedHarnesses.durable(org)) ?? null,
-    getInternalMemberOverrides: () => [...(settings.internalMemberOverrides.get(org) ?? [])],
-    setInternalMemberOverrides: (members) =>
-      settings.internalMemberOverrides.set(org, [
-        ...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean)),
-      ]),
-    getInternalMemberOverridesDurable: async () => (await settings.internalMemberOverrides.durable(org)) ?? [],
     getOrgAmbient: () => settings.orgAmbient.get(org) ?? true,
     setOrgAmbient: (on) => settings.orgAmbient.set(org, on),
     getOrgAmbientDurable: async () => (await settings.orgAmbient.durable(org)) ?? true,

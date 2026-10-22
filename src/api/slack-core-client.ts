@@ -86,7 +86,6 @@ export interface SlackCoreClient {
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
-  internalMemberOverrides(): Promise<string[]>;
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
@@ -205,10 +204,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
-    },
-
-    async internalMemberOverrides() {
-      return deps.config.getInternalMemberOverridesDurable();
     },
 
     async ackEmojiOverride() {

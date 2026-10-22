@@ -703,61 +703,6 @@ test("webui-models is an org-wide string-list read back via admin GET and surfac
   }
 });
 
-test("internal-member-overrides is org-only, validates entries, audits, and round-trips", async () => {
-  const srv = start();
-  try {
-    const wrongScope = await fetch(`${srv.base}/v1/admin/scopes/personal:U1/internal-member-overrides`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ members: ["u1"] }),
-    });
-    assert.equal(wrongScope.status, 400);
-    assert.match(((await wrongScope.json()) as { message: string }).message, /org-wide/);
-
-    const notArray = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ members: "u1" }),
-    });
-    assert.equal(notArray.status, 400);
-    assert.match(((await notArray.json()) as { message: string }).message, /requires/);
-
-    const badEntry = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ members: ["ok@example.com", "  "] }),
-    });
-    assert.equal(badEntry.status, 400);
-    assert.match(((await badEntry.json()) as { message: string }).message, /non-empty string/);
-
-    const put = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ members: [" Contractor@EXAMPLE.com ", "U123ABC", "contractor@example.com"] }),
-    });
-    assert.equal(put.status, 200);
-    assert.deepEqual(srv.built.config.getInternalMemberOverrides(), ["contractor@example.com", "u123abc"]);
-    const adminGet = await fetch(`${srv.base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
-    assert.deepEqual(((await adminGet.json()) as { internalMemberOverrides: string[] }).internalMemberOverrides, [
-      "contractor@example.com",
-      "u123abc",
-    ]);
-    assert.ok(
-      (await srv.built.auditLog.events()).some((event) => event.action === "identity.internal-override.update"),
-    );
-
-    const clear = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/internal-member-overrides`, {
-      method: "PUT",
-      headers: ADMIN,
-      body: JSON.stringify({ members: [] }),
-    });
-    assert.equal(clear.status, 200);
-    assert.deepEqual(srv.built.config.getInternalMemberOverrides(), []);
-  } finally {
-    await srv.close();
-  }
-});
-
 test("GET /v1/admin/slack-emoji surfaces 404 without a token, and serves the plugin-published catalog once one exists", async () => {
   const srv = start();
   try {
