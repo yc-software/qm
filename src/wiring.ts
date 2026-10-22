@@ -1913,6 +1913,13 @@ export function buildApp(
     id: "durable-map/pinned_skills/0002-drop",
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/internal_member_overrides/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS internal_member_overrides",
+      "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
+    ],
+  });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
