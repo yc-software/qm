@@ -196,7 +196,7 @@ function splitProposalReply(reply: string): { text: string; proposal?: Record<st
       : undefined;
   const text =
     hit && proposal
-      ? `${reply.slice(0, hit.block.start).trimEnd()}\n${reply.slice(hit.block.end).trimStart()}`.trim()
+      ? `${reply.slice(0, hit.block.start).trimEnd()}\n\n${reply.slice(hit.block.end).trimStart()}`.trim()
       : reply.trim();
   return {
     text: text || reply.trim(),
