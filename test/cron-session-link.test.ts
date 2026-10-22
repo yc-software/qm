@@ -79,7 +79,7 @@ test("session:false and triggered turns leave a cron untied, and patch ties or u
     { session: true },
     claims({ scopeId: scopeId("channel", "C9") }),
   );
-  assert.equal(elsewhere.ok ? "" : elsewhere.code, "bad_request", "a cron only ties to sessions in its own scope");
+  assert.equal(elsewhere.ok ? "" : elsewhere.code, "forbidden", "a personal cron is reached only from its own scope");
   const fromFire = await control.createCron({ ...watch, title: "Fire child" }, claims({ triggered: true }));
   assert.ok(fromFire.ok && fromFire.cron.sessionRef === undefined);
 

@@ -7,7 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Grant, Permission, ScopeId } from "../types.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, reachesPrivateHome, scopeId } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { normalizeRelPath } from "./deploy-fs.ts";
@@ -309,13 +309,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   }
 
   async function managesHome(d: Deployment, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
-    if (d.ownerScopeId === `personal:${callerId}`) return true;
-    if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
-      return true;
     if (
       isManageableCreationScope(d.createdInScope) &&
       (await canWriteScope(callerId, d.createdInScope!, actingScopeId))
     )
+      return true;
+    if (!reachesPrivateHome(d.ownerScopeId, actingScopeId) && actingScopeId !== d.createdInScope) return false;
+    if (d.ownerScopeId === `personal:${callerId}`) return true;
+    if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
       return true;
     return false;
   }
@@ -752,10 +753,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const files = input.files ?? [];
       const existing = input.name !== undefined ? await deps.deployStore.getByName(input.name) : null;
       if (existing) {
-        if (
-          existing.ownerScopeId !== ownerScopeId &&
-          !(await canManage(existing, ownerScopeId, createdBy, input.createdInScope))
-        ) {
+        if (!(await canManage(existing, ownerScopeId, createdBy, input.createdInScope))) {
           throw new Error(`deployment name taken: ${input.name}`);
         }
         const entrypoint = requiredEntrypoint(input.entrypoint, existing);

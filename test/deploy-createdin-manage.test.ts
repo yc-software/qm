@@ -249,6 +249,65 @@ test("canManage: acting in a different (shared-into) channel does NOT confer man
   }
 });
 
+test("canManage: an app published in a DM is managed only from its owner's own scope", async () => {
+  const { f, d } = await setup();
+  try {
+    const dm = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('v1')" }],
+      name: "dm-app",
+      createdInScope: scopeId("personal", "U1"),
+    });
+    assert.equal(await f.deploy.canManageDeployment(dm.id, "U1", scopeId("personal", "U1")), true);
+    assert.equal(await f.deploy.canManageDeployment(dm.id, "U1"), true);
+    assert.equal(await f.deploy.canManageDeployment(dm.id, "U1", scopeId("channel", CH)), false);
+    assert.equal(await f.deploy.canManageDeployment(d.id, "U1", scopeId("channel", CH)), true);
+    const room = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('v1')" }],
+      name: "room-app",
+      createdInScope: scopeId("group", "G1"),
+    });
+    assert.equal(await f.deploy.canManageDeployment(room.id, "U1", scopeId("group", "G1")), true);
+    assert.equal(await f.deploy.canManageDeployment(room.id, "U2", scopeId("group", "G1")), false);
+    assert.equal(await f.deploy.canManageDeployment(room.id, "U1", scopeId("channel", CH)), false);
+    await assert.rejects(
+      f.deploy.deployOrUpdate({
+        ownerScopeId: scopeId("personal", "U1"),
+        createdBy: "U1",
+        name: "dm-app",
+        entrypoint: "node server.js",
+        files: [{ path: "server.js", data: "console.log('v2')" }],
+        createdInScope: scopeId("channel", CH),
+      }),
+      /name taken/i,
+    );
+    const r = await fetch(`${f.base}/v1/deployments/dm-app/always-on`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-agent-capability": await mintCapabilityToken(
+          {
+            actorId: "U1",
+            scopeId: scopeId("channel", CH),
+            aud: CONTROL_PLANE_AUD,
+            exp: Date.now() + CAPABILITY_TTL_MS,
+          },
+          SECRET,
+        ),
+      },
+      body: JSON.stringify({ alwaysOn: true }),
+    });
+    assert.equal(r.status, 403);
+  } finally {
+    await f.close();
+  }
+});
+
 test("canManage: a channel write grant follows a member into their DM", async () => {
   const { f, d } = await setup();
   try {

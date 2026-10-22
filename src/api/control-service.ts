@@ -26,7 +26,14 @@ import {
   type ShareArtifactRequest,
   type ShareArtifactResult,
 } from "./artifact-share.ts";
-import { actsAsScope, isSharedScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import {
+  actsAsScope,
+  isSharedScope,
+  parseScopeId,
+  reachesPrivateHome,
+  type Permission,
+  type ScopeId,
+} from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
@@ -331,6 +338,8 @@ function validateUnattendedGrants(grants: string[]): string | null {
 }
 
 export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
+  const administers = async (cron: Cron, cap: CapabilityClaims, isActor?: (id: string) => Promise<boolean>) =>
+    reachesPrivateHome(cron.ownerScopeId, cap.scopeId) && (await canAdministerCron(app, cron, cap.actorId, isActor));
   const notifyEdit = (
     cron: Cron,
     cap: CapabilityClaims,
@@ -382,6 +391,12 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (wantsPersonal) {
         destination = principalDestination(capability.actorId, capability.actorId);
         ownerScopeId = destination.audienceScopeId ?? ownerScopeId;
+        if (!reachesPrivateHome(ownerScopeId, capability.scopeId) && !livePersonCapability(capability))
+          return {
+            ok: false,
+            code: "forbidden",
+            message: 'scope:"personal" from another conversation requires a live turn started by its owner',
+          };
       } else if (req.recipient !== undefined || req.channel !== undefined || hasParticipants) {
         const r = await app.resolveReachTarget(
           {
@@ -502,7 +517,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       const { visible } = await app.listCronsForViewer(capability.actorId);
       const all = await app.listCrons();
       const isActor = await app.personMatcher(capability.actorId);
-      const admits = await Promise.all(all.map((c) => canAdministerCron(app, c, capability.actorId, isActor)));
+      const admits = await Promise.all(all.map((c) => administers(c, capability, isActor)));
       const administered = all.filter((_, i) => admits[i]);
       const ids = new Set(administered.map((c) => c.id));
       return { crons: administered, visible: visible.filter((c) => !ids.has(c.id)) };
@@ -511,7 +526,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async getCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (await canAdministerCron(app, cron, capability.actorId)) return { ok: true, cron };
+      if (await administers(cron, capability)) return { ok: true, cron };
       const { visible } = await app.listCronsForViewer(capability.actorId);
       if (visible.some((c) => c.id === id)) return { ok: true, cron };
       return { ok: false, code: "forbidden", message: "not your cron" };
@@ -520,8 +535,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async getCronRuns(id, req, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.limit !== undefined && (!Number.isInteger(req.limit) || req.limit < 1)) {
         return { ok: false, code: "bad_request", message: "limit must be a positive integer" };
       }
@@ -532,8 +546,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async patchCron(id, req, capability) {
       const before = await app.getCron(id);
       if (!before) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, before, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(before, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if (req.unattendedGrants !== undefined) {
         const invalid = validateUnattendedGrants(req.unattendedGrants);
         if (invalid) return { ok: false, code: "bad_request", message: invalid };
@@ -590,8 +603,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       }
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if (cron.archived) {
         return {
           ok: false,
@@ -625,8 +637,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async deleteCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       await app.deleteCron(id);
       await notifyEdit(cron, capability, ["deleted"]);
       return { ok: true };
@@ -635,8 +646,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async setCronEnabled(id, enabled, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if (enabled && (cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
@@ -651,8 +661,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async runCron(id, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
@@ -680,8 +689,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
     async retargetCron(id, destinationKey, capability) {
       const cron = await app.getCron(id);
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
-      if (!(await canAdministerCron(app, cron, capability.actorId)))
-        return { ok: false, code: "forbidden", message: "not your cron" };
+      if (!(await administers(cron, capability))) return { ok: false, code: "forbidden", message: "not your cron" };
       if ((cron.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
@@ -826,7 +834,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (
         !orgSkillCede &&
         !(cron
-          ? await ownsCron(app, cron, capability.actorId)
+          ? reachesPrivateHome(cron.ownerScopeId, capability.scopeId) && (await ownsCron(app, cron, capability.actorId))
           : await app.canManageArtifactHome(home.ownerScopeId, home.createdBy, capability.actorId))
       ) {
         return {

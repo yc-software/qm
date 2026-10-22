@@ -3,7 +3,7 @@ import { boundLoopCron } from "../../loops/authority.ts";
 import { unattendedGrantRefusal } from "../../cron/authority.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../types.ts";
-import { scopeId, type ScopeId } from "../../types.ts";
+import { reachesPrivateHome, scopeId, type ScopeId } from "../../types.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import type { LoopStore, CreateLoopInput, LoopPatch } from "../../loops/loop-store.ts";
 import { DECISION_LEASE_MS, type LoopItemLedger } from "../../loops/item-ledger.ts";
@@ -68,6 +68,7 @@ function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): boolean {
 
 export async function canAdministerLoop(ctx: ApiCtx, loop: Loop, acting: ActingPrincipal): Promise<boolean> {
   const { app } = ctx;
+  if (!reachesPrivateHome(loop.ownerScopeId, acting.scopeId)) return false;
   if (await app.membershipControlsScope(loop.ownerScopeId)) {
     return app.managesScope(acting.actorId, loop.ownerScopeId);
   }
@@ -259,6 +260,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
+  if (!reachesPrivateHome(ownerScopeId, acting.scopeId) && !requireLiveHuman(ctx, acting)) return;
   const input: CreateLoopInput = {
     owner: acting.actorId,
     createdBy: acting.actorId,

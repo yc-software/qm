@@ -148,7 +148,7 @@ test("direct deployment creation also grants channel read access", async () => {
   assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "ok");
 });
 
-test("DM apps stay private when republished or renamed in a channel", async () => {
+test("DM apps are neither republished nor renamed from a channel", async () => {
   const { deploy } = await setup();
   const input = {
     ownerScopeId: scopeId("personal", "U1"),
@@ -160,13 +160,17 @@ test("DM apps stay private when republished or renamed in a channel", async () =
   const d = await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("personal", "U1") });
   assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
   assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
-  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) });
-  await deploy.deployOrUpdate({
-    ...input,
-    name: "renamed-dm-app",
-    renameFrom: "dm-app",
-    createdInScope: scopeId("channel", CH_OTHER),
-  });
+  await assert.rejects(deploy.deployOrUpdate({ ...input, createdInScope: scopeId("channel", CH) }), /name taken/);
+  await assert.rejects(
+    deploy.deployOrUpdate({
+      ...input,
+      name: "renamed-dm-app",
+      renameFrom: "dm-app",
+      createdInScope: scopeId("channel", CH_OTHER),
+    }),
+    /not authorized to manage/,
+  );
+  await deploy.deployOrUpdate({ ...input, createdInScope: scopeId("personal", "U1") });
   assert.deepEqual(await deploy.deploymentGrantees(d.id), []);
   assert.equal((await deploy.reachDeployment(d.id, "U2")).status, "denied");
 });

@@ -54,6 +54,10 @@ export function isManageableCreationScope(id: ScopeId | undefined): boolean {
   return kind === "channel" || kind === "team";
 }
 
+export function reachesPrivateHome(home: ScopeId, acting: ScopeId | undefined): boolean {
+  return acting === undefined || acting === home || parseScopeId(home).kind !== "personal";
+}
+
 export function isSharedScope(id: ScopeId | undefined): boolean {
   if (!id) return false;
   const { kind } = parseScopeId(id);

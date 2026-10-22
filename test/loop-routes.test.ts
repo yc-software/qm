@@ -50,6 +50,7 @@ async function call(
   liveActor = true,
   isAdmin = true,
   managesScope = false,
+  scope = scopeId("personal", actor),
 ): Promise<{ status: number; body: unknown }> {
   const found = findRoute(loopRoutes as ReadonlyArray<Route<ApiCtx>>, method, path);
   assert.ok(found, `no route for ${method} ${path}`);
@@ -65,7 +66,7 @@ async function call(
       mode === "capability"
         ? {
             actorId: actor,
-            scopeId: scopeId("personal", actor),
+            scopeId: scope,
             ...(liveActor ? { liveActor: true } : {}),
             destinations: [{ key: "alerts", label: "Alerts", type: "slack", target: "C-alerts" }],
           }
@@ -87,6 +88,21 @@ const CREATE = {
   successCondition: "a fix PR is linked",
   shipActions: [{ action: "open_pr", gate: "hold" }],
 };
+
+test("a personal loop is administered only from its owner's own scope", async () => {
+  const deps = services();
+  const room = scopeId("channel", "C1");
+  const created = await call(deps, "POST", "/v1/loops", CREATE);
+  assert.equal(created.status, 200);
+  const id = (created.body as { loop: { id: string } }).loop.id;
+  const fromRoom = (method: string, path: string, body?: unknown, live = true) =>
+    call(deps, method, path, body, "josh", "capability", live, true, false, room);
+  assert.equal((await fromRoom("GET", `/v1/loops/${id}`)).status, 403);
+  assert.equal((await fromRoom("PATCH", `/v1/loops/${id}`, { name: "Hijacked" })).status, 403);
+  assert.equal((await fromRoom("POST", "/v1/loops", { ...CREATE, name: "From a trigger" }, false)).status, 403);
+  assert.equal((await fromRoom("POST", "/v1/loops", { ...CREATE, name: "Asked in the room" })).status, 200);
+  assert.equal((await call(deps, "PATCH", `/v1/loops/${id}`, { name: "Renamed" })).status, 200);
+});
 
 test("creating a loop with a schedule creates a bound child cron", async () => {
   const deps = services();

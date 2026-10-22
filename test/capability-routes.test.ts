@@ -277,6 +277,31 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     await del(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") });
   });
 
+  it("administers a personal cron only from its owner's own scope", async () => {
+    const own = { "x-agent-capability": await capFor("U1") };
+    const room = { "x-agent-capability": await capChannel("U1") };
+    const roomFire = { "x-agent-capability": await capChannel("U1", { triggered: true }) };
+    const roomLive = { "x-agent-capability": await capChannel("U1", { liveActor: true }) };
+    const body = { title: "Private", schedule: { everyMs: 60_000 }, action: "orig" };
+    const id = ((await (await post("/v1/crons", body, own)).json()) as any).cron.id as string;
+
+    assert.equal((await get(`/v1/crons/${id}`, room)).status, 403);
+    assert.equal((await patch(`/v1/crons/${id}`, { title: "Hijacked" }, room)).status, 403);
+    assert.equal((await post(`/v1/crons/${id}/run`, {}, roomFire)).status, 403);
+    assert.equal((await del(`/v1/crons/${id}`, room)).status, 403);
+    const listed = (await (await get("/v1/crons", room)).json()) as { crons: Array<{ id: string }> };
+    assert.equal(
+      listed.crons.some((c) => c.id === id),
+      false,
+    );
+    assert.equal((await patch(`/v1/crons/${id}`, { title: "Renamed" }, own)).status, 200);
+
+    assert.equal((await post("/v1/crons", { ...body, scope: "personal" }, roomFire)).status, 403);
+    const asked = await post("/v1/crons", { ...body, scope: "personal" }, roomLive);
+    assert.equal(asked.status, 200);
+    assert.equal(((await asked.json()) as any).cron.ownerScopeId, scopeId("personal", "U1"));
+  });
+
   it("accepts calendar cron schedules and defaults timezone from the capability", async () => {
     const withTz = await post(
       "/v1/crons",

@@ -343,7 +343,7 @@ test("a teammate-addressed cron runs in the OWNER's scope; the recipient is deli
   assert.notEqual(r.cron.ownerScopeId, scopeId("personal", "U2"));
   const personal = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal" },
-    claims("U1", scopeId("channel", "C9")),
+    claims("U1", scopeId("channel", "C9"), { liveActor: true }),
   );
   assert.ok(personal.ok, JSON.stringify(personal));
 });
@@ -419,10 +419,15 @@ test("cron create with `channel` resolves a public channel; a private channel ne
 test('scope:"personal" runs at the invoking user\'s personal scope and DMs them, even from a channel', async () => {
   const { control } = setup();
   const chanScope = scopeId("channel", "C9");
-  const r = await control.createCron(
-    { title: "my private reminder", schedule: { everyMs: 3_600_000 }, action: "remind me", scope: "personal" },
-    claims("U1", chanScope),
-  );
+  const req = {
+    title: "my private reminder",
+    schedule: { everyMs: 3_600_000 },
+    action: "remind me",
+    scope: "personal" as const,
+  };
+  const unasked = await control.createCron(req, claims("U1", chanScope));
+  assert.equal(unasked.ok ? "" : unasked.code, "forbidden", "only the person themselves reaches their own scope");
+  const r = await control.createCron(req, claims("U1", chanScope, { liveActor: true }));
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.cron.ownerScopeId, scopeId("personal", "U1"));
   assert.equal(r.cron.destination?.type, "principal");
@@ -453,7 +458,7 @@ test('scope:"personal" ignores an empty participants array (tool callers often s
   const { control } = setup();
   const ok = await control.createCron(
     { schedule: { everyMs: 3_600_000 }, action: "x", scope: "personal", participants: [] },
-    claims("U1", scopeId("channel", "C9")),
+    claims("U1", scopeId("channel", "C9"), { liveActor: true }),
   );
   assert.ok(ok.ok, JSON.stringify(ok));
   assert.equal(ok.cron.ownerScopeId, scopeId("personal", "U1"));
