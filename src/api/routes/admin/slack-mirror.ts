@@ -2,6 +2,7 @@ import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
 
 const SLACK_MIRROR_PAGE_MAX = 400;
 const SLACK_MIRROR_PAGE_DEFAULT = 200;
@@ -18,9 +19,8 @@ async function mirrorNames(deps: ApiCtx["deps"]) {
     author: (id?: string): string | undefined => (id ? byId.get(id) : undefined),
     mentions(text?: string, existing?: Record<string, string>): Record<string, string> | undefined {
       const out: Record<string, string> = { ...existing };
-      for (const m of (text ?? "").matchAll(/<@([A-Z0-9]+)(?:\|[^>]*)?>/g)) {
-        const id = m[1];
-        if (!id || out[id]) continue;
+      for (const id of mentionedUserIds(text ?? "")) {
+        if (out[id]) continue;
         const name = byId.get(id);
         if (name) out[id] = name;
       }

@@ -30,10 +30,60 @@ export function pgTextSafe(s: string): string {
   return out;
 }
 
+export function outermostJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start === -1 || end < start ? undefined : text.slice(start, end + 1);
+}
+
+const APP_LINK = /\[([^[\]\n]+)\]\((\/d\/[^\s)[]+)\)/g;
+
+function fenceRun(line: string): string | undefined {
+  let indent = 0;
+  while (indent < 3 && line[indent] === " ") indent++;
+  const mark = line[indent];
+  if (mark !== "`" && mark !== "~") return undefined;
+  let run = indent;
+  while (line[run] === mark) run++;
+  return run - indent >= 3 ? line.slice(indent, run) : undefined;
+}
+
+function closesFence(line: string, opener: string): boolean {
+  const run = fenceRun(line);
+  return !!run && run[0] === opener[0] && run.length >= opener.length && line.trim() === run;
+}
+
+function rewriteAppLinks(segment: string, baseUrl: string): string {
+  return segment.replace(APP_LINK, (_m, label: string, path: string) => `[${label}](${new URL(path, baseUrl).href})`);
+}
+
+function rewriteOutsideCodeSpans(line: string, baseUrl: string): string {
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const tick = line.indexOf("`", i);
+    if (tick === -1) return out + rewriteAppLinks(line.slice(i), baseUrl);
+    let run = tick + 1;
+    while (line[run] === "`") run++;
+    const close = line.indexOf(line.slice(tick, run), run);
+    const end = close === -1 ? run : close + run - tick;
+    out += rewriteAppLinks(line.slice(i, tick), baseUrl) + line.slice(tick, end);
+    i = end;
+  }
+}
+
 export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
   if (!baseUrl) return text;
-  return text.replace(
-    /(^(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\2[ \t]*$|(`+)[^\n]*?\3)|\[([^\]\n]+)\]\((\/d\/[^\s)]+)\)/gm,
-    (match, code, _fence, _ticks, label, path) => (code ? match : `[${label}](${new URL(path, baseUrl).href})`),
-  );
+  let fence: string | undefined;
+  return text
+    .split("\n")
+    .map((line) => {
+      if (fence) {
+        if (closesFence(line, fence)) fence = undefined;
+        return line;
+      }
+      fence = fenceRun(line);
+      return fence ? line : rewriteOutsideCodeSpans(line, baseUrl);
+    })
+    .join("\n");
 }

@@ -274,3 +274,35 @@ test("a label-less wire mention is disarmed to the person's name when the direct
     setMentionIndex(new Map());
   }
 });
+
+test("pathological inline markdown stays linear-time", () => {
+  const untouched = [
+    "[".repeat(60_000),
+    "<@UU|".repeat(12_000),
+    "**a ".repeat(25_000),
+    "~~~~" + "\t\t~~x".repeat(12_000),
+  ];
+  const heading = "#\tx" + "\t".repeat(60_000) + "\tx\n";
+  const started = performance.now();
+  for (const text of untouched) assert.equal(toSlackMrkdwn(text), text);
+  assert.equal(toSlackMrkdwn(heading), `*${heading.slice(2, -1)}*\n`);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `pathological inline markdown took ${Math.round(elapsed)}ms`);
+});
+
+test("toSlackMrkdwn: a link label never swallows an earlier bracket, and closing hashes leave headings", () => {
+  assert.equal(toSlackMrkdwn("see [[x](http://a)"), "see [<http://a|x>");
+  assert.equal(toSlackMrkdwn("# Title ##"), "*Title*");
+  assert.equal(toSlackMrkdwn("## Sub ## "), "*Sub ##*");
+  assert.equal(toSlackMrkdwn("<@U1|<@U2>"), "<@U1|<@U2>");
+});
+
+test("bare URL tail trimming stays linear-time on a flood of closing brackets", () => {
+  const flood = `see http://x.y/a${")".repeat(20_000)}`;
+  const started = performance.now();
+  const out = toSlackMrkdwn(flood);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `bracket flood took ${Math.round(elapsed)}ms`);
+  assert.equal(out, `see <http://x.y/a>${")".repeat(20_000)}`);
+  assert.equal(toSlackMrkdwn("(see http://x.y/a(b)) ok"), "(see <http://x.y/a(b)>) ok");
+});

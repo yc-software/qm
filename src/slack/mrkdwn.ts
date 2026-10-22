@@ -5,13 +5,17 @@ export function decodeSlackEntities(text: string): string {
 }
 
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
-  return text.replace(/<@(U\w+)(?:\|([^>]*))?>/g, (_m, id: string, label?: string) => {
+  return text.replace(/<@(U\w+)(?:\|([^<>]*))?>/g, (_m, id: string, label?: string) => {
     const name = (label && label.trim()) || lookup(id);
     return name ? `@${name}` : `@${id}`;
   });
 }
 
-const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|[^>]*)?>/g;
+const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|[^<>]*)?>/g;
+
+export function mentionedUserIds(text: string): string[] {
+  return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
+}
 
 export function resolveMentions(text: string, nameById: ReadonlyMap<string, string> | undefined): string {
   if (!nameById || !text.includes("<@")) return text;
@@ -24,7 +28,7 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 
-const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^>]*)?>/gi;
+const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^<>]*)?>/gi;
 export function neutralizeMassMentions(text: string): string {
   return text.replace(MASS_MENTION, (_m, word: string) => `@\u200b${word.toLowerCase()}`);
 }
@@ -39,7 +43,7 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
-const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
+const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?>/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
@@ -141,7 +145,7 @@ export function toSlackMrkdwn(md: string): string {
 
   text = reformatTables(text, keep);
 
-  text = text.replace(/!?\[([^\]]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
+  text = text.replace(/!?\[([^[\]\n]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
     keep(label ? `<${url}|${label}>` : `<${url}>`),
   );
 
@@ -155,14 +159,14 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/^[ \t]*([-*_])\1{2,}[ \t]*$/gm, "──────────");
 
-  text = text.replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
-  text = text.replace(/__(?!\s)([^\n]+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
+  text = text.replace(/\*\*(?!\s)((?:[^*\n]|\*(?!\*))+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
+  text = text.replace(/__(?!\s)((?:[^_\n]|_(?!_))+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
 
-  text = text.replace(/~~(?!\s)([^\n]+?)(?<!\s)~~/g, "~$1~");
+  text = text.replace(/~~(?!\s)((?:[^~\n]|~(?!~))+?)(?<!\s)~~/g, "~$1~");
 
   text = text.replace(
-    /^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*$/gm,
-    (_m, h) => `${BOLD_SENTINEL}${(h as string).replaceAll(BOLD_SENTINEL, "")}${BOLD_SENTINEL}`,
+    /^[ \t]*#{1,6}[ \t]+(.+)$/gm,
+    (_m, h: string) => `${BOLD_SENTINEL}${headingTitle(h).replaceAll(BOLD_SENTINEL, "")}${BOLD_SENTINEL}`,
   );
 
   text = text.replace(/^([ \t]*)[-*+][ \t]+/gm, "$1• ");
@@ -175,26 +179,29 @@ export function toSlackMrkdwn(md: string): string {
   return text;
 }
 
+function headingTitle(rest: string): string {
+  let end = rest.length;
+  while (end > 1 && rest[end - 1] === "#") end--;
+  while (end > 1 && (rest[end - 1] === " " || rest[end - 1] === "\t")) end--;
+  return rest.slice(0, end);
+}
+
+const URL_CLOSER_OPENER: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
 function trimUrlTail(url: string): string {
-  const openerOf: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  const counts = new Map<string, number>();
+  for (const ch of url) {
+    if (ch in URL_CLOSER_OPENER || Object.values(URL_CLOSER_OPENER).includes(ch))
+      counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  }
   let end = url.length;
   while (end > 0) {
     const ch = url[end - 1]!;
-    if ("*_~.,;:!?'\"".includes(ch)) {
-      end--;
-      continue;
-    }
-    const opener = openerOf[ch];
-    if (opener) {
-      const head = url.slice(0, end);
-      const opens = head.split(opener).length - 1;
-      const closes = head.split(ch).length - 1;
-      if (closes > opens) {
-        end--;
-        continue;
-      }
-    }
-    break;
+    const opener = URL_CLOSER_OPENER[ch];
+    const unbalanced = opener !== undefined && (counts.get(ch) ?? 0) > (counts.get(opener) ?? 0);
+    if (!"*_~.,;:!?'\"".includes(ch) && !unbalanced) break;
+    if (opener !== undefined) counts.set(ch, counts.get(ch)! - 1);
+    end--;
   }
   return url.slice(0, end);
 }

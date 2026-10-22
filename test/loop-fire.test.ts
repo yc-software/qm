@@ -1215,3 +1215,18 @@ test("a resolution from a non-reply Loop is ignored", async () => {
   const [item] = await w.items.byLoop(loop.id);
   assert.notEqual(item?.status, "skipped");
 });
+
+test("an unclosed fence after the real reply parses in linear time, and a closer may carry trailing text", async () => {
+  const padded: Responder = (req) =>
+    stage(req) === "work"
+      ? `Prepared.\n\`\`\`json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix"}]}\n\`\`\` done\nNotes:\n\`\`\`\n${"\n".repeat(4_000)}`
+      : HAPPY(req);
+  const s = service(padded);
+  const loop = await makeLoop(s.loops);
+  const started = performance.now();
+  const result = await s.fire.fire(loop.id, "padded");
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 2_000, `padded reply took ${Math.round(elapsed)}ms`);
+  assert.equal(result.status, "ok");
+  assert.equal((await s.outputs.awaitingReview(loop.id))[0]?.title, "Fix");
+});

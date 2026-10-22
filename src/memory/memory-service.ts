@@ -77,7 +77,7 @@ function cleanCapturedFacts(facts: string[]): string[] {
       .trim()
       .replace(/^[-*]\s+/, "")
       .replace(/^\((\d{4}-\d\d-\d\d)\)\s*/, "on $1: ")
-      .replace(/\s+\(said in ([^)]+)\)\s*$/i, " [claimed source: $1]");
+      .replace(/\s+\(said in ([^()]+)\)\s*$/i, " [claimed source: $1]");
     return text ? [text] : [];
   });
 }

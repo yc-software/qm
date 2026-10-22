@@ -175,13 +175,45 @@ function itemActionPrompt(loop: Loop, item: LoopItem, kind: string, args: Record
   ].join("\n");
 }
 
+interface FencedBlock {
+  start: number;
+  end: number;
+  body: string;
+}
+
+function fencedBlocks(reply: string): FencedBlock[] {
+  const blocks: FencedBlock[] = [];
+  let open: { start: number; bodyStart: number } | undefined;
+  let offset = 0;
+  for (const line of reply.split("\n")) {
+    const trimmed = line.trim();
+    const next = offset + line.length + 1;
+    if (!open) {
+      if (trimmed.endsWith("```") || trimmed.endsWith("```json")) {
+        open = { start: offset + line.lastIndexOf("```"), bodyStart: next };
+      }
+    } else if (trimmed.startsWith("```")) {
+      blocks.push({
+        start: open.start,
+        end: offset + line.indexOf("```") + 3,
+        body: reply.slice(open.bodyStart, offset),
+      });
+      open = undefined;
+    }
+    offset = next;
+  }
+  return blocks;
+}
+
 function splitProposalReply(reply: string): { text: string; proposal?: Record<string, unknown> } {
+  const blocks = fencedBlocks(reply);
   const parsed = fencedJson(reply);
   const proposal =
     parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>).proposal
       : undefined;
-  const text = reply.replace(/```(?:json)?\s*\n[\s\S]*?\n\s*```\s*$/, "").trim();
+  const last = blocks.at(-1);
+  const text = last && !reply.slice(last.end).trim() ? reply.slice(0, last.start).trim() : reply.trim();
   return {
     text: text || reply.trim(),
     ...(proposal && typeof proposal === "object" && !Array.isArray(proposal)
@@ -191,10 +223,10 @@ function splitProposalReply(reply: string): { text: string; proposal?: Record<st
 }
 
 function fencedJson(reply: string): unknown {
-  const fences = [...reply.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/g)];
-  for (let i = fences.length - 1; i >= 0; i--) {
+  const blocks = fencedBlocks(reply);
+  for (let i = blocks.length - 1; i >= 0; i--) {
     try {
-      return JSON.parse(fences[i]![1]!);
+      return JSON.parse(blocks[i]!.body);
     } catch {
       continue;
     }

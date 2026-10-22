@@ -28,6 +28,7 @@
  *   semantics — keep working at least this much) and an optional token cap
  *   (wind down when exhausted; never auto-complete).
  */
+import { outermostJsonObject } from "../util/text.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { createGrindMeter, type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
@@ -419,7 +420,7 @@ export async function governGoal(
   const reply = (await judge(GOAL_GOVERNOR_SYSTEM_PROMPT, prompt, signal)) ?? "";
   let parsed: { verdict?: unknown; reasons?: unknown } | undefined;
   try {
-    parsed = JSON.parse(reply.slice(reply.indexOf("{"), reply.lastIndexOf("}") + 1)) as typeof parsed;
+    parsed = JSON.parse(outermostJsonObject(reply) ?? "") as typeof parsed;
   } catch {
     parsed = undefined;
   }
