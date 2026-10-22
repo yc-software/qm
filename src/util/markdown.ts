@@ -45,7 +45,7 @@ function codeSpans(line: string): Array<[number, number]> {
     while (line[end] === "`") end++;
     runs.push({ start: tick, end });
   }
-  const nextSameLength = new Array<number>(runs.length).fill(-1);
+  const nextSameLength = Array.from({ length: runs.length }, () => -1);
   const lastByLength = new Map<number, number>();
   for (let i = runs.length - 1; i >= 0; i--) {
     const length = runs[i]!.end - runs[i]!.start;
