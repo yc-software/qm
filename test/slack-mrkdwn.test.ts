@@ -301,6 +301,9 @@ test("a mention token nested inside another token's label cannot re-form a live 
     resolveMentionsInText("<@U1|<@U2>>", () => undefined),
     "@U1@U2>",
   );
+  assert.equal(neutralizeMentions("<<@U123>> <<@U4|x>>"), "@U123> @x>");
+  assert.equal(toSlackMrkdwn("<<!channel>>"), "@\u200bchannel>");
+  assert.equal(neutralizeMentions("<<<<<".repeat(5_000) + "<@U9>"), "@U9", "an opener run is consumed whole");
   assert.equal(
     neutralizeMassMentions("<!heresy> <!here|label <!date^1^{date}|then>"),
     "<!heresy> @\u200bhere<!date^1^{date}|then>",

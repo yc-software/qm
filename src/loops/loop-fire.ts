@@ -14,7 +14,7 @@ import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../typ
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
-import { fencedCodeBlocks, type FencedCodeBlock } from "../util/text.ts";
+import { fencedCodeBlocks, type FencedCodeBlock } from "../util/markdown.ts";
 import { errMessage } from "../util/errors.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { isRunnable, type LoopStore } from "./loop-store.ts";
@@ -189,12 +189,12 @@ function parsedBlock(blocks: FencedCodeBlock[]): { block: FencedCodeBlock; value
 
 function splitProposalReply(reply: string): { text: string; proposal?: Record<string, unknown> } {
   const hit = parsedBlock(fencedCodeBlocks(reply));
-  const parsed = hit ? hit.value : fencedJson(reply);
+  const parsed = hit ? hit.value : bareJson(reply);
   const proposal =
     parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>).proposal
       : undefined;
-  const text = hit ? (reply.slice(0, hit.block.start) + reply.slice(hit.block.end)).trim() : reply.trim();
+  const text = hit && proposal ? (reply.slice(0, hit.block.start) + reply.slice(hit.block.end)).trim() : reply.trim();
   return {
     text: text || reply.trim(),
     ...(proposal && typeof proposal === "object" && !Array.isArray(proposal)
@@ -204,8 +204,10 @@ function splitProposalReply(reply: string): { text: string; proposal?: Record<st
 }
 
 function fencedJson(reply: string): unknown {
-  const hit = parsedBlock(fencedCodeBlocks(reply));
-  if (hit) return hit.value;
+  return parsedBlock(fencedCodeBlocks(reply))?.value ?? bareJson(reply);
+}
+
+function bareJson(reply: string): unknown {
   const bare = reply.trim();
   if (bare.startsWith("[") || bare.startsWith("{")) {
     try {

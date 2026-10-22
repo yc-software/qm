@@ -4,7 +4,7 @@ export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
-const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
+const SLACK_MENTION = /(?<!<)<+@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
 
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
   return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
@@ -28,7 +28,7 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 
-const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
+const MASS_MENTION = /(?<!<)<+!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
 export function neutralizeMassMentions(text: string): string {
   return text.replace(MASS_MENTION, (_m, word: string) => `@\u200b${word.toLowerCase()}`);
 }
@@ -43,7 +43,7 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
-const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?(?:>|(?=<))/gi;
+const WIRE_MENTION = /(?<!<)<+(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?(?:>|(?=<))/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";

@@ -157,7 +157,8 @@ import {
 } from "../harness/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { absoluteAppLinks, headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
   isNonRetryable,
