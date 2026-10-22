@@ -32,7 +32,7 @@ test("app links are rewritten outside code and left alone inside an unclosed fen
   assert.equal(absoluteAppLinks("```\n[x](/d/x/)", "https://qm.example.com"), "```\n[x](/d/x/)");
 });
 
-test("app link fences close on a same-mark run at least as long as the opener, indented up to three spaces", () => {
+test("app link fences close on a same-mark run at least as long as the opener, at any indent", () => {
   assert.equal(
     absoluteAppLinks("```js\n[a](/d/a)\n````\n[b](/d/b)", "https://qm.example.com"),
     "```js\n[a](/d/a)\n````\n[b](https://qm.example.com/d/b)",
@@ -44,6 +44,13 @@ test("app link fences close on a same-mark run at least as long as the opener, i
   assert.equal(
     absoluteAppLinks("~~~\n[a](/d/a)\n```\n[b](/d/b)", "https://qm.example.com"),
     "~~~\n[a](/d/a)\n```\n[b](/d/b)",
+  );
+  assert.equal(
+    absoluteAppLinks(
+      "    ```\n    [a](/d/a)\n    ```\n[b](/d/b)\n\t~~~\n[c](/d/c)\n\t~~~\n[d](/d/d)",
+      "https://qm.example.com",
+    ),
+    "    ```\n    [a](/d/a)\n    ```\n[b](https://qm.example.com/d/b)\n\t~~~\n[c](/d/c)\n\t~~~\n[d](https://qm.example.com/d/d)",
   );
 });
 
