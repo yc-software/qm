@@ -4,14 +4,14 @@ export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
+const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
+
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
-  return text.replace(/<@(U\w+)(?:\|([^<>]*))?>/g, (_m, id: string, label?: string) => {
+  return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
     const name = (label && label.trim()) || lookup(id);
     return name ? `@${name}` : `@${id}`;
   });
 }
-
-const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|[^<>]*)?>/g;
 
 export function mentionedUserIds(text: string): string[] {
   return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
@@ -28,7 +28,7 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 
-const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^<>]*)?>/gi;
+const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
 export function neutralizeMassMentions(text: string): string {
   return text.replace(MASS_MENTION, (_m, word: string) => `@\u200b${word.toLowerCase()}`);
 }
@@ -43,7 +43,7 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
-const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?>/gi;
+const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?(?:>|(?=<))/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
@@ -105,9 +105,13 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
   let out = "";
   let i = 0;
   let tildesExhausted = !text.includes("~~~");
+  let tilde: { start: number; end: number } | undefined;
   while (i < text.length) {
     const backtick = text.indexOf("```", i);
-    const tilde = tildesExhausted ? undefined : nextLineMatch(text, i, TILDE_OPENER);
+    if (!tildesExhausted && (tilde === undefined || tilde.start < i)) {
+      tilde = nextLineMatch(text, i, TILDE_OPENER);
+      tildesExhausted = tilde === undefined;
+    }
     if (tilde === undefined && backtick < 0) break;
     if (backtick >= 0 && (tilde === undefined || backtick < tilde.start)) {
       const close = text.indexOf("```", backtick + 3);
@@ -120,6 +124,7 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
     const closer = opener.end < text.length ? nextLineMatch(text, opener.end + 1, TILDE_CLOSER) : undefined;
     if (closer === undefined) {
       tildesExhausted = true;
+      tilde = undefined;
       continue;
     }
     const info = text.slice(opener.start, opener.end).replace(/^[ \t]*~+/, "");
@@ -180,19 +185,20 @@ export function toSlackMrkdwn(md: string): string {
 }
 
 function headingTitle(rest: string): string {
-  let end = rest.length;
-  while (end > 1 && rest[end - 1] === "#") end--;
-  while (end > 1 && (rest[end - 1] === " " || rest[end - 1] === "\t")) end--;
-  return rest.slice(0, end);
+  const trimmed = rest.trimEnd();
+  let end = trimmed.length;
+  while (end > 0 && trimmed[end - 1] === "#") end--;
+  if (end === trimmed.length || (end > 0 && trimmed[end - 1] !== " " && trimmed[end - 1] !== "\t")) return trimmed;
+  return trimmed.slice(0, end).trimEnd() || trimmed;
 }
 
 const URL_CLOSER_OPENER: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+const URL_BRACKETS = new Set([...Object.keys(URL_CLOSER_OPENER), ...Object.values(URL_CLOSER_OPENER)]);
 
 function trimUrlTail(url: string): string {
   const counts = new Map<string, number>();
   for (const ch of url) {
-    if (ch in URL_CLOSER_OPENER || Object.values(URL_CLOSER_OPENER).includes(ch))
-      counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    if (URL_BRACKETS.has(ch)) counts.set(ch, (counts.get(ch) ?? 0) + 1);
   }
   let end = url.length;
   while (end > 0) {

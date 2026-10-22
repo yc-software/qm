@@ -11,6 +11,7 @@ import {
   setMentionIndex,
   inlineCode,
 } from "../src/slack/lib.ts";
+import { resolveMentions } from "../src/slack/mrkdwn.ts";
 
 test("inlineCode clamps long text and neutralizes backticks", () => {
   const clamped = inlineCode("`echo hi`" + "y".repeat(60000));
@@ -275,26 +276,42 @@ test("a label-less wire mention is disarmed to the person's name when the direct
   }
 });
 
-test("pathological inline markdown stays linear-time", () => {
-  const untouched = [
-    "[".repeat(60_000),
-    "<@UU|".repeat(12_000),
-    "**a ".repeat(25_000),
-    "~~~~" + "\t\t~~x".repeat(12_000),
-  ];
+test("pathological inline markdown and mention floods stay linear-time", () => {
+  const untouched = ["[".repeat(60_000), "**a ".repeat(25_000), "~~~~" + "\t\t~~x".repeat(12_000)];
   const heading = "#\tx" + "\t".repeat(60_000) + "\tx\n";
   const started = performance.now();
   for (const text of untouched) assert.equal(toSlackMrkdwn(text), text);
   assert.equal(toSlackMrkdwn(heading), `*${heading.slice(2, -1)}*\n`);
+  assert.equal(neutralizeMentions("<@UU|".repeat(12_000)), `${"@UU".repeat(11_999)}<@UU|`);
+  assert.equal(neutralizeMassMentions("<!here|".repeat(8_000)), `${"@\u200bhere".repeat(7_999)}<!here|`);
+  assert.equal(
+    resolveMentionsInText("<@U1|".repeat(12_000), () => undefined),
+    `${"@U1".repeat(11_999)}<@U1|`,
+  );
+  assert.equal(resolveMentions("<@U1|".repeat(12_000), new Map([["U1", "ann"]])), `${"@ann".repeat(11_999)}<@U1|`);
   const elapsed = performance.now() - started;
   assert.ok(elapsed < 1_000, `pathological inline markdown took ${Math.round(elapsed)}ms`);
+});
+
+test("a mention token nested inside another token's label cannot re-form a live mention", () => {
+  assert.equal(toSlackMrkdwn("<!here|<!channel>>"), "@\u200bhere@\u200bchannel>");
+  assert.equal(neutralizeMassMentions("<!channel|<!here|x>>"), "@\u200bchannel@\u200bhere>");
+  assert.equal(neutralizeMentions("<@U123|<@U456>>"), "@U123@U456>");
+  assert.equal(
+    resolveMentionsInText("<@U1|<@U2>>", () => undefined),
+    "@U1@U2>",
+  );
+  assert.equal(
+    neutralizeMassMentions("<!heresy> <!here|label <!date^1^{date}|then>"),
+    "<!heresy> @\u200bhere<!date^1^{date}|then>",
+  );
 });
 
 test("toSlackMrkdwn: a link label never swallows an earlier bracket, and closing hashes leave headings", () => {
   assert.equal(toSlackMrkdwn("see [[x](http://a)"), "see [<http://a|x>");
   assert.equal(toSlackMrkdwn("# Title ##"), "*Title*");
-  assert.equal(toSlackMrkdwn("## Sub ## "), "*Sub ##*");
-  assert.equal(toSlackMrkdwn("<@U1|<@U2>"), "<@U1|<@U2>");
+  assert.equal(toSlackMrkdwn("## Sub ## "), "*Sub*");
+  assert.equal(toSlackMrkdwn("# C#"), "*C#*");
 });
 
 test("bare URL tail trimming stays linear-time on a flood of closing brackets", () => {

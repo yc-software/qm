@@ -1216,10 +1216,10 @@ test("a resolution from a non-reply Loop is ignored", async () => {
   assert.notEqual(item?.status, "skipped");
 });
 
-test("an unclosed fence after the real reply parses in linear time, and a closer may carry trailing text", async () => {
+test("an unclosed fence after the real reply parses in linear time", async () => {
   const padded: Responder = (req) =>
     stage(req) === "work"
-      ? `Prepared.\n\`\`\`json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix"}]}\n\`\`\` done\nNotes:\n\`\`\`\n${"\n".repeat(4_000)}`
+      ? `Prepared.\n\`\`\`json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix"}]}\n\`\`\`\nNotes:\n\`\`\`\n${"\n".repeat(4_000)}`
       : HAPPY(req);
   const s = service(padded);
   const loop = await makeLoop(s.loops);
@@ -1229,4 +1229,35 @@ test("an unclosed fence after the real reply parses in linear time, and a closer
   assert.ok(elapsed < 2_000, `padded reply took ${Math.round(elapsed)}ms`);
   assert.equal(result.status, "ok");
   assert.equal((await s.outputs.awaitingReview(loop.id))[0]?.title, "Fix");
+});
+
+test("a language-tagged fence before the json block does not hide it", async () => {
+  const chatty: Responder = (req) =>
+    stage(req) === "work"
+      ? 'I ran:\n```bash\nnpm test\n```\nAll green.\n```json\n{"outputs": [{"shipAction": "open_pr", "title": "Fix"}]}\n```'
+      : HAPPY(req);
+  const s = service(chatty);
+  const loop = await makeLoop(s.loops);
+  await s.fire.fire(loop.id, "chatty");
+  assert.equal((await s.outputs.awaitingReview(loop.id))[0]?.title, "Fix");
+});
+
+test("a follow-up keeps its prose and earlier code blocks in the chat and lifts only the proposal block", async () => {
+  const s = service(
+    () => 'Current config:\n```\n{"retries": 3}\n```\nI propose:\n```json\n{"proposal": {"body": "Retry twice"}}\n```',
+  );
+  const loop = await makeLoop(s.loops);
+  await s.items.ingest([
+    {
+      loopId: loop.id,
+      dedupeKey: "reply",
+      source: "gmail",
+      sourcePayload: { snippet: "How many retries?" },
+      proposal: { data: { body: "Retry thrice" }, by: "agent" },
+    },
+  ]);
+  const [item] = await s.items.byLoop(loop.id);
+  const next = await s.fire.followUp(loop, item!, "Fewer retries please", "josh");
+  assert.equal(next?.thread?.at(-1)?.text, 'Current config:\n```\n{"retries": 3}\n```\nI propose:');
+  assert.equal(next?.proposal?.data.body, "Retry twice");
 });

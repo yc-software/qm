@@ -38,6 +38,12 @@ export function outermostJsonObject(text: string): string | undefined {
 
 const APP_LINK = /\[([^[\]\n]+)\]\((\/d\/[^\s)[]+)\)/g;
 
+export interface FencedCodeBlock {
+  start: number;
+  end: number;
+  body: string;
+}
+
 function fenceRun(line: string): string | undefined {
   let indent = 0;
   while (indent < 3 && line[indent] === " ") indent++;
@@ -45,12 +51,29 @@ function fenceRun(line: string): string | undefined {
   if (mark !== "`" && mark !== "~") return undefined;
   let run = indent;
   while (line[run] === mark) run++;
-  return run - indent >= 3 ? line.slice(indent, run) : undefined;
+  if (run - indent < 3 || (mark === "`" && line.includes("`", run))) return undefined;
+  return line.slice(indent, run);
 }
 
-function closesFence(line: string, opener: string): boolean {
-  const run = fenceRun(line);
-  return !!run && run[0] === opener[0] && run.length >= opener.length && line.trim() === run;
+export function fencedCodeBlocks(text: string): FencedCodeBlock[] {
+  const blocks: FencedCodeBlock[] = [];
+  let open: { start: number; run: string; bodyStart: number } | undefined;
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const next = offset + line.length + 1;
+    const run = fenceRun(line);
+    if (!open) {
+      if (run) open = { start: offset, run, bodyStart: next };
+    } else if (run && run[0] === open.run[0] && run.length >= open.run.length && line.trim() === run) {
+      blocks.push({ start: open.start, end: offset + line.length, body: text.slice(open.bodyStart, offset) });
+      open = undefined;
+    }
+    offset = next;
+  }
+  if (open) {
+    blocks.push({ start: open.start, end: text.length, body: text.slice(Math.min(open.bodyStart, text.length)) });
+  }
+  return blocks;
 }
 
 function rewriteAppLinks(segment: string, baseUrl: string): string {
@@ -72,18 +95,20 @@ function rewriteOutsideCodeSpans(line: string, baseUrl: string): string {
   }
 }
 
+function rewriteProse(prose: string, baseUrl: string): string {
+  return prose
+    .split("\n")
+    .map((line) => rewriteOutsideCodeSpans(line, baseUrl))
+    .join("\n");
+}
+
 export function absoluteAppLinks(text: string, baseUrl: string | undefined): string {
   if (!baseUrl) return text;
-  let fence: string | undefined;
-  return text
-    .split("\n")
-    .map((line) => {
-      if (fence) {
-        if (closesFence(line, fence)) fence = undefined;
-        return line;
-      }
-      fence = fenceRun(line);
-      return fence ? line : rewriteOutsideCodeSpans(line, baseUrl);
-    })
-    .join("\n");
+  let out = "";
+  let cursor = 0;
+  for (const block of fencedCodeBlocks(text)) {
+    out += rewriteProse(text.slice(cursor, block.start), baseUrl) + text.slice(block.start, block.end);
+    cursor = block.end;
+  }
+  return out + rewriteProse(text.slice(cursor), baseUrl);
 }
