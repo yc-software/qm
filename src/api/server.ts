@@ -493,6 +493,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       nameRequest(base.method, "/deployment-proxy/*");
       return;
     }
+    if (!base.pathname.startsWith("/d/") && /%00/.test(req.url ?? "")) {
+      sendJson(res, 400, { error: "bad_request", message: "URL must not contain NUL bytes" });
+      return void req.resume();
+    }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
