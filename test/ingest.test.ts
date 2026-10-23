@@ -140,3 +140,29 @@ test("a shared bundle cannot clobber a skill record in another scope", async () 
   );
   assert.equal((await store.list()).length, 0);
 });
+
+test("a `**/` glob also matches zero directories", () => {
+  const { candidates } = planIngest(repo(), {
+    config: { skillGlobs: ["skills/**/*"], exclude: ["**/trusted/*"] },
+    nativeNames: new Set(),
+  });
+  const planned = candidates.map((c) => c.upstreamName);
+  assert.ok(planned.includes("company-directory"));
+  assert.ok(!planned.includes("stalker-watch"));
+  const nested = planIngest(
+    { commit: "c", files: [{ path: "skills/top/SKILL.md", text: md("name: top\ndescription: d"), binary: false }] },
+    { config: { skillGlobs: ["skills/**"] }, nativeNames: new Set() },
+  );
+  assert.deepEqual(
+    nested.candidates.map((c) => c.upstreamName),
+    ["top"],
+  );
+  const rooted = planIngest(
+    { commit: "c", files: [{ path: "trusted/x/SKILL.md", text: md("name: x\ndescription: d"), binary: false }] },
+    { config: { exclude: ["**/trusted/*"] }, nativeNames: new Set() },
+  );
+  assert.deepEqual(
+    rooted.candidates.filter((c) => c.eligible).map((c) => c.upstreamName),
+    [],
+  );
+});
