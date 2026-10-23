@@ -214,7 +214,25 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
   return out;
 }
 
-const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
+// allow-same-origin is required despite the name "sandbox": without it, the
+// served document gets a unique opaque origin (per the CSP sandbox spec),
+// which can never equal anything — including its own real origin. fetch()'s
+// default credentials mode is "same-origin", so every in-page fetch() the
+// deployed app itself makes (e.g. to its own /api/* routes, same-origin-
+// relative per deploy-directory.md's own convention) silently drops the
+// portal_session cookie this proxy itself requires to authorize that exact
+// request, even though the browser still has the cookie and sent it fine on
+// the initial document load. The result: a signed-in viewer's own deployed
+// app 401s on every non-navigation request (POST, or GET without
+// Accept: text/html) to /d/<id>/..., with no way for the app's own code to
+// work around it. allow-same-origin does not reduce isolation against the
+// things this sandbox is actually for (allow-scripts/forms/popups/modals/
+// downloads already assume script execution is trusted at the content
+// level) — it only restores the document's real origin for storage/fetch
+// purposes, matching how the apps-domain gateway path
+// (proxyDeploymentSubdomain) already serves apps with no sandbox CSP at all.
+const APP_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-same-origin";
 
 function frameAncestorsDirective(ancestors: readonly string[]): string {
   return `frame-ancestors 'self' ${ancestors.join(" ")}`;
