@@ -1,3 +1,4 @@
+import { agentSkillDigest, filterAgentSkills } from "../auth/agent-policy.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
@@ -224,6 +225,7 @@ export function createSkillMethods(
 ): Pick<
   App,
   | "listSkills"
+  | "getSkillDigest"
   | "getSkill"
   | "archiveSkill"
   | "listVisibleSkills"
@@ -246,20 +248,41 @@ export function createSkillMethods(
     listSkills() {
       return deps.skills.list();
     },
-    getSkill(id) {
-      return deps.skills.get(id);
+    async getSkillDigest(skill) {
+      if (!deps.agentPolicy) return undefined;
+      try {
+        return agentSkillDigest(skill, skill.pack ? await deps.skillBundles?.get(skill.pack.packId) : null);
+      } catch {
+        return undefined;
+      }
+    },
+    async getSkill(id, context) {
+      const skill = await deps.skills.get(id);
+      if (!skill || !context) return skill;
+      const permitted = await filterAgentSkills(
+        deps.agentPolicy,
+        context,
+        [{ skill, shadowed: [] }],
+        deps.skillBundles,
+      );
+      return permitted[0]?.skill ?? null;
     },
     archiveSkill(id) {
       return deps.skills.archive(id);
     },
-    async listVisibleSkills(principalId) {
+    async listVisibleSkills(principalId, context) {
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
         principalId,
         (await deps.skills.list()).map((s) => s.scopeId),
       );
-      return deps.skills.visibleFor(ordered, granted);
+      return filterAgentSkills(
+        deps.agentPolicy,
+        context ?? { principalId },
+        await deps.skills.visibleFor(ordered, granted),
+        deps.skillBundles,
+      );
     },
     canManageSkill(skill, principalId) {
       return canManageSkill(skill, principalId);

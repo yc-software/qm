@@ -1,3 +1,4 @@
+import type { AgentPolicy, AgentPolicyContext } from "../auth/agent-policy.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
@@ -555,9 +556,10 @@ export interface App {
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
-  getSkill(id: string): Promise<Skill | null>;
+  getSkillDigest(skill: Skill): Promise<string | undefined>;
+  getSkill(id: string, context?: AgentPolicyContext): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
+  listVisibleSkills(principalId: string, context?: AgentPolicyContext): Promise<SkillResolution[]>;
   canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
   updateOwnedSkill(
     id: string,
@@ -634,6 +636,7 @@ export interface App {
 }
 
 export interface AppDeps {
+  agentPolicy?: AgentPolicy;
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;

@@ -1,3 +1,4 @@
+import { admitAgentOperation, filterAgentSkills, guardAgentTools } from "../auth/agent-policy.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
@@ -578,6 +579,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
+      const agentPolicyContext = {
+        runtime: true,
+        principalId: actor.id,
+        threadRef: conversation.threadRef,
+        ...(input.runId ? { runId: input.runId } : {}),
+      };
+      if (!(await admitAgentOperation(deps.agentPolicy, agentPolicyContext, { kind: "turn" }))) {
+        return { status: "refused", reason: "agent policy denied run admission" };
+      }
+      const agentPolicyBound = !!(await deps.agentPolicy?.resolve(agentPolicyContext));
       const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
@@ -1022,7 +1033,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const mcpToolsReady = !external && deps.mcp ? deps.mcp.toolDefsFor(actor.id) : undefined;
-      const useMemory = !external && input.skipMemory !== true;
+      const useMemory = !external && input.skipMemory !== true && !agentPolicyBound;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       const rwLayer = resolution.layers.find((l) => l.mode === "rw");
       if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;
@@ -1229,7 +1240,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
           });
         }
-        return allowed;
+        return filterAgentSkills(deps.agentPolicy, agentPolicyContext, allowed, deps.skillBundles);
       };
       const skillSourceContext = await context.listSkills([scopeId, resolution.orgScopeId]);
       const otherSkillSources = skillSourceContext.skillSources
@@ -1237,7 +1248,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .sort();
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
-      const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
+      const nativeSkills = await filterAgentSkills(
+        deps.agentPolicy,
+        agentPolicyContext,
+        filterConnectorSkills(skillSourceContext.skills, configuredProviders),
+        deps.skillBundles,
+      );
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
@@ -1874,8 +1890,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       const commandPolicy = resolution.commandPolicy;
       const layerCommandRules = [...(deps.deploymentLayer?.commandRules ?? [])];
-      const reachAvailable = !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
-      const turnSandboxResources = external
+      const reachAvailable = !agentPolicyBound && !!deps.reachExec && !!deps.directory && conversation.kind === "dm";
+      const sharedSandboxResources = external
         ? deps.sandboxResources?.forTurn({
             actorId: actor.id,
             scopeId,
@@ -1893,6 +1909,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               )),
           })
         : deps.sandboxResources;
+      const turnSandboxResources = agentPolicyBound ? undefined : sharedSandboxResources;
       const workspaceLayout = {
         hasGlobal: resolution.layers.some((l) => l.mountPath === "global"),
         teamCount: resolution.layers.filter((l) => l.mountPath.startsWith("team-")).length,
@@ -1914,6 +1931,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         provisionForReach,
         reclaimBox,
         invalidateProvision,
+        recheckSkillTrees,
+        dropSkillTrees,
       } = createTurnSandboxes({
         deps: { ...deps, sandboxResources: turnSandboxResources, isCurrentSharedScopeMember },
         input,
@@ -1930,8 +1949,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openSpeakerKeychain: openSpeakerKeychain || openAutomationKeychain,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
-        ownerAuthAvailable,
+        ownerAuthAvailable: ownerAuthAvailable && !agentPolicyBound,
         visibleSkillsForTurn,
+        ...(agentPolicyBound ? { agentPolicyContext } : {}),
         emitGapWork,
       });
       const leaseStart = Date.now();
@@ -2347,7 +2367,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.runId))
           )
         ) {
-          const detectHistory = filterHistory((await historyWindow()).entries.slice(-DETECT_HISTORY_TAIL));
+          const detectHistory = agentPolicyBound
+            ? []
+            : filterHistory((await historyWindow()).entries.slice(-DETECT_HISTORY_TAIL));
           const decision = await deps.harness.models
             .shouldRespond({
               session,
@@ -2811,7 +2833,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
 
         const importedOverheard: OverheardEntryPayload[] = [];
-        if ((!input.envelopeWrapped || humanInput) && input.overheard?.length) {
+        if (!agentPolicyBound && (!input.envelopeWrapped || humanInput) && input.overheard?.length) {
           const toImport = await transcripts
             .forRender(session.id)
             .then((read) => selectOverheardToImport(input.overheard!, recordedMessageTimestamps(read.entries)))
@@ -2831,8 +2853,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (importedEntries.length) importedOverheard.push(...toImport);
         }
 
-        const rawEntries = (await historyWindow()).entries;
-        const priorTurns = input.priorTurns;
+        const rawEntries = agentPolicyBound ? [] : (await historyWindow()).entries;
+        const priorTurns = agentPolicyBound ? undefined : input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
         const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
@@ -2942,11 +2964,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
         let remainingDocumentCount = 10 - documentInputs.documents.length;
         let remainingDocumentTokens = documentBudget - documentInputs.tokens;
-        const principalDelivered = await recentPrincipalDeliveryNote(
-          deps.deliveries,
-          session.threadRef,
-          visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt,
-        );
+        const principalDelivered = agentPolicyBound
+          ? ""
+          : await recentPrincipalDeliveryNote(
+              deps.deliveries,
+              session.threadRef,
+              visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt,
+            );
         const sender = !automatedTurn && !sessionTurn && input.text.trim() ? senderNote(actor.displayName) : "";
         const unscreenedNote =
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
@@ -3477,8 +3501,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(environment ? { environment } : {}),
-            ...(extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
-            ...(extras.overheard?.length ? { overheard: extras.overheard } : {}),
+            ...(!agentPolicyBound && extras.priorTurns?.length ? { priorTurns: extras.priorTurns } : {}),
+            ...(!agentPolicyBound && extras.overheard?.length ? { overheard: extras.overheard } : {}),
             ...(extras.attachments?.length ? { attachments: extras.attachments } : {}),
             ...(extras.images?.length ? { images: extras.images } : {}),
             documents: initialDocuments,
@@ -3635,7 +3659,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             systemPrompt,
             history: continuation?.history ?? history,
-            tools,
+            tools: guardAgentTools(deps.agentPolicy, agentPolicyContext, tools, recheckSkillTrees, dropSkillTrees),
             ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),

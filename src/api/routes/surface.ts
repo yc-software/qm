@@ -846,14 +846,15 @@ const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, 
 
 async function listSkills(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
-  const principalId = url.searchParams.get("principalId");
+  const principalId = ctx.capability?.actorId ?? ctx.actor?.p ?? url.searchParams.get("principalId");
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
+  const policyContext = { principalId, ...ctx.capability, ...(ctx.capability ? { runtime: true } : {}) };
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
-  const resolved = (await app.listVisibleSkills(principalId)).filter(
+  const resolved = (await app.listVisibleSkills(principalId, policyContext)).filter(
     (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
-    (await app.listSkills())
+    (ctx.capability ? [] : await app.listSkills())
       .filter((skill) => skill.status === "archived")
       .map(async (skill) => ({ skill, manageable: await app.canManageSkill(skill, principalId) })),
   );
@@ -865,6 +866,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   const skills = await Promise.all(
     [...visible, ...archived].map(async (r) => ({
       id: r.skill.id,
+      digest: await app.getSkillDigest(r.skill),
       name: r.skill.manifest.name,
       description: r.skill.manifest.description,
       scope: parseScopeId(r.skill.scopeId).kind ?? r.skill.scopeId,
@@ -889,17 +891,19 @@ async function getSkillDetail(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 401, { error: "capability_required" });
   }
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const skill = await app.getSkill(ctx.params.id!);
+  const policyContext = { principalId, ...capability, ...(capability ? { runtime: true } : {}) };
+  const skill = await app.getSkill(ctx.params.id!, policyContext);
   if (
     !skill ||
     (!(await app.canManageSkill(skill, principalId)) &&
-      !(await app.listVisibleSkills(principalId)).some((row) => row.skill?.id === skill.id))
+      !(await app.listVisibleSkills(principalId, policyContext)).some((row) => row.skill?.id === skill.id))
   ) {
     return sendJson(res, 404, { error: "not_found" });
   }
   return sendJson(res, 200, {
     skill: {
       id: skill.id,
+      digest: await app.getSkillDigest(skill),
       name: skill.manifest.name,
       description: skill.manifest.description,
       body: skill.manifest.body,
@@ -1435,7 +1439,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
-    { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
+    { method: "GET", path: "/v1/skills", auth: "either", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),
   ...withActor("query.viewer", [

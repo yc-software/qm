@@ -1,3 +1,4 @@
+import type { AgentPolicy } from "../../auth/agent-policy.ts";
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../harness/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
@@ -115,6 +116,7 @@ export interface OrchestratorInput extends Omit<
 }
 
 export interface OrchestratorDeps {
+  agentPolicy?: AgentPolicy;
   externalSlackPolicies?: ExternalSlackPolicies;
   swarms?: SwarmService;
   refreshModels?: () => Promise<void>;

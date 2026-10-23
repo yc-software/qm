@@ -11,7 +11,7 @@ import { MAX_SCREEN_CHARS } from "../security/security-posture.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
-import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
+import type { Cron, Loop, LoopItem, LoopOutput, ShipGrant, TurnRequest, TurnResult } from "../types.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
@@ -79,8 +79,27 @@ type LoopFollowUpOptions = Pick<TurnRequest, "model" | "harness" | "thinkingLeve
 
 type StageOptions = LoopFollowUpOptions & Pick<TurnRequest, "readOnly">;
 
+interface LoopSnapshot {
+  readonly loop: Loop;
+  readonly cron: Cron | null;
+  readonly grants: ShipGrant[];
+}
+
+interface LoopFireOptions {
+  enumerate?: boolean;
+  admit?: (snapshot: LoopSnapshot) => Promise<boolean>;
+}
+
+function frozen<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const item of Object.values(value)) frozen(item);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 export interface LoopFireService {
-  fire(loopId: string, fireKey: string, cronId?: string, options?: { enumerate?: boolean }): Promise<LoopFireResult>;
+  fire(loopId: string, fireKey: string, cronId?: string, options?: LoopFireOptions): Promise<LoopFireResult>;
   followUp(
     loop: Loop,
     item: LoopItem,
@@ -516,18 +535,42 @@ function shipPrompt(loop: Loop, output: LoopOutput, note?: string): StageInput {
 
 export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   const admitted = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
+  async function snapshotLoop(loop: Loop, cronId?: string): Promise<LoopSnapshot> {
+    const bound = await boundLoopCron(loop, deps.crons, cronId);
+    return frozen(
+      structuredClone({
+        loop,
+        cron: bound?.loopId === loop.id ? bound : null,
+        grants: await deps.grants.byLoop(loop.id),
+      }),
+    );
+  }
+  async function stillAutoShips(snapshot: LoopSnapshot, output: LoopOutput): Promise<boolean> {
+    const current = await deps.loops.get(snapshot.loop.id);
+    if (!current || !isRunnable(current) || !isRunnable(snapshot.loop)) return false;
+    const candidate = outputCandidate(output);
+    return (
+      decideShip(snapshot.loop, candidate, snapshot.grants).outcome === "auto" &&
+      decideShip(current, candidate, await deps.grants.byLoop(current.id)).outcome === "auto"
+    );
+  }
   async function stageTurn(
-    loop: Loop,
+    snapshot: LoopSnapshot,
     fireKey: string,
     threadRef: string,
     input: StageInput,
     actorId?: string,
     options?: StageOptions,
   ): Promise<TriggerOutcome> {
-    let cron;
+    const { loop } = snapshot;
+    let cron: Cron | null = null;
     try {
       const bound = await boundLoopCron(loop, deps.crons);
-      cron = bound?.loopId === loop.id ? bound : null;
+      const admitted = snapshot.cron;
+      if (admitted && bound?.loopId === loop.id) {
+        const kept = bound.unattendedGrants?.filter((grant) => admitted.unattendedGrants?.includes(grant));
+        cron = { ...admitted, enabled: bound.enabled, archived: bound.archived, unattendedGrants: kept };
+      }
     } catch (e) {
       return { authzFailed: true, ran: false, note: errMessage(e) };
     }
@@ -557,13 +600,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function decideTriage(
-    loop: Loop,
+    snapshot: LoopSnapshot,
     work: { open: LoopItem[]; pending: LoopItem[]; context: LoopItem[] },
     fireKey: string,
     threadRef: string,
   ): Promise<Map<string, TriagePatch>> {
+    const { loop } = snapshot;
     const outcome = await stageTurn(
-      loop,
+      snapshot,
       fireKey,
       threadRef,
       triagePrompt(loop, work.context, work.pending),
@@ -583,7 +627,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     const work = previewWork(await deps.items.byLoop(loop.id));
     if (work.open.length === 0) return [];
     const fireKey = `loop:${loop.id}:triage-preview:${Date.now()}`;
-    const patches = await decideTriage(draft, work, fireKey, loopFireThreadRef(loop.id, fireKey));
+    const snapshot = await snapshotLoop(loop);
+    const patches = await decideTriage(
+      { ...snapshot, loop: draft },
+      work,
+      fireKey,
+      loopFireThreadRef(loop.id, fireKey),
+    );
     return work.open.map((item) => {
       const { priority, reason, groupId } = { ...item.triage, ...patches.get(item.id) };
       return {
@@ -595,12 +645,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     });
   }
 
-  async function triage(loop: Loop, fireKey: string, threadRef: string): Promise<void> {
+  async function triage(snapshot: LoopSnapshot, fireKey: string, threadRef: string): Promise<void> {
+    const { loop } = snapshot;
     try {
       if (!(await deps.triageEnabledFor?.(loop.owner))) return;
       const work = triageWork(loop, await deps.items.byLoop(loop.id));
       if (!work) return;
-      const patches = await decideTriage(loop, work, `${fireKey}:triage`, threadRef);
+      const patches = await decideTriage(snapshot, work, `${fireKey}:triage`, threadRef);
       for (const [id, patch] of patches) await deps.items.setTriage(id, patch, "agent");
     } catch (error) {
       console.error("%s", `[loops] triage for ${loop.id} failed:`, errMessage(error));
@@ -673,7 +724,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     loopId: string,
     fireKey: string,
     cronId?: string,
-    options?: { enumerate?: boolean },
+    options?: LoopFireOptions,
   ): Promise<LoopFireResult> {
     try {
       const work = () => fireAdmitted(loopId, fireKey, cronId, options);
@@ -688,15 +739,19 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     loopId: string,
     fireKey: string,
     cronId?: string,
-    options?: { enumerate?: boolean },
+    options?: LoopFireOptions,
   ): Promise<LoopFireResult> {
-    const loop = await deps.loops.get(loopId);
-    if (!loop) return { status: "failed", note: "loop not found" };
+    const stored = await deps.loops.get(loopId);
+    if (!stored) return { status: "failed", note: "loop not found" };
+    let snapshot: LoopSnapshot;
     try {
-      await boundLoopCron(loop, deps.crons, cronId);
+      snapshot = await snapshotLoop(stored, cronId);
     } catch (e) {
       return { status: "failed", note: errMessage(e) };
     }
+    if (options?.admit && !(await options.admit(snapshot)))
+      return { status: "refused", note: "agent policy denied cron admission" };
+    const { loop, grants } = snapshot;
     if (loop.state === "enabled" && (await deps.trigger.idempotency.committed(`${fireKey}:intake`))) {
       return { status: "silent", note: "duplicate fire key" };
     }
@@ -706,14 +761,14 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       let failure: string | undefined;
       try {
         const outcome = await stageTurn(
-          loop,
+          snapshot,
           `${fireKey}:sync`,
           threadRef,
           loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
         failure = stageFailure("inbox sync", outcome)?.error.message;
-        if (failure === undefined) await triage(loop, fireKey, threadRef);
+        if (failure === undefined) await triage(snapshot, fireKey, threadRef);
       } catch (error) {
         failure = errMessage(error);
       }
@@ -722,7 +777,6 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       return failure !== undefined ? { status: "failed", note: failure } : { status: "silent" };
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    const grants = await deps.grants.byLoop(loopId);
     const workReplies = new Map<string, string>();
     let members: Promise<LoopItem[]> | undefined;
     let held: Set<string> | undefined;
@@ -735,20 +789,20 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         {
           enumerate: async () => {
             if (options?.enumerate === false) return [];
-            const outcome = await stageTurn(loop, `${fireKey}:intake`, threadRef, intakePrompt(loop));
+            const outcome = await stageTurn(snapshot, `${fireKey}:intake`, threadRef, intakePrompt(loop));
             if (!outcome.ran && !outcome.authzFailed) throw new DuplicateLoopFireError("duplicate fire key");
             const failure = stageFailure("intake", outcome);
             if (failure) throw failure.error;
             return parseIntake(outcome.reply ?? "");
           },
-          triage: () => triage(loop, fireKey, threadRef),
+          triage: () => triage(snapshot, fireKey, threadRef),
           work: async ({ item, guidance }) => {
             const all = await (members ??= consolidates(loop) ? deps.items.byLoop(loop.id) : Promise.resolve([]));
             const heldIds = (held ??= heldMembers(loop, all));
             const itemThreadRef = loopFireItemThreadRef(loopId, fireKey, item.id);
             const similar = all.filter((member) => heldIds.has(member.id) && member.triage?.groupId === item.id);
             const outcome = await stageTurn(
-              loop,
+              snapshot,
               `${fireKey}:work:${item.id}:${item.attempts}`,
               itemThreadRef,
               workPrompt(loop, item, guidance, similar),
@@ -774,7 +828,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           captureOutputs: async ({ item }) => parseOutputs(workReplies.get(item.id) ?? ""),
           evaluate: async ({ item, attempt }) => {
             const outcome = await stageTurn(
-              loop,
+              snapshot,
               `${fireKey}:judge:${item.id}:${attempt}`,
               loopFireItemThreadRef(loopId, fireKey, item.id),
               judgePrompt(loop, item),
@@ -789,15 +843,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
               maxAttempts,
             );
           },
-          authorizeAutoShip: async (output) => {
-            const currentLoop = await deps.loops.get(loop.id);
-            if (!currentLoop || !isRunnable(currentLoop)) return null;
-            const currentGrants = await deps.grants.byLoop(loop.id);
-            return decideShip(currentLoop, outputCandidate(output), currentGrants).outcome === "auto"
-              ? currentLoop
-              : null;
-          },
-          ship: async ({ output }) => shipOutput(loop.id, output.id, loop.owner, "auto-shipped by policy", true),
+          authorizeAutoShip: async (output) => ((await stillAutoShips(snapshot, output)) ? loop : null),
+          ship: async ({ output }) => shipOutput(snapshot, output.id, loop.owner, "auto-shipped by policy", true),
         },
         grants,
       );
@@ -823,15 +870,15 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
   }
 
   async function shipOutput(
-    loopId: string,
+    source: string | LoopSnapshot,
     outputId: string,
     actorId: string,
     note?: string,
     requireAuto = false,
   ): Promise<LoopOutput | null> {
-    let loop = await deps.loops.get(loopId);
+    const loopId = typeof source === "string" ? source : source.loop.id;
     let output = await deps.outputs.get(outputId);
-    if (!loop || !output || output.loopId !== loopId) return null;
+    if (!output || output.loopId !== loopId) return null;
     if (output.state === "shipped") return output;
     const decisionItemId = output.itemId;
     const decisionToken = await deps.items.acquireDecision(decisionItemId);
@@ -841,12 +888,11 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       if (!output || output.loopId !== loopId) return null;
       const item = await deps.items.get(output.itemId);
       if (!item || item.status !== "ready" || !item.outputIds.includes(outputId)) return null;
-      loop = await deps.loops.get(loopId);
-      if (!loop || !isRunnable(loop)) return null;
-      if (requireAuto) {
-        const grants = await deps.grants.byLoop(loopId);
-        if (decideShip(loop, outputCandidate(output), grants).outcome !== "auto") return null;
-      }
+      const stored = typeof source === "string" ? await deps.loops.get(loopId) : null;
+      const snapshot = typeof source === "string" ? stored && (await snapshotLoop(stored)) : source;
+      if (!snapshot || !isRunnable(snapshot.loop)) return null;
+      const { loop } = snapshot;
+      if (requireAuto && !(await stillAutoShips(snapshot, output))) return null;
       if (output.state === "unconfirmed") {
         const shipped = await deps.outputs.confirmShipped(outputId, { actorId, ...(note ? { note } : {}) });
         if (shipped) await settleItem(loopId, shipped.itemId);
@@ -858,7 +904,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       const fireKey = `loop:${loopId}:ship:${outputId}`;
       if (!(await deps.outputs.beginShipAttempt(outputId, claimToken, fireKey))) return null;
       const outcome = await stageTurn(
-        loop,
+        snapshot,
         fireKey,
         loopFireThreadRef(loopId, fireKey),
         shipPrompt(loop, claimed, note),
@@ -941,7 +987,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     actorId: string,
     options?: LoopFollowUpOptions,
   ): Promise<ItemTurnResult> {
-    const outcome = await stageTurn(loop, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId, options);
+    let snapshot: LoopSnapshot;
+    try {
+      snapshot = await snapshotLoop(loop);
+    } catch (e) {
+      return { ok: false, note: errMessage(e), userNote: errMessage(e) };
+    }
+    const outcome = await stageTurn(snapshot, fireKey, loopItemThreadRef(loop.id, item.id), input, actorId, options);
     const failure = stageFailure("item turn", outcome);
     if (failure) return { ok: false, note: failure.error.message, userNote: failure.userMessage };
     return {

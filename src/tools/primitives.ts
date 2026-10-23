@@ -323,7 +323,10 @@ export interface ToolContext extends SurfaceToolDeps {
   ): Promise<
     ControlOk<{ webhook: Webhook }> | ControlErr<"not_found" | "forbidden" | "bad_request"> | ControlUnavailable
   >;
-  soulRead(): { effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable;
+  soulRead():
+    | { effectiveSoul: string; soul: string | null; soulVersion: number }
+    | ControlUnavailable
+    | Promise<{ effectiveSoul: string; soul: string | null; soulVersion: number } | ControlUnavailable>;
   soulWrite(
     content: string,
     expectedVersion?: number,
