@@ -205,6 +205,7 @@ export interface AwsUpOpts {
   yes?: boolean;
   buildFrom?: boolean;
   buildFromPath?: string;
+  prebuilt?: Record<string, string>;
   imageLabel?: string;
   only?: string[];
   restart?: string[];
@@ -665,6 +666,29 @@ function sourceBuildInfo(root: string): { gitCommit?: string; dirty?: boolean } 
   return info;
 }
 
+function verifiedPrebuiltImage(config: QmConfig, workload: string, image: string, buildFromPath?: string): string {
+  const { gitCommit, dirty } = sourceBuildInfo(resolveBuildRepoRoot(buildFromPath, [workload]));
+  if (!gitCommit || dirty) throw new CliError(`--prebuilt ${workload} requires a clean git checkout to match`);
+  const architecture = workloadArchitecture(config, workload);
+  type ImageConfig = { os?: string; architecture?: string; config?: { Env?: string[] } };
+  let inspected: ImageConfig & Record<string, ImageConfig | undefined>;
+  try {
+    inspected = JSON.parse(
+      capture("docker", ["buildx", "imagetools", "inspect", image, "--format", "{{json .Image}}"]),
+    );
+  } catch (error) {
+    throw new CliError(`could not inspect --prebuilt ${workload} image ${image}: ${errMessage(error)}`);
+  }
+  const selected = typeof inspected.architecture === "string" ? inspected : inspected[`linux/${architecture}`];
+  if (selected?.os !== "linux" || selected.architecture !== architecture) {
+    throw new CliError(`--prebuilt ${workload} image ${image} has no linux/${architecture} image`);
+  }
+  if (!selected.config?.Env?.includes(`GIT_SHA=${gitCommit}`)) {
+    throw new CliError(`--prebuilt ${workload} image ${image} was not built from checkout ${gitCommit}`);
+  }
+  return image;
+}
+
 function sourceImageDigest(source: string): string {
   const pinned = source.match(/@(?<digest>sha256:[0-9a-f]{64})$/)?.groups?.digest;
   if (pinned) return pinned;
@@ -700,6 +724,7 @@ async function publishWorkloadImage(
   const spec = aws.services[workload]!;
   const tagged = `${ecrHost(aws)}/${spec.ecrRepository}:${label}`;
   const platform = `linux/${workloadArchitecture(config, workload)}`;
+  const prebuilt = opts.buildFrom && isServiceName(workload) ? opts.prebuilt?.[workload] : undefined;
   if (plugin?.kind === "source") {
     const args = [
       "buildx",
@@ -718,7 +743,7 @@ async function publishWorkloadImage(
     args.push(plugin.sourceDir!);
     if (signal) await runInheritAsync("docker", args, { signal });
     else runInherit("docker", args);
-  } else if (opts.buildFrom && isServiceName(workload)) {
+  } else if (opts.buildFrom && isServiceName(workload) && !prebuilt) {
     const root = resolveBuildRepoRoot(opts.buildFromPath, [workload]);
     const dockerfile = join(root, spec.dockerfile ?? join("deploy", workload, "Dockerfile"));
     if (spec.dockerfile && !existsSync(dockerfile)) {
@@ -744,7 +769,9 @@ async function publishWorkloadImage(
     if (signal) await runInheritAsync("docker", args, { signal });
     else runInherit("docker", args);
   } else {
-    const source = workloadSourceImage(config, workload, plugin);
+    const source = prebuilt
+      ? verifiedPrebuiltImage(config, workload, prebuilt, opts.buildFromPath)
+      : workloadSourceImage(config, workload, plugin);
     if (!source) throw new CliError(`AWS workload ${workload} has no source image`);
     if (signal) await runInheritAsync("docker", imageTransferArgs(source, tagged), { signal });
     else runInherit("docker", imageTransferArgs(source, tagged));
@@ -2298,6 +2325,18 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     throw new CliError("--image-label must be a valid ECR tag");
   }
   if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
+  for (const [service, image] of Object.entries(opts.prebuilt ?? {})) {
+    if (!opts.buildFrom) throw new CliError("--prebuilt requires --build-from");
+    if (!services.includes(service) || !isServiceName(service) || plugins.has(service)) {
+      throw new CliError(`--prebuilt workload ${service} is not a selected QM service built from source`);
+    }
+    if (!/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(image)) {
+      throw new CliError(`--prebuilt ${service} must be pinned by digest: <image>@sha256:<digest>`);
+    }
+    if (aws.services[service]?.dockerfile || Object.keys(workloadBuildArgs(config, service)).length) {
+      throw new CliError(`--prebuilt ${service} cannot replace a build with a custom dockerfile or build args`);
+    }
+  }
   if (opts.buildOnly) {
     assertAwsCallerAccount(aws);
     header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.orgId} (aws candidate ${opts.imageLabel})`);
@@ -2398,7 +2437,11 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       const sourceBuild = (opts.buildFrom && isServiceName(service)) || plugins.get(service)?.kind === "source";
       if (sourceBuild) {
         images[service] = `${ecrHost(aws)}/${spec.ecrRepository}@sha256:${"0".repeat(64)}`;
-        step(`${service}: source build planned; image digest is unresolved until build`);
+        step(
+          opts.prebuilt?.[service]
+            ? `${service}: reuse ${opts.prebuilt[service]} once it matches the source checkout`
+            : `${service}: source build planned; image digest is unresolved until build`,
+        );
         continue;
       }
       images[service] = plannedWorkloadImage(config, service, plugins.get(service));
