@@ -2619,6 +2619,8 @@ const apiRoutes: readonly WebRoute[] = [
       let desktopClientId: string | undefined;
       let proactiveOpener = false;
       let idempotencyKey: string | undefined;
+      let clientTools: unknown[] | undefined;
+      let surfaceBriefing: Record<string, unknown> | undefined;
       try {
         const p = JSON.parse(await readBody(req));
         text = String(p.text ?? "");
@@ -2653,6 +2655,9 @@ const apiRoutes: readonly WebRoute[] = [
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
         if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
+        if (Array.isArray(p.clientTools)) clientTools = p.clientTools;
+        if (p.surfaceBriefing && typeof p.surfaceBriefing === "object" && !Array.isArray(p.surfaceBriefing))
+          surfaceBriefing = p.surfaceBriefing;
         if (Array.isArray(p.attachments)) {
           for (const raw of p.attachments as unknown[]) {
             if (!raw || typeof raw !== "object") continue;
@@ -2682,6 +2687,8 @@ const apiRoutes: readonly WebRoute[] = [
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(timezone ? { timezone } : {}),
+        ...(clientTools ? { clientTools } : {}),
+        ...(surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(approval ? { approval } : {}),
         ...(proactiveOpener ? { proactiveOpener: true } : {}),

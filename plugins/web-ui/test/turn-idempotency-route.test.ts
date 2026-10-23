@@ -47,6 +47,12 @@ const core = createServer((req: IncomingMessage, res) => {
       return;
     }
     if (req.method === "POST") turns.push(JSON.parse(raw) as Record<string, unknown>);
+    const briefing = turns.at(-1)?.surfaceBriefing as { name?: string } | undefined;
+    if (req.method === "POST" && briefing && !briefing.name) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "surfaceBriefing.name: Required" }));
+      return;
+    }
     res.writeHead(202, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: "queued", runId: "run-1" }));
   });
@@ -130,6 +136,48 @@ test("ordinary chats and invalid app references cannot inject app context", asyn
   });
   assert.equal(response.status, 202);
   assert.equal(turns.at(-1)?.conversationHeader, undefined, "someone else's app thread carries no app context");
+});
+
+const postTurn = (body: Record<string, unknown>) =>
+  fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text: "hello", threadRef: "web:alice:embed", ...body }),
+  });
+
+test("a turn that drops clientTools leaves the embedder's tools unreachable", async () => {
+  const clientTools = [{ name: "ui__scroll", description: "Scroll", inputSchema: { type: "object" } }];
+  assert.equal((await postTurn({ clientTools })).status, 202);
+  assert.deepEqual(turns.at(-1)?.clientTools, clientTools);
+});
+
+test("a turn that drops surfaceBriefing leaves the surface's context unsent", async () => {
+  const surfaceBriefing = { name: "Panel", instructions: "Be brief", state: { page: "inbox" } };
+  assert.equal((await postTurn({ surfaceBriefing })).status, 202);
+  assert.deepEqual(turns.at(-1)?.surfaceBriefing, surfaceBriefing);
+});
+
+test("a turn forwards clientTools and surfaceBriefing only in their declared shapes", async () => {
+  for (const bad of [
+    { clientTools: { name: "x" }, surfaceBriefing: "x" },
+    { surfaceBriefing: ["x"] },
+    { surfaceBriefing: null },
+  ]) {
+    assert.equal((await postTurn(bad)).status, 202);
+    assert.equal(turns.at(-1)?.clientTools, undefined);
+    assert.equal(turns.at(-1)?.surfaceBriefing, undefined);
+  }
+});
+
+test("a proxy that swallows core's 400 hides which surfaceBriefing field is malformed", async () => {
+  const response = await postTurn({ surfaceBriefing: { instructions: "x" } });
+  assert.equal(response.status, 400);
+  assert.match(((await response.json()) as { error: string }).error, /surfaceBriefing\.name/);
+});
+
+test("a turn that skips an empty clientTools array makes the embedder's declaration vanish", async () => {
+  assert.equal((await postTurn({ clientTools: [] })).status, 202);
+  assert.deepEqual(turns.at(-1)?.clientTools, []);
 });
 
 test("inbox chat loads fresh caller-scoped previews separately from the user message", async () => {
