@@ -83,6 +83,8 @@ export interface Config {
   sandboxBackend: SandboxBackendName;
   sandboxSecondaryBackend?: SandboxBackendName;
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b";
+  /** Image override for DEPLOY_PROVIDER=docker's deploy-runtime container — see dockerDeployImageEnv. */
+  dockerDeployImage?: string;
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -830,6 +832,39 @@ function sharedPlatformSuffixOf(domain: string): string | undefined {
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^${HOSTNAME_LABEL}(?:\\.${HOSTNAME_LABEL})+$`);
 
+// createDockerDeployProvider's own built-in default (node:24, currently
+// Debian bookworm) is a reasonable general default, but native (non-pure-JS)
+// npm dependencies a published app brings in are compiled wherever the agent
+// turn that built them actually ran — for SANDBOX_BACKEND=do-managed-agents,
+// that's DigitalOcean's own Ubuntu-based sandbox image, which can ship a
+// newer glibc than the deploy image's. A native addon built against a glibc
+// symbol version the deploy image doesn't have fails to load there even
+// though both are glibc (not a musl/glibc mismatch — that case, Alpine vs.
+// glibc, was the default before node:24-alpine was dropped upstream). Lines
+// up build and run environments automatically whenever Managed Agents is the
+// active sandbox backend, since that's the one condition under which the
+// mismatch is predictable; every other backend keeps the provider's own
+// default untouched. DEPLOY_DOCKER_IMAGE always wins when set, regardless of
+// sandbox backend, for an operator who wants to pin something else entirely.
+//
+// qm-deploy-runtime:ubuntu24-node20 is not published to any registry — it's
+// an Ubuntu 24.04 + Node 20.20.2 (NodeSource) + build-essential + python3
+// image (matching the Managed Agents sandbox's own glibc/Node ABI exactly,
+// confirmed live: a real native addon with no prebuilt binary — the thing
+// that actually needs this — builds via node-gyp and loads correctly here).
+// Deployments using this default are responsible for making sure their own
+// Docker daemon already has an image with this exact tag before a publish
+// is attempted — e.g. built once at provisioning time and loaded into that
+// daemon's local image store, the same way createDockerDeployProvider's own
+// default tags are expected to already be pullable/present.
+const MANAGED_AGENTS_DEPLOY_IMAGE = "qm-deploy-runtime:ubuntu24-node20";
+
+function dockerDeployImageEnv(env: NodeJS.ProcessEnv, sandboxBackend: SandboxBackendName): string | undefined {
+  const explicit = env.DEPLOY_DOCKER_IMAGE?.trim();
+  if (explicit) return explicit;
+  return sandboxBackend === "do-managed-agents" ? MANAGED_AGENTS_DEPLOY_IMAGE : undefined;
+}
+
 function deployAppsDomainEnv(env: NodeJS.ProcessEnv, deployProvider: string): string | undefined {
   const raw = env.DEPLOY_APPS_DOMAIN?.trim();
   if (raw) {
@@ -1328,6 +1363,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
+  const dockerDeployImage = dockerDeployImageEnv(env, sandboxBackend);
   const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
   if (env.SANDBOX_SCOPE_BACKENDS) {
     const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
@@ -1506,6 +1542,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxBackend,
     legacySandboxScopeDefaults,
     deployProvider,
+    ...(dockerDeployImage ? { dockerDeployImage } : {}),
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
           egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")
