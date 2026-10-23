@@ -69,6 +69,9 @@ bulk`) below personal mail, but never suppress transactional notices (DocuSign,
 - `reply` threads onto the original message; `--all` keeps every recipient. Don't
   rebuild To/CC by hand. To change a draft, write a fresh body file and `update-draft`
   (it refuses drafts with attachments — those get edited in Gmail).
+- Draft, reply, and update-draft require a nonempty body file or stdin. Subject-only
+  composition is not supported by this helper; use Gmail for that. Sending an
+  existing stored draft is unchanged, including subject-only and attachment-only drafts.
 - Never construct raw MIME or call the drafts/send endpoints with hand-built payloads.
 - Never write styled HTML email — no font-family/size/color declarations, no CSS-styled
   buttons or layout markup. Styled HTML screams automated blast and overrides the
