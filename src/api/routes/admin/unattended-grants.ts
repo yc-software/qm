@@ -3,7 +3,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx, Route } from "../route.ts";
 
-function unattendedGrantListing(routes: ReadonlyArray<Route<ApiCtx>>) {
+export function unattendedGrantListing(routes: ReadonlyArray<Route<ApiCtx>>) {
   return routes.flatMap((route) => {
     if (!("path" in route) || !route.admin?.unattended) return [];
     const action = Object.entries(adminOperations).find(

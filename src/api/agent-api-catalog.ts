@@ -1,6 +1,7 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { adminRoutes } from "./routes/admin.ts";
+import { unattendedGrantListing } from "./routes/admin/unattended-grants.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
 
 interface AgentApiRoute {
@@ -690,10 +691,8 @@ const unattendedFamilies = (): AgentApiFamily[] =>
     when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes(grant) === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: adminRoutes.flatMap((route) =>
-      "path" in route && route.admin?.unattended?.grant === grant
-        ? [{ method: route.method, path: route.path, summary: route.admin.unattended.summary }]
-        : [],
+    routes: unattendedGrantListing(adminRoutes).flatMap((entry) =>
+      entry.grant === grant ? [{ method: entry.method, path: entry.path, summary: entry.summary }] : [],
     ),
   }));
 
