@@ -93,6 +93,75 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, marker, upgrade };
 }
 
+test("new computer reservations release capacity without retiring files or interrupting active computers", async () => {
+  const active = new Set<string>();
+  const releases: string[] = [];
+  const { resources, router } = fixture((backend) => {
+    backend.profile.parksOnTeardown = true;
+    const provision = backend.provision;
+    backend.provision = async (layers, options) => {
+      const id = layers.find((layer) => layer.mode === "rw")!.scopeId;
+      if (!active.has(id) && active.size >= 1) throw new Error("provider capacity reached");
+      const handle = await provision(layers, options);
+      active.add(handle.id);
+      return handle;
+    };
+    backend.teardown = async (handle, options) => {
+      assert.notEqual(options?.destroy, true);
+      releases.push(handle.id);
+      active.delete(handle.id);
+    };
+  }, []);
+  const actor = "owner";
+  const scope = `personal:${actor}`;
+  const layers = [{ scopeId: scope, mode: "rw" as const, mountPath: "/" }];
+  const first = await resources.create(actor, scope, "local", "Worker", "worker");
+  const second = await resources.create(actor, scope, "local", "Board", "board");
+  assert.equal(first.state, "ready");
+  assert.equal(second.state, "ready");
+  assert.equal(active.size, 0);
+  assert.deepEqual(releases, [first.backingScopeId, second.backingScopeId]);
+  assert.equal((await resources.create(actor, scope, "local", "Worker", "worker")).id, first.id);
+  assert.equal(releases.length, 2);
+
+  const running = await router.provision(layers, { sandboxId: first.id });
+  await router.writeFile(running, "result", "saved work");
+  await assert.rejects(resources.create(actor, scope, "local", "Control", "control"), /provider capacity reached/);
+  assert.deepEqual([...active], [running.id]);
+  assert.equal((await router.run(running, "pwd")).code, 0);
+  assert.equal(await router.readFile(running, "result"), "saved work");
+
+  await router.teardown(running);
+  const control = await resources.create(actor, scope, "local", "Control", "control");
+  assert.equal(control.id, "control");
+  assert.equal(control.state, "ready");
+  const resumed = await router.provision(layers, { sandboxId: first.id });
+  assert.equal(resumed.id, running.id);
+  assert.equal(await router.readFile(resumed, "result"), "saved work");
+  await router.teardown(resumed);
+});
+
+test("failed initial parking stays visible and retries the same computer reservation", async () => {
+  let attempts = 0;
+  const { resources } = fixture((backend) => {
+    backend.profile.parksOnTeardown = true;
+    backend.teardown = async () => {
+      if (++attempts === 1) throw new Error("provider pause failed");
+    };
+  }, []);
+  const create = () => resources.create("owner", "personal:owner", "local", "Worker", "retry");
+  await assert.rejects(create(), /provider pause failed/);
+  const failed = await resources.get("retry");
+  assert.equal(failed.state, "failed");
+  assert.match(failed.error!, /provider pause failed/);
+  assert.equal((await create()).state, "ready");
+  assert.equal(attempts, 2);
+  assert.deepEqual(
+    (await resources.list("owner", "personal:owner")).sandboxes.map((record) => record.id),
+    ["retry"],
+  );
+});
+
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
   const { resources, router, layers } = fixture();
   const old = await router.provision(layers);
