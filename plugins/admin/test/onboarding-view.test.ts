@@ -384,3 +384,12 @@ test("a pending onboarding load keeps an explicit keep-current-base-model choice
   assert.equal(controller.model, "");
   dom.window.close();
 });
+
+test("loading onboarding loads the custom providers its page shows", async () => {
+  const { dom, controller } = fixture();
+  let loads = 0;
+  controller.context.loadCustomProviders = async () => void loads++;
+  await controller.load();
+  dom.window.close();
+  assert.equal(loads, 1);
+});

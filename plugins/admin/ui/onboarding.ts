@@ -153,6 +153,7 @@ export class Onboarding {
       view = this.context.view();
     const selection = { provider: this.provider, model: this.model, apiKey: this.apiKey };
     void this.loadRegistry().catch(swallowAs("admin: load model registry", undefined));
+    void this.context.loadCustomProviders().catch(swallowAs("admin: load custom providers", undefined));
     const [models, slack, catalog, config] = await Promise.all([
       this.context.api("GET", "/api/model-providers?catalog=cached"),
       this.context.api("GET", "/api/slack-installation"),
@@ -273,7 +274,6 @@ export class Onboarding {
         : { ok: true };
       this.apiKey = "";
       await this.load();
-      await this.context.loadCustomProviders();
       this.providerMessage = providerSavedMessage(modelId, selected);
       this.providerTone = selected.ok ? "ok" : "err";
     } catch (error) {
@@ -301,7 +301,6 @@ export class Onboarding {
       const response = await this.context.api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
       if (!response.ok) throw new Error(response.data?.message || "Could not disable this provider.");
       await this.load();
-      await this.context.loadCustomProviders();
       this.providerMessage = "Provider disabled.";
       this.providerTone = "ok";
     } catch (error) {
