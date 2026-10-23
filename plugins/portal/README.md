@@ -246,7 +246,7 @@ and only accepts it when `PORTAL_PUBLIC_URL` is loopback.
 Identity: `OIDC_PRINCIPAL_CLAIM` — `email` (default; the org-canonical id: the
 verified work email, lowercased; sign-in fails unless the IdP marks the email verified) or `sub`
 (the IdP's opaque subject, e.g. the Slack U… id — only for deployments still keyed on Slack ids).
-`OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, additionally reject any account outside this domain
+`OIDC_ALLOWED_EMAIL_DOMAIN` — with `email`, admit accounts in this domain or on `OIDC_ALLOWED_EMAILS`
 (checked against the email suffix and Google's `hd` claim).
 An address those rules reject still signs in when an org admin has invited it as an
 external user: the callback asks core over the signed core client

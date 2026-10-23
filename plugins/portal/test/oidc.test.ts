@@ -259,6 +259,15 @@ test("resolvePrincipal allowedEmails permits only the seeded verified addresses"
   );
 });
 
+test("resolvePrincipal admits an address on the list or in the domain when both are set (#827)", async () => {
+  const rule = { claim: "email" as const, allowedEmails: ["contractor@gmail.com"], allowedEmailDomain: "example.com" };
+  const login = (email: string) =>
+    resolvePrincipal(rule, { sub: "g", claims: {}, userinfo: { email, email_verified: true } });
+  assert.deepEqual(await login("contractor@gmail.com"), { sub: "contractor@gmail.com" });
+  assert.deepEqual(await login("a@example.com"), { sub: "a@example.com" });
+  await assert.rejects(login("stranger@gmail.com"), /permitted domain/);
+});
+
 test("resolvePrincipal admits an invited external address that the env rules reject", async () => {
   const rule = { claim: "email" as const, allowedEmailDomain: "example.com", allowedEmails: ["admin@example.com"] };
   const asked: string[] = [];
