@@ -11,7 +11,7 @@ import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { splitToScope } from "../src/api/artifact-share.ts";
+import { splitToScope, triggerBlocksSharedSkill } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -37,6 +37,7 @@ function fakeManages(state: FakeState): ManagesArtifactHome {
     const { kind, ref } = parseScopeId(homeScopeId);
     const memberManaged = kind === "group" || (kind === "channel" && state.privateChannels.has(ref));
     if (memberManaged && (state.scopesByPrincipal[principalId] ?? []).includes(homeScopeId)) return true;
+    if (kind === "team") return (state.scopesByPrincipal[principalId] ?? []).includes(homeScopeId);
     if (createdBy !== principalId) return false;
     if (kind === "personal") return ref === principalId;
     if (kind === "channel") return !state.privateChannels.has(ref);
@@ -554,6 +555,51 @@ test("an automated trigger (no liveActor) cannot MOVE a skill out of its shared 
   );
   assert.ok(live.ok, JSON.stringify(live));
   assert.equal(state.moves.length, 1, "a live member's move goes through");
+});
+
+test("a team member who didn't create a team-owned skill can share it onward; a trigger cannot move it out", async () => {
+  const state = await ownerState();
+  state.artifacts["skill:TS"] = {
+    type: "skill",
+    id: "TS",
+    ownerScopeId: scopeId("team", "finance"),
+    createdBy: "U1",
+    grantRef: "skill:TS",
+  };
+  state.scopesByPrincipal["U2"] = [
+    scopeId("personal", "U2"),
+    scopeId("org", ORG),
+    scopeId("team", "finance"),
+    scopeId("channel", "C7"),
+  ];
+  state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), scopeId("org", ORG), scopeId("channel", "C7")];
+  const svc = createControlService(fakeApp(state));
+
+  const shared = await svc.shareArtifact(
+    { type: "skill", id: "TS", scope: scopeId("channel", "C7"), permission: "write" },
+    cap("U2"),
+  );
+  assert.ok(shared.ok, JSON.stringify(shared));
+  assert.ok((await grantsOf(state)).some((g) => g.ref === "skill:TS" && g.granteeScopeId === scopeId("channel", "C7")));
+
+  const outsider = await svc.shareArtifact(
+    { type: "skill", id: "TS", scope: scopeId("channel", "C7"), permission: "write" },
+    cap("U3"),
+  );
+  assert.equal(outsider.ok, false, "a non-member cannot manage the team's skill");
+
+  const trigger = await svc.shareArtifact(
+    { type: "skill", id: "TS", scope: scopeId("personal", "U2"), move: true },
+    cap("U2", scopeId("personal", "U2"), false),
+  );
+  assert.equal(trigger.ok, false, "an automated trigger cannot take a team skill out of the team");
+  assert.equal(state.moves.length, 0);
+});
+
+test("skill mutations from an automated trigger are blocked for team homes, like channel and group homes", () => {
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "finance"), false), true);
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "finance"), true), false);
+  assert.equal(triggerBlocksSharedSkill(scopeId("personal", "U1"), false), false);
 });
 
 test("a trigger (no liveActor) cannot MOVE a personal skill INTO a shared scope either — a move that authors a group-wide skill is guarded like create", async () => {

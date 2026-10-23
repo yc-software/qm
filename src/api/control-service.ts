@@ -25,8 +25,9 @@ import {
   SHARED_SKILL_TRIGGER_REFUSAL,
   type ShareArtifactRequest,
   type ShareArtifactResult,
+  isMultiMemberSkillScope,
 } from "./artifact-share.ts";
-import { actsAsScope, isSharedScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
@@ -873,7 +874,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           if (
             req.type === "skill" &&
             !livePersonCapability(capability) &&
-            (isSharedScope(home.ownerScopeId) || isSharedScope(toScope))
+            (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }
