@@ -135,7 +135,10 @@ test("OIDC callback seals core app-only authority; ordinary admission stays ordi
   }
   admission = { allowed: false };
   const denied = await signIn(appCookie());
-  assert.equal(denied.status, 400);
+  assert.equal(denied.status, 403);
+  const page = await denied.text();
+  assert.match(page, /account is not permitted/);
+  assert.doesNotMatch(page, /Try signing in again|usually temporary/);
   assert.equal(
     denied.headers.getSetCookie().some((c) => c.startsWith("portal_session=")),
     false,

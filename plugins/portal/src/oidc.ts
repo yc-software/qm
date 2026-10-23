@@ -130,6 +130,8 @@ export async function verifyIdToken(
   return payload as JWTPayload & Record<string, unknown>;
 }
 
+export class SignInDenied extends Error {}
+
 export interface PrincipalRule {
   claim: "sub" | "email";
   allowedEmailDomain?: string;
@@ -169,7 +171,7 @@ export async function resolvePrincipal(
   const refusal = envRefusal(rule, email, args);
   if (refusal || rule.requireCoreAdmission) {
     const admission = await invited(email);
-    if (!admission.allowed) throw new Error(refusal ?? "account is not permitted");
+    if (!admission.allowed) throw new SignInDenied(refusal ?? "account is not permitted");
     return {
       sub: admission.appOnly || rule.claim === "email" ? email : args.sub,
       ...(admission.appOnly ? { appOnly: true } : {}),
