@@ -66,6 +66,14 @@ sessions per second; with more than a few hundred thousand such sessions, run
 `node src/migrate-main.ts` with the release's configuration before starting the servers
 so readiness checks do not time out.
 
+A startup migration marks every saved spend day dirty once, so the refresher recomputes
+days saved before spend rows carried a cron id; until it catches up, Spend and the spend
+export report an older `asOf` for ranges that include a day still waiting. It relies on
+the previous release already writing cron ids. When upgrading from a release without
+per-cron spend, the previous deployment's refresher can save those days again without
+them; once it has stopped, run `INSERT INTO session_spend_dirty(day) SELECT day FROM
+session_spend_days ON CONFLICT DO NOTHING` to recompute them.
+
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those
 records remain stored in `cron_fires`. Validate both old and new readers against the
