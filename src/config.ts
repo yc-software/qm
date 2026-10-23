@@ -12,6 +12,7 @@ import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgr
 import type { SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
 import {
+  MODEL_REQUEST_CONTEXT_HEADERS,
   parseProviderBaseUrl,
   providerBaseUrlsFromEnv,
   type ModelGatewayTransportConfig,
@@ -1131,6 +1132,9 @@ function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfi
   const apiKeyHeader = env.MODEL_GATEWAY_API_KEY_HEADER!.trim();
   if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(apiKeyHeader)) {
     throw new Error("MODEL_GATEWAY_API_KEY_HEADER must be a valid HTTP header name");
+  }
+  if (Object.hasOwn(MODEL_REQUEST_CONTEXT_HEADERS, apiKeyHeader.toLowerCase())) {
+    throw new Error("MODEL_GATEWAY_API_KEY_HEADER cannot be a QM request context header");
   }
   const models: Record<string, string> = {};
   for (const mapping of env.MODEL_GATEWAY_MODELS?.trim() ? env.MODEL_GATEWAY_MODELS.split(",") : []) {

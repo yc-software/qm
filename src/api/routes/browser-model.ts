@@ -3,6 +3,7 @@ import { orgId } from "../../config.ts";
 import { scopeId } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
+import { modelGatewayHeaders } from "../../model/provider-endpoints.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -91,7 +92,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     if (!target) return sendJson(res, 503, { error: "browser model unavailable" });
     const response = await fetch(`${gateway.url.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json", [gateway.apiKeyHeader]: gateway.apiKey },
+      headers: { "content-type": "application/json", ...modelGatewayHeaders(gateway, "browser") },
       body: JSON.stringify({ ...input, model: target, stream: false }),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
       redirect: "error",

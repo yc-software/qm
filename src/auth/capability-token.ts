@@ -2,6 +2,7 @@ import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
 import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
+import type { SessionOrigin } from "../sessions/session-store.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
@@ -62,6 +63,7 @@ export interface CapabilityClaims {
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
+  origin?: SessionOrigin;
   runAttempt?: number;
   runLeaseToken?: string;
   deployment?: string;

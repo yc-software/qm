@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { ClientToolResult, TurnRequest } from "../types.ts";
@@ -87,11 +88,12 @@ export function createMemoryRunSignalStore(): RunSignalStore {
       }
     },
     onSignal(runId, cb) {
+      const bound = AsyncLocalStorage.bind(cb);
       const set = listeners.get(runId) ?? new Set();
-      set.add(cb);
+      set.add(bound);
       listeners.set(runId, set);
       return () => {
-        set.delete(cb);
+        set.delete(bound);
         if (set.size === 0) listeners.delete(runId);
       };
     },

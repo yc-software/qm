@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
@@ -34,6 +35,24 @@ const turn = (text: string): OrchestratorInput => ({
   conversation: { kind: "dm", threadRef: "t", audience: [actor] },
   origin: { kind: "direct" },
   text,
+});
+
+test("sessions inherit the origin of their nearest automated ancestor in either store", { skip }, async () => {
+  for (const store of [createMemorySessionStore(), createPostgresSessionStore(URL!)]) {
+    const run = randomUUID();
+    const scope = scopeId("channel", "C1");
+    const cron = await store.getOrCreateByThread(`agent:main:cron:${run}`, "channel", scope);
+    const child = await store.getOrCreateByThread(`subagent:${run}:1`, "channel", scope);
+    const grandchild = await store.getOrCreateByThread(`subagent:${run}:2`, "channel", scope);
+    const orphan = await store.getOrCreateByThread(`subagent:${run}:3`, "channel", scope);
+    await store.setParentSession(child.id, cron.id);
+    await store.setParentSession(grandchild.id, child.id);
+    await store.setParentSession(orphan.id, `missing-${run}`);
+    const origin = async (id: string) => store.inheritedOrigin((await store.get(id))!);
+    assert.equal(await origin(grandchild.id), "cron");
+    assert.equal(await origin(cron.id), "cron");
+    assert.equal(await origin(orphan.id), "conversation");
+  }
 });
 
 test("pg session row mapping ignores incomplete fork provenance", () => {

@@ -47,7 +47,7 @@ async function extractFacts(
   if (!harness.oneShot) return { facts: [], sensitivity: "unknown" };
   try {
     const transcript = turns.map((t) => `User said:\n${t.input}\n\nAssistant replied:\n${t.reply}`).join("\n\n---\n\n");
-    const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript);
+    const out = await harness.oneShot(MEMORY_EXTRACTION_PROMPT, transcript, "memory_capture");
     return {
       facts: parseFacts(out ?? ""),
       sensitivity: parseSensitivity(/^SENSITIVITY: (ordinary|unknown|sensitive|restricted)\n/.exec(out ?? "")?.[1]),

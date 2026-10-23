@@ -20,6 +20,11 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { anthropicStream, contextHeaders, recordRequests } from "./support/gateway-stream.ts";
+import { settle } from "./support/settle.ts";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
+import { withModelRequestContext } from "../src/model/request-context.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -852,6 +857,148 @@ for (const location of [
     assert.equal(disk.has("skills/carried-method/SKILL.md"), false);
   });
 }
+
+test("carried skill and steer screens tell the model gateway which session they serve", async (t) => {
+  const requests = recordRequests(t, '{"decision":"auto"}');
+  const skills = createSkillStore();
+  const skill = await skills.create({
+    scopeId: scopeId("personal", actor.id),
+    createdBy: actor.id,
+    manifest: {
+      name: "carried-method",
+      description: "A method",
+      body: "Do work.",
+      requiredCapabilities: [],
+      files: [],
+    },
+  });
+  await skills.review(skill.id, actor.id, []);
+  await skills.publish(skill.id);
+  const harness = createMockHarness();
+  harness.models.screenSecurity = createPiHarness({
+    detectModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: "https://gateway.test",
+      apiKey: "k",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "m" },
+    },
+  }).models.screenSecurity;
+  const { orchestrator, config, sessions } = buildOrchestrator({
+    skills,
+    harness,
+    isCurrentSharedScopeMember: async () => true,
+  });
+  await config.setSharingPosture(scopeId("org", ORG), "open");
+  const conversation: Conversation = {
+    kind: "channel",
+    channelRef: "C1",
+    threadRef: "C1:carried-context",
+    audience: [actor],
+    publishMembers: [actor],
+  };
+  const result = await orchestrator.handleTurn({
+    surface: "test",
+    actor,
+    origin: { kind: "human" },
+    conversation,
+    text: "!skill carried-method",
+  });
+  assert.match(result.reply ?? "", /Do work/);
+  const turnContext = {
+    "x-qm-session-id": result.sessionId!,
+    "x-qm-actor": actor.id,
+    "x-qm-scope": "channel:C1",
+    "x-qm-origin": "conversation",
+    "x-qm-purpose": "security_screen",
+  };
+  assert.deepEqual(
+    contextHeaders(requests.find((request) => request.body.includes("carried-method"))!.headers),
+    turnContext,
+  );
+
+  const steer = () =>
+    orchestrator.screenSecuritySteer({ payload: "[]", actor, conversation, sessionId: result.sessionId });
+  assert.equal(await steer(), "allow");
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), turnContext);
+  const cron = await sessions.getOrCreateByThread("agent:main:cron:nightly", "channel", scopeId("channel", "C1"));
+  await sessions.setParentSession(result.sessionId!, cron.id);
+  assert.equal(await steer(), "allow");
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...turnContext, "x-qm-origin": "cron" });
+  sessions.inheritedOrigin = () => Promise.reject(new Error("session store unavailable"));
+  assert.equal(await steer(), "allow");
+  const { "x-qm-origin": _unresolved, ...unresolvedOrigin } = turnContext;
+  assert.deepEqual(contextHeaders(requests.at(-1)!.headers), unresolvedOrigin);
+});
+
+test("a steer delivered by notification is screened in the context of the turn it steers", async (t) => {
+  let release!: () => void;
+  const turnHeld = new Promise<void>((resolve) => (release = resolve));
+  let turnStarted!: () => void;
+  const started = new Promise<void>((resolve) => (turnStarted = resolve));
+  const screens: Array<Record<string, string>> = [];
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    release();
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (headers.get("x-qm-purpose") === "turn") {
+      turnStarted();
+      await turnHeld;
+    }
+    if (headers.get("x-qm-purpose") === "security_screen" && String(init?.body).includes("UPDATED_INBOX_SNAPSHOT"))
+      screens.push(contextHeaders(headers));
+    return new Response(anthropicStream('{"decision":"auto"}'), { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  const signals = createMemoryRunSignalStore();
+  const { orchestrator } = buildOrchestrator({
+    harness: createPiHarness({
+      defaultModelId: "claude-haiku-4-5",
+      detectModelId: "claude-haiku-4-5",
+      modelGateway: {
+        url: "https://gateway.test",
+        apiKey: "k",
+        apiKeyHeader: "api-key",
+        models: { "claude-haiku-4-5": "m" },
+      },
+      signals,
+    }),
+  });
+  const thread = "web:alice:inbox";
+  const turn = orchestrator.handleTurn(dm(thread, "hello", { surface: "web", runId: "run-steered" }));
+  await started;
+  const steer = (ts: string) =>
+    signals.send("run-steered", {
+      kind: "steer",
+      text: "summarize again",
+      ts,
+      request: {
+        surface: "web",
+        actor: { externalId: actor.id },
+        conversation: { kind: "dm", threadRef: thread },
+        text: "summarize again",
+        conversationHeader: "UPDATED_INBOX_SNAPSHOT",
+      },
+    });
+  const sender = { sessionId: "session-sender", actorId: "U2", scopeId: "personal:U2", origin: "cron" as const };
+  await withModelRequestContext(sender, () => steer("1"));
+  await settle(async () => screens.length === 1);
+  await steer("2");
+  await settle(async () => screens.length === 2);
+  release();
+  const result = await turn;
+  assert.equal(result.status, "ok", result.reason);
+  const turnContext = {
+    "x-qm-session-id": result.sessionId!,
+    "x-qm-actor": actor.id,
+    "x-qm-scope": scopeId("personal", actor.id),
+    "x-qm-origin": "conversation",
+    "x-qm-purpose": "security_screen",
+  };
+  assert.deepEqual(screens, [turnContext, turnContext]);
+});
 
 test("Open uses the exact skill snapshot that passed screening despite an in-flight source update", async () => {
   const skills = createSkillStore();

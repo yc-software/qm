@@ -136,6 +136,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
         }
       : {}),
     ...(r.parent_session_id != null ? { parentSessionId: r.parent_session_id as string } : {}),
+    ...(r.origin != null ? { origin: r.origin as SessionOrigin } : {}),
     ...(r.spawn_meta != null ? { spawnMeta: JSON.parse(r.spawn_meta as string) as Session["spawnMeta"] } : {}),
   };
 }
@@ -207,7 +208,7 @@ const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => 
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.origin`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 
@@ -414,19 +415,20 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
   const hasOrigin = (alias: string, origin: SessionOrigin): string => `${alias}.origin = '${origin}'`;
   const originFilterClause = (alias: string, origin: SessionOriginFilter): string =>
     origin === "other_background" ? `${alias}.origin NOT IN ('conversation', 'cron')` : hasOrigin(alias, origin);
-  const spendSql = `WITH RECURSIVE ancestry AS (
+  const ancestry = (seed: string): string => `ancestry AS (
            SELECT s.id AS session_id, s.parent_session_id, s.origin AS origin, s.origin_id AS cron_id,
                   ARRAY[s.id] AS path
              FROM sessions s
-            WHERE s.parent_session_id IS NOT NULL AND s.origin = 'conversation'
-              AND EXISTS (SELECT 1 FROM session_llm_requests r
-                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
-                             AND r.usage_json IS NOT NULL)
+            WHERE ${seed}
            UNION ALL
            SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
             WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
-         ), origins AS (
+         )`;
+  const spendSql = `WITH RECURSIVE ${ancestry(`s.parent_session_id IS NOT NULL AND s.origin = 'conversation'
+              AND EXISTS (SELECT 1 FROM session_llm_requests r
+                           WHERE r.session_id = s.id AND r.created_at >= $1 AND r.created_at < $2
+                             AND r.usage_json IS NOT NULL)`)}, origins AS (
            SELECT DISTINCT ON (session_id) session_id, origin, cron_id
              FROM ancestry ORDER BY session_id, cardinality(path) DESC
          ), rollup AS MATERIALIZED (
@@ -1682,6 +1684,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async descendantsOf(rootIds): Promise<SessionDescendant[]> {
       return descendantsOf(rootIds);
+    },
+
+    async inheritedOrigin(session): Promise<SessionOrigin> {
+      const rows = await q(
+        `WITH RECURSIVE ${ancestry("s.id = $1")} SELECT origin FROM ancestry ORDER BY cardinality(path) DESC LIMIT 1`,
+        [session.id],
+      );
+      return (rows[0]?.origin as SessionOrigin | undefined) ?? "conversation";
     },
 
     async listDescendantsForParticipant(rootId, principalId, limit): Promise<Session[]> {

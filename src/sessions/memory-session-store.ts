@@ -39,9 +39,11 @@ import {
   entryWithinTenure,
   isOverheardEntry,
   DuplicateCallError,
+  originThroughParents,
   promptEnvelopeBody,
   sessionCategory,
   sessionOrigin,
+  type SessionOrigin,
   userMessagePreview,
   isWebThread,
 } from "./session-store.ts";
@@ -142,6 +144,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         type,
         scopeId,
         threadRef,
+        origin: sessionOrigin(threadRef),
         createdAt: now(),
         ...(clientTools?.length ? { clientTools: structuredClone(clientTools) } : {}),
         ...(channelName ? { channelName } : {}),
@@ -566,6 +569,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       };
     },
 
+    async inheritedOrigin(session): Promise<SessionOrigin> {
+      const stored = sessions.get(session.id);
+      return stored ? (await originThroughParents(stored, (id) => sessions.get(id))).origin : "conversation";
+    },
+
     async descendantsOf(rootIds): Promise<SessionDescendant[]> {
       return [...new Set(rootIds)].flatMap((rootId) => {
         const out: SessionDescendant[] = [];
@@ -827,16 +835,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       for (const [sessionId, records] of llmRequests) {
         const session = sessions.get(sessionId);
         if (!session) continue;
-        let origin = sessionOrigin(session.threadRef);
-        let ancestor = session;
-        const visited = new Set([sessionId]);
-        while (origin === "conversation" && ancestor.parentSessionId && visited.size < 64) {
-          const parent = sessions.get(ancestor.parentSessionId);
-          if (!parent || visited.has(parent.id)) break;
-          visited.add(parent.id);
-          ancestor = parent;
-          origin = sessionOrigin(parent.threadRef);
-        }
+        const { origin, ancestor } = await originThroughParents(session, (id) => sessions.get(id));
         const cronId = cronIdOf(ancestor.threadRef);
         for (const r of records) {
           if (!r.usage) continue;
