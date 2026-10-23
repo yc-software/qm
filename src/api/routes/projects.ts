@@ -87,6 +87,15 @@ async function removeProjectMember(ctx: ApiCtx): Promise<void> {
   return mutationResponse(ctx, await ctx.app.removeProjectMember(ctx.params.id!, principalId, memberId));
 }
 
+async function deleteProject(ctx: ApiCtx): Promise<void> {
+  const body = isObj(ctx.body) ? ctx.body : {};
+  const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
+  const principalId = capabilityPrincipal(ctx, requested);
+  if (principalId === null) return;
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
+  return mutationResponse(ctx, await ctx.app.deleteProject(ctx.params.id!, principalId));
+}
+
 async function setProjectSlackChannel(ctx: ApiCtx): Promise<void> {
   const body = isObj(ctx.body) ? ctx.body : {};
   const requested = typeof body.principalId === "string" ? body.principalId.trim() : "";
@@ -114,6 +123,7 @@ export const projectRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "DELETE", path: "/v1/projects/:id/slack-channel", auth: "either", handle: clearProjectSlackChannel },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/projects", auth: "either", allowedInStrict: true, handle: createProject },
+    { method: "DELETE", path: "/v1/projects/:id", auth: "either", handle: deleteProject },
     {
       method: "POST",
       path: "/v1/projects/:id/members",

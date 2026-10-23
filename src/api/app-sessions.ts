@@ -6,7 +6,7 @@ import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, Session } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import { parseScopeId, scopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -90,6 +90,7 @@ export function createSessionMethods(
   | "addProjectMember"
   | "removeProjectMember"
   | "renameProject"
+  | "deleteProject"
   | "setProjectSlackChannel"
   | "listScopeResources"
   | "managesScope"
@@ -224,6 +225,40 @@ export function createSessionMethods(
       text: "",
       idempotencyKey: `session-pin:${pinId}:${remove ? "remove" : "add"}`,
     });
+  };
+
+  /**
+   * A deleted project's records stay for audit, but nothing it owned keeps running or stays reachable: its
+   * conversations already fail closed once the project record is gone (managedProjectMembership), and its
+   * schedules, webhooks, monitors, apps, skills and files go through the archive/disable paths their own
+   * delete buttons use.
+   */
+  const retireProjectScope = async (scope: ScopeId): Promise<void> => {
+    const retire = (what: string, work: () => Promise<unknown>) =>
+      work().catch(swallowAs(`project delete: retire ${what} in ${scope}`, undefined));
+    const [crons, webhooks, monitors, deployments, skills] = await Promise.all([
+      deps.crons.list(),
+      deps.webhooks.list(),
+      deps.monitors?.list() ?? [],
+      deps.deploy.listDeployments(),
+      deps.skills.list(),
+    ]);
+    for (const cron of crons.filter((c) => c.ownerScopeId === scope && !c.archived))
+      await retire(`cron ${cron.id}`, () => deps.crons.update(cron.id, { archived: true }));
+    for (const hook of webhooks.filter((w) => w.ownerScopeId === scope && w.enabled))
+      await retire(`webhook ${hook.id}`, () => deps.webhooks.setEnabled(hook.id, false));
+    for (const monitor of monitors.filter((m) => m.ownerScopeId === scope && m.enabled))
+      await retire(`monitor ${monitor.id}`, () => deps.monitors!.setEnabled(monitor.id, false));
+    for (const app of deployments.filter((d) => d.ownerScopeId === scope && d.status !== "archived"))
+      await retire(`deployment ${app.id}`, () => deps.deploy.archiveDeployment(app.id));
+    for (const skill of skills.filter((k) => k.scopeId === scope && k.status !== "archived"))
+      await retire(`skill ${skill.id}`, () => deps.skills.archive(skill.id));
+    let cursor: string | undefined;
+    do {
+      const page = await deps.files.listOwnedByScopes([scope], { limit: 200, ...(cursor ? { cursor } : {}) });
+      for (const file of page.files) await retire(`file ${file.id}`, () => deps.files.setEnabled(file.id, false));
+      cursor = page.nextCursor;
+    } while (cursor);
   };
 
   /** Sessions whose title matches the query — the entry index only covers message text. */
@@ -886,6 +921,23 @@ export function createSessionMethods(
         return { ...result, project: await projectView(result.project) };
       }
       return result;
+    },
+
+    async deleteProject(id, principalId) {
+      if (!deps.projects) return { status: "not_found" };
+      if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
+      const result = await deps.projects.remove(id, principalId, async ({ project }) => {
+        deps.auditLog.record({
+          at: Date.now(),
+          principalId,
+          action: "project.delete",
+          resource: project.id,
+          scopeLabel: projectScopeId(project.id),
+        });
+        await retireProjectScope(projectScopeId(project.id));
+      });
+      if (result.status !== "ok") return result;
+      return { ...result, project: await projectView(result.project) };
     },
 
     async listScopeResources(principalId, scope) {

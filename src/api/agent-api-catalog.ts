@@ -173,6 +173,12 @@ const FAMILIES: AgentApiFamily[] = [
         summary: "rename a project the asking person owns — body {name}",
       },
       {
+        method: "DELETE",
+        path: "/v1/projects/:id",
+        summary:
+          "delete a project the asking person owns — irreversible, and everyone in it loses the shared workspace",
+      },
+      {
         method: "POST",
         path: "/v1/projects/:id/members",
         summary: "add an internal directory member to a project the asking person belongs to — body {memberId}",
