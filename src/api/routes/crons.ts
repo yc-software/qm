@@ -101,6 +101,8 @@ function isCronPatch(b: unknown): b is {
   runtime?: Cron["runtime"];
   title?: string;
   task?: string;
+  text?: string;
+  message?: string;
   action?: string;
   schedule?: unknown;
   enabled?: boolean;
@@ -122,6 +124,8 @@ function isCronPatch(b: unknown): b is {
   if (hasTitle && typeof b.title !== "string") return false;
   if (hasAction && typeof b.action !== "string") return false;
   if (hasTask && typeof b.task !== "string") return false;
+  if (b.text !== undefined && typeof b.text !== "string") return false;
+  if (b.message !== undefined && typeof b.message !== "string") return false;
   if (hasEnabled && typeof b.enabled !== "boolean") return false;
   if (hasArchived && typeof b.archived !== "boolean") return false;
   if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
@@ -141,6 +145,8 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.title !== undefined ||
     b.action !== undefined ||
     b.task !== undefined ||
+    b.text !== undefined ||
+    b.message !== undefined ||
     b.schedule !== undefined ||
     b.enabled !== undefined ||
     b.archived !== undefined ||
@@ -341,7 +347,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), text (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), unattendedGrants (string[]), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
@@ -366,12 +372,14 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     const schedule =
       body.schedule !== undefined ? userScheduleFromBody(body.schedule, defaultTimezoneFor(capability))! : undefined;
     const task = body.action ?? body.task;
+    const text = exactText(body);
     const r = await ctx.deps.control.patchCron(
       id,
       {
         ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(task !== undefined ? { action: task } : {}),
+        ...(text !== undefined ? { text } : {}),
         ...(schedule !== undefined ? { schedule } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),
@@ -410,6 +418,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
   }
   const schedule = body.schedule !== undefined ? userScheduleFromBody(body.schedule)! : undefined;
   const task = body.action ?? body.task;
+  const text = exactText(body);
   if (body.unfurlLinks !== undefined && !cron.destination) {
     return sendJson(res, 400, {
       error: "bad_request",
@@ -420,6 +429,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(task !== undefined ? { action: task } : {}),
+    ...(text !== undefined ? { message: text } : {}),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(body.archived !== undefined ? { archived: body.archived } : {}),
@@ -438,6 +448,7 @@ async function cronById(ctx: ApiCtx): Promise<void> {
           ...(body.runtime !== undefined ? ["runtime"] : []),
           ...(body.title !== undefined ? ["title"] : []),
           ...(task !== undefined ? ["task"] : []),
+          ...(text !== undefined ? ["text"] : []),
           ...(schedule !== undefined ? ["schedule"] : []),
           ...(body.enabled !== undefined ? [`enabled=${body.enabled}`] : []),
           ...(body.archived !== undefined ? [`archived=${body.archived}`] : []),
