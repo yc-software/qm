@@ -34,6 +34,34 @@ test("malformed request bodies are 400", async () => {
   }
 });
 
+test("malformed turn conversations and attachments are 400, not handler crashes", async () => {
+  const s = start();
+  const turn = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "dm:U1:t" },
+      text: "hi",
+      ...extra,
+    });
+  try {
+    for (const [label, body] of [
+      ["threadRef number", turn({ conversation: { kind: "dm", threadRef: 5 } })],
+      ["unknown kind", turn({ conversation: { kind: "zz", threadRef: "x" } })],
+      ["NUL in threadRef", turn({ conversation: { kind: "dm", threadRef: "dm:U1:\u0000" } })],
+      ["NUL in text", turn({ text: "a\u0000b" })],
+      ["attachments string", turn({ attachments: "x" })],
+      ["attachment missing blobId", turn({ attachments: [{ name: "a", mimetype: "text/plain", sizeBytes: 1 }] })],
+      ["attachment null", turn({ attachments: [null] })],
+    ] as const) {
+      const res = await post(s.base, "/v1/turns", body);
+      assert.equal(res.status, 400, `${label} -> ${res.status} ${await res.text()}`);
+    }
+  } finally {
+    await s.close();
+  }
+});
+
 test("unknown resources are 404, not silent 200 or 500", async () => {
   const s = start();
   try {

@@ -6,14 +6,31 @@ import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
+const noNul = (value: string) => !value.includes("\u0000");
+
+const turnAttachmentSchema = z.looseObject({
+  name: z.string(),
+  mimetype: z.string(),
+  sizeBytes: z.number().finite().nonnegative(),
+  blobId: z.string().min(1),
+});
+
 function isTurnRequest(body: unknown): body is TurnRequest {
   return (
     isObj(body) &&
     typeof body.text === "string" &&
+    noNul(body.text) &&
     isObj(body.actor) &&
     typeof body.actor.externalId === "string" &&
     body.actor.externalId !== "" &&
-    isObj(body.conversation)
+    isObj(body.conversation) &&
+    (body.conversation.kind === "dm" || body.conversation.kind === "channel" || body.conversation.kind === "group") &&
+    typeof body.conversation.threadRef === "string" &&
+    body.conversation.threadRef !== "" &&
+    noNul(body.conversation.threadRef) &&
+    (body.conversation.channelRef === undefined ||
+      (typeof body.conversation.channelRef === "string" && noNul(body.conversation.channelRef))) &&
+    (body.attachments === undefined || z.array(turnAttachmentSchema).safeParse(body.attachments).success)
   );
 }
 
