@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/v1/files/") && (req.url ?? "").includes("/content")) {
@@ -17,6 +20,14 @@ process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).p
 process.env.CORE_SIGNING_SECRET = "apps-frame-test-secret";
 process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.DEPLOY_APPS_DOMAIN = "apps.test";
+
+// /app-edit serves the built dist-web/index.html; a bare checkout (tests run before `npm run build`) has
+// none, so stub one rather than depending on another test file having created it first.
+const distDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web");
+if (!existsSync(join(distDir, "index.html"))) {
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(join(distDir, "index.html"), "<!doctype html><html><head></head><body></body></html>");
+}
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));
