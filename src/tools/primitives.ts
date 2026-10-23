@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AdminToolAccess } from "./admin.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
@@ -60,7 +61,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
-import type { FileArtifactStore } from "../files/file-artifact-store.ts";
+import { artifactPath, fileArtifactId, type FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
@@ -198,6 +199,11 @@ export interface ToolContext extends SurfaceToolDeps {
   admin?: AdminToolAccess;
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
+  storeToolResult?(
+    callId: string,
+    content: string,
+    sourceScopeId?: ScopeId | null,
+  ): Promise<{ fileId: string; sizeBytes: number } | null>;
   sessionSyscalls?: SessionSyscalls;
   /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
@@ -963,6 +969,26 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
           return reached ? { ...r, reached } : r;
         });
       });
+    },
+
+    async storeToolResult(callId, content, sourceScopeId) {
+      if (!deps.files || !writableScopeId || (sourceScopeId && sourceScopeId !== writableScopeId)) return null;
+      const data = Buffer.from(content, "utf8");
+      const digest = createHash("sha256").update(data).digest("hex");
+      const id = fileArtifactId(`${writableScopeId}:${deps.runId ?? ""}:${callId}:${digest}`, "out", 0);
+      const name = "tool-result.txt";
+      const { artifact } = await deps.files.put({
+        id,
+        ownerScopeId: writableScopeId,
+        createdBy: deps.createdBy,
+        createdInScope: writableScopeId,
+        name,
+        path: artifactPath(id, name),
+        mimetype: "text/plain",
+        data,
+        direction: "out",
+      });
+      return { fileId: artifact.id, sizeBytes: artifact.sizeBytes };
     },
 
     async read(path: string, signal?: AbortSignal, sandboxId?: string): Promise<ReadResult> {
