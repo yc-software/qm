@@ -225,7 +225,7 @@ export async function startSlackPlugin(
     ...(cfg.userCacheTtlMs ? { userCacheTtlMs: cfg.userCacheTtlMs } : {}),
   });
   const mirror = cfg.externalAccess
-    ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {} }
+    ? { pushSurfaceEvents: async () => {}, mirrorMessageEvent: async () => {}, mirrorReactionEvent: async () => {} }
     : createMirror({ core, ids, directory, externalParticipantsEnabled });
   const historyRateLimitOptions = {
     managed: Boolean(cfg.installationId && cfg.sharedServiceUrl?.trim()),

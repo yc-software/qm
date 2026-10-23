@@ -29,7 +29,7 @@ export type SlackHistoryReader = (
 ) => Promise<SlackHistoryPage>;
 
 const MIRROR_CONTEXT_NOTE =
-  "Context comes from stored Slack events. Earlier messages, missed events, reactions, and attachment details may be absent; this is not a complete Slack history.";
+  "Context comes from stored Slack events. Earlier messages, missed events, and attachment details may be absent; reactions include only received events, with their times. This is not a complete Slack history.";
 
 export function createSlackHistoryReader(deps: {
   core: SlackCoreClient;
@@ -252,6 +252,7 @@ export function createSlackHistoryReader(deps: {
             ...(m.sub ? { thread_ts: m.sub } : {}),
             ...(m.self || m.authorId ? { user: m.self ? deps.ids.botUserId : m.authorId } : {}),
             ...(m.authorName ? { username: m.authorName } : {}),
+            ...(m.reactions !== undefined ? { reactions: m.reactions } : {}),
             ...(m.bot ? { bot_id: m.botId ?? (m.self ? deps.ids.ownBotId : "mirrored-bot") } : {}),
             ...(m.files?.length
               ? {
@@ -304,6 +305,15 @@ export function createSlackHistoryReader(deps: {
           noFallback: true,
         });
         for (const row of stored) if (row.deleted) deleted.add(row.ts);
+        const storedByTs = new Map(stored.map((row) => [row.ts, row]));
+        for (const message of page.messages) {
+          const reactions = message.ts ? storedByTs.get(message.ts)?.reactions : undefined;
+          if (!reactions?.length || !Array.isArray(message.reactions)) continue;
+          message.reactions = message.reactions.map((reaction) => {
+            const timestamps = reactions.find((storedReaction) => storedReaction.name === reaction?.name)?.timestamps;
+            return timestamps ? { ...reaction, timestamps } : reaction;
+          });
+        }
       }
       const byTs = new Map<string, SlackHistoryMessage>();
       for (const message of [...mirrored, ...page.messages])

@@ -9,6 +9,7 @@ export interface CachedMessage {
   authorName?: string;
   text: string;
   replyCount?: number;
+  reactions?: Array<{ name: string; count: number; users: string[]; timestamps?: Record<string, string> }>;
   files?: Array<{ fileId: string; name?: string; title?: string; size?: number; mimetype?: string }>;
   mentions?: Record<string, string>;
   self?: boolean;
@@ -52,6 +53,7 @@ export interface ActiveThread {
 export interface IngestEvent {
   container: string;
   ts: string;
+  reaction?: { name: string; userId: string; eventTs: string; added: boolean };
   sub?: string | null;
   broadcast?: boolean;
   subtype?: string;

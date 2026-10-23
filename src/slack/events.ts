@@ -411,14 +411,15 @@ export function registerSlackEvents(
   app.event("assistant_thread_started", async () => {});
   app.event("assistant_thread_context_changed", async () => {});
 
-  app.event("reaction_added", async ({ event, body, client }: EventArgs) => {
-    const reaction = parseReactionEvent(event);
-    if (reaction.user === ids.botUserId) return;
-    await handleReactionEvent(reaction, parseEventId(body), client, true);
-  });
-  app.event("reaction_removed", async ({ event, body, client }: EventArgs) => {
-    const reaction = parseReactionEvent(event);
-    if (reaction.user === ids.botUserId) return;
-    await handleReactionEvent(reaction, parseEventId(body), client, false);
-  });
+  for (const type of ["reaction_added", "reaction_removed"] as const) {
+    app.event(type, async ({ event, body, client, context }: EventArgs) => {
+      try {
+        const reaction = parseReactionEvent(event);
+        await handleReactionEvent(reaction, parseEventId(body), client, type === "reaction_added");
+      } catch (error) {
+        context.ackGate?.failed("Slack reaction processing failed");
+        throw error;
+      }
+    });
+  }
 }

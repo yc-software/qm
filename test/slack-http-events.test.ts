@@ -155,7 +155,7 @@ test("non-gated envelopes ack immediately even while the handler is still runnin
       await blocked;
     },
     async (post) => {
-      const res = await post({ type: "event_callback", event_id: "Ev9", event: { type: "reaction_added" } });
+      const res = await post({ type: "event_callback", event_id: "Ev9", event: { type: "channel_rename" } });
       assert.equal(res.status, 200);
       release();
     },

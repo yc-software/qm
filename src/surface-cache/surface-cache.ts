@@ -27,6 +27,27 @@ const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_THREADS_LIMIT = 50;
 
+type ReactionEvent = NonNullable<IngestEvent["reaction"]>;
+
+const REACTION_EVENTS = `(SELECT json_agg(json_build_object('name', name, 'userId', user_id, 'eventTs', event_ts, 'added', added))
+  FROM channel_reactions WHERE org_id = channel_messages.org_id AND container = channel_messages.container AND ts = channel_messages.ts) AS reaction_events`;
+
+function reactionsFromEvents(events: ReactionEvent[]): NonNullable<CachedMessage["reactions"]> {
+  const reactions = new Map<string, Map<string, string>>();
+  for (const event of [...events].sort((a, b) => a.name.localeCompare(b.name) || a.userId.localeCompare(b.userId))) {
+    if (!event.added) continue;
+    const users = reactions.get(event.name) ?? new Map<string, string>();
+    users.set(event.userId, event.eventTs);
+    reactions.set(event.name, users);
+  }
+  return [...reactions].map(([name, users]) => ({
+    name,
+    count: users.size,
+    users: [...users.keys()],
+    timestamps: Object.fromEntries(users),
+  }));
+}
+
 function normalizeEvent(event: IngestEvent): IngestEvent {
   return JSON.parse(
     JSON.stringify(event, (_key, value) => (typeof value === "string" ? value.replace(/\u0000/g, "") : value)),
@@ -131,6 +152,16 @@ export function createPostgresSurfaceCache(
         `ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS size BIGINT`,
       ],
     },
+    {
+      id: "surface-cache/store/0007",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS channel_reactions(
+          org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL,
+          name TEXT NOT NULL, user_id TEXT NOT NULL, event_ts TEXT NOT NULL, added BOOLEAN NOT NULL,
+          PRIMARY KEY(org_id, container, ts, name, user_id)
+        )`,
+      ],
+    },
   ]);
 
   const liveFallback = opts.liveFallback;
@@ -147,6 +178,9 @@ export function createPostgresSurfaceCache(
       ...(r.author_name != null ? { authorName: r.author_name as string } : {}),
       text: (r.text as string) ?? "",
       ...(r.reply_count != null ? { replyCount: Number(r.reply_count) } : {}),
+      ...(Array.isArray(r.reaction_events)
+        ? { reactions: reactionsFromEvents(r.reaction_events as ReactionEvent[]) }
+        : {}),
       ...(r.mentions != null ? { mentions: r.mentions as Record<string, string> } : {}),
       ...(r.self ? { self: true } : {}),
       ...(r.bot ? { bot: true } : {}),
@@ -169,6 +203,21 @@ export function createPostgresSurfaceCache(
       try {
         await client.query("BEGIN");
         for (const event of events) {
+          if (!event.reaction) continue;
+          const e = normalizeEvent(event);
+          if (!e.container || !e.ts) continue;
+          const reaction = e.reaction!;
+          const result = await client.query(
+            `INSERT INTO channel_reactions(org_id, container, ts, name, user_id, event_ts, added)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT (org_id, container, ts, name, user_id) DO UPDATE SET
+               event_ts = EXCLUDED.event_ts, added = EXCLUDED.added
+             WHERE EXCLUDED.event_ts::numeric > channel_reactions.event_ts::numeric`,
+            [orgId, e.container, e.ts, reaction.name, reaction.userId, reaction.eventTs, reaction.added],
+          );
+          upserted += result.rowCount ?? 0;
+        }
+        for (const event of events.filter((e) => !e.reaction)) {
           const e = normalizeEvent(event);
           if (!e.container || !e.ts) continue;
           const res = await client.query(
@@ -309,7 +358,7 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
+        `SELECT channel_messages.*, ${REACTION_EVENTS}, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
         args,
       );
       const hit = rows.map(rowToMessage);
@@ -334,7 +383,7 @@ export function createPostgresSurfaceCache(
       }
       args.push(REVISION_SCAN_LIMIT);
       const rows = await q(
-        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
+        `SELECT channel_messages.*, ${REACTION_EVENTS} FROM channel_messages WHERE ${conds.join(" AND ")}
           ORDER BY GREATEST(COALESCE(edited_at, 0), COALESCE(deleted_at, 0)) DESC, ts DESC LIMIT $${args.length}`,
         args,
       );
@@ -353,7 +402,7 @@ export function createPostgresSurfaceCache(
       }
       args.push(limit);
       const rows = await q(
-        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
+        `SELECT channel_messages.*, ${REACTION_EVENTS} FROM channel_messages WHERE ${conds.join(" AND ")}
          ORDER BY ts_rank(tsv, plainto_tsquery('english', $2)) DESC, ts DESC LIMIT $${args.length}`,
         args,
       );
@@ -455,6 +504,7 @@ export function createPostgresSurfaceCache(
 export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } = {}): SurfaceCache {
   const key = (container: string): string => container;
   const messages = new Map<string, Map<string, CachedMessage>>();
+  const reactions = new Map<string, Map<string, ReactionEvent>>();
   const files = new Map<string, CachedFile[]>();
   const state = new Map<string, ContainerState & { members: string[] }>();
   const liveFallback = opts.liveFallback;
@@ -466,11 +516,33 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
     return m;
   };
 
+  const withReactions = (message: CachedMessage): CachedMessage => {
+    const events = reactions.get(JSON.stringify([message.container, message.ts]));
+    return {
+      ...message,
+      ...(events ? { reactions: reactionsFromEvents([...events.values()]) } : {}),
+    };
+  };
+
   return {
     async ingest(events) {
       const now = Date.now();
       let upserted = 0;
       for (const event of events) {
+        if (!event.reaction) continue;
+        const e = normalizeEvent(event);
+        if (!e.container || !e.ts) continue;
+        const reaction = e.reaction!;
+        const messageKey = JSON.stringify([e.container, e.ts]);
+        const messageReactions = reactions.get(messageKey) ?? new Map<string, ReactionEvent>();
+        const reactionKey = JSON.stringify([reaction.name, reaction.userId]);
+        const previous = messageReactions.get(reactionKey);
+        if (previous && Number(previous.eventTs) >= Number(reaction.eventTs)) continue;
+        messageReactions.set(reactionKey, reaction);
+        reactions.set(messageKey, messageReactions);
+        upserted++;
+      }
+      for (const event of events.filter((e) => !e.reaction)) {
         const e = normalizeEvent(event);
         if (!e.container || !e.ts) continue;
         const m = containerMsgs(e.container);
@@ -589,7 +661,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
         const live = await liveFallback(container, o);
         if (live) return live;
       }
-      return hit;
+      return hit.map(withReactions);
     },
 
     async revisedSince(container, since, o = {}) {
@@ -597,7 +669,8 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
         .filter((m) => revisedAt(m) > 0 && revisedAt(m) >= since)
         .filter((m) => !o.thread || m.sub === o.thread || m.ts === o.thread)
         .sort((a, b) => revisedAt(b) - revisedAt(a) || compareTs(b, a))
-        .slice(0, REVISION_SCAN_LIMIT);
+        .slice(0, REVISION_SCAN_LIMIT)
+        .map(withReactions);
     },
 
     async search(queryText, o = {}) {
@@ -617,7 +690,7 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
         if (a.ts > b.ts) return -1;
         return 0;
       });
-      return out.slice(0, limit);
+      return out.slice(0, limit).map(withReactions);
     },
 
     async activeThreads(o = {}) {

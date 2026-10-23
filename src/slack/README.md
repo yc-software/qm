@@ -160,7 +160,7 @@ the tokens, core simply runs without Slack.
   a **stake** in is surfaced to the agent: a reaction on its **own** message, a reaction in a **DM**
   with it, or one on a **thread root it's following** (`shouldSurfaceReaction` in
   [`lib.ts`](./lib.ts)). Everything else — a stray reaction in a channel it merely sits in —
-  is ignored, so a busy channel never floods the agent. A relevant reaction is delivered as an
+  is stored in the mirror without starting a turn, so a busy channel never floods the agent. A relevant reaction is delivered as an
   **unprompted turn** (exactly like a thread-follow message): the core runs **turn detection**, so a
   passing 👍 stays silent while a ✅ on the bot's "shall I deploy?" gets acted on. The reacted message
   is read once via `reactions.get` so the agent sees its text **and its full current emoji set** —
@@ -292,3 +292,7 @@ Stored mirror reads keep their existing window; shadow comparisons match the liv
 Ingestion continues in every mode. Shadow mismatch counts describe the sampled live window, not complete channel coverage. Compare channel and thread samples, edits/deletes, and normal agent turns before enabling mirror reads. No automatic mode promotion occurs.
 
 Slack mirror records preserve provider subtypes so stored context uses the same system-message filtering as live context. A missing stored subtype means legacy or unobserved metadata; an empty subtype means a verified ordinary message. Partial event updates preserve omitted subtype and thread metadata. Mirror-mode history fallback shares event content normalization and prefers fresh Slack duplicates; live and shadow reads never backfill their comparison source.
+
+Reaction summaries include reactor names and identify the bot as `you`. Automatic summaries show at most five reactors per emoji, retaining the bot's own reaction when present and showing the remainder as “N others.” Context API reaction entries retain `name` and `count`, adding all available `users: { id, name, isSelf?, ts? }[]`. Live reads use the users Slack returns; that list can be shorter than `count`. They do not make additional `reactions.get` calls to fill the list. Names use the cached directory and the existing bounded name lookup budget, falling back to the Slack ID when unavailable.
+
+The mirror stores each received message reaction add/remove event, including the bot's own reactions, before deciding whether to start a turn. The latest `event_ts` per message, emoji, and reactor wins; removals remain recorded so delayed additions cannot restore them. Stored reactions include that event time. Live reads omit reaction times; mirror backfill preserves known times for matching users. The mirror does not reconstruct reactions from before event capture or missed events, and live history backfills do not seed reaction state. Its counts describe observed active reactions, not a verified complete Slack total. Existing mirrored messages without reaction events leave reactions unknown. No history mode default or permission scope changes.
