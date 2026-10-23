@@ -22,7 +22,7 @@ if (!existsSync(distIndex)) {
   mkdirSync(distDir, { recursive: true });
   writeFileSync(
     distIndex,
-    '<!doctype html><html><head><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
+    '<!doctype html><html><head><link rel="apple-touch-icon" href="/brand-mark.svg" /><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
   );
 }
 
@@ -37,8 +37,10 @@ test.after(() => {
   core.close();
 });
 
-test("without WEB_UI_FAVICON_SVG the favicon is the emoji and the manifest icon is the stock mark", async () => {
+test("without WEB_UI_FAVICON_SVG the favicon is the emoji and the manifest and touch icons are the stock mark", async () => {
   delete process.env.WEB_UI_FAVICON_SVG;
+  const page = await (await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice" } })).text();
+  assert.match(page, /<link rel="apple-touch-icon" href="\/brand-mark\.svg"/);
   const icon = await fetch(`${base}/favicon.svg`);
   assert.equal(icon.headers.get("content-type"), "image/svg+xml; charset=utf-8");
   assert.match(await icon.text(), /\u{1F3F4}\u{200D}☠️/u);
@@ -46,9 +48,11 @@ test("without WEB_UI_FAVICON_SVG the favicon is the emoji and the manifest icon 
   assert.equal(manifest.icons[0]?.src, "/brand-mark.svg");
 });
 
-test("WEB_UI_FAVICON_SVG is served verbatim and becomes the manifest icon", async () => {
+test("WEB_UI_FAVICON_SVG is served verbatim and becomes the manifest and touch icon", async () => {
   process.env.WEB_UI_FAVICON_SVG = svg;
   try {
+    const page = await (await fetch(`${base}/`, { headers: { cookie: "webuiuser=alice" } })).text();
+    assert.match(page, /<link rel="apple-touch-icon" href="\/favicon\.svg"/);
     const icon = await fetch(`${base}/favicon.svg`);
     assert.equal(icon.headers.get("x-content-type-options"), "nosniff");
     assert.equal(await icon.text(), svg);
