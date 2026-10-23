@@ -66,26 +66,26 @@ const REFUSAL_CODES = new Set([
   "forbidden",
 ]);
 
-function refusalMessage(body: string): string | null {
+function apiError(body: string): { code?: string; message?: string } {
   let parsed: { error?: { code?: string; message?: string } };
   try {
     parsed = JSON.parse(body);
   } catch {
-    return null;
+    return {};
   }
-  const { code, message } = parsed?.error ?? {};
-  return code && message && REFUSAL_CODES.has(code) ? message : null;
+  return parsed?.error ?? {};
 }
 
-async function apiFailure(action: string, res: Response): Promise<{ detail: string; error: Error }> {
+async function apiFailure(action: string, res: Response): Promise<{ code?: string; error: Error }> {
   const body = await res.text().catch(() => "");
   const detail = withRequestId(`http ${res.status} ${body.slice(0, 200)}`, res.headers);
-  const refused = refusalMessage(body);
+  const { code, message } = apiError(body);
   return {
-    detail,
-    error: refused
-      ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${refused}`)
-      : new Error(`agent37 ${action}: ${detail}`),
+    ...(code ? { code } : {}),
+    error:
+      code && message && REFUSAL_CODES.has(code)
+        ? new NonRetryableTurnError(`Agent37 refused this agent computer: ${message}`)
+        : new Error(`agent37 ${action}: ${detail}`),
   };
 }
 
@@ -182,10 +182,13 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     return data.find((i) => i.name === name && !GONE_STATES.has(i.status)) ?? null;
   }
 
+  const instanceInfo = (id: string): Promise<InstanceInfo> =>
+    apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
+
   async function ensureRunning(id: string): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     for (;;) {
-      const info = await apiJson<InstanceInfo>("GET", `/v1/instances/${encodeURIComponent(id)}`);
+      const info = await instanceInfo(id);
       if (info.status === "running") return;
       if (DEAD_STATES.has(info.status)) throw new Error(`agent37 instance ${id}: ${info.status}`);
       if (Date.now() > deadline)
@@ -243,9 +246,13 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     const first = await send("POST", `/v1/instances/${encodeURIComponent(id)}/exec`, body, timeoutMs);
     let res = first;
     if (!first.ok) {
-      const { detail, error } = await apiFailure(`exec ${name}`, first);
+      const { code, error } = await apiFailure(`exec ${name}`, first);
       if (first.status === 404) idByName.delete(name);
-      const notRunning = first.status === 400 && /running instances/i.test(detail);
+      const status =
+        code === "invalid_request"
+          ? (await instanceInfo(id).catch(swallowAs(`agent37: status of ${id} after exec 400`, undefined)))?.status
+          : undefined;
+      const notRunning = status !== undefined && status !== "running";
       const freezing = first.status === 409;
       if (first.status !== 404 && !notRunning && !freezing) {
         throw error;

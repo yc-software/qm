@@ -37,6 +37,7 @@ interface FakeMachine {
 }
 
 export interface InjectedFailure {
+  body?: string;
   headers?: Record<string, string>;
   match?: (call: { method: string; path: string }) => boolean;
 }
@@ -168,7 +169,10 @@ export function installFakeSmolmachines(): FakeSmolmachines {
     const at = injected.findIndex((f) => !f.match || f.match({ method, path: url.pathname }));
     if (at >= 0) {
       const [next] = injected.splice(at, 1);
-      return new Response(`injected ${next!.status}`, { status: next!.status, headers: next!.headers ?? {} });
+      return new Response(next!.body ?? `injected ${next!.status}`, {
+        status: next!.status,
+        headers: next!.headers ?? {},
+      });
     }
     if (url.pathname === "/v1/machines" && method === "GET") {
       return Response.json([...machines.values()].map(info));

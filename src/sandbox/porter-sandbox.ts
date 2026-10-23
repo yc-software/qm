@@ -131,25 +131,15 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
     kind: "scope" | "scratch" = "scope",
   ): Promise<BodyEntry> {
     const name = bodyName(slug);
-    const sb = await client.sandboxes
-      .create({
-        image,
-        name,
-        command: ["sleep", "infinity"],
-        tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
-        ...(volume ? { volume_mounts: { [volume.mountPath]: volume.id } } : {}),
-        ...(egressMode === "proxy" && egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
-        ttl_seconds: ttlSec,
-      })
-      .catch((e) => {
-        if (errMessage(e).includes("egress restriction is not available")) {
-          throw new Error(
-            `porter sandbox ${name}: PORTER_SANDBOX_EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or unset the proxy URL (docs/porter.md) (${errMessage(e)})`,
-            { cause: e },
-          );
-        }
-        throw e;
-      });
+    const sb = await client.sandboxes.create({
+      image,
+      name,
+      command: ["sleep", "infinity"],
+      tags: { [SCOPE_TAG]: slug, [EGRESS_TAG]: egressMode, [KIND_TAG]: kind },
+      ...(volume ? { volume_mounts: { [volume.mountPath]: volume.id } } : {}),
+      ...(egressMode === "proxy" && egressProxyHost ? { egress: { allowed_destinations: [egressProxyHost] } } : {}),
+      ttl_seconds: ttlSec,
+    });
     try {
       await waitPorterRunning(name, sb);
     } catch (e) {
