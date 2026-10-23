@@ -1,4 +1,5 @@
 import { isGatewayModelId } from "./gateway-models.ts";
+import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 /**
  * Provider endpoint overrides.
  *
@@ -20,6 +21,35 @@ const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
 };
 
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
+
+const SANDBOX_PROVIDER_ENDPOINTS = [
+  { keyEnv: "OPENAI_API_KEY", baseUrlEnv: "OPENAI_BASE_URL", baseUrl: "https://api.openai.com/v1" },
+  { keyEnv: "ANTHROPIC_API_KEY", baseUrlEnv: "ANTHROPIC_BASE_URL", baseUrl: "https://api.anthropic.com" },
+] as const;
+
+export function sandboxGatewayEnv(baseUrl: string, token: string): Record<string, string> {
+  return {
+    OPENAI_BASE_URL: `${baseUrl}/v1`,
+    OPENAI_API_KEY: token,
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_API_KEY: token,
+  };
+}
+
+export function withProviderBaseUrls(
+  env: Record<string, string>,
+  sandboxEnv: Record<string, string> | undefined,
+): Record<string, string> {
+  const paired = { ...env };
+  for (const { keyEnv, baseUrlEnv, baseUrl } of SANDBOX_PROVIDER_ENDPOINTS)
+    if (keyEnv in paired && !(baseUrlEnv in paired) && sandboxEnv?.[baseUrlEnv]?.includes(SANDBOX_MODEL_PREFIX))
+      paired[baseUrlEnv] = baseUrl;
+  return paired;
+}
+
+export function gatewayRoot(url: string): string {
+  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
+}
 
 export interface ModelGatewayTransportConfig {
   url: string;

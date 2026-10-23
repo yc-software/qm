@@ -20,7 +20,12 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
+import {
+  verifyCapabilityToken,
+  CONTROL_PLANE_AUD,
+  SANDBOX_MODEL_AUD,
+  type CapabilityClaims,
+} from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -78,6 +83,13 @@ function capabilityFromHeaders(req: IncomingMessage): string | null {
   return typeof h === "string" && h ? h : null;
 }
 
+function sdkApiKeyFromHeaders(req: IncomingMessage): string | null {
+  const apiKey = req.headers["x-api-key"];
+  if (typeof apiKey === "string" && apiKey) return apiKey;
+  const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
+  return bearer?.[1] ?? null;
+}
+
 interface GateResult {
   body: unknown;
   capability: CapabilityClaims | null;
@@ -112,7 +124,7 @@ async function verifyCapability(
   pathname: string,
   requiredAud: string | null,
 ): Promise<CapabilityClaims | null> {
-  const capToken = capabilityFromHeaders(req);
+  const capToken = capabilityFromHeaders(req) ?? (requiredAud === SANDBOX_MODEL_AUD ? sdkApiKeyFromHeaders(req) : null);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;

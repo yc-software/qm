@@ -79,6 +79,8 @@ import {
   renderSandboxProfiles,
 } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
+import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
+import { sandboxGatewayEnv } from "../model/provider-endpoints.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -86,6 +88,7 @@ import {
   SANDBOX_CAPABILITY_TTL_MS,
   CONTROL_PLANE_AUD,
   BROWSER_MODEL_AUD,
+  SANDBOX_MODEL_AUD,
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,
   EGRESS_PROXY_AUD,
@@ -1703,6 +1706,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             },
             deps.capabilitySecret ?? deps.signingSecret,
           );
+        }
+        if (deps.sandboxModels && allInternal) {
+          const sandboxModelToken = await mintCapabilityToken(
+            { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
+            deps.capabilitySecret ?? deps.signingSecret,
+            deps.capabilityTokenCompression,
+          );
+          Object.assign(
+            connectorEnv,
+            sandboxGatewayEnv(`${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`, sandboxModelToken),
+          );
+          turnContextBlocks["Model access"] =
+            'Code in the sandbox can call the company model gateway with the OpenAI or Anthropic SDKs: `OPENAI_BASE_URL`/`OPENAI_API_KEY` and `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` are already set. List usable model IDs with `curl -H "Authorization: Bearer $OPENAI_API_KEY" $OPENAI_BASE_URL/models`. These keys are QM tokens, not provider keys: send them only to those base URLs, never to api.openai.com or api.anthropic.com.';
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {
