@@ -22,11 +22,10 @@ import {
   isHarnessId,
   modelProviderAvailabilityFor,
   modelServiceable,
-  modelOfferedInWebui,
   modelUnavailableReason,
   resolveModel,
 } from "../model/pi-models.ts";
-import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { selectableModelCatalog, webuiCatalogModelIds } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -327,20 +326,19 @@ export function createTurnMethods(
             };
           }
           const configuredWebuiModels = await deps.config.getWebuiModelsDurable(org);
-          let enabledWebuiModels: string[] | null = null;
+          let enabledWebuiModels: string[];
           if (configuredWebuiModels != null) {
             enabledWebuiModels = configuredWebuiModels.length
               ? [...new Set([...configuredWebuiModels, orgRuntime.modelId])]
               : [];
-          } else if (providers?.openrouter) {
+          } else {
             enabledWebuiModels = [
               ...new Set([
-                ...selectableCatalogForHarness(
-                  await selectableModelCatalog(deps.modelCredentialFetch),
+                ...(await webuiCatalogModelIds(
                   runtime.harnessId,
-                )
-                  .filter((model) => modelOfferedInWebui(model.id))
-                  .map((model) => model.id),
+                  Boolean(deps.modelCredentials && managedKeys.openrouter),
+                  deps.modelCredentialFetch,
+                )),
                 ...(orgRuntime.harnessId === runtime.harnessId ? [orgRuntime.modelId] : []),
               ]),
             ];

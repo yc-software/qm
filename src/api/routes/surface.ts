@@ -13,11 +13,10 @@ import {
   defaultModelForHarness,
   isHarnessId,
   modelSupportedByHarness,
-  modelOfferedInWebui,
   thinkingLevelsForHarness,
   fastModeModelIds,
 } from "../../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { webuiCatalogModelIds } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
@@ -1178,12 +1177,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
   const configuredKeys = deps.providerKeys ?? managedKeys;
   const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
-  const catalog = managedKeys?.openrouter
-    ? await selectableModelCatalog(deps.modelCredentialFetch)
-    : builtInModelCatalog();
-  const allowed = selectableCatalogForHarness(catalog, harnessId)
-    .filter((model) => modelOfferedInWebui(model.id))
-    .map((model) => model.id);
+  const allowed = await webuiCatalogModelIds(harnessId, Boolean(managedKeys?.openrouter), deps.modelCredentialFetch);
   const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
   const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
     ? baseModel!

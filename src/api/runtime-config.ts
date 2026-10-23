@@ -15,7 +15,6 @@ import {
   ALL_PROVIDERS_AVAILABLE,
   fastModeModelIds,
   modelCatalogFor,
-  modelOfferedInWebui,
   modelUnavailableReason,
   thinkingLevelsForHarness,
   harnessSupportsFastMode,
@@ -23,7 +22,7 @@ import {
   codexSubscriptionModelId,
   type HarnessId,
 } from "../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
+import { webuiCatalogModelIds } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
 
 export type RuntimeDeps = Partial<
@@ -99,10 +98,6 @@ export async function runtimeConfigBody(
   const org = orgScope();
   const approvedHarnesses = ((await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId]).filter(isHarnessId);
   const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
-  const catalog =
-    ctx.deps.modelCredentials && managedKeys.openrouter
-      ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
-      : builtInModelCatalog();
   const orgStored = await config.getRuntimeSelectionDurable(org);
   const orgLegacyModel = orgStored ? null : await config.getBaseModelOwnDurable(org);
   let orgDefault: {
@@ -149,14 +144,21 @@ export async function runtimeConfigBody(
   const purposeDefault = purpose ? await config.getPurposeRuntimeDurable(purpose) : undefined;
   const selected = [orgDefault, scopeOverride, effective, purposeDefault].filter((choice) => choice != null);
   const allowlist = await config.getWebuiModelsDurable(org);
+  const openrouter = Boolean(ctx.deps.modelCredentials && managedKeys.openrouter);
+  const catalogIds = new Map(
+    await Promise.all(
+      approvedHarnesses.map(
+        async (harnessId) =>
+          [harnessId, await webuiCatalogModelIds(harnessId, openrouter, ctx.deps.modelCredentialFetch)] as const,
+      ),
+    ),
+  );
   const modelsByHarness = Object.fromEntries(
     approvedHarnesses.map((harnessId) => {
       const ids =
         allowlist != null
           ? allowlist.filter((id) => modelSupportedByHarness(id, harnessId))
-          : selectableCatalogForHarness(catalog, harnessId)
-              .filter((model) => modelOfferedInWebui(model.id))
-              .map((model) => model.id);
+          : catalogIds.get(harnessId)!;
       for (const choice of selected) {
         if (
           allowlist?.length !== 0 &&

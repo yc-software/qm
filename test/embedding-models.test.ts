@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
+import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
@@ -20,7 +21,6 @@ import {
   resolveEmbeddingModel,
   embeddingModelCatalog,
   selectableBaseModels,
-  defaultWebuiModelIds,
   modelSupportedByHarness,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
@@ -74,7 +74,7 @@ test("verified embedding definitions survive registry reload but never become ch
   assert.deepEqual(requests, [{ model: "embed-small", input: ["verification"], encoding_format: "float" }]);
   assert.equal(resolveModel("embed-small"), undefined);
   assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
-  assert.ok(!defaultWebuiModelIds().includes("embed-small"));
+  assert.ok(!builtInModelCatalog().some((m) => m.id === "embed-small"));
   for (const harness of ["pi", "claude"]) assert.equal(modelSupportedByHarness("embed-small", harness), false);
   await writer.delete("embed-small", "admin");
   await writer.refresh();

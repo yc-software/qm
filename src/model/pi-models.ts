@@ -490,16 +490,6 @@ export function overlayModelCatalog(): Array<{ id: string; name: string; provide
     .map(({ id, name, provider }) => ({ id, name, provider }));
 }
 
-export function defaultWebuiModelIds(): readonly string[] {
-  return [
-    ...DEFAULT_WEBUI_MODEL_IDS,
-    ...gatewayModelCatalog(true).map((m) => m.id),
-    ...chatOverlays()
-      .filter((m) => m.webui)
-      .map((m) => m.id),
-  ];
-}
-
 export function fastModeModelIds(): readonly string[] {
   return [
     ...FAST_MODE_MODEL_IDS.filter(modelSupportsFastMode),
@@ -515,8 +505,6 @@ const OPENROUTER_CATALOG_MODELS = new Map<string, PiModel>();
 export function modelDisplayName(id: string): string {
   return overlays.get(id)?.name ?? REGISTRY_BY_ID.get(id)?.name ?? OPENROUTER_CATALOG_MODELS.get(id)?.name ?? id;
 }
-
-export const DEFAULT_WEBUI_MODEL_IDS: readonly string[] = MODEL_REGISTRY.filter((m) => m.webui).map((m) => m.id);
 
 export const SELECTABLE_BASE_MODELS: ReadonlyArray<{ id: string; name: string }> = MODEL_REGISTRY.filter(
   (m) => m.base,

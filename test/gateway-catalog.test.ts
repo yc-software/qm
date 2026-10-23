@@ -99,7 +99,7 @@ test("discovers unknown tool models through the company key without leaking tran
   assert.equal(modelGatewayRequest(f.catalog.transport, model)?.target, "vendor/new-model");
   assert.ok(builtInModelCatalog().some((m) => m.id === id));
   const availability = { anthropic: false, openai: false, openrouter: false, modelIds: new Set([id]) };
-  assert.equal(validateWebTurnModelOptions({ model: id }, null, availability), null);
+  assert.equal(validateWebTurnModelOptions({ model: id }, [id], availability), null);
   assert.match(validateWebTurnModelOptions({ model: id }, [], availability) ?? "", /not enabled/);
 
   assert.equal(modelSupportedByHarness(id, "pi"), true);
@@ -259,7 +259,7 @@ test("gateway aliases hide duplicate picker options while preserving saved route
   for (const id of ["claude-opus-5", `gateway/${target}`]) {
     assert.equal(modelGatewayRequest(f.catalog.transport, resolveModel(id)!)?.target, target);
     assert.equal(
-      validateWebTurnModelOptions({ model: id }, null, {
+      validateWebTurnModelOptions({ model: id }, [id], {
         anthropic: false,
         openai: false,
         openrouter: false,
