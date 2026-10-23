@@ -60,7 +60,8 @@
         "src/app-devbar.ts",
         "src/inbox.ts",
         "src/context-model.ts",
-        "src/assistant-sidebar.ts"
+        "src/assistant-sidebar.ts",
+        "server/settok.ts"
       ],
       "ignoreDependencies": [
         "katex-real",
