@@ -92,3 +92,53 @@ test("messageWithForwardedContent ignores timestamped legacy attachments", () =>
 
   assert.deepEqual(result, { text: "top-level message", files: [] });
 });
+
+test("messageWithForwardedContent reads legacy attachment content from bots that post an empty text", () => {
+  const result = messageWithForwardedContent({
+    text: "",
+    attachments: [
+      {
+        fallback: "[acme/api] Pull request opened: #42 Fix login",
+        pretext: "Pull request opened by octocat",
+        title: "#42 Fix login",
+        title_link: "https://github.com/acme/api/pull/42",
+        text: "Handles expired sessions.",
+        fields: [
+          { title: "Reviewers", value: "ada" },
+          { title: "Empty", value: "" },
+        ],
+        footer: "acme/api",
+      } as never,
+    ],
+  });
+  assert.equal(
+    result.text,
+    [
+      "Pull request opened by octocat",
+      "#42 Fix login (https://github.com/acme/api/pull/42)",
+      "Handles expired sessions.",
+      "Reviewers: ada",
+      "acme/api",
+    ].join("\n"),
+  );
+});
+
+test("messageWithForwardedContent falls back to the attachment summary and skips link previews", () => {
+  const result = messageWithForwardedContent({
+    text: "",
+    attachments: [
+      { fallback: "Deploy #7 succeeded in 3m" } as never,
+      { from_url: "https://example.com/run/7", title: "Run 7", text: "page preview" } as never,
+    ],
+  });
+  assert.equal(result.text, "Deploy #7 succeeded in 3m");
+});
+
+test("messageWithForwardedContent bounds legacy attachment text", () => {
+  const result = messageWithForwardedContent({
+    attachments: Array.from({ length: 8 }, (_, i) => ({ text: `${i}:${"x".repeat(3_000)}` }) as never),
+  });
+  const lines = result.text.split("\n");
+  assert.equal(lines.length, 5);
+  for (const line of lines) assert.ok(line.length <= 2_001);
+});
