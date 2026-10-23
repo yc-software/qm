@@ -103,3 +103,13 @@ test("concurrentIndexName recognizes retryable concurrent index creation", () =>
 function pathToUrl(p: string): string {
   return new URL(`file://${p}`).href;
 }
+
+test("pooled Postgres connections enable TCP keepalive so idle sockets dropped by NAT are detected", async () => {
+  const pool = createPgPool("postgres://keepalive@127.0.0.1:1/keepalive");
+  const session = await pool.sessionPool();
+  const options = (session as unknown as { options: { keepAlive?: boolean; keepAliveInitialDelayMillis?: number } })
+    .options;
+  assert.equal(options.keepAlive, true);
+  assert.equal(options.keepAliveInitialDelayMillis, 10_000);
+  await pool.close();
+});
