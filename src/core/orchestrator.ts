@@ -3764,7 +3764,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !input.cancel?.aborted &&
           spine.surfaceOutboundCount === 0 &&
           !result.silent &&
-          !result.stopped
+          !result.stopped &&
+          result.pausedOnApproval !== true
         ) {
           // The model already wrote a reply as plain assistant text — deliver that text
           // directly instead of nudging it to re-post (a nudge here re-sends near-identical
