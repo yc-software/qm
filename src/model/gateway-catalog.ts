@@ -2,19 +2,12 @@ import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import { errMessage } from "../util/errors.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
 const TTL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
-const STALE_MS = 15 * 60_000;
-
-function transientFailure(error: unknown): boolean {
-  const status = (error as { status?: unknown } | null)?.status;
-  if (typeof status === "number") return status === 429 || status >= 500;
-  const name = (error as { name?: unknown } | null)?.name;
-  return name === "TimeoutError" || name === "AbortError" || error instanceof TypeError;
-}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -147,10 +140,7 @@ export function createGatewayCatalog(
   const root = config.url.replace(/\/v1$/, "");
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
-  let discovered = false;
-  let expiresAt = 0;
   let retryAt = 0;
-  let lastSuccessAt = 0;
   let inFlight: Promise<void> | undefined;
   const transport: ModelGatewayTransportConfig = {
     ...config,
@@ -188,10 +178,7 @@ export function createGatewayCatalog(
             next[id] = target;
         }
         routes = next;
-        discovered = true;
-        expiresAt = now() + TTL_MS;
-        retryAt = expiresAt;
-        lastSuccessAt = now();
+        retryAt = now() + TTL_MS;
         const offeredAliases = new Set(
           selectableBaseModels()
             .filter(({ id }) => modelOfferedInWebui(id))
@@ -207,16 +194,9 @@ export function createGatewayCatalog(
         );
       } catch (error) {
         retryAt = now() + RETRY_MS;
-        if (discovered && transientFailure(error) && now() - lastSuccessAt < STALE_MS) {
-          console.warn("[model] Gateway model discovery failed; keeping last known models and retrying in 30 seconds");
-          return;
-        }
-        if (discovered || Object.keys(config.models).length === 0) {
-          routes = {};
-          expiresAt = 0;
-          setGatewayModels([]);
-          console.warn("[model] Gateway model discovery unavailable; retrying in 30 seconds");
-        }
+        console.warn(
+          `[model] Gateway model discovery failed; keeping current routes and retrying in 30 seconds: ${errMessage(error)}`,
+        );
       }
     })().finally(() => {
       inFlight = undefined;
