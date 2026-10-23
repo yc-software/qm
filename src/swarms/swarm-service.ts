@@ -72,7 +72,7 @@ export interface SwarmService {
   inspect(caller: SwarmCaller): Promise<{
     id: string;
     self: SwarmMember;
-    peers: SwarmMember[];
+    peers: Array<SwarmMember & { running?: true }>;
     board?: Swarm["board"];
     backend: Swarm["backend"];
     settings: SwarmSettings;
@@ -601,10 +601,14 @@ export function createSwarmService(deps: {
     sweep,
     async inspect(caller) {
       const { swarm, self } = await load(caller);
+      const active = new Set(await runs.activeSessionIds());
       return {
         id: swarm.id,
         self: view(self),
-        peers: swarm.members.map(view),
+        peers: swarm.members.map((member) => ({
+          ...view(member),
+          ...(active.has(member.threadRef) ? { running: true as const } : {}),
+        })),
         ...(swarm.board ? { board: swarm.board } : {}),
         backend: swarm.backend,
         settings: swarm.settings,

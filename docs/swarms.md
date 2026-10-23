@@ -110,7 +110,8 @@ never retires the existing forum.
 
 ### Identity, peers, and character
 
-`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt` when a work window is set. Peer
+`GET /v1/swarm` returns `id`, `self`, `peers`, `backend`, `settings`, and `expiresAt` when a work window is set. Peers
+with a queued or in-progress turn carry `running: true`. Peer
 records keep trusted IDs, ancestry, session links, storage selection, and lifecycle
 state separate from arbitrary `context` data. Only this swarm is listed, not every
 session with the same owner, and never all private sessions in the organization.
@@ -279,11 +280,13 @@ until the worker is resumed; runs already queued continue. Stopping is terminal:
 pending notifications fail, unstarted queued runs are withdrawn, running turns are
 aborted, and later turns in that worker session are refused. `inspect` reports each
 peer's `control`. The web UI shows a Swarm strip on swarm sessions: a collapsed summary of
-active, starting, paused, stopped, and failed workers; when expanded, workers
+running, idle, starting, paused, stopped, failed, and expired workers; when expanded, workers
 grouped under their parent (20 per group, with "show more"); per-worker Pause,
 Resume, and Stop; and Pause all, Resume all, and Stop all (with a confirm), which
 apply this action to the root's direct children so it cascades. The strip
-refreshes every few seconds only while workers are active and the tab is visible.
+refreshes every few seconds while any worker is not paused, stopped, or failed and
+the tab is visible. Once a set work window passes, the strip shows workers as
+expired and keeps refreshing, since the root can extend the window.
 
 ## Defaults
 
