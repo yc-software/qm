@@ -53,9 +53,13 @@ credentials or falls back to them on account or gateway errors.
 Pi offers `gpt-6-astra-ultrafast` and `gpt-6.1-sol-ultrafast`, each labeled
 **Ultrafast (6× cost)**. These are QM selection identifiers: requests use the
 corresponding base model (`gpt-6-astra` or `gpt-6.1-sol`) with
-`service_tier: "ultrafast"` through the Responses API. Standard models and their
-Fast switches retain their existing behavior. Ultrafast has its own pricing card,
-including cached input, cache writes, and long-context rates.
+`service_tier: "ultrafast"` through the Responses API. Ultrafast has its own pricing
+card, including cached input, cache writes, and long-context rates. OpenAI bills each
+call at the tier its response's `service_tier` reports, which can be lower than the
+one requested, and QM prices calls the same way with pi-ai's tier rates (flex ½×,
+priority and fast 2×). An Ultrafast request served at another tier is priced from the
+base model's card at that tier, and a Fast request whose response reports no tier is
+priced at the Fast rate.
 
 Use an OpenAI API key or explicitly map the Ultrafast model ID to your gateway's
 corresponding base-model group in `MODEL_GATEWAY_MODELS`. The gateway must support Responses and

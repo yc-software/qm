@@ -1,0 +1,56 @@
+diff --git a/dist/api/openai-responses-shared.js b/dist/api/openai-responses-shared.js
+index 254156f..525c6eb 100644
+--- a/dist/api/openai-responses-shared.js
++++ b/dist/api/openai-responses-shared.js
+@@ -429,6 +429,8 @@ export async function processResponsesStream(openaiStream, output, stream, model
+             };
+         }
+         calculateCost(model, output.usage);
++        if (!options?.resolveServiceTier && typeof response?.service_tier === "string")
++            output.serviceTier = response.service_tier;
+         if (options?.applyServiceTierPricing) {
+             const serviceTier = options.resolveServiceTier
+                 ? options.resolveServiceTier(response?.service_tier, options.serviceTier)
+diff --git a/dist/api/openai-responses.d.ts b/dist/api/openai-responses.d.ts
+index 41267bd..f835374 100644
+--- a/dist/api/openai-responses.d.ts
++++ b/dist/api/openai-responses.d.ts
+@@ -11,4 +11,7 @@ export interface OpenAIResponsesOptions extends StreamOptions {
+  */
+ export declare const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions>;
+ export declare const streamSimple: StreamFunction<"openai-responses", SimpleStreamOptions>;
++export declare function getServiceTierCostMultiplier(model: {
++    id: string;
++}, serviceTier: string | undefined): number;
+ //# sourceMappingURL=openai-responses.d.ts.map
+\ No newline at end of file
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 07558fa..b058150 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -248,11 +248,12 @@ function buildParams(model, context, options, compat = getCompat(model), grammar
+     }
+     return params;
+ }
+-function getServiceTierCostMultiplier(model, serviceTier) {
++export function getServiceTierCostMultiplier(model, serviceTier) {
+     switch (serviceTier) {
+         case "flex":
+             return 0.5;
+         case "priority":
++        case "fast":
+             return model.id === "gpt-5.5" ? 2.5 : 2;
+         default:
+             return 1;
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 184143d..4056063 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -292,6 +292,7 @@ export interface AssistantMessage {
+     providerError?: ProviderErrorInfo;
+     /** qm patch: the provider's raw stop/finish reason when it mapped to stopReason "error" (e.g. Anthropic "refusal"). */
+     rawStopReason?: string;
++    serviceTier?: string;
+     timestamp: number;
+ }
+ /** qm patch: structured provider HTTP failure kept alongside errorMessage. */

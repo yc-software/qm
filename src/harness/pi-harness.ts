@@ -37,6 +37,7 @@ import {
   type ToolResultMessage,
   type Usage,
 } from "@earendil-works/pi-ai";
+import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-responses";
 import { baseModelProviders, configuredModelForHarness, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
 type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -615,6 +616,7 @@ export function piUsageToCallUsage(
   u: Partial<Usage> | undefined,
   model: Model<Api> | undefined,
   fast: boolean | undefined,
+  servedTier: string | undefined,
 ): LlmCallUsage | null {
   if (!u) return null;
   const row: LlmCallUsage = {
@@ -625,7 +627,8 @@ export function piUsageToCallUsage(
     totalTokens: u.totalTokens ?? 0,
     costUsd: u.cost?.total ?? 0,
   };
-  if (!fast || !model?.cost) return row;
+  const card = model?.cost ? servedTierCard(model, fast, servedTier) : undefined;
+  if (!card) return row;
   const priced: Usage = {
     input: row.input,
     output: row.output,
@@ -635,9 +638,25 @@ export function piUsageToCallUsage(
     totalTokens: row.totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
-  const card = fast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : model;
   row.costUsd = calculateCost(card, priced).total;
   return row;
+}
+
+function servedTierCard(
+  model: Model<Api>,
+  fast: boolean | undefined,
+  servedTier: string | undefined,
+): Model<Api> | undefined {
+  const request = modelRequestOverrides(model.id);
+  if (request && servedTier && servedTier !== request.service_tier) {
+    const base = resolveModel(request.model);
+    return base?.cost
+      ? ({ ...base, cost: scaleCost(base.cost, getServiceTierCostMultiplier(base, servedTier)) } as Model<Api>)
+      : undefined;
+  }
+  return fast && !servedTier
+    ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>)
+    : undefined;
 }
 
 function sumCacheUsage(
@@ -1979,9 +1998,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
             } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
               const end = Date.now();
-              const u = (event.message as { usage?: Partial<Usage> }).usage;
+              const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
               const stepModel = entry.agentSession.model;
-              const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
+              const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
               meterGrindCall(grindMeter, usage);
               const meteredGoal = entry.ref.goal;
               if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);

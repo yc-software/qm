@@ -157,7 +157,7 @@ const pricingCases: Array<[string, Model<Api>, Partial<Usage>, number]> = [
 ];
 for (const [name, model, usage, standard] of pricingCases) {
   test(`pricing doubles each component exactly once: ${name}`, () => {
-    assertUsd(piUsageToCallUsage(usage, model, true)!.costUsd, standard * FAST_COST_MULTIPLIER);
+    assertUsd(piUsageToCallUsage(usage, model, true, undefined)!.costUsd, standard * FAST_COST_MULTIPLIER);
   });
 }
 
@@ -177,7 +177,7 @@ test("normalization ignores provider pricing, preserves tokens and never mutates
     };
     const snapshot = structuredClone(usage);
     for (let attempt = 0; attempt < 3; attempt++) {
-      const { costUsd, ...tokens } = piUsageToCallUsage(usage, ASTRA, true)!;
+      const { costUsd, ...tokens } = piUsageToCallUsage(usage, ASTRA, true, undefined)!;
       assertUsd(costUsd, 0.6);
       assert.deepEqual(tokens, ASTRA_TOKENS);
     }
@@ -245,8 +245,8 @@ test("applyThinkingBinding sets drop_block only on requests that carry the beta 
 });
 
 test("normalization handles absent usage, missing token fields and an unknown model", () => {
-  assert.equal(piUsageToCallUsage(undefined, ASTRA, true), null);
-  assert.deepEqual(piUsageToCallUsage({ totalTokens: 500 }, ASTRA, true), {
+  assert.equal(piUsageToCallUsage(undefined, ASTRA, true, undefined), null);
+  assert.deepEqual(piUsageToCallUsage({ totalTokens: 500 }, ASTRA, true, undefined), {
     input: 0,
     output: 0,
     cacheRead: 0,
@@ -255,8 +255,8 @@ test("normalization handles absent usage, missing token fields and an unknown mo
     costUsd: 0,
   });
   const usage = { ...ASTRA_TOKENS, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.3 } };
-  assert.deepEqual(piUsageToCallUsage(usage, undefined, true), { ...ASTRA_TOKENS, costUsd: 0.3 });
-  assert.equal(piUsageToCallUsage({}, undefined, undefined)!.costUsd, 0);
+  assert.deepEqual(piUsageToCallUsage(usage, undefined, true, undefined), { ...ASTRA_TOKENS, costUsd: 0.3 });
+  assert.equal(piUsageToCallUsage({}, undefined, undefined, undefined)!.costUsd, 0);
 });
 
 function sse(events: Array<Record<string, unknown>>): Response {
@@ -396,6 +396,8 @@ for (const [name, gateway, fastMode, expected, echoedTier] of [
   ["gateway standard", true, false, 0.3],
   ["direct standard with priority default", false, false, 0.6, "priority"],
   ["direct standard with flex default", false, false, 0.15, "flex"],
+  ["direct standard with priority default reported as fast", false, false, 0.6, "fast"],
+  ["direct fast served at standard", false, true, 0.3, "default"],
 ] as const) {
   test(`Astra records the billed price: ${name}`, async () => {
     const { rows, payloads } = await runTurn(
@@ -490,6 +492,21 @@ for (const [baseId, cost] of [
     });
   }
 }
+
+test("an Ultrafast turn OpenAI serves at another tier is priced at the base model's card for that tier", async () => {
+  for (const [served, cost] of [
+    [undefined, 1.8],
+    ["fast", 0.6],
+    ["priority", 0.6],
+    ["default", 0.3],
+    ["flex", 0.15],
+  ] as const) {
+    const { rows } = await runTurn(`astra-ultrafast-served-${served ?? "silent"}`, "gpt-6-astra-ultrafast", false, () =>
+      responsesReply("done", ASTRA_WIRE_USAGE, served),
+    );
+    assertUsd(rows[0]!.usage!.costUsd, cost);
+  }
+});
 
 test("a stop_reason refusal retries on the admin-configured fallback runtime", async () => {
   const { payloads } = await runTurn(

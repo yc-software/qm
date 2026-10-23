@@ -29,8 +29,8 @@ for (const [baseId, shortCost, longCost] of [
       const ultrafastUsage = { ...zeroUsage(), ...tokens };
       calculateCost(getRequiredModel(baseId), standardUsage);
       calculateCost(model, ultrafastUsage);
-      const standard = piUsageToCallUsage(standardUsage, getRequiredModel(baseId), false)!;
-      const ultrafast = piUsageToCallUsage(ultrafastUsage, model, false)!;
+      const standard = piUsageToCallUsage(standardUsage, getRequiredModel(baseId), false, undefined)!;
+      const ultrafast = piUsageToCallUsage(ultrafastUsage, model, false, undefined)!;
       assert.ok(Math.abs(standard.costUsd - (tokens.input === 10_000 ? shortCost : longCost)) < 1e-9);
       assert.ok(Math.abs(ultrafast.costUsd - standard.costUsd * 6) < 1e-9);
     }
