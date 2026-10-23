@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
-    "electron": "44.4.3",
+    "electron": "44.5.0",
     "jsdom": "^29.1.1"
   },
   "dependencies": {
