@@ -8,11 +8,10 @@ import type { TurnRequest } from "../types.ts";
 export type ExternalSlackPolicies = Readonly<Record<string, ExternalSlackAccess>>;
 
 export function externalSlackRequestAllowed(
-  request: Pick<TurnRequest, "externalSlack" | "slackSource" | "surface"> & {
+  request: Pick<TurnRequest, "externalSlack" | "slackSource"> & {
     conversation: Pick<TurnRequest["conversation"], "kind" | "channelRef" | "threadRef">;
   },
   policies: ExternalSlackPolicies = {},
-  historicalSlack = false,
 ): boolean {
   const ref = request.conversation.channelRef ?? request.conversation.threadRef;
   if (request.externalSlack) {
@@ -30,7 +29,8 @@ export function externalSlackRequestAllowed(
       ref.startsWith(`${externalSlackNamespace(supplied.teamId, current)}:`)
     );
   }
-  if (ref.includes("external-slack:")) return false;
+  if ([request.conversation.channelRef, request.conversation.threadRef].some((r) => r?.includes("external-slack:")))
+    return false;
   if (request.slackSource) {
     const source = request.slackSource;
     const policy = policies[source.accountId];
@@ -40,9 +40,7 @@ export function externalSlackRequestAllowed(
         source.externalPolicyNamespace === externalSlackNamespace(source.teamId, policy))
     );
   }
-  if (ref.startsWith("slack-account:")) return false;
-  if (request.conversation.kind === "dm") return true;
-  return !(Object.keys(policies).length && (request.surface === "slack" || historicalSlack));
+  return !request.conversation.threadRef.startsWith("slack-account:");
 }
 
 export async function currentExternalSlackRun(
@@ -60,7 +58,7 @@ export async function currentExternalSlackRun(
     !samePerson(run.request.actor.id, claims.actorId) ||
     (run.leaseExpiresAt ?? 0) <= Date.now() ||
     !run.request.externalSlack ||
-    !externalSlackRequestAllowed({ ...run.request, surface: run.request.surface ?? "" }, deps.externalSlackPolicies) ||
+    !externalSlackRequestAllowed(run.request, deps.externalSlackPolicies) ||
     conversationScope(run.request.conversation, run.request.actor.id) !== claims.scopeId
   )
     return null;
