@@ -44,7 +44,16 @@ export function heldMembers(loop: Loop, items: LoopItem[]): Set<string> {
 
 export function workOrder(loop: Loop, queued: LoopItem[], items: LoopItem[]): LoopItem[] {
   const held = heldMembers(loop, items);
-  const rank = (item: LoopItem): number => (prioritizes(loop) ? PRIORITY_RANK[item.triage?.priority ?? "normal"] : 0);
+  const own = (item: LoopItem): number => (prioritizes(loop) ? PRIORITY_RANK[item.triage?.priority ?? "normal"] : 0);
+  const groupRank = new Map<string, number>();
+  if (consolidates(loop)) {
+    const open = openById(items);
+    for (const item of open.values()) {
+      const groupId = liveGroup(item, open);
+      if (groupId) groupRank.set(groupId, Math.min(groupRank.get(groupId) ?? Infinity, own(item)));
+    }
+  }
+  const rank = (item: LoopItem): number => Math.min(own(item), groupRank.get(item.id) ?? Infinity);
   return queued.filter((item) => !held.has(item.id)).sort((a, b) => rank(a) - rank(b) || a.createdAt - b.createdAt);
 }
 
