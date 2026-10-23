@@ -6,7 +6,7 @@
   "type": "module",
   "description": "Headless core for the shared org agent (managed-agents architecture).",
   "engines": {
-    "node": ">=24.15.0",
+    "node": ">=24.22.1",
     "npm": ">=11.10.0"
   },
   "scripts": {
@@ -67,7 +67,7 @@
     "*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.280",
+    "@anthropic-ai/claude-agent-sdk": "0.3.303",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-ecs": "3.1096.0",
