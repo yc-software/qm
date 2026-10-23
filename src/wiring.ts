@@ -1822,32 +1822,30 @@ export function buildApp(
     managesArtifactHome,
     ...(deployGitSecret && deployGitBase
       ? {
-          deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const env: Record<string, string> = {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
-            };
+          deploymentEnv: async (deployment: Deployment, version: number): Promise<Record<string, string>> => {
             const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
             );
-            if (credentials.length) {
-              env.AGENT_API_URL = deployGitBase;
-              env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
+            return {
+              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
+              AGENT_API_URL: deployGitBase,
+              AGENT_CREDENTIAL_TOKEN: await mintCapabilityToken(
                 {
                   actorId: deployment.createdBy,
                   scopeId: personalScope(deployment.createdBy),
                   aud: CREDENTIAL_BROKER_AUD,
                   credentials,
                   deployment: deployment.id,
+                  deploymentVersion: version,
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
                 config.capabilitySecret ?? deployGitSecret,
                 config.capabilityTokenCompression,
-              );
-            }
-            return env;
+              ),
+            };
           },
         }
       : {}),

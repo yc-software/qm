@@ -1,4 +1,5 @@
 import { EXTERNAL_APP_SHARING_OFF } from "../feature-flags.ts";
+import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { notifyDeploymentShared } from "./share-notice.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "./embed-ancestors.ts";
@@ -39,6 +40,7 @@ export interface RedeployInput {
   env?: Record<string, string>;
   stampEnv?: Record<string, string>;
   alwaysOn?: boolean;
+  publishedBy?: string;
 }
 
 export interface DeployInput extends RedeployInput {
@@ -84,6 +86,7 @@ export interface DeployService {
   setDeploymentDisplayName(id: string, displayName: string): Promise<Deployment>;
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
+  setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
 
   maintainDeployments(): Promise<number>;
@@ -91,7 +94,7 @@ export interface DeployService {
   /** Recent app output (entrypoint stdout+stderr) for a deployment, newest last; null when the provider keeps none. */
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
-  pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
+  pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>, publishedBy?: string): Promise<T>;
   reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<Deployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
@@ -119,7 +122,7 @@ const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
 export type DeployAccessErrorCode =
-  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable";
+  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable" | "unknown_connector";
 
 export class DeployAccessError extends Error {
   readonly code: DeployAccessErrorCode;
@@ -148,7 +151,7 @@ export interface DeployServiceDeps {
   canManageEmail?: (email: string) => Promise<boolean>;
   externalSharingAllowed?: (ownerScopeId: ScopeId) => Promise<boolean>;
   managesArtifactHome?: (homeScopeId: ScopeId, createdBy: string, principalId: string) => Promise<boolean>;
-  deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>;
+  deploymentEnv?: (deployment: Deployment, version: number) => Promise<Record<string, string>>;
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -204,6 +207,13 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     if ((await deps.canManageEmail?.(ref)) || (await externalSharingAllowed(ownerScopeId))) return;
     throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
   }
+  function creditedPublisher(
+    previous: DeploymentVersion | undefined,
+    publisher: string | undefined,
+    inherits: boolean,
+  ): string | undefined {
+    return publisher && (!inherits || samePerson(previous?.publishedBy, publisher)) ? publisher : undefined;
+  }
   function withDeployLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return deployQueue(id, () => advisoryLock.withLock(`deploy:${id}`, fn));
   }
@@ -216,7 +226,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
   ): Promise<DeployEndpoint> => {
     const stored = (await deps.deployStore.get(id))!;
     const d = alwaysOn === undefined ? stored : { ...stored, alwaysOn };
-    const deploymentEnv = await deps.deploymentEnv?.(d);
+    const deploymentEnv = await deps.deploymentEnv?.(d, version.version);
     if (deploymentEnv && Object.keys(deploymentEnv).length)
       version = { ...version, env: { ...version.env, ...deploymentEnv } };
     let endpoint: DeployEndpoint;
@@ -369,6 +379,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         ...(input.createdInScope !== undefined ? { createdInScope: input.createdInScope } : {}),
         ...(env ? { env } : {}),
         ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
+        publishedBy: input.createdBy,
       });
       const endpoint = await applyVersion(d.id, d.versions[0]!);
       await markVersionRunning(d.id, d.versions[0]!.version, endpoint);
@@ -396,7 +407,14 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         if (input.homeFiles?.length) homeDir = await snapshotFiles(deps.deployDir, input.homeFiles);
         const inherited = input.env ?? current?.env;
         const env = input.stampEnv ? { ...inherited, ...input.stampEnv } : inherited;
+        const publishedBy = creditedPublisher(
+          current,
+          input.publishedBy,
+          (input.env === undefined && current?.env !== undefined) ||
+            (input.homeFiles === undefined && current?.homeDir !== undefined),
+        );
         const v = await deps.deployStore.addVersion(id, {
+          ...(publishedBy ? { publishedBy } : {}),
           entrypoint: input.entrypoint,
           snapshotDir,
           files: input.files,
@@ -561,6 +579,41 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       });
     },
 
+    async setDeploymentConnectors(idOrName, connectors, actor) {
+      const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
+      if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
+      if (!samePerson(d.createdBy, actor.createdBy))
+        throw new DeployAccessError(
+          "forbidden",
+          `only the person who published "${d.name ?? d.id}" can lend it their connectors`,
+        );
+      const hosts = [...new Set(connectors.map((host) => host.toLowerCase()))].sort();
+      const unknown = hosts.filter((host) => !CONNECTOR_HOSTS.includes(host));
+      if (unknown.length)
+        throw new DeployAccessError("unknown_connector", `not a connected-app host: ${unknown.join(", ")}`);
+      if (hosts.length && d.public)
+        throw new DeployAccessError("forbidden", "a public app cannot borrow connectors; make it restricted first");
+      if (hosts.length && d.appliedVersion !== undefined && d.appliedVersion !== d.currentVersion)
+        throw new DeployAccessError("forbidden", "a deploy is in progress; lend once it is running");
+      const approved = currentVersionOf(d);
+      if (hosts.length && !samePerson(approved?.publishedBy, d.createdBy))
+        throw new DeployAccessError(
+          "forbidden",
+          `version ${d.currentVersion} was not published by the publisher alone; publish it yourself, with its env and home files, before lending`,
+        );
+      const loan = hosts.length ? { hosts, version: d.currentVersion } : undefined;
+      await deps.deployStore.setConnectors(d.id, loan);
+      deps.auditLog.record({
+        at: Date.now(),
+        principalId: actor.createdBy,
+        action: "deploy_connectors",
+        resource: deploymentRef(d.id),
+        scopeLabel: d.ownerScopeId,
+        detail: loan ? `${hosts.join(",")} version:${loan.version}` : "(none)",
+      });
+      return (await deps.deployStore.get(d.id))!;
+    },
+
     async setDeploymentPublic(idOrName, isPublic, actor) {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
@@ -569,6 +622,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       }
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
+      if (isPublic && d.connectors)
+        throw new DeployAccessError(
+          "forbidden",
+          "an app that borrows connectors cannot be public; withdraw them first",
+        );
       if (isPublic && deps.publicLinksAvailable === false)
         throw new DeployAccessError("public_links_unavailable", PUBLIC_LINKS_UNAVAILABLE);
       await deps.deployStore.setPublic(d.id, isPublic);
@@ -627,7 +685,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return d ? await deps.deployStore.repoUrl(d.id) : null;
     },
 
-    async pushGit(id, runReceivePack) {
+    async pushGit(id, runReceivePack, publishedBy) {
       return withDeployLock(id, async () => {
         const { result, ok } = await runReceivePack();
         if (!ok) return result;
@@ -643,7 +701,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             tree.map((f) => f.size),
             deps.provider.profile.maxAppBytes,
           );
-          const v = await deps.deployStore.addVersionFromCommit(id, pushed);
+          const v = await deps.deployStore.addVersionFromCommit(
+            id,
+            pushed,
+            creditedPublisher(currentVersionOf(before), publishedBy, true),
+          );
           if (!v) return result;
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
@@ -722,6 +784,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           await this.redeploy(existing.id, {
             entrypoint,
             files: input.files,
+            publishedBy: creditedPublisher(currentVersionOf(existing), createdBy, input.entrypoint === undefined),
             ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
             ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
             ...(input.env ? { env: input.env } : {}),
@@ -762,6 +825,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         await this.redeploy(existing.id, {
           entrypoint,
           files,
+          publishedBy: creditedPublisher(currentVersionOf(existing), createdBy, input.entrypoint === undefined),
           ...(input.alwaysOn !== undefined ? { alwaysOn: input.alwaysOn } : {}),
           ...(input.homeFiles ? { homeFiles: input.homeFiles } : {}),
           ...(input.env ? { env: input.env } : {}),

@@ -148,6 +148,13 @@ apps({ action: "share", id: "status-board", toScope: "org", permission: "read" }
 - **A deployment is scoped data.** Sharing into a wider scope makes the app — and whatever
   data you baked into it — reachable by everyone in that scope. Apply the same audience
   judgment you would before posting into that channel.
+- **Connected apps stay the publisher's.** An app reaches the publisher's connected apps
+  only after the publisher asks you to lend them (`POST /v1/deployments/:id/connectors`),
+  and only for a running version they published themselves; lend again after each
+  publish. Its server calls
+  `/v1/credentials/broker` with `{connector, url, method, body}`. Writes also need
+  `viewer`: the `x-qm-viewer-attestation` header from the publisher's own same-origin form
+  or fetch, so trigger them from a POST, never a GET.
 - **Publishing/rollback/rename are writes.** Confirm before rolling back or renaming
   something others rely on, same as any consequential action.
 

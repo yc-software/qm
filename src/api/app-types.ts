@@ -94,7 +94,7 @@ import { type BotPolicy, type ChannelPolicy, type ChannelPolicyStore } from "../
 import { type AmbientDecision } from "../surface-cache/ambient-judge.ts";
 import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-store.ts";
 import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { Deployment } from "../deploy/deploy-store.ts";
+import type { ConnectorLoan, Deployment } from "../deploy/deploy-store.ts";
 import type { DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { type ArtifactHome, type ArtifactType } from "./artifact-share.ts";
 import type {
@@ -119,6 +119,7 @@ interface DeploymentVersionView {
   createdAt: number;
   commit?: string;
   parentCommit?: string;
+  publishedBy?: string;
 }
 
 export interface DeploymentView {
@@ -133,6 +134,7 @@ export interface DeploymentView {
   status: Deployment["status"];
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  connectors?: ConnectorLoan;
   public: boolean;
   lastAccessAt?: number;
   createdAt?: number;
@@ -145,11 +147,12 @@ export interface ViewerDeployment extends DeploymentView {
 }
 
 export function deploymentView(d: Deployment): DeploymentView {
-  const versions = d.versions.map(({ version, createdAt, commit, parentCommit }) => ({
+  const versions = d.versions.map(({ version, createdAt, commit, parentCommit, publishedBy }) => ({
     version,
     createdAt,
     ...(commit ? { commit } : {}),
     ...(parentCommit ? { parentCommit } : {}),
+    ...(publishedBy ? { publishedBy } : {}),
   }));
   return {
     id: d.id,
@@ -163,6 +166,7 @@ export function deploymentView(d: Deployment): DeploymentView {
     status: d.status,
     ...(d.alwaysOn ? { alwaysOn: true } : {}),
     ...(d.embedAncestors?.length ? { embedAncestors: d.embedAncestors } : {}),
+    ...(d.connectors ? { connectors: d.connectors } : {}),
     public: d.public === true,
     ...(d.lastAccessAt !== undefined ? { lastAccessAt: d.lastAccessAt } : {}),
     ...(versions[0] ? { createdAt: versions[0].createdAt } : {}),
@@ -596,6 +600,7 @@ export interface App {
   setDeploymentAlwaysOn(id: string, alwaysOn: boolean): Promise<Deployment>;
   setDeploymentEmbedAncestors(id: string, embedAncestors: string[]): Promise<Deployment>;
   setDeploymentPublic(idOrName: string, isPublic: boolean, actor: { createdBy: string }): Promise<Deployment>;
+  setDeploymentConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<Deployment>;
   maintainDeployments(): Promise<number>;
   reachDeployment(id: string, principalId: string, opts?: ReachOptions): Promise<Reach>;
   deploymentLogsFor(
@@ -619,7 +624,11 @@ export interface App {
   }>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   deploymentGitRepoPath(id: string): Promise<string | null>;
-  runDeploymentGitPush<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
+  runDeploymentGitPush<T>(
+    id: string,
+    runReceivePack: () => Promise<{ result: T; ok: boolean }>,
+    publishedBy?: string,
+  ): Promise<T>;
   deploymentGitUrlFor(
     idOrName: string,
     principalId: string,

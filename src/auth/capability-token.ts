@@ -65,6 +65,7 @@ export interface CapabilityClaims {
   runAttempt?: number;
   runLeaseToken?: string;
   deployment?: string;
+  deploymentVersion?: number;
   botActor?: boolean;
   liveAuthor?: boolean;
   triggered?: boolean;
@@ -163,6 +164,7 @@ export async function verifyCapabilityToken(
   if (claims.runLeaseToken !== undefined && (typeof claims.runLeaseToken !== "string" || !claims.runLeaseToken))
     return null;
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
+  if (claims.deploymentVersion !== undefined && !Number.isSafeInteger(claims.deploymentVersion)) return null;
   if (claims.exp === 0) {
     if (![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD].includes(claims.aud ?? ""))
       return null;

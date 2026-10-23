@@ -5,6 +5,12 @@ export function viewerIdentityKey(secret: string, deploymentId: string): string 
   return createHmac("sha256", secret).update(`viewer:${deploymentId}`).digest("base64url");
 }
 
+export const VIEWER_ATTESTATION_HEADER = "x-qm-viewer-attestation";
+
+export function viewerAttestationKey(secret: string, deploymentId: string): string {
+  return createHmac("sha256", secret).update(`viewer-attestation:${deploymentId}`).digest("base64url");
+}
+
 export interface DeployGitAccess {
   deploymentId: string;
   permission: "read" | "write";

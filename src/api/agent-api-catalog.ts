@@ -416,6 +416,12 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "POST",
+        path: "/v1/deployments/:id/connectors",
+        summary:
+          "publisher only, after they ask: lend an app they published their connected apps — body {connectors:[hosts]}; [] withdraws; broker use is in the publish skill",
+      },
+      {
+        method: "POST",
         path: "/v1/deployments/:id/archive",
         summary: "take down an app you manage (stops it and frees its endpoint; the source is kept)",
       },

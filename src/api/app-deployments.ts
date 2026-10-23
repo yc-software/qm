@@ -34,6 +34,7 @@ export function createDeploymentMethods(
   | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
   | "setDeploymentPublic"
+  | "setDeploymentConnectors"
   | "maintainDeployments"
   | "reachDeployment"
   | "deploymentLogsFor"
@@ -163,6 +164,9 @@ export function createDeploymentMethods(
     setDeploymentPublic(idOrName, isPublic, actor) {
       return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
     },
+    setDeploymentConnectors(idOrName, connectors, actor) {
+      return deps.deploy.setDeploymentConnectors(idOrName, connectors, actor);
+    },
     maintainDeployments() {
       return deps.deploy.maintainDeployments();
     },
@@ -186,8 +190,8 @@ export function createDeploymentMethods(
     deploymentGitRepoPath(id) {
       return deps.deploy.gitRepoPath(id);
     },
-    runDeploymentGitPush(id, runReceivePack) {
-      return deps.deploy.pushGit(id, runReceivePack);
+    runDeploymentGitPush(id, runReceivePack, publishedBy) {
+      return deps.deploy.pushGit(id, runReceivePack, publishedBy);
     },
     async deploymentGitUrlFor(idOrName, principalId, opts) {
       const d = await deps.deploy.getDeployment(idOrName);

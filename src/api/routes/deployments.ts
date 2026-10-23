@@ -22,8 +22,13 @@ import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
-import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
+import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import {
+  VIEWER_ATTESTATION_HEADER,
+  verifyDeployGitAccess,
+  viewerAttestationKey,
+  viewerIdentityKey,
+} from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
@@ -31,6 +36,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { samePerson } from "../../directory/person.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -49,6 +55,7 @@ function isRedeployInput(b: unknown): b is RedeployInput {
     (b.homeFiles === undefined || Array.isArray(b.homeFiles)) &&
     (b.env === undefined || isStringRecord(b.env)) &&
     b.stampEnv === undefined &&
+    b.publishedBy === undefined &&
     (b.alwaysOn === undefined || typeof b.alwaysOn === "boolean")
   );
 }
@@ -168,6 +175,7 @@ const GATEWAY_AUTH_HEADERS = [
   "x-admin-actor",
   "x-agent-capability",
   PORTAL_IDENTITY_HEADER,
+  VIEWER_ATTESTATION_HEADER,
 ];
 
 const PROXY_BUFFER_MAX_BYTES = 10_000_000;
@@ -217,7 +225,7 @@ function forwardableHeaders(req: BaseCtx["req"]): Record<string, string | string
 const APP_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
 
 function frameAncestorsDirective(ancestors: readonly string[]): string {
-  return `frame-ancestors 'self' ${ancestors.join(" ")}`;
+  return `frame-ancestors ${[...new Set(["'self'", ...ancestors])].join(" ")}`;
 }
 
 function cspMentionsFrameAncestors(value: string | string[] | undefined): boolean {
@@ -523,7 +531,7 @@ async function proxyReach(
   reach: Awaited<ReturnType<App["reachDeployment"]>>,
   subPath: string,
   viewer?: string,
-  opts?: { sandbox?: boolean; frameAncestors?: readonly string[] },
+  opts?: { sandbox?: boolean; frameAncestors?: readonly string[]; attestViewer?: boolean },
 ): Promise<void> {
   const { req, res, deps, url, method } = ctx;
   if (res.destroyed) return;
@@ -556,6 +564,11 @@ async function proxyReach(
       { p: viewer, exp: Date.now() + 60_000 },
       viewerIdentityKey(ctx.secret, reach.id),
     );
+    if (opts?.attestViewer)
+      headers[VIEWER_ATTESTATION_HEADER] = await mintPortalIdentity(
+        { p: viewer, exp: Date.now() + 60_000 },
+        viewerAttestationKey(ctx.secret, reach.id),
+      );
   }
   if (/(?:^|,)\s*chunked\s*$/i.test(String(req.headers["transfer-encoding"] ?? ""))) {
     const chunks: Buffer[] = [];
@@ -855,7 +868,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
   const dest = req.headers["sec-fetch-dest"];
   const site = req.headers["sec-fetch-site"];
   const framed = dest === "iframe" || site === "same-origin";
-  const embedAncestors = framed ? (deployment?.embedAncestors ?? []) : [];
+  const embedAncestors = framed && !deployment?.connectors ? (deployment?.embedAncestors ?? []) : [];
   if (!session && sessionSecret && embedAncestors.length) {
     session = portalSessionFrom(req.headers.cookie, FRAME_SESSION_COOKIE, sessionSecret);
   }
@@ -1033,7 +1046,13 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     recordPageView(authMode);
   }
   await proxyReach(ctx, reach, pathname, sub && (canManage || authenticatedPermission) ? sub : undefined, {
-    frameAncestors: embedAncestors,
+    frameAncestors: deployment?.connectors ? ["'self'"] : embedAncestors,
+    attestViewer: Boolean(
+      deployment?.connectors &&
+      !session?.appOnly &&
+      !["GET", "HEAD", "OPTIONS"].includes(ctx.method) &&
+      samePerson(sub, deployment.createdBy),
+    ),
   });
   return true;
 }
@@ -1256,26 +1275,30 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
         body,
       });
     const result = isPush
-      ? await ctx.app.runDeploymentGitPush(parts.id, async () => {
-          if (
-            access?.principalId &&
-            !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
-          ) {
-            const body = Buffer.from(
-              JSON.stringify({ error: "forbidden", message: "deployment git write access has been revoked" }),
-            );
-            return {
-              result: {
-                status: 403,
-                headers: { "content-type": "application/json", "content-length": String(body.length) },
-                body,
-              },
-              ok: false,
-            };
-          }
-          const r = await runBackend();
-          return { result: r, ok: r.status >= 200 && r.status < 300 };
-        })
+      ? await ctx.app.runDeploymentGitPush(
+          parts.id,
+          async () => {
+            if (
+              access?.principalId &&
+              !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
+            ) {
+              const body = Buffer.from(
+                JSON.stringify({ error: "forbidden", message: "deployment git write access has been revoked" }),
+              );
+              return {
+                result: {
+                  status: 403,
+                  headers: { "content-type": "application/json", "content-length": String(body.length) },
+                  body,
+                },
+                ok: false,
+              };
+            }
+            const r = await runBackend();
+            return { result: r, ok: r.status >= 200 && r.status < 300 };
+          },
+          access?.principalId,
+        )
       : await runBackend();
     ctx.res.writeHead(result.status, result.headers);
     ctx.res.end(result.body);
@@ -1453,7 +1476,9 @@ async function redeployDeployment(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, body)) });
+    const publishedBy = ctx.capability?.actorId ?? ctx.actor?.p;
+    const input = publishedBy ? { ...body, publishedBy } : body;
+    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, input)) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }
@@ -1542,6 +1567,25 @@ async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentEmbedAncestors(id, ancestors)) });
   } catch (e) {
     return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
+  }
+}
+
+async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, body, capability, actor } = ctx;
+  const principalId = capability ? capability.actorId : actor?.p;
+  if (!principalId || (capability && !livePersonCapability(capability)))
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
+    });
+  const connectors = (body as { connectors?: unknown }).connectors;
+  if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
+    return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
+  try {
+    const deployment = await app.setDeploymentConnectors(params.id!, connectors, { createdBy: principalId });
+    return sendJson(res, 200, { deployment: deploymentView(deployment) });
+  } catch (e) {
+    return sendShareFailure(res, e);
   }
 }
 
@@ -1686,6 +1730,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   forbidden: 403,
   external_sharing_disabled: 403,
   public_links_unavailable: 409,
+  unknown_connector: 400,
 };
 
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
@@ -1724,4 +1769,5 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
   { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
   { method: "POST", path: "/v1/deployments/:id/embed-ancestors", auth: "either", handle: setDeploymentEmbedAncestors },
+  { method: "POST", path: "/v1/deployments/:id/connectors", auth: "either", handle: setDeploymentConnectors },
 ];

@@ -22,6 +22,7 @@ export interface DeploymentVersion {
   commit?: string;
   parentCommit?: string;
   env?: Record<string, string>;
+  publishedBy?: string;
 }
 
 export interface DeployEndpoint {
@@ -55,6 +56,11 @@ interface DefaultAudienceSnapshot {
   snapshotAt: number;
 }
 
+export interface ConnectorLoan {
+  hosts: string[];
+  version: number;
+}
+
 export interface Deployment {
   id: string;
   ownerScopeId: ScopeId;
@@ -69,6 +75,7 @@ export interface Deployment {
 
   alwaysOn?: boolean;
   embedAncestors?: string[];
+  connectors?: ConnectorLoan;
   public?: true;
   lastAccessAt?: number;
   appliedVersion?: number;
@@ -85,6 +92,7 @@ interface VersionInput {
   homeDir?: string;
   env?: Record<string, string>;
   files?: DeployGitInputFile[];
+  publishedBy?: string;
 }
 
 export interface DeployStore {
@@ -99,7 +107,7 @@ export interface DeployStore {
     } & VersionInput,
   ): Promise<Deployment>;
   addVersion(id: string, input: VersionInput): Promise<DeploymentVersion>;
-  addVersionFromCommit(id: string, commit: string): Promise<DeploymentVersion | null>;
+  addVersionFromCommit(id: string, commit: string, publishedBy?: string): Promise<DeploymentVersion | null>;
   get(id: string): Promise<Deployment | null>;
   getByName(name: string): Promise<Deployment | null>;
   list(): Promise<Deployment[]>;
@@ -112,6 +120,7 @@ export interface DeployStore {
   setDisplayName(id: string, displayName: string | undefined): Promise<void>;
   setAlwaysOn(id: string, alwaysOn: boolean): Promise<void>;
   setEmbedAncestors(id: string, embedAncestors: string[]): Promise<void>;
+  setConnectors(id: string, loan: ConnectorLoan | undefined): Promise<void>;
   setPublic(id: string, isPublic: boolean): Promise<void>;
   setDefaultAudience(id: string, snapshot: DefaultAudienceSnapshot): Promise<void>;
   setAppliedVersion(id: string, version: number): Promise<void>;
@@ -300,6 +309,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       ...(input.env ? { env: input.env } : {}),
       ...(commit ? { commit } : {}),
       ...(parentCommit ? { parentCommit } : {}),
+      ...(input.publishedBy ? { publishedBy: input.publishedBy } : {}),
     };
   }
 
@@ -346,7 +356,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
       await updateVersionRef(id, v);
       return v;
     },
-    async addVersionFromCommit(id, commit) {
+    async addVersionFromCommit(id, commit, publishedBy) {
       const d = await backingMap.get(id);
       if (!d) throw new Error(`unknown deployment: ${id}`);
       const current = currentVersionOf(d);
@@ -361,6 +371,7 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
         ...(current?.env ? { env: current.env } : {}),
         commit,
         ...(current?.commit ? { parentCommit: current.commit } : {}),
+        ...(publishedBy ? { publishedBy } : {}),
       };
       d.versions.push(v);
       d.currentVersion = version;
@@ -439,6 +450,9 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     },
     async setEmbedAncestors(id, embedAncestors) {
       await backingMap.merge(id, { embedAncestors } as Partial<Deployment>);
+    },
+    async setConnectors(id, loan) {
+      await backingMap.merge(id, { connectors: loan });
     },
     async setPublic(id, isPublic) {
       await backingMap.merge(id, { public: isPublic ? true : undefined });

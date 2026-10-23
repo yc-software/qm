@@ -177,6 +177,34 @@ record. If its injection configuration enables actor attestation, the broker set
 `x-qm-actor` from the stored publisher. Caller-supplied actor headers are rejected.
 The destination receives the configured credential, never the deployment token.
 
+### Lending a publisher's connected apps to their app
+
+A publisher can let their app call a connected app (for example their mailbox) as them.
+Nothing is lent by default. The publisher opts in per app and per host with
+`POST /v1/deployments/:id/connectors` and `{"connectors": ["<connected-app host>"]}`;
+`[]` withdraws. Only the publisher may call it, from a live turn or a signed-in session.
+The loan covers only the version running when it was made, and only a version the
+publisher published themselves without inheriting env or home files from someone else's
+version (each version records `publishedBy`); after any new version the publisher must
+lend again. Public apps cannot borrow connectors. The token
+comes from the publisher's personal connection, else their default, else their company
+one. Every app gets a broker token naming its version, so a loan needs no redeploy.
+
+The app's server sends the broker `connector` (the host) instead of `credential`, with
+the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
+over standard HTTPS, injects the token and returns only the response.
+
+`GET` and `HEAD` run for whoever uses the app, except on hosts whose API can write over
+`GET`, such as Slack. Every other call acts as the publisher and needs `viewer`: the
+`x-qm-viewer-attestation` header the app gateway adds for one minute to a same-origin,
+non-`GET` request from the signed-in publisher, including inside the app's own shell. The
+app never holds its key, so app code cannot forge it the way it could `x-portal-identity`.
+While an app borrows connectors only its own pages may frame it and its embedding sites
+are ignored. Apps served only under `/d/<app>/` get no attestation and can only read.
+
+Each call and refusal is audited as `connector.broker.use`, `.denied` or `.error`, with
+the app, method, path, viewer and outcome; each loan change as `deploy_connectors`.
+
 ### Public AWS plugin routes
 
 Plugins stay private by default. An AWS plugin workload can declare
