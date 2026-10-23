@@ -278,7 +278,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         return;
       }
       const res = await deps.run({
-        surface: spec.surface,
+        // A secret-drop/keychain-ask resume continues its paused conversation, so the turn takes that surface.
+        surface:
+          spec.surface === "secret-drop" || spec.surface === "keychain-ask"
+            ? (spec.destination?.type ?? spec.surface)
+            : spec.surface,
         actor: { externalId: actorId },
         conversation,
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
