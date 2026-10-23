@@ -50,8 +50,8 @@ export interface E2bSandboxInfo {
 }
 
 export class E2bSandboxGoneError extends Error {
-  constructor(sandboxId: string, detail: string) {
-    super(`e2b sandbox ${sandboxId} is gone: ${detail}`);
+  constructor(sandboxId: string, detail: string, options?: ErrorOptions) {
+    super(`e2b sandbox ${sandboxId} is gone: ${detail}`, options);
     this.name = "E2bSandboxGoneError";
   }
 }
@@ -199,7 +199,9 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const wrap = (lib: E2bSdk, sbx: SdkSandbox, ttlMs: number): E2bSession => {
     let expiresAtMs = Date.now() + ttlMs;
     const gone = (err: unknown): unknown =>
-      isSandboxGone(lib, err) ? new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message)) : err;
+      isSandboxGone(lib, err)
+        ? new E2bSandboxGoneError(sbx.sandboxId, String((err as Error).message), { cause: err })
+        : err;
     const extend = async (ms: number): Promise<void> => {
       const bounded = Math.min(maxLifetimeMs, Math.max(ms, expiresAtMs - Date.now()));
       const at = Date.now() + bounded;
@@ -307,7 +309,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           memoryMb: info.memoryMB,
         };
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
+        if (isSandboxGone(lib, err))
+          throw new E2bSandboxGoneError(sandboxId, String((err as Error).message), { cause: err });
         throw err;
       }
     },
@@ -333,7 +336,8 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         if (network) await sbx.updateNetwork(network);
         return wrap(lib, sbx, sandboxTtlMs);
       } catch (err) {
-        if (isSandboxGone(lib, err)) throw new E2bSandboxGoneError(sandboxId, String((err as Error).message));
+        if (isSandboxGone(lib, err))
+          throw new E2bSandboxGoneError(sandboxId, String((err as Error).message), { cause: err });
         throw err;
       }
     },
