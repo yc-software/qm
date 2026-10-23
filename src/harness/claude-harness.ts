@@ -862,7 +862,10 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           buildDetectionPrompt(detect.reactionGuidance),
           renderDetectPrompt(detect),
           undefined,
-          { recordModelCall: detect.recordModelCall },
+          {
+            recordModelCall: detect.recordModelCall,
+            ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
+          },
           judgeModelId,
         );
         return parseDetectVerdict((out ?? "").trim(), Boolean(detect.reactionGuidance?.trim()));

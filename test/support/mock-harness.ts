@@ -966,20 +966,28 @@ export function createMockHarness(): Harness {
         return { ...base, ...(silent ? { silent: true as const } : {}), cacheUsage };
       },
 
-      shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
+      async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
+        const input = countTokens(detect.message);
+        await detect.recordLlmRequest?.({
+          turnSeq: null,
+          step: 0,
+          model: "mock-detect",
+          truncated: false,
+          usage: { input, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: input + 1, costUsd: 0 },
+        });
         const msg = detect.message.trim();
         const first = msg.split("\n")[0]?.trim() ?? "";
-        if (first.startsWith("!")) return Promise.resolve({ respond: true, reason: "command" });
-        if (msg.endsWith("?")) return Promise.resolve({ respond: true, reason: "question" });
-        if (/\b(agent|bot)\b/i.test(msg)) return Promise.resolve({ respond: true, reason: "addressed" });
+        if (first.startsWith("!")) return { respond: true, reason: "command" };
+        if (msg.endsWith("?")) return { respond: true, reason: "question" };
+        if (/\b(agent|bot)\b/i.test(msg)) return { respond: true, reason: "addressed" };
         if (
           detect.reactionGuidance?.trim() &&
           /\b(thanks|thank you|thx|ty|nice|great|awesome|perfect|lgtm)\b/i.test(msg)
         ) {
-          return Promise.resolve({ respond: false, reactions: ["pray"], reason: "acknowledgement" });
+          return { respond: false, reactions: ["pray"], reason: "acknowledgement" };
         }
-        if (detect.threadOpener?.trim()) return Promise.resolve({ respond: true, reason: "own thread" });
-        return Promise.resolve({ respond: false, reason: "not addressed" });
+        if (detect.threadOpener?.trim()) return { respond: true, reason: "own thread" };
+        return { respond: false, reason: "not addressed" };
       },
 
       async compactHistory({ history }) {

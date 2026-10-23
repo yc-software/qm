@@ -2111,6 +2111,26 @@ test("on a surface without reactions, the same acknowledgement just stays silent
   );
 });
 
+test("turn detection books its model call to the conversation's scope, whether or not the agent replies", async () => {
+  const { app, sessions } = freshApp();
+  const silent = await app.turn(channel("ok sounds good to me", { unprompted: true }));
+  assert.equal(silent.status, "silent");
+  const answered = await app.turn(channel("what does everyone think about the rollout?", { unprompted: true }));
+  assert.equal(answered.status, "ok");
+  assert.equal(answered.sessionId, silent.sessionId);
+
+  const requests = await sessions.listLlmRequests(answered.sessionId!);
+  const detections = requests.filter((request) => request.model === "mock-detect");
+  const turn = requests.find((request) => request.model === "mock");
+  assert.equal(detections.length, 2);
+  assert.ok(turn);
+  for (const detection of detections) {
+    assert.equal(detection.turnSeq, null);
+    assert.equal(detection.scopeLabel, turn.scopeLabel);
+    assert.ok(detection.usage && detection.usage.input > 0);
+  }
+});
+
 test("an unprompted thread question gets a reply (turn detection chimes in)", async () => {
   const { app } = freshApp();
   const res = await app.turn(channel("what does everyone think about the rollout?", { unprompted: true }));

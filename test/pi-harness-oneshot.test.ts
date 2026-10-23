@@ -29,6 +29,7 @@ import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveMod
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
+import type { HarnessDetectInput, HarnessLlmRequestRecord } from "../src/harness/harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 
@@ -352,6 +353,115 @@ test("Pi title generation accepts the prompted NONE sentinel without reporting a
 
   assert.equal(await harness.models.generateTitle!("User:\nHello"), undefined);
 });
+
+type DetectAttempt = { reply: string; stopReason: string } | "overloaded";
+
+async function detectAgainst(
+  t: { after(fn: () => Promise<void>): void },
+  attempts: readonly DetectAttempt[],
+): Promise<{ outcome: string; rows: HarnessLlmRequestRecord[] }> {
+  let served = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const attempt = attempts[Math.min(served++, attempts.length - 1)]!;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const start = {
+        type: "message_start",
+        message: {
+          id: `msg_detect_${served}`,
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 1200, output_tokens: 0 },
+        },
+      };
+      const events =
+        attempt === "overloaded"
+          ? [start, { type: "error", error: { type: "overloaded_error", message: "Overloaded" } }]
+          : [
+              start,
+              { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+              { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: attempt.reply } },
+              { type: "content_block_stop", index: 0 },
+              {
+                type: "message_delta",
+                delta: { stop_reason: attempt.stopReason, stop_sequence: null },
+                usage: { output_tokens: 8 },
+              },
+              { type: "message_stop" },
+            ];
+      for (const event of events) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+  );
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const harness = createPiHarness({
+    defaultModelId: "claude-opus-4-8",
+    detectModelId: "claude-haiku-4-5",
+    modelGateway: {
+      url: `http://127.0.0.1:${address.port}`,
+      apiKey: "gateway-key",
+      apiKeyHeader: "api-key",
+      models: { "claude-haiku-4-5": "detect-model" },
+    },
+  });
+  const rows: HarnessLlmRequestRecord[] = [];
+  const outcome = await harness.models.shouldRespond!({
+    session: { id: "session-1" } as HarnessDetectInput["session"],
+    message: "hey bot, can you check this?",
+    recentContext: "",
+    systemPrompt: "be brief",
+    history: [],
+    recordModelCall: () => {},
+    recordLlmRequest: async (rec) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      rows.push(rec);
+    },
+  }).then(
+    (verdict) => (verdict.respond ? "respond" : "decline"),
+    (error: unknown) => (error instanceof ProviderTurnError ? error.code : "error"),
+  );
+  return { outcome, rows };
+}
+
+test(
+  "Pi turn detection records each model call it was billed for, refused or retried, for the session's ledger",
+  { timeout: 20_000 },
+  async (t) => {
+    const card = getRequiredModel("claude-haiku-4-5").cost;
+    const yes = { reply: "YES — they asked the assistant", stopReason: "end_turn" };
+    for (const [attempts, expected, outputs] of [
+      [[{ reply: "", stopReason: "refusal" }], "refusal", [8]],
+      [["overloaded", yes], "respond", [0, 8]],
+    ] as const) {
+      const { outcome, rows } = await detectAgainst(t, attempts);
+      assert.equal(outcome, expected);
+      assert.equal(rows.length, outputs.length);
+      for (const [step, output] of outputs.entries()) {
+        const { usage, ...row } = rows[step]!;
+        assert.deepEqual(row, { turnSeq: null, step, model: "claude-haiku-4-5", truncated: false });
+        const { costUsd, ...tokens } = usage!;
+        assert.deepEqual(tokens, { input: 1200, output, cacheRead: 0, cacheWrite: 0, totalTokens: 1200 + output });
+        assert.ok(Math.abs(costUsd - (1200 * card.input + output * card.output) / 1_000_000) < 1e-12);
+      }
+    }
+  },
+);
 
 test("piHarnessConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = piHarnessConfigOptions(testConfig());

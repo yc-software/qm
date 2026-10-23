@@ -183,6 +183,7 @@ export interface HarnessDetectInput {
   reactionGuidance?: string;
   history: SessionEntry[];
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
+  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
 }
 
 export interface HarnessDetectResult {

@@ -489,8 +489,16 @@ test("the claude harness offers compaction and detection so a utility role canno
 
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
-    yield resultMessage("YES — they asked the assistant directly");
+    const verdict = "YES — they asked the assistant directly";
+    yield assistantMessage("msg_detect", verdict, {
+      input_tokens: 900,
+      output_tokens: 6,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+    yield resultMessage(verdict, { total_cost_usd: 0.004 });
   };
+  const detectRows: HarnessLlmRequestRecord[] = [];
   const verdict = await harness.models.shouldRespond!({
     session: { id: "session-1" } as HarnessTurnInput["session"],
     message: "hey bot, can you check this?",
@@ -498,8 +506,15 @@ test("the claude harness offers compaction and detection so a utility role canno
     systemPrompt: "be brief",
     history: [],
     recordModelCall: () => {},
+    recordLlmRequest: (rec) => {
+      detectRows.push(rec);
+    },
   });
   assert.equal(verdict.respond, true);
+  assert.deepEqual(
+    detectRows.map((row) => [row.turnSeq, row.usage?.costUsd]),
+    [[null, 0.004]],
+  );
 });
 
 test("Claude preserves a committed runtime handoff when SDK interruption returns an error", async () => {
