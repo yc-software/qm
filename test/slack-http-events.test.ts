@@ -59,6 +59,7 @@ async function withReceiver(
         "x-slack-signature": opts.badSig ? "v0=deadbeef" : signature,
       },
       body: raw,
+      signal: AbortSignal.timeout(3000),
     });
   };
   try {
@@ -85,6 +86,30 @@ test("rejects an unsigned/tampered POST with 401 without invoking the app", asyn
       assert.equal((await post(messageEnvelope, { timestampOffsetSeconds: -3600 })).status, 401);
       assert.equal((await post(messageEnvelope, { timestampOffsetSeconds: 3600 })).status, 401);
       assert.equal(processed, 0);
+    },
+  );
+});
+
+test("rejects signed non-object payloads and keeps serving requests", async () => {
+  let processed = 0;
+  await withReceiver(
+    async (event) => {
+      processed += 1;
+      await event.ack();
+    },
+    async (post) => {
+      assert.equal((await post(null, { badSig: true })).status, 401);
+      for (const form of [false, true]) {
+        for (const body of [null, [], true, 42, "message"]) {
+          const res = await post(body, { form });
+          assert.equal(res.status, 400);
+          assert.deepEqual(await res.json(), { error: "invalid_payload" });
+        }
+      }
+      assert.equal(processed, 0);
+      const res = await post({ type: "url_verification", challenge: "still-serving" });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { challenge: "still-serving" });
     },
   );
 });
