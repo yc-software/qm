@@ -1,5 +1,6 @@
 import "./marked-dedupe.ts";
 import "./mermaid-block.ts";
+import { embedFrame } from "./embed-frame.ts";
 import { MarkdownBlock } from "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { ReactiveElement, render, type PropertyValues } from "lit";
@@ -12,12 +13,14 @@ export class StableMarkdown extends ReactiveElement {
     isThinking: { type: Boolean },
     isStreaming: { type: Boolean },
     streamingBaseline: {},
+    embeds: { type: Boolean },
   };
 
   declare content: string;
   declare isThinking: boolean;
   declare isStreaming: boolean;
   declare streamingBaseline: string;
+  declare embeds: boolean;
   private baselineText = "";
   private renderedText = "";
   private readonly fades = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -30,6 +33,7 @@ export class StableMarkdown extends ReactiveElement {
     this.isThinking = false;
     this.isStreaming = false;
     this.streamingBaseline = "";
+    this.embeds = false;
     this.renderer.escapeHtml = false;
   }
 
@@ -56,7 +60,7 @@ export class StableMarkdown extends ReactiveElement {
           result.push(node as Text);
       } else if (
         node.nodeType !== Node.ELEMENT_NODE ||
-        !["code-block", "qm-mermaid", "svg", "style", "script"].includes((node as Element).localName)
+        !["code-block", "qm-mermaid", "qm-embed", "svg", "style", "script"].includes((node as Element).localName)
       )
         node.childNodes.forEach(visit);
     };
@@ -159,14 +163,18 @@ export class StableMarkdown extends ReactiveElement {
       render(this.renderer.render(), this.staging);
       const target = this.staging.cloneNode(true) as HTMLElement;
       for (const code of target.querySelectorAll("code-block")) {
-        if (code.getAttribute("language")?.toLowerCase() !== "mermaid") continue;
-        const diagram = document.createElement("qm-mermaid");
-        diagram.setAttribute(
-          "code",
-          new TextDecoder().decode(
-            Uint8Array.from(atob(code.getAttribute("code") ?? ""), (character) => character.charCodeAt(0)),
-          ),
+        const language = code.getAttribute("language")?.toLowerCase();
+        if (language !== "mermaid" && (language !== "embed" || !this.embeds || this.isStreaming)) continue;
+        const source = new TextDecoder().decode(
+          Uint8Array.from(atob(code.getAttribute("code") ?? ""), (character) => character.charCodeAt(0)),
         );
+        if (language === "embed") {
+          const frame = embedFrame(source, window.location.origin);
+          if (frame) code.replaceWith(frame);
+          continue;
+        }
+        const diagram = document.createElement("qm-mermaid");
+        diagram.setAttribute("code", source);
         if (this.isStreaming) diagram.setAttribute("pending", "");
         code.replaceWith(diagram);
       }

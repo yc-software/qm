@@ -12407,3 +12407,30 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   font-weight: 600;
   margin-right: 4px;
 }
+
+qm-embed {
+  display: block;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+qm-embed .qm-embed-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: var(--secondary);
+  border-bottom: 1px solid var(--border);
+}
+qm-embed .qm-embed-bar a {
+  color: inherit;
+}
+qm-embed iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #fff;
+}

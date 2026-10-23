@@ -2295,7 +2295,7 @@ export function createChatSurface(
           if (body.trim())
             parts.push(
               html`<div class="streaming-text ${animating ? "live-stream" : ""}" dir="auto">
-                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""))}
+                ${markdown(body, animating, isStreaming && work ? streamedAnswer((message as AssistantWork).streamingBaseline ?? "", work) : ((message as AssistantWork).streamingBaseline ?? ""), true)}
               </div>`,
             );
           for (const link of links) parts.push(connectorWidget(link));
@@ -3003,7 +3003,7 @@ export function createChatSurface(
         !tail.trim() &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
-        return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+        return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply, false, "", true)}</div>`)}`;
       let fold =
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
@@ -3054,12 +3054,12 @@ export function createChatSurface(
                       },
                     ),
                 )}
-                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work))}</div>` : nothing}
+                ${tail.trim() ? html`<div class="work-said streaming-text ${animating ? "live-stream" : ""}">${markdown(tail, animating, streamedAnswer(baseline, work), true)}</div>` : nothing}
               </div>
             </details>`
           : nothing;
       if (stopped && last && fold === nothing) fold = html`<div class="stopped-head">${label}</div>`;
-      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
+      return html`${fold}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply, false, "", true)}</div>`)}`;
     })}`;
   }
 
