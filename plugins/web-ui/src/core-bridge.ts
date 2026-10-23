@@ -1392,7 +1392,7 @@ async function drive(
     work.status = "failed";
     work.finishedAt = Date.now();
     notify();
-    if (e instanceof TypeError) {
+    if (e instanceof TypeError || (e instanceof ApiError && e.status >= 500)) {
       const errorMessage = "Message wasn’t sent. Check your connection and try again.";
       const message = latestUserMessage(agent);
       if (message) message.sendFailure = errorMessage;
