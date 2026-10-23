@@ -809,11 +809,19 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0019-participant-activity-indexes",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS participants_by_principal
+        concurrentIndexes: [
+          {
+            name: "participants_by_principal",
+            table: "participants",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS participants_by_principal
              ON participants(principal_id, session_id)`,
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_activity
+          },
+          {
+            name: "session_entries_user_activity",
+            table: "session_entries",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_activity
              ON session_entries(session_id, created_at DESC) WHERE type = 'user'`,
+          },
         ],
       },
       {
@@ -870,8 +878,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0021-spend-covering-index",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend
+        concurrentIndexes: [
+          {
+            name: "session_llm_requests_spend",
+            table: "session_llm_requests",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend
              ON session_llm_requests(created_at,
                ((spend_usage_json(usage_json) ->> 'costUsd')::double precision),
                ((spend_usage_json(usage_json) ->> 'input')::bigint),
@@ -880,9 +891,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                ((spend_usage_json(usage_json) ->> 'cacheWrite')::bigint))
              INCLUDE (session_id, model, usage_json)
              WHERE usage_json IS NOT NULL AND ${SPEND_INDEXABLE}`,
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
+          },
+          {
+            name: "session_llm_requests_spend_wide",
+            table: "session_llm_requests",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
              ON session_llm_requests(created_at)
              WHERE usage_json IS NOT NULL AND NOT ${SPEND_INDEXABLE}`,
+          },
         ],
       },
       {
@@ -942,9 +958,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0025-org-activity-index",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_by_activity
+        concurrentIndexes: [
+          {
+            name: "sessions_by_activity",
+            table: "sessions",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_by_activity
              ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)`,
+          },
         ],
       },
       {
@@ -957,9 +977,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       },
       {
         id: "sessions/store/0027-agent-reply-index",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_agent_reply
+        concurrentIndexes: [
+          {
+            name: "session_entries_agent_reply",
+            table: "session_entries",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_agent_reply
              ON session_entries(session_id, created_at DESC) WHERE type IN ('assistant', 'delivery')`,
+          },
         ],
       },
       {

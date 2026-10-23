@@ -140,16 +140,6 @@ export function createPostgresEventSink<E>(cfg: PostgresEventSinkConfig<E>): Pos
     ].join(",\n"),
     ")",
   ].join("\n");
-  const initialDbColumns = new Set(initialColumns.map(([db]) => db));
-  const followUpSql = followUps.flatMap((migration) => migration.statements).join("\n");
-  for (const [db] of cfg.columns) {
-    if (initialDbColumns.has(db)) continue;
-    if (!new RegExp(`\\b${db}\\b`).test(followUpSql)) {
-      throw new Error(
-        `scoped-event-sink: column ${cfg.table}.${db} is not part of the released 0001 schema and no follow-up migration adds it`,
-      );
-    }
-  }
   const { q } = createPgPool(cfg.connectionString, [
     {
       id: scopedEventMigrationId(cfg.table, 1),

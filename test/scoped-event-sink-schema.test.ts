@@ -42,20 +42,6 @@ test("0001 is rendered from the frozen initial columns, not the live column list
   assert.equal(grown[1]!.id, "admin/scoped-events/ev/0002");
 });
 
-test("a column outside 0001 with no follow-up migration is refused at construction", () => {
-  assert.throws(
-    () =>
-      createPostgresEventSink<Ev>({
-        ...common,
-        connectionString: fakeUrl(),
-        table: "ev",
-        columns: [...BASE, ["b", "b", "INT", "number"]],
-        schema: { initialColumns: BASE },
-      }),
-    /ev\.b is not part of the released 0001 schema/,
-  );
-});
-
 test("editing the frozen 0001 columns trips the pinned checksum", () => {
   assert.throws(
     () =>

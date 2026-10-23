@@ -238,7 +238,10 @@ test(
       );
       await holder.query("BEGIN");
       await holder.query("SELECT * FROM runs");
-      await assert.rejects(applyPgMigrations(pool, migrations), { code: "55P03" });
+      await assert.rejects(
+        applyPgMigrations(pool, migrations),
+        (error: Error) => (error.cause as { code?: string }).code === "55P03",
+      );
       assert.equal((await pool.query("SELECT count(*) FROM runs")).rows[0].count, "0");
       await holder.query("ROLLBACK");
       await applyPgMigrations(pool, migrations);

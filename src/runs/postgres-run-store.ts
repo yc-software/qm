@@ -125,15 +125,27 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       },
       {
         id: "runs/store/0005-session-history",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC)`,
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)`,
+        concurrentIndexes: [
+          {
+            name: "idx_runs_session_created_seq",
+            table: "runs",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC)`,
+          },
+          {
+            name: "idx_runs_created",
+            table: "runs",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)`,
+          },
         ],
       },
       {
         id: "runs/store/0006-terminal-finished",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
+        concurrentIndexes: [
+          {
+            name: "idx_runs_terminal_finished",
+            table: "runs",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')`,
+          },
         ],
       },
       {
@@ -150,8 +162,12 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       },
       {
         id: "runs/store/0009-claim-priority-index",
-        statements: [
-          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'`,
+        concurrentIndexes: [
+          {
+            name: "idx_runs_pending_priority",
+            table: "runs",
+            statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'`,
+          },
         ],
       },
       {
