@@ -1,7 +1,9 @@
 import "dockview-core/dist/styles/dockview.css";
 import "./model-picker.css";
 import "./tooltip.css";
+import "./spend-chart.css";
 import "./shell.css";
+import "./spend.css";
 import { bootSafely, closeUserMenu } from "./shell";
 import { registerChatSearchHotkey } from "./search";
 import { closeFormMenus } from "./ui";

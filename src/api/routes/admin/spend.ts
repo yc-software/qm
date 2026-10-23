@@ -20,7 +20,7 @@ export function cacheHitRatio(s: { cacheRead?: number; cacheWrite?: number; unca
 
 const DAY_MS = 86_400_000;
 const DEFAULT_WINDOW_DAYS = 30;
-const EXPORT_MAX_DAYS = 93;
+const MAX_SPEND_DAYS = 93;
 const CRON_LOOKUP_CONCURRENCY = 8;
 const SPEND_EXPORT_PRINCIPAL = "spend-export";
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -161,8 +161,12 @@ function backgroundTally(bySource: Record<SpendSource, Tally>): Tally {
   return total;
 }
 
+function costOf(r: SpendRow): number {
+  return Number.isFinite(r.costUsd) ? r.costUsd : 0;
+}
+
 function addRow(t: Tally, r: SpendRow): void {
-  t.costUsd += r.costUsd;
+  t.costUsd += costOf(r);
   t.calls += r.calls;
   t.input += r.input;
   t.output += r.output;
@@ -306,8 +310,8 @@ export function summarizeSpend(rows: readonly SpendRow[], opts: SpendSummaryOpti
       buckets.set(bucketKey, bucket);
     }
     addRow(bucket.bySource[source], row);
-    bucket.models.set(row.model, (bucket.models.get(row.model) ?? 0) + row.costUsd);
-    bucket.people.set(person, (bucket.people.get(person) ?? 0) + row.costUsd);
+    bucket.models.set(row.model, (bucket.models.get(row.model) ?? 0) + costOf(row));
+    bucket.people.set(person, (bucket.people.get(person) ?? 0) + costOf(row));
   }
 
   const entities = [...accumulators.values()].map((acc) => entityOf(acc, opts.label));
@@ -477,11 +481,30 @@ function parseBound(raw: string): number | null {
   return Number.isSafeInteger(parsed) && Number.isFinite(new Date(parsed).getTime()) ? parsed : null;
 }
 
+function spendBucket(url: URL): SpendBucket | null {
+  const bucket = url.searchParams.get("bucket") ?? "day";
+  return bucket === "day" || bucket === "week" ? bucket : null;
+}
+
+function spendDays(url: URL): { from: number; to: number } | string {
+  const from = parseDay(url.searchParams.get("from") ?? "");
+  const to = parseDay(url.searchParams.get("to") ?? "");
+  if (from === null || to === null) return "from and to must be YYYY-MM-DD dates (UTC)";
+  if (to <= from || to - from > MAX_SPEND_DAYS * DAY_MS)
+    return `to must be later than from and at most ${MAX_SPEND_DAYS} days after it`;
+  return { from, to };
+}
+
 async function loadSpendRows(
   sessions: SessionStore,
   range: { from: number; to: number },
 ): Promise<{ rows: SpendRow[]; asOf?: number }> {
   return sessions.spendReport ? sessions.spendReport(range) : { rows: await sessions.spendRollup(range) };
+}
+
+function cronInfo(cron: Cron): SpendCronInfo {
+  const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
+  return { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived };
 }
 
 async function cronInfoLookup(
@@ -492,11 +515,7 @@ async function cronInfoLookup(
   const crons = new Map<string, SpendCronInfo>();
   for (let start = 0; start < ids.length; start += CRON_LOOKUP_CONCURRENCY) {
     const batch = await Promise.all(ids.slice(start, start + CRON_LOOKUP_CONCURRENCY).map((id) => app.getCron(id)));
-    for (const cron of batch) {
-      if (!cron) continue;
-      const { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived } = cron;
-      crons.set(id, { id, title, message, action, owner, ownerScopeId, schedule, enabled, archived });
-    }
+    for (const cron of batch) if (cron) crons.set(cron.id, cronInfo(cron));
   }
   return crons;
 }
@@ -509,16 +528,10 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
     return sendJson(res, 401, { error: "unauthorized" });
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
-  const from = parseDay(url.searchParams.get("from") ?? "");
-  const to = parseDay(url.searchParams.get("to") ?? "");
-  if (from === null || to === null)
-    return sendJson(res, 400, { error: "bad_request", message: "from and to must be YYYY-MM-DD dates (UTC)" });
-  if (to <= from || to - from > EXPORT_MAX_DAYS * DAY_MS)
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: `to must be later than from and at most ${EXPORT_MAX_DAYS} days after it`,
-    });
-  const { rows, asOf } = await loadSpendRows(deps.sessions, { from, to });
+  const days = spendDays(url);
+  if (typeof days === "string") return sendJson(res, 400, { error: "bad_request", message: days });
+  const { from, to } = days;
+  const { rows, asOf } = await loadSpendRows(deps.sessions, days);
   const labels = await discoverScopes(
     app,
     deps,
@@ -556,8 +569,8 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: "spend.read", resource: "spend", scopeLabel: scope });
 
   const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
-  const bucket = url.searchParams.get("bucket") ?? "day";
-  if (bucket !== "day" && bucket !== "week") return bad('bucket must be "day" or "week"');
+  const bucket = spendBucket(url);
+  if (!bucket) return bad('bucket must be "day" or "week"');
   const format = url.searchParams.get("format") ?? "json";
   if (format !== "json" && format !== "csv") return bad('format must be "json" or "csv"');
 
@@ -603,4 +616,44 @@ export async function spend(ctx: ApiCtx): Promise<void> {
   });
   res.end(body);
   return;
+}
+
+export async function selfSpend(ctx: ApiCtx): Promise<void> {
+  const { res, app, deps, url } = ctx;
+  const bad = (message: string) => sendJson(res, 400, { error: "bad_request", message });
+  const principalId = url.searchParams.get("principalId");
+  if (!principalId) return bad("principalId required");
+  const days = spendDays(url);
+  if (typeof days === "string") return bad(days);
+  const bucket = spendBucket(url);
+  if (!bucket) return bad('bucket must be "day" or "week"');
+  if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
+
+  const me = resolveScope(personalScope(principalId)).key;
+  const [contexts, crons, { rows, asOf }] = await Promise.all([
+    app.listContexts(principalId),
+    app.listCronsForViewer(principalId),
+    loadSpendRows(deps.sessions, days),
+  ]);
+  const shared = new Map(
+    contexts.flatMap((context) =>
+      context.kind === "personal" ? [] : [[context.scopeId, context.name ?? ""] as const],
+    ),
+  );
+  const info = new Map([...crons.owned, ...crons.visible].map((cron) => [cron.id, cronInfo(cron)]));
+  const owned = new Set(crons.owned.map((cron) => cron.id));
+  const visible = new Set(
+    [...new Set(rows.map((row) => row.scopeId))].filter((id) => shared.has(id) || resolveScope(id).key === me),
+  );
+  const report = summarizeSpend(
+    rows.filter((row) => visible.has(row.scopeId)),
+    { ...days, bucket, label: (id) => shared.get(id) ?? "", cron: (id) => info.get(id) ?? null },
+  );
+  audit(deps, { principalId, action: "spend.self.read", resource: "spend", scopeLabel: me });
+  return sendJson(res, 200, {
+    scopeId: me,
+    ...report,
+    crons: report.crons.map((cron) => ({ ...cron, owned: owned.has(cron.cronId) })),
+    ...(asOf === undefined ? {} : { asOf }),
+  });
 }

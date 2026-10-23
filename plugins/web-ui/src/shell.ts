@@ -97,6 +97,7 @@ import { attachTooltip, hideTooltip, tip } from "./tooltip";
 import { clearConnectorNotice, noteConnectorResult, renderConnectors, resetKeychainState } from "./connectors";
 import { openDeployById, renderDeploys } from "./deploys";
 import { renderMemory, resetMemoryState } from "./memory";
+import { renderSpend, resetSpendState } from "./spend";
 import { renderCalendar } from "./calendar";
 import {
   inboxOpenCount,
@@ -256,6 +257,7 @@ export async function signOut(): Promise<void> {
   appState.currentView = "chats";
   clearSkillsCache();
   resetMemoryState();
+  resetSpendState();
   resetContextsState();
   resetKeychainState();
   mainConversation().composer.resetComposer();
@@ -758,6 +760,9 @@ export function switchView(v: View): void {
     case "skills":
       void renderSkills();
       break;
+    case "spend":
+      void renderSpend();
+      break;
     case "settings":
       renderSettings();
       break;
@@ -825,6 +830,9 @@ function refreshActiveView(v: View): void {
       break;
     case "skills":
       void renderSkills();
+      break;
+    case "spend":
+      void renderSpend();
       break;
     case "settings":
       renderSettings();

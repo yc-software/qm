@@ -1,17 +1,11 @@
 import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BACKGROUND_SOURCES, spendChart } from "./spend-chart.ts";
+import { BACKGROUND_SOURCES, spendChart } from "../../web-ui/src/spend-chart.ts";
+import { spendAsOf, spendCustomRange, spendWindowTabs } from "../../web-ui/src/spend-window.ts";
 import { table, card, renderer } from "./shared.ts";
 
 type Services = Record<string, any>;
 
-const DAY = 86400000;
-const PRESETS = new Map([
-  ["7d", 7],
-  ["30d", 30],
-  ["90d", 90],
-]);
-const MAX_CUSTOM_DAYS = 366;
 const COLUMNS: Array<[string, string]> = [
   ["person", "Person"],
   ["costUsd", "Total"],
@@ -40,38 +34,6 @@ const rowName = (row: any) =>
   "model" in row ? row.model || "Unknown model" : row.displayName || row.principalId || row.scopeId || "";
 
 const fmtUsd = (n: any) => "$" + (Number(n) || 0).toFixed(2);
-
-const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-
-function dayMs(day: unknown): number | null {
-  const ms = Date.parse(`${day}T00:00:00.000Z`);
-  return Number.isFinite(ms) && isoDay(ms) === day ? ms : null;
-}
-
-interface SpendWindow {
-  from: string;
-  to: string;
-  preset: string | null;
-  bucket: "day" | "week";
-}
-
-function windowOf(start: number, end: number, preset: string | null): SpendWindow {
-  return { from: isoDay(start), to: isoDay(end), preset, bucket: end - start > 62 * DAY ? "week" : "day" };
-}
-
-export function spendWindow(
-  state: { range?: string | null; from?: string | null; to?: string | null },
-  now = Date.now(),
-): SpendWindow {
-  const tomorrow = Math.floor(now / DAY) * DAY + DAY;
-  const from = dayMs(state.from);
-  const to = dayMs(state.to);
-  const end = to === null ? null : Math.min(to, tomorrow);
-  if (from !== null && end !== null && from < end)
-    return windowOf(Math.max(from, end - MAX_CUSTOM_DAYS * DAY), end, null);
-  const preset = state.range && PRESETS.has(state.range) ? state.range : "30d";
-  return windowOf(tomorrow - PRESETS.get(preset)! * DAY, tomorrow, preset);
-}
 
 function sortValue(row: any, key: string): number | string {
   if (key === "person") return String(rowName(row)).toLowerCase();
@@ -119,18 +81,7 @@ export class SpendView {
         [fmtUsd(org.background?.costUsd), "Background"],
         [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
       ],
-      tabs: [
-        ...[...PRESETS.keys()].map((range) => ({
-          label: range,
-          active: s.window.preset === range,
-          onClick: () => s.setRange(range),
-        })),
-        {
-          label: "Custom",
-          active: s.window.preset === null,
-          onClick: () => s.setCustomRange(s.window.from, s.window.to),
-        },
-      ],
+      tabs: spendWindowTabs(s.window, s.setRange, s.setCustomRange),
       search: {
         value: this.filter,
         placeholder: "person, scope, cron or model",
@@ -146,26 +97,6 @@ export class SpendView {
       search.replaceWith(previous);
       if (focused) active?.focus({ preventScroll: true });
     } else this.search = search;
-  }
-  customRange() {
-    const current: SpendWindow = this.services.window;
-    if (current.preset !== null) return null;
-    const today = isoDay(Date.now());
-    const apply = (event: Event) => {
-      event.preventDefault();
-      const [first, last] = [...this.root.querySelectorAll<HTMLInputElement>(".spend-custom input")]
-        .map((input) => input.value)
-        .sort();
-      const end = dayMs(last);
-      if (dayMs(first) !== null && end !== null) this.services.setCustomRange(first, isoDay(end + DAY));
-    };
-    return html`<form class="spend-custom" @submit=${apply}>
-      <input type="date" aria-label="First day" required max=${today} .value=${current.from} />
-      <span>to</span>
-      <input type="date" aria-label="Last day" required max=${today} .value=${isoDay(Date.parse(current.to) - DAY)} />
-      <button class="primary">Apply</button>
-      <span class="hint">UTC, up to ${MAX_CUSTOM_DAYS} days</span>
-    </form>`;
   }
   sortBy(key: string) {
     if (this.sortKey === key) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
@@ -273,12 +204,8 @@ export class SpendView {
     const series = this.data.series || [];
     const org = this.data.org || {};
     this.paint(
-      html`${this.customRange()}${
-        this.data.asOf == null
-          ? null
-          : html`<p class="subline">
-              Totals as of ${new Date(this.data.asOf).toLocaleString()}. Updated every minute.
-            </p>`
+      html`${spendCustomRange(s.window, s.setCustomRange)}${
+        this.data.asOf == null ? null : html`<p class="subline">${spendAsOf(this.data.asOf)}</p>`
       }${card(
         "Spend over time",
         series.length

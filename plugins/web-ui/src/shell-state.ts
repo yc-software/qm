@@ -33,6 +33,7 @@ const VIEWS = [
   "deploys",
   "memory",
   "skills",
+  "spend",
   "settings",
 ] as const;
 export type View = (typeof VIEWS)[number];

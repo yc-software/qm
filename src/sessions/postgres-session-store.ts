@@ -1999,15 +1999,22 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            FULL JOIN pending p ON p.day = c.day ORDER BY day`,
         [range.from / dayMs, range.to / dayMs],
       );
-      if (days.some((day) => day.rows === null)) {
-        return { rows: (await q(spendSql, [range.from, range.to])).map(rowToSpendRow) };
-      }
       const rows: SpendRow[] = [];
+      const gaps: [number, number][] = [];
       for (const day of days) {
-        rows.push(...(day.rows as Record<string, unknown>[]).map(rowToSpendRow));
+        if (day.rows === null) {
+          const start = Number(day.day);
+          const last = gaps.at(-1);
+          if (last?.[1] === start) last[1] = start + 1;
+          else gaps.push([start, start + 1]);
+          continue;
+        }
+        for (const row of day.rows as Record<string, unknown>[]) rows.push(rowToSpendRow(row));
         if (day.pending) asOf = Math.min(asOf, Number(day.updated_at));
       }
-      return { rows, asOf };
+      for (const [from, to] of gaps)
+        for (const row of await q(spendSql, [from * dayMs, to * dayMs])) rows.push(rowToSpendRow(row));
+      return { rows: rows.sort((a, b) => a.day - b.day), asOf };
     },
 
     async refreshSpendRollup() {

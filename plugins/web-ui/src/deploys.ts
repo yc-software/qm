@@ -6,7 +6,7 @@ import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { chipTabs, listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
@@ -122,26 +122,18 @@ function deployTabs(): TemplateResult {
     DEPLOY_TABS.map((tab) => [tab.value, inContext.filter((d) => deploymentTab(d, viewer) === tab.value).length]),
   ) as Record<DeploymentTab, number>;
   const tabs = DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value);
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="App view">
-      ${tabs.map(
-        (tab) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${deployTab === tab.value}
-            class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
-            @click=${() => {
-              deployTab = tab.value;
-              drawDeploysPage();
-            }}
-          >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return chipTabs(
+    "App view",
+    tabs.map((tab) => ({
+      label: tab.label,
+      active: deployTab === tab.value,
+      count: counts[tab.value],
+      onClick: () => {
+        deployTab = tab.value;
+        drawDeploysPage();
+      },
+    })),
+  );
 }
 
 function deploymentRow(d: DeploymentView): TemplateResult {

@@ -33,6 +33,7 @@ import {
   uiStateId,
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
+import { selfSpend } from "./admin/spend.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   ARTIFACT_TYPES,
@@ -1435,6 +1436,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "GET", path: "/v1/contexts", auth: "source", handle: listContexts },
     { method: "GET", path: "/v1/scope-resources", auth: "source", handle: listScopeResources },
     { method: "GET", path: "/v1/memory", auth: "source", handle: selfMemory },
+    { method: "GET", path: "/v1/spend", auth: "source", handle: selfSpend },
     { method: "GET", path: "/v1/skills", auth: "source", handle: listSkills },
     { method: "GET", path: "/v1/skills/:id", auth: "either", handle: getSkillDetail },
   ]),

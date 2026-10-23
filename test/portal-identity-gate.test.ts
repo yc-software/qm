@@ -132,6 +132,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
     const alice = await token("U1");
     for (const path of [
       "/v1/memory?principalId=",
+      "/v1/spend?principalId=",
       "/v1/contexts/policy?scope=channel:C1&principalId=",
       "/v1/sessions/s1/background?viewer=",
       "/v1/shared-sessions/token?viewer=",

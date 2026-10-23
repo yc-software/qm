@@ -40,7 +40,12 @@ const BASE_HTML = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..
     "<style data-admin-components></style>",
     () =>
       "<style data-admin-components>" +
-      ["../../web-ui/src/model-picker.css", "../../web-ui/src/tooltip.css", "../public/admin-components.css"]
+      [
+        "../../web-ui/src/model-picker.css",
+        "../../web-ui/src/tooltip.css",
+        "../../web-ui/src/spend-chart.css",
+        "../public/admin-components.css",
+      ]
         .map((path) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), path), "utf8"))
         .join("\n") +
       "</style>",

@@ -2217,6 +2217,19 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/spend",
+    handle: async (c) => {
+      const { res, url, user } = c;
+      const qs = new URLSearchParams({ principalId: user });
+      for (const key of ["from", "to", "bucket"]) {
+        const value = url.searchParams.get(key);
+        if (value) qs.set(key, value);
+      }
+      return relayCore(res, "GET", `/v1/spend?${qs.toString()}`);
+    },
+  },
+  {
     method: "PATCH",
     path: "/api/memory",
     handle: async (c) => {

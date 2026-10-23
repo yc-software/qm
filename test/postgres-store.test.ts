@@ -399,6 +399,58 @@ test(
   },
 );
 
+test("pg spend report recomputes only the days it has not saved, adjacent days in one read", { skip }, async (t) => {
+  const pg = (await import("pg")).default;
+  const admin = new pg.Pool({ connectionString: URL });
+  const schema = `spend_gaps_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const url = new globalThis.URL(URL!);
+  url.searchParams.set("options", `-c search_path=${schema}`);
+  const day = 86_400_000;
+  const base = Date.UTC(2025, 6, 1);
+  let at = base;
+  const store = createPostgresSessionStore(url.toString(), { now: () => at });
+  const raw = new pg.Pool({ connectionString: url.toString() });
+  const scope = scopeId("personal", "spend-gaps");
+  const session = await store.getOrCreateByThread("spend-gaps", "dm", scope);
+  const range = { from: base, to: base + 4 * day };
+  const live: number[][] = [];
+  const query = pg.Client.prototype.query;
+  t.mock.method(pg.Client.prototype, "query", function (this: unknown, ...args: any[]): any {
+    if (typeof args[0] === "string" && args[0].startsWith("WITH RECURSIVE ancestry")) live.push(args[1]);
+    return Reflect.apply(query, this, args);
+  });
+  try {
+    for (const offset of [0, 1, 2, 3]) {
+      at = base + offset * day + 1;
+      await store.recordLlmRequest(session.id, {
+        turnSeq: null,
+        step: 0,
+        model: "gaps",
+        scopeLabel: scope,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, costUsd: 1 },
+      });
+    }
+    at = base + 4 * day;
+    await store.refreshSpendRollup!();
+    const unsaved = [base / day, base / day + 2, base / day + 3];
+    await raw.query("DELETE FROM session_spend_days WHERE day = ANY($1)", [unsaved]);
+    await raw.query("INSERT INTO session_spend_dirty(day) SELECT unnest($1::bigint[])", [unsaved]);
+    live.length = 0;
+    const report = await store.spendReport!(range);
+    assert.deepEqual(live, [
+      [base, base + day],
+      [base + 2 * day, base + 4 * day],
+    ]);
+    assert.deepEqual(report.rows, await store.spendRollup(range));
+    assert.equal(report.asOf, at);
+  } finally {
+    await raw.end();
+    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    await admin.end();
+  }
+});
+
 test(
   "pg saved spend resolves session changes after commit and preserves non-finite legacy costs",
   { skip },

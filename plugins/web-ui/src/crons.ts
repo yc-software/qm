@@ -3,18 +3,21 @@ import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { chipTabs, listBackLink, listPageTpl } from "./list-page";
 import { contextsState, ensureContexts, scopeChip } from "./contexts";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import {
+  clipWords,
   cronNextFire,
   cronRunSummary,
   cronRunSummaryTitle,
   cronScheduleDetail,
   cronScheduleSummary,
+  cronText,
+  cronTitle,
 } from "./cron-format";
 import { tip } from "./tooltip";
 
@@ -129,31 +132,6 @@ async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boole
   } finally {
     if (seq === cronRefreshSeq) cronsLoading = false;
   }
-}
-
-function cronText(c: CronView): string {
-  return c.message ?? c.action ?? "";
-}
-
-function cleanCronText(text: string): string {
-  return text
-    .trim()
-    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
-    .replace(/[*_`~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function clipWords(text: string, max = 64): string {
-  const clean = cleanCronText(text);
-  if (clean.length <= max) return clean;
-  const cut = clean.slice(0, max);
-  const wordCut = cut.replace(/\s+\S*$/, "");
-  return `${(wordCut.length >= max * 0.55 ? wordCut : cut).trim()}…`;
-}
-
-function cronTitle(c: CronView): string {
-  return c.title?.trim() || clipWords(cronText(c), 58) || "(untitled cron)";
 }
 
 function cronScopeLabel(c: CronView): string {
@@ -297,24 +275,15 @@ function cronTabs(counts: Record<CronTab, number>, hasShared: boolean): Template
   const tabs = CRON_TABS.filter(
     (t) => t.value === "yours" || (t.value === "shared" && hasShared) || counts[t.value] > 0 || cronTab === t.value,
   );
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="Cron view">
-      ${tabs.map(
-        (t) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${cronTab === t.value}
-            class="cron-filter-chip ${cronTab === t.value ? "active" : ""}"
-            @click=${() => setCronTab(t.value)}
-          >
-            <span>${t.label}</span>
-            <span class="cron-filter-count">${counts[t.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return chipTabs(
+    "Cron view",
+    tabs.map((t) => ({
+      label: t.label,
+      active: cronTab === t.value,
+      count: counts[t.value],
+      onClick: () => setCronTab(t.value),
+    })),
+  );
 }
 
 function cronDisabledToggle(count: number): TemplateResult {
