@@ -70,7 +70,6 @@ interface E2bCreateOpts {
   timeoutMs?: number;
   autoPause?: boolean;
   autoResume?: boolean;
-  privateTraffic?: boolean;
   fromSnapshot?: string;
 }
 
@@ -323,9 +322,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
           onTimeout: createOpts.autoPause ? "pause" : "kill",
           autoResume: !!(createOpts.autoPause && createOpts.autoResume),
         },
-        ...(network || createOpts.privateTraffic
-          ? { network: { ...network, ...(createOpts.privateTraffic ? { allowPublicTraffic: false } : {}) } }
-          : {}),
+        network: { ...network, allowPublicTraffic: false },
       });
       return wrap(lib, sbx, timeoutMs);
     },

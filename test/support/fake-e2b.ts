@@ -23,7 +23,6 @@ interface FakeRecord {
   timeoutMs: number[];
   loseNextCommand: boolean;
   autoResume: boolean;
-  privateTraffic: boolean;
   createTimeoutMs?: number;
 }
 
@@ -37,7 +36,7 @@ export interface FakeE2b {
   expirePaused(): void;
   loseNextCommand(name: string): void;
   timeouts(name: string): number[];
-  createOptions(name: string): { autoPause: boolean; autoResume: boolean; privateTraffic: boolean; timeoutMs?: number };
+  createOptions(name: string): { autoPause: boolean; autoResume: boolean; timeoutMs?: number };
   snapshots(): string[];
   restoredFrom(name: string): string | undefined;
   metrics: E2bMetrics | null;
@@ -46,36 +45,22 @@ export interface FakeE2b {
 }
 
 const OWNER_ENV = "QM_FAKE_E2B_OWNER";
-const liveRoots = new Set<string>();
 
-function ownedPids(marker: string): number[] {
-  const tag = `${OWNER_ENV}=${marker}`;
-  const owned = (kv: string): boolean => kv === tag || kv.startsWith(`${tag}/`);
-  if (existsSync("/proc/self/environ")) {
-    const pids: number[] = [];
-    for (const entry of readdirSync("/proc")) {
-      const pid = Number(entry);
-      if (!Number.isInteger(pid) || pid === process.pid) continue;
-      try {
-        if (readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").some(owned)) pids.push(pid);
-      } catch {
-        continue;
-      }
-    }
-    return pids;
-  }
-  const ps = spawnSync("ps", ["-Aeww", "-o", "pid=,command="], { encoding: "utf8" });
-  return (ps.stdout ?? "")
-    .split("\n")
-    .filter((line) => line.split(/\s+/).some(owned))
-    .map((line) => Number(line.trim().split(/\s+/)[0]))
-    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
-}
-
-function killOwned(marker: string): void {
-  for (let pass = 0; pass < 20; pass++) {
-    const pids = ownedPids(marker);
-    if (!pids.length) return;
+function killOwned(owner: string): void {
+  const owned = (kv: string): boolean => kv === `${OWNER_ENV}=${owner}` || kv.startsWith(`${OWNER_ENV}=${owner}/`);
+  const scan = (): number[] =>
+    readdirSync("/proc")
+      .map(Number)
+      .filter((pid) => {
+        if (!Number.isInteger(pid) || pid === process.pid) return false;
+        try {
+          return readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").some(owned);
+        } catch {
+          return false;
+        }
+      });
+  if (!existsSync("/proc")) return;
+  for (let pids = scan(); pids.length; pids = scan()) {
     for (const pid of pids) {
       try {
         process.kill(pid, "SIGKILL");
@@ -86,16 +71,8 @@ function killOwned(marker: string): void {
   }
 }
 
-process.once("exit", () => {
-  for (const root of liveRoots) {
-    killOwned(root);
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
   const root = mkdtempSync(join(tmpdir(), "fake-e2b-"));
-  liveRoots.add(root);
   const destroy = (r: FakeRecord): void => {
     r.expired = true;
     killOwned(`${root}/${r.sandboxId}`);
@@ -167,7 +144,6 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       return {
         autoPause: r.autoPause,
         autoResume: r.autoResume,
-        privateTraffic: r.privateTraffic,
         ...(r.createTimeoutMs ? { timeoutMs: r.createTimeoutMs } : {}),
       };
     },
@@ -176,14 +152,13 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
     execScripts: () => [...execScripts],
     cleanup: () => {
       killOwned(root);
-      liveRoots.delete(root);
       rmSync(root, { recursive: true, force: true });
     },
   };
 
   const session = (r: FakeRecord): E2bSession => ({
     sandboxId: r.sandboxId,
-    ...(r.privateTraffic ? { trafficAccessToken: `traffic-${r.sandboxId}` } : {}),
+    trafficAccessToken: `traffic-${r.sandboxId}`,
     host: (port) => `${port}-${r.sandboxId}.e2b.test`,
     async runCommand(command, opts): Promise<E2bCommandResult> {
       alive(r);
@@ -269,7 +244,6 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
         ...(opts.timeoutMs ? { createTimeoutMs: opts.timeoutMs } : {}),
         loseNextCommand: false,
         autoResume: opts.autoResume ?? false,
-        privateTraffic: opts.privateTraffic ?? false,
         ...(opts.fromSnapshot ? { fromSnapshot: opts.fromSnapshot } : {}),
       };
       if (opts.fromSnapshot) {

@@ -63,11 +63,6 @@ test("provision runs commands with env and cwd", async () => {
   assert.match(r.stdout, /VAR=v1/);
 });
 
-test("scope sandboxes are created with public traffic disabled", async () => {
-  await sandbox.provision(layers);
-  assert.equal(fake.createOptions(scopeName()).privateTraffic, true);
-});
-
 test("two cores provisioning the same stopped computer create one sandbox", async () => {
   const advisoryLock = createMemoryAdvisoryLock();
   await Promise.all([make({ advisoryLock }).provision(layers), make({ advisoryLock }).provision(layers)]);
@@ -193,7 +188,6 @@ test("scratch sandboxes are ephemeral and killed at release", async () => {
   const h = await sandbox.provision(layers, { scratch: { key: "job-1" } });
   assert.equal(h.scratch, true);
   assert.equal(fake.current(h.id)?.metadata.scratch, "true");
-  assert.equal(fake.createOptions(h.id).privateTraffic, true);
   await sandbox.teardown(h);
   assert.equal(fake.current(h.id), null);
 });
@@ -306,7 +300,6 @@ test("a scratch sandbox that dies mid-turn is revived as scratch, not as a durab
   assert.equal(r.stdout.trim(), "scratch-back");
   const cur = fake.current(h.id);
   assert.equal(cur?.metadata.scratch, "true", "revived sandbox must still be tagged scratch");
-  assert.equal(fake.createOptions(h.id).privateTraffic, true);
 });
 
 test("a failing snapshot store fails the fallback provision instead of cold-starting empty", async () => {
@@ -497,7 +490,6 @@ test("a lost native E2B sandbox is replaced from its persistent recovery snapsho
   assert.equal(revived.coldStart, false);
   assert.equal(fake.createdCount(scopeName()), 2);
   assert.equal(fake.restoredFrom(scopeName()), captured.recoverySnapshotId);
-  assert.equal(fake.createOptions(scopeName()).privateTraffic, true);
   assert.equal(await restarted.readFile(revived, "work.txt"), "captured before the pause\n");
   assert.equal((await store.get(scope))?.sandboxId, fake.current(scopeName())?.sandboxId);
   assert.equal((await store.get(scope))?.preservationState, "running");

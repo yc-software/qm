@@ -201,7 +201,6 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
           session = await client.create({
             metadata: { name },
             autoPause: true,
-            privateTraffic: true,
             fromSnapshot: stored.recoverySnapshotId,
           });
         } catch (e) {
@@ -221,7 +220,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
         return adopt(session);
       }
       onStatus?.("Creating the sandbox…");
-      const session = await client.create({ metadata: { name }, autoPause: true, privateTraffic: true });
+      const session = await client.create({ metadata: { name }, autoPause: true });
       sessionByName.set(name, session);
       await store.put(scope, {
         sandboxId: session.sandboxId,
@@ -252,11 +251,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
       if (active === 0 && !sessionByName.has(name)) {
-        const session = await client.create({
-          metadata: { name, scratch: "true" },
-          autoPause: false,
-          privateTraffic: true,
-        });
+        const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
         sessionByName.set(name, session);
       }
       activeScratch.set(name, active + 1);
@@ -269,11 +264,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
     if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
 
     const reviveScratch = async (): Promise<E2bSession> => {
-      const session = await client.create({
-        metadata: { name, scratch: "true" },
-        autoPause: false,
-        privateTraffic: true,
-      });
+      const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
       sessionByName.set(name, session);
       return session;
     };

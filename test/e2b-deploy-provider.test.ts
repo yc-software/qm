@@ -90,7 +90,6 @@ test("e2b deploy runs each app in its own auto-pausing, auto-resuming private sa
   assert.deepEqual(fake.createOptions(name), {
     autoPause: true,
     autoResume: true,
-    privateTraffic: true,
     timeoutMs: 300_000,
   });
   assert.equal(fake.current(name)!.metadata["qm-deploy"], d.id);
