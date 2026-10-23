@@ -241,35 +241,19 @@ cron carries the grant each route needs. When an admin asks for scheduled work t
 reads admin data, settle the grants at creation, not after the first fire fails:
 
 1. Work out which admin tool actions or admin API routes the task will call.
-2. Map each to its grant with the table below. Every action or route the table omits
-   has no unattended grant.
+2. Fetch the live mapping with the admin tool's `unattended_grants` action
+   (`GET /v1/admin/unattended-grants`, org admins on a live turn only). It is built
+   from the routes themselves: each entry gives the grant, method, path, summary and,
+   where one exists, the admin tool action. Reads it doesn't list have no grant.
 3. Create the cron from a live turn in the admin's own DM, delivering to that DM, with
-   exactly those grants in `unattendedGrants`.
+   exactly the grants those reads need in `unattendedGrants`.
 4. If a needed action or route has no grant, or the cron can't carry grants (not the
    owner's own DM, not a live turn by a current org admin, or delivery to a channel,
    group or another person), tell the admin plainly before or at creation which part
-   won't work unattended. Don't create a cron that will fail on its first fire without saying so.
+   won't work unattended. Don't create a cron that will fail on its first fire without
+   saying so.
 5. After creating it, confirm the grants appear in the cron's details (the create
    result or `get`).
-
-The table mirrors the `admin.unattended` annotations on the routes in
-`src/api/routes/admin.ts` and the admin tool's operations in `src/tools/admin.ts`; a
-test keeps them in step.
-
-| Admin tool action | Route                          | Grant                 |
-| ----------------- | ------------------------------ | --------------------- |
-| `scopes`          | `GET /v1/admin/scopes`         | `admin.sessions.read` |
-| `spend`           | `GET /v1/admin/spend`          | `admin.spend.read`    |
-| `egress`          | `GET /v1/admin/egress`         | `admin.egress.read`   |
-| `sessions`        | `GET /v1/admin/sessions`       | `admin.sessions.read` |
-| `session`         | `GET /v1/admin/sessions/:id`   | `admin.sessions.read` |
-| `runs`            | `GET /v1/admin/runs`           | `admin.sessions.read` |
-| `file`            | `GET /v1/admin/files/read`     | `admin.files.read`    |
-| —                 | `GET /v1/admin/files/download` | `admin.files.read`    |
-| `files`           | `GET /v1/admin/files`          | `admin.files.read`    |
-| `errors`          | `GET /v1/admin/errors`         | `admin.sessions.read` |
-| `audit`           | `GET /v1/admin/audit`          | `admin.audit.read`    |
-| `crons`           | `GET /v1/admin/crons`          | `admin.crons.read`    |
 
 ## Failure modes
 

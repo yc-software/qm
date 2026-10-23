@@ -29,6 +29,11 @@ export const adminOperations = {
   whoami: operation("Check the requesting person's admin status.", "GET", "/whoami"),
   scopes: operation("Find scopes and their labels; do not guess scope IDs.", "GET", "/scopes"),
   resources: operation("Inspect the existing scope configuration resource manifest.", "GET", "/resources"),
+  unattended_grants: operation(
+    "List the admin reads a cron can be granted for unattended fires: each grant, route and admin action. Reads not listed have no grant.",
+    "GET",
+    "/unattended-grants",
+  ),
   config: operation("Read a scope's configuration.", "GET", "/scopes/:scope", scope),
   configure: operation(
     "Update one nonsecret configuration resource. Connector and service-credential setters stay on the self-API. Confirm the exact change first. The existing resource validator owns the value shape; read the admin skill for its fields.",

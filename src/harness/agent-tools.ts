@@ -2388,7 +2388,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
       "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
       "If the owner leaves the conversation, the cron is deleted.\n" +
-      'A cron whose fires read admin data (admin tool or API) needs `unattendedGrants`, and many admin reads have none: before creating it, read the admin skill\'s "Scheduling admin-reading work" and follow it.\n' +
+      'A cron whose fires read admin data (admin tool or API) needs `unattendedGrants`, and many admin reads have none: before creating it, follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list.\n' +
       "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
       "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
       "action=get inspects one in full; " +
@@ -2528,7 +2528,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       unattendedGrants: Type.Optional(
         Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
           description:
-            "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); see the admin skill's grant table. patch replaces; [] removes.",
+            "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
         }),
       ),
       enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),

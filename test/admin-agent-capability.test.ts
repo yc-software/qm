@@ -1,4 +1,6 @@
 import { createAdminCall } from "../src/tools/admin.ts";
+import { adminRoutes } from "../src/api/routes/admin.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import "./support/auto-fake-sprites.ts";
@@ -366,6 +368,45 @@ test("each new unattended read grant opens exactly its own routes", async () => 
       (await fetch(`${s.base}/v1/admin/audit?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
       403,
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("the unattended-grant listing mirrors the route annotations and only answers a live org admin", async () => {
+  const s = start();
+  try {
+    const expected = adminRoutes.flatMap((route) =>
+      "path" in route && route.admin?.unattended
+        ? [{ grant: route.admin.unattended.grant, method: route.method, path: route.path }]
+        : [],
+    );
+    const listing = await createAdminCall(s.base, await capFor("admin-alice"))({ action: "unattended_grants" });
+    assert.equal(listing.status, 200);
+    const grants = (listing.body as { grants: Array<Record<string, string>> }).grants;
+    assert.deepEqual(
+      grants.map(({ grant, method, path }) => ({ grant, method, path })),
+      expected,
+    );
+    assert.deepEqual(new Set(grants.map((entry) => entry.grant)), new Set(UNATTENDED_ADMIN_GRANTS));
+    assert.ok(grants.every((entry) => entry.summary));
+    assert.deepEqual(
+      grants.filter((entry) => entry.action === "spend" || entry.action === "crons").map((entry) => entry.grant),
+      ["admin.spend.read", "admin.crons.read"],
+    );
+    assert.ok(!grants.some((entry) => entry.path === "/v1/admin/users"));
+    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "unattended-grants.read"));
+
+    const nonAdmin = await fetch(`${s.base}/v1/admin/unattended-grants`, {
+      headers: { "x-agent-capability": await capFor("U1") },
+    });
+    assert.equal(nonAdmin.status, 403);
+    const unattended = await fetch(`${s.base}/v1/admin/unattended-grants`, {
+      headers: {
+        "x-agent-capability": await capFor("admin-alice", { live: false, grants: [...UNATTENDED_ADMIN_GRANTS] }),
+      },
+    });
+    assert.equal(unattended.status, 403);
   } finally {
     await s.close();
   }
