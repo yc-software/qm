@@ -1,6 +1,7 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
+import { encodeDeliveryTarget } from "../slack/delivery.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -259,7 +260,10 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             ...(solicited.member.displayName ? { displayName: solicited.member.displayName } : {}),
           },
           conversation,
-          deliveryTarget: batch.container,
+          deliveryTarget:
+            batch.surface === "slack"
+              ? encodeDeliveryTarget(batch.container, solicited.message.sub ?? solicited.message.ts)
+              : batch.container,
           text: solicited.message.text,
           liveActor: true,
           triggerTs: solicited.message.ts,
