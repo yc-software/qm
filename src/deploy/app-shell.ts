@@ -169,11 +169,26 @@ ${opts.annotationsEnabled ? ANNOTATE_CSS : ""}</style>
 
   const defaultName = document.getElementById("name").textContent;
   let lastHref = null;
+  let lastIcon = null;
+  const syncIcon = (doc) => {
+    const source = doc && doc.querySelector('link[rel~="icon"][href]');
+    const href = source ? source.href : null;
+    if (href === lastIcon) return;
+    lastIcon = href;
+    for (const old of document.querySelectorAll('link[rel~="icon"]')) old.remove();
+    if (!href) return;
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.href = href;
+    if (source.type) link.type = source.type;
+    document.head.appendChild(link);
+  };
   const sync = () => {
     try {
       const t = app.contentDocument && app.contentDocument.title;
       document.getElementById("name").textContent = t || defaultName;
       document.title = t || defaultName;
+      syncIcon(app.contentDocument);
       const loc = app.contentWindow.location;
       if (loc.href === "about:blank" || loc.href === lastHref) return;
       lastHref = loc.href;
