@@ -6,6 +6,7 @@ import type { Destination, SurfaceContextRequest, SurfaceContextResult } from ".
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
+import { createMemoryEventBus } from "../util/event-bus.ts";
 import { randomUUID } from "node:crypto";
 import {
   reachEnqueue,
@@ -92,6 +93,7 @@ export function createMessagingMethods(
   | "judgeAmbientContainer"
   | "createContextRequest"
   | "onContextRequestCreated"
+  | "onContextRequestSettled"
   | "getContextRequest"
   | "deleteContextRequest"
   | "pendingContextRequests"
@@ -125,6 +127,7 @@ export function createMessagingMethods(
   const contextRequests = deps.contextRequests ?? createMemoryMap<SurfaceContextRequest>();
   const contextRequestListeners = new Set<(request: SurfaceContextRequest) => void>();
   const contextRequestTokens = new Map<string, string>();
+  const contextRequestSettled = deps.contextRequestSettled ?? createMemoryEventBus<string>("context-request-settled");
   // Principals identity knows about that the Slack directory never sees: the email
   // allow-list, invited external users, and anyone who has signed in. On a Slack-less
   // deployment these are the only members there are.
@@ -384,6 +387,9 @@ export function createMessagingMethods(
       contextRequestListeners.add(listener);
       return () => contextRequestListeners.delete(listener);
     },
+    onContextRequestSettled(listener, onResync) {
+      return contextRequestSettled.subscribe(listener, { onResync });
+    },
     getContextRequest(id) {
       return contextRequests.get(id);
     },
@@ -411,6 +417,7 @@ export function createMessagingMethods(
           ? { status: "failed", error: outcome.error }
           : { status: "done", result: outcome.result ?? { messages: [] } },
       );
+      if (merged != null) contextRequestSettled.emit(id);
       return merged != null;
     },
     async ackDelivery(id, slackApiMs) {

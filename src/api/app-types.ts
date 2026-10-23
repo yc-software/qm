@@ -489,6 +489,7 @@ export interface App {
   pendingContextRequests(source: string): Promise<SurfaceContextRequest[]>;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<boolean>;
   onContextRequestCreated(listener: (request: SurfaceContextRequest) => void): () => void;
+  onContextRequestSettled(listener: (id: string) => void, onResync: () => void): () => void;
   ingestSurfaceEvents(
     events: IngestEvent[],
     surface?: string,
@@ -687,6 +688,7 @@ export interface AppDeps {
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
   contextRequests?: DurableMap<SurfaceContextRequest>;
+  contextRequestSettled?: EventBus<string>;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
