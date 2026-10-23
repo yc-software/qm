@@ -108,8 +108,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
         {
           processId: "bg-1",
           command: "bg: npm test",
-          status: { state: "running" },
-          registryStatus: "running",
+          status: "running",
           startedAt: 0,
         },
       ];
@@ -1898,6 +1897,29 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   const bg = emitted.filter((e) => e.payload.tool === "background");
   assert.equal(bg.length, 8);
   assert.equal(emitted.filter((e) => e.payload.tool === "execute").length, 2);
+});
+
+test("background list renders stored lifecycle without fabricated exit codes", async () => {
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      async backgroundList() {
+        return (["running", "exited", "reaped"] as const).map((status) => ({
+          processId: status,
+          command: "bg: job",
+          status,
+          startedAt: 0,
+        }));
+      },
+    },
+  };
+  const background = createAgentTools(ref).find((t) => t.name === "background");
+  const result = await call(background, { action: "list" });
+  const text = (result as { content: Array<{ text: string }> }).content[0]!.text;
+  assert.deepEqual(
+    text.split("\n").map((line) => line.split("  ")[1]),
+    ["running", "exited", "stopped (ttl)"],
+  );
 });
 
 test("background watch reports an already exited job as a successful tail result", async () => {
