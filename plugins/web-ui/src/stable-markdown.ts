@@ -1,4 +1,4 @@
-import "./marked-dedupe.ts";
+import "./marked-extensions.ts";
 import "./mermaid-block.ts";
 import { MarkdownBlock } from "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";

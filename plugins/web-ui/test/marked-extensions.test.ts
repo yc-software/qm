@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { marked } from "marked";
-import "../src/marked-dedupe.ts";
+import "../src/marked-extensions.ts";
 
 type Ext = { name: string; level: "inline"; start: (s: string) => number; tokenizer: () => undefined };
 const ext = (name: string): Ext => ({
@@ -21,11 +21,19 @@ test("re-registering the same extensions is a no-op — the tokenizer list stops
   assert.equal(inlineCount(), after);
 });
 
-test("a config carrying more than extensions always passes through", () => {
+test("a config carrying more than extensions keeps its options without re-registering extensions", () => {
   marked.use({ extensions: [ext("dedupe-c")] });
   const before = inlineCount();
-  marked.use({ extensions: [ext("dedupe-c")], breaks: false });
-  assert.equal(inlineCount(), before + 1, "extension-plus-options config is not swallowed");
+  marked.use({ extensions: [ext("dedupe-c")], gfm: false });
+  assert.equal(inlineCount(), before);
+  assert.equal((marked.defaults as { gfm?: boolean }).gfm, false);
+  marked.use({ gfm: true });
+});
+
+test("mini-lit's dollar math is superseded while its LaTeX delimiters still register", () => {
+  marked.use({ extensions: [ext("inlineMathDollar"), ext("blockMathDollar"), ext("inlineMathLatex")] });
+  assert.equal(marked.parse("$5 and $10 today") as string, "<p>$5 and $10 today</p>\n");
+  assert.match(marked.parse("$x$ inline") as string, /class="katex"/);
 });
 
 test("a config with no extensions passes through untouched", () => {

@@ -2103,6 +2103,9 @@ qm-markdown .tok-in {
 .user-bubble :is(markdown-block, qm-markdown) p {
   line-height: inherit;
 }
+:is(markdown-block, qm-markdown) .katex-display {
+  margin-block: 1rem;
+}
 .message-stack .user-row.latest-prompt:not(.pin-expanded) .user-bubble > .pin-content {
   display: -webkit-box;
   -webkit-box-orient: vertical;
