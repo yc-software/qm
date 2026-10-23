@@ -1,6 +1,5 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -20,14 +19,13 @@ const SERVER = [
   "  if (q.url === '/write') { fs.writeFileSync(process.env.DATA_DIR + '/note.txt', 'kept'); return s.end('ok'); }",
   "  if (q.url === '/data') return s.end(fs.readFileSync(process.env.DATA_DIR + '/note.txt', 'utf8'));",
   "  s.end('v' + process.env.APP_VERSION);",
-  "}).listen(process.env.PORT);",
+  "}).listen(process.env.PORT, '127.0.0.1');",
 ].join(" ");
 
 let fake: FakeE2b | undefined;
 let appPort = 0;
 
 afterEach(() => {
-  if (appPort) spawnSync("sh", ["-c", `lsof -ti tcp:${appPort} -sTCP:LISTEN | xargs kill 2>/dev/null; true`]);
   fake?.cleanup();
   fake = undefined;
 });

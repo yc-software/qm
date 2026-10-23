@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -45,8 +45,62 @@ export interface FakeE2b {
   cleanup(): void;
 }
 
+const OWNER_ENV = "QM_FAKE_E2B_OWNER";
+const liveRoots = new Set<string>();
+
+function ownedPids(marker: string): number[] {
+  const tag = `${OWNER_ENV}=${marker}`;
+  const owned = (kv: string): boolean => kv === tag || kv.startsWith(`${tag}/`);
+  if (existsSync("/proc/self/environ")) {
+    const pids: number[] = [];
+    for (const entry of readdirSync("/proc")) {
+      const pid = Number(entry);
+      if (!Number.isInteger(pid) || pid === process.pid) continue;
+      try {
+        if (readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").some(owned)) pids.push(pid);
+      } catch {
+        continue;
+      }
+    }
+    return pids;
+  }
+  const ps = spawnSync("ps", ["-Aeww", "-o", "pid=,command="], { encoding: "utf8" });
+  return (ps.stdout ?? "")
+    .split("\n")
+    .filter((line) => line.split(/\s+/).some(owned))
+    .map((line) => Number(line.trim().split(/\s+/)[0]))
+    .filter((pid) => Number.isInteger(pid) && pid !== process.pid);
+}
+
+function killOwned(marker: string): void {
+  for (let pass = 0; pass < 20; pass++) {
+    const pids = ownedPids(marker);
+    if (!pids.length) return;
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
+      }
+    }
+  }
+}
+
+process.once("exit", () => {
+  for (const root of liveRoots) {
+    killOwned(root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
   const root = mkdtempSync(join(tmpdir(), "fake-e2b-"));
+  liveRoots.add(root);
+  const destroy = (r: FakeRecord): void => {
+    r.expired = true;
+    killOwned(`${root}/${r.sandboxId}`);
+    rmSync(r.home, { recursive: true, force: true });
+  };
   const records = new Map<string, FakeRecord>();
   const snapshots = new Map<string, string>();
   const execScripts: string[] = [];
@@ -99,10 +153,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
     },
     expirePaused: () => {
       for (const r of records.values()) {
-        if (r.state === "paused" && !r.expired) {
-          r.expired = true;
-          rmSync(r.home, { recursive: true, force: true });
-        }
+        if (r.state === "paused" && !r.expired) destroy(r);
       }
     },
     loseNextCommand: (name) => {
@@ -123,7 +174,11 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
     snapshots: () => [...snapshots.keys()],
     restoredFrom: (name) => byName(name)?.fromSnapshot,
     execScripts: () => [...execScripts],
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    cleanup: () => {
+      killOwned(root);
+      liveRoots.delete(root);
+      rmSync(root, { recursive: true, force: true });
+    },
   };
 
   const session = (r: FakeRecord): E2bSession => ({
@@ -143,7 +198,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       const spawned = spawnSync("sh", ["-c", remap(r, command)], {
         encoding: "buffer",
         maxBuffer: 128 * 1024 * 1024,
-        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        env: { ...process.env, COPYFILE_DISABLE: "1", [OWNER_ENV]: `${root}/${r.sandboxId}` },
       });
       return {
         stdout: (spawned.stdout ?? Buffer.alloc(0)).toString("utf8"),
@@ -185,8 +240,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
       return fake.metrics;
     },
     async kill(): Promise<void> {
-      r.expired = true;
-      rmSync(r.home, { recursive: true, force: true });
+      destroy(r);
     },
   });
 
@@ -242,8 +296,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
     async kill(sandboxId): Promise<void> {
       const r = records.get(sandboxId);
       if (!r) return;
-      r.expired = true;
-      rmSync(r.home, { recursive: true, force: true });
+      destroy(r);
     },
     async deleteSnapshot(snapshotId): Promise<void> {
       const dir = snapshots.get(snapshotId);
