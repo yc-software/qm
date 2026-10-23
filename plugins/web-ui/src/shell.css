@@ -10694,6 +10694,7 @@ h3.ambient-field-label {
 }
 .send-failure .btn {
   color: var(--foreground);
+  pointer-events: auto;
 }
 .user-row .send-failure {
   justify-content: flex-end;
