@@ -1044,6 +1044,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return {
         sourceScopeId,
         skills: selected.map(({ skill }) => ({
+          id: skill!.id,
           name: skill!.manifest.name,
           description: skill!.manifest.description,
           source: skill!.scopeId,

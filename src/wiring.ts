@@ -1775,7 +1775,7 @@ export function buildApp(
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
-  const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
+  const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory, teams }, canManageScope);
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;

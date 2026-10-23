@@ -3176,7 +3176,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       label: action,
       description,
       parameters: Type.Object({
-        id: Type.String({ description: "Artifact ID; an app may also be named by its handle." }),
+        id: Type.String({
+          description:
+            "Artifact ID (for a skill, the id from skills list or search); an app may also be named by its handle.",
+        }),
         toScope:
           type === "deploy" && !move
             ? Type.Optional(
