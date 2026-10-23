@@ -27,7 +27,7 @@ test("init --org scaffolds config + generated .env + a runnable sandbox/, which 
     assert.ok(existsSync(join(dir, "sandbox", "tools", "example-tool", "tool.json")));
     const toolBin = join(dir, "sandbox", "tools", "example-tool", "example-tool");
     assert.ok(existsSync(toolBin), "example tool executable written");
-    assert.ok(statSync(toolBin).mode & 0o111, "example tool is executable");
+    if (process.platform !== "win32") assert.ok(statSync(toolBin).mode & 0o111, "example tool is executable");
 
     const checked = runCli(["check"], { cwd: dir });
     assert.equal(checked.code, 0, checked.out);
