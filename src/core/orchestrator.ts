@@ -3927,6 +3927,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 : command,
               pa.approvalKey,
             );
+            if (prepared.some((p) => p.requestId === requestId)) continue;
             const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
             prepared.push({
               requestId,
