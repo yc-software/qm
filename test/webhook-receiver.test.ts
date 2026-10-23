@@ -390,3 +390,45 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
 });
+
+test("filters skip structured JSON values without throwing or matching their coercion", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github", secret: SECRET },
+    filters: [{ path: "data.status", in: ["opened", "[object Object]"] }],
+  });
+  for (const status of [{ toString: null }, { toString: "opened" }, ["opened"], {}, []]) {
+    const rawBody = JSON.stringify({ data: { status } });
+    assert.deepEqual(await receiver.deliver(wh.id, githubReq(rawBody)), { status: 200, body: "skipped" });
+  }
+  await flush();
+  assert.equal(calls.length, 0);
+  assert.equal((await webhooks.listEvents(wh.id)).length, 0);
+});
+
+test("nested filter paths keep matching string, number and boolean values", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "triage",
+    verification: { scheme: "github", secret: SECRET },
+    filters: [{ path: "data.status", in: ["opened", "7", "true", "false", "0"] }],
+  });
+  for (const status of ["opened", 7, true, false, 0]) {
+    assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ data: { status } }))), { status: 202 });
+    await flush();
+  }
+  for (const data of [{}, { status: null }, { status: "closed" }]) {
+    assert.deepEqual(await receiver.deliver(wh.id, githubReq(JSON.stringify({ data }))), {
+      status: 200,
+      body: "skipped",
+    });
+  }
+  assert.equal(calls.length, 5);
+});
