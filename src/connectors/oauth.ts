@@ -491,10 +491,12 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       console: "Zoom App Marketplace → Develop → Build App → General app",
       url: "https://marketplace.zoom.us/",
       steps: [
-        "Create a General app and choose User-managed. Until it is published, only users in your Zoom account can connect it.",
-        "Add the redirect URI shown below as the OAuth redirect URL and to the OAuth allow list, with strict mode on.",
+        "Create a General app and choose User-managed.",
+        "In the Production view, add the redirect URI shown below as the OAuth redirect URL and to the OAuth allow list, with strict mode on.",
         "Under Scopes, add meeting:read:meeting, meeting:read:list_meetings, meeting:write:meeting, meeting:update:meeting, meeting:delete:meeting, and user:read:user.",
-        "Paste the Client ID + Client secret below — the Development credentials unless the app is published.",
+        "Under Publish, set the audience to Users within my Zoom account. Internal apps skip Marketplace review.",
+        "If your account requires Marketplace admin approval, have an admin open the app in the Marketplace, open the menu next to Add, and choose Manage approvals → All users on this account.",
+        "Paste the Production Client ID + Client secret below.",
       ],
       scopesRationale:
         "Zoom grants the scopes configured on the app rather than a requested list; the meeting scopes let the agent find, create, reschedule, and cancel meetings the connecting user hosts or schedules, and user:read:user reads their Zoom profile and timezone.",
