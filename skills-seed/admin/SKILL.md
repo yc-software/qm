@@ -236,8 +236,8 @@ where the admin acts directly. If asked, point them there — don't try the API
 
 ## Scheduling admin-reading work
 
-Cron and webhook fires are autonomous, so the admin plane refuses them unless the
-cron carries the grant each route needs. When an admin asks for scheduled work that
+Cron fires are autonomous, so the admin plane refuses them unless the cron carries
+the grant each route needs (webhooks can't carry grants). When an admin asks for scheduled work that
 reads admin data, settle the grants at creation, not after the first fire fails:
 
 1. Work out which admin tool actions or admin API routes the task will call.
