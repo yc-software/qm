@@ -243,10 +243,7 @@ export function createDeliveryPoller(deps: {
               if (d.destination.react) {
                 const { messageTs, emoji } = d.destination.react;
                 const { failed } = await applyReactions(client, channel, messageTs, [emoji]);
-                if (failed.length)
-                  console.error(
-                    `[slack-plugin] delivery ${d.id} reaction(s) failed: ${failed.join(", ")} (check reactions:write / message ts)`,
-                  );
+                if (failed.length) throw new Error(`reaction(s) failed: ${failed.join(", ")}`);
                 return undefined;
               }
               if (d.destination.pin) {
@@ -256,10 +253,7 @@ export function createDeliveryPoller(deps: {
                   else await client.pins.add({ channel, timestamp: messageTs });
                 } catch (err) {
                   const code = slackErrorCode(err);
-                  if (!code || !SETTLED_PIN_ERRORS.has(code))
-                    console.error(
-                      `[slack-plugin] delivery ${d.id} native ${remove ? "unpin" : "pin"} failed: ${code ?? (err as Error).message}`,
-                    );
+                  if (!code || !SETTLED_PIN_ERRORS.has(code)) throw err;
                 }
                 return undefined;
               }
@@ -269,10 +263,7 @@ export function createDeliveryPoller(deps: {
                   await client.chat.delete({ channel, ts: messageTs });
                 } catch (err) {
                   const code = slackErrorCode(err);
-                  if (code !== "message_not_found")
-                    console.error(
-                      `[slack-plugin] delivery ${d.id} delete failed: ${code ?? (err as Error).message} (own messages only)`,
-                    );
+                  if (code !== "message_not_found") throw err;
                 }
                 return undefined;
               }
