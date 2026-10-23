@@ -1,6 +1,7 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
+import { renderSurfaceBriefing } from "../../core/orchestrator/prompt-blocks.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";
@@ -55,6 +56,17 @@ const clientToolsSchema = z
   .refine((tools) => new Set(tools.map((tool) => tool.name)).size === tools.length, {
     message: "names must be unique",
   });
+
+const surfaceBriefingSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^[^\r\n]+$/),
+  state: z.string().max(20_000).optional(),
+  instructions: z.string().max(8_000).optional(),
+});
 
 const clientResultSchema = z.object({
   callId: z.string().min(1).max(256),
@@ -114,7 +126,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   const resolvedOrigin = publicTurnOrigin(safeBody);
   if (resolvedOrigin.error) return { error: resolvedOrigin.error };
   const origin = resolvedOrigin.origin;
-  const { clientTools: rawClientTools, ...rest } = safeBody;
+  const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };
   let clientTools: ClientToolDeclaration[] | undefined;
@@ -123,7 +135,20 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
     if (!parsed.success) return { error: zodMessage("clientTools", parsed.error) };
     clientTools = parsed.data;
   }
-  return { request: { ...rest, ...(origin ? { origin } : {}), ...(clientTools?.length ? { clientTools } : {}) } };
+  let conversationHeader = rest.conversationHeader;
+  if (rawSurfaceBriefing !== undefined) {
+    const parsed = surfaceBriefingSchema.safeParse(rawSurfaceBriefing);
+    if (!parsed.success) return { error: zodMessage("surfaceBriefing", parsed.error) };
+    conversationHeader = [conversationHeader, renderSurfaceBriefing(parsed.data)].filter(Boolean).join("\n\n");
+  }
+  return {
+    request: {
+      ...rest,
+      ...(conversationHeader ? { conversationHeader } : {}),
+      ...(origin ? { origin } : {}),
+      ...(clientTools?.length ? { clientTools } : {}),
+    },
+  };
 }
 
 async function postTurn(ctx: ApiCtx): Promise<void> {
