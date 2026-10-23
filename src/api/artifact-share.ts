@@ -8,7 +8,6 @@ import type { RecipientResolution } from "../directory/directory-store.ts";
 export const SHARED_SKILL_TRIGGER_REFUSAL =
   "a skill in a shared scope can only be changed by a person, not an automated trigger";
 
-/** A scope whose skills belong to several people: a channel, group or team. */
 export function isMultiMemberSkillScope(scope: ScopeId): boolean {
   return isSharedScope(scope) || parseScopeId(scope).kind === "team";
 }

@@ -267,7 +267,6 @@ export function createManagesArtifactHome(
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
-    // A team-owned artifact is managed by the team: its current members can share or move it.
     if (kind === "team") return teamMember(deps, principalId, ref);
     if (!samePerson(createdBy, principalId)) return false;
     if (kind === "personal") return true;

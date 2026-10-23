@@ -562,14 +562,14 @@ test("a team member who didn't create a team-owned skill can share it onward; a 
   state.artifacts["skill:TS"] = {
     type: "skill",
     id: "TS",
-    ownerScopeId: scopeId("team", "finance"),
+    ownerScopeId: scopeId("team", "alpha"),
     createdBy: "U1",
     grantRef: "skill:TS",
   };
   state.scopesByPrincipal["U2"] = [
     scopeId("personal", "U2"),
     scopeId("org", ORG),
-    scopeId("team", "finance"),
+    scopeId("team", "alpha"),
     scopeId("channel", "C7"),
   ];
   state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), scopeId("org", ORG), scopeId("channel", "C7")];
@@ -597,8 +597,8 @@ test("a team member who didn't create a team-owned skill can share it onward; a 
 });
 
 test("skill mutations from an automated trigger are blocked for team homes, like channel and group homes", () => {
-  assert.equal(triggerBlocksSharedSkill(scopeId("team", "finance"), false), true);
-  assert.equal(triggerBlocksSharedSkill(scopeId("team", "finance"), true), false);
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), false), true);
+  assert.equal(triggerBlocksSharedSkill(scopeId("team", "alpha"), true), false);
   assert.equal(triggerBlocksSharedSkill(scopeId("personal", "U1"), false), false);
 });
 
