@@ -184,8 +184,10 @@ import {
   createCanWriteScope,
   createCurrentScopeMembers,
   createIsCurrentSharedScopeMember,
+  createLiveProofHolds,
   createManagesArtifactHome,
   rosterAdmits,
+  type LiveProof,
   type CanReadScope,
   type CanManageScope,
   type ManagesArtifactHome,
@@ -1781,6 +1783,7 @@ export function buildApp(
   );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
+  const liveProofHolds = createLiveProofHolds({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;
   membership.canManageScope = canManageScope;
   membership.canUseSandboxScope = async (actorId, scopeId) =>
@@ -1967,9 +1970,10 @@ export function buildApp(
     }
     return broker;
   };
-  const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"]) => {
+  const prepareSessionRequest = async (request: Parameters<RunStore["enqueue"]>[0]["request"], proof?: LiveProof) => {
     const scope = resolution.scopeFor(request.conversation, request.actor);
-    if (!(await canWriteScope(request.actor.id, scope))) throw new Error("session actor no longer has scope access");
+    if (!(await canWriteScope(request.actor.id, scope)) && !(await liveProofHolds(request.actor.id, scope, proof)))
+      throw new Error("session actor no longer has scope access");
     const ref = request.conversation.channelRef;
     if (request.conversation.kind !== "group" || !ref || !projects.recognizes(ref)) return request;
     const version = await projects.version(ref);

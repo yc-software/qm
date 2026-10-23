@@ -18,6 +18,7 @@ import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
+import type { LiveProof } from "../resolution/scope-membership.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
@@ -42,6 +43,13 @@ export async function delegatedAuthorizationOrigin(
   request: OrchestratorInput,
   deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
 ): Promise<OrchestratorInput["origin"] | undefined> {
+  return (await delegatedAuthorizationRoot(request, deps))?.origin;
+}
+
+export async function delegatedAuthorizationRoot(
+  request: OrchestratorInput,
+  deps: { runs: Pick<RunStore, "get">; sessions: Pick<SessionStore, "getByThread" | "getForParticipant"> },
+): Promise<{ origin: OrchestratorInput["origin"]; provenAt: number } | undefined> {
   const seen = new Set<string>();
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
@@ -99,7 +107,7 @@ export async function delegatedAuthorizationOrigin(
       (parent.origin.kind === "human" ||
         (parent.origin.kind === "ambient" && parent.origin.live === true && parent.conversation.kind !== "dm"))
     )
-      return parent.origin;
+      return { origin: parent.origin, provenAt: source.createdAt };
     current = parent;
   }
 }
@@ -188,6 +196,7 @@ interface SessionSyscallBinding {
   scopeId: ScopeId;
   orgScopeId?: ScopeId;
   liveTurn?: boolean;
+  liveProof?: LiveProof;
   request: Pick<
     OrchestratorInput,
     | "cancel"
@@ -250,7 +259,7 @@ export interface SessionSyscallDeps {
   maxAttempts: number;
   treeRunCap?: number;
   advisoryLock?: AdvisoryLock;
-  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  prepareRequest?: (request: OrchestratorInput, proof?: LiveProof) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
   conversations?: {
@@ -571,18 +580,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
         if (deps.enabled && !(await deps.enabled(binding.request.actor.id)))
           throw new Error("persistent subagents are not enabled for this user");
         const current = await deps.sessions.get(binding.session.id);
-        if (
-          !current ||
-          current.scopeId !== binding.scopeId ||
-          (deps.authorize && !(await deps.authorize(current, binding.request.actor.id)))
-        )
+        if (!current || current.scopeId !== binding.scopeId)
           throw new Error("the sender no longer has access to this session");
         const request: OrchestratorInput = {
           ...binding.request,
           origin: binding.request.origin ?? { kind: "automation" },
           text: "",
         };
-        return deps.prepareRequest ? deps.prepareRequest(request) : request;
+        return deps.prepareRequest ? deps.prepareRequest(request, binding.liveProof) : request;
       }
 
       return {
@@ -723,7 +728,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               await deps.runs.enqueue({
                 sessionId: child.threadRef,
                 dedupKey: `subagent-open:${threadRef}`,
-                request: deps.prepareRequest ? await deps.prepareRequest(request) : request,
+                request: deps.prepareRequest ? await deps.prepareRequest(request, binding.liveProof) : request,
                 maxAttempts: deps.maxAttempts,
               });
               return { ok: true, sessionId: child.id, title, liveRunsRemaining: Math.max(0, cap - live - 1) };
@@ -788,7 +793,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 "",
                 "",
               );
-              const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
+              const request = deps.prepareRequest ? await deps.prepareRequest(prepared, binding.liveProof) : prepared;
               assertAudienceCompatible(caller, request);
               const title = visibleTitle(target);
               if (input.interrupt) {
@@ -1032,11 +1037,14 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<
+    SessionStore,
+    "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries" | "getForParticipant"
+  >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
-  prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
+  prepareRequest?: (request: OrchestratorInput, proof?: LiveProof) => Promise<OrchestratorInput>;
 }
 
 export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Promise<boolean> {
@@ -1146,7 +1154,16 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
-  const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
+  const getRun = deps.runs.get;
+  const root =
+    originalParent && initiatingRun && getRun && !request.externalSlack
+      ? await delegatedAuthorizationRoot(
+          { ...request, delegatingRunId: initiatingRun.id },
+          { runs: { get: (id) => getRun(id) }, sessions: deps.sessions },
+        )
+      : undefined;
+  const proof = root && { actorId: request.actor.id, scopeId: parent.scopeId, provenAt: root.provenAt };
+  const prepared = deps.prepareRequest ? await deps.prepareRequest(request, proof) : request;
   assertAudienceCompatible(run.request, prepared);
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {

@@ -10,7 +10,7 @@ import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import { requiresDelegation, delegatedAuthorizationRoot } from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type ExtractedDocumentText,
@@ -19,7 +19,13 @@ import {
 } from "./document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
 import { recoveredRuntime } from "../harness/runtime-recovery.ts";
-import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import {
+  createCanWriteScope,
+  createLiveProofHolds,
+  rosterAdmits,
+  withLiveTurnMembership,
+  type ScopeMembershipDeps,
+} from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
@@ -553,10 +559,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         input.origin.kind === "ambient" && input.origin.live === true && conversation.kind !== "dm";
       const delegationEnabled =
         !external && (await deps.featureFlags?.enabled("responsive_spine", `personal:${actor.id}` as ScopeId)) === true;
-      const delegatedOrigin =
+      const delegatedRoot =
         !external && deps.runs
-          ? await delegatedAuthorizationOrigin(input, { runs: deps.runs, sessions: deps.sessions })
+          ? await delegatedAuthorizationRoot(input, { runs: deps.runs, sessions: deps.sessions })
           : undefined;
+      const delegatedOrigin = delegatedRoot?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
       const liveTurn = authorizationOrigin.kind === "human" && allInternal && !external;
       const liveAuthorTurn =
@@ -582,7 +589,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
       if (conversation.threadRef.startsWith("agent:main:subagent:")) {
-        const canWrite = createCanWriteScope({
+        const membershipDeps: ScopeMembershipDeps = {
           managedGroups: deps.managedGroups
             ? {
                 recognizes: (ref) => deps.managedGroups!.recognizes(ref),
@@ -592,12 +599,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : undefined,
           directory: deps.directory,
           identity: deps.identity,
-        });
+        };
+        const proof =
+          liveAuthorTurn && delegatedRoot && delegatedSession
+            ? { actorId: actor.id, scopeId: delegatedSession.scopeId, provenAt: delegatedRoot.provenAt }
+            : undefined;
         if (
           !delegatedSession?.spawnMeta ||
           delegatedSession.scopeId !== deps.resolution.scopeFor(conversation, actor) ||
           !(await deps.sessions.getForParticipant(delegatedSession.id, actor.id)) ||
-          !(await canWrite(actor.id, delegatedSession.scopeId))
+          (!(await createCanWriteScope(membershipDeps)(actor.id, delegatedSession.scopeId)) &&
+            !(await createLiveProofHolds(membershipDeps)(actor.id, delegatedSession.scopeId, proof)))
         )
           return { status: "refused", reason: "subagent session access is no longer current" };
       }
@@ -2722,6 +2734,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   scopeId: scopeId as ScopeId,
                   orgScopeId: resolution.orgScopeId,
                   liveTurn,
+                  ...(liveAuthorTurn && conversation.kind !== "dm"
+                    ? {
+                        liveProof: {
+                          actorId: actor.id,
+                          scopeId: scopeId as ScopeId,
+                          provenAt: delegatedRoot?.provenAt ?? input.runStartedAt ?? coreReceivedAt,
+                        },
+                      }
+                    : {}),
                   request: { ...input, readOnly: strictReadOnly, cancel: turnAbort.signal },
                 }),
               }

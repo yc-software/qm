@@ -217,6 +217,67 @@ test("sharing e2e: a delegated turn shares its live parent's access under curren
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
 
+test("sharing e2e: a helper in a group DM the directory has not crawled runs on the live proof until a newer crawl", async (t) => {
+  const b = await fixture(t);
+  await b.featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
+  await b.directory.replaceGroups([{ groupId: "G-OLD", principalId: "U1" }], Date.now() - 60_000, ["G-OLD"], ["G-OLD"]);
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => void warnings.push(args.join(" ")));
+  b.runtime.startBackground();
+  const settled = async (find: () => Promise<Awaited<ReturnType<typeof b.runs.get>>>) => {
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const run = await find();
+      if (run?.status === "done" || run?.status === "failed") return run;
+      assert.ok(Date.now() < deadline, "run did not finish");
+      await sleep(25);
+    }
+  };
+  const people = [{ externalId: "U1" }, { externalId: "U2" }];
+  const opened = await b.turn("!open summarize the room", true, "U1", {
+    conversation: {
+      kind: "group",
+      channelRef: "G-NEW",
+      threadRef: "G-NEW:helper",
+      audience: people,
+      publishMembers: people,
+    },
+  });
+  const childId = /^opened (\S+)$/.exec(opened)?.[1];
+  assert.ok(childId, opened);
+  const child = await b.sessions.get(childId);
+  assert.ok(child);
+  const first = await settled(() => b.runs.getByDedupKey(`subagent-open:${child.threadRef}`));
+  assert.equal(first.result?.status, "ok", JSON.stringify(first.result));
+  assert.ok(await settled(() => b.runs.getByDedupKey(`subagent-return:${first.id}`)));
+  const parent = first.request.delegatingRunId ? await b.runs.get(first.request.delegatingRunId) : null;
+  assert.ok(parent);
+  const childTurn = async () => {
+    const { run } = await b.runs.enqueue({ sessionId: child.threadRef, request: { ...first.request, text: "again" } });
+    return settled(() => b.runs.get(run.id));
+  };
+  const groups = (roster: string[], members: Array<{ groupId: string; principalId: string }>) =>
+    b.directory.replaceGroups(
+      [{ groupId: "G-OLD", principalId: "U1" }, ...members],
+      Date.now(),
+      ["G-OLD", "G-NEW"],
+      ["G-OLD", ...roster],
+    );
+  await groups([], []);
+  const kept = await childTurn();
+  assert.equal(kept.result?.status, "ok");
+  assert.ok(await settled(() => b.runs.getByDedupKey(`subagent-return:${kept.id}`)));
+  await groups(["G-NEW"], [{ groupId: "G-NEW", principalId: "U2" }]);
+  const revoked = await childTurn();
+  assert.match(revoked.result?.reason ?? "", /access is no longer current/);
+  const deadline = Date.now() + 10_000;
+  while (!warnings.some((w) => w.includes("sessions: return: session actor no longer has scope access"))) {
+    assert.ok(Date.now() < deadline, warnings.join("\n"));
+    await sleep(25);
+  }
+  assert.equal(await b.runs.getByDedupKey(`subagent-return:${revoked.id}`), null);
+});
+
 test("sharing e2e: room file and memory access is revoked on the next DM turn", async (t) => {
   const b = await fixture(t);
   await b.file("channel:C1", "plan.txt", "ROOM_FILE");

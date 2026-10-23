@@ -374,8 +374,10 @@ test("pg directory: a swap stamped older than the stored snapshot is refused", {
 
   assert.equal(await store.replaceGroups([{ groupId: "G-fresh", principalId: "U-alice" }], 2000), true);
   assert.equal(await store.replaceGroups([], 1000), false, "a stale instance's swap must not clobber a fresh sync");
+  assert.equal(await store.groupsSyncedAt(), 2000);
   assert.equal(await store.groupMember("G-fresh", "U-alice"), true);
   assert.equal(await store.replaceGroups([], 3000), true);
+  assert.equal(await store.groupsSyncedAt(), 3000);
   assert.equal(await store.groupMember("G-fresh", "U-alice"), false);
 
   assert.equal(await store.replace([{ principalId: "U-fresh", displayName: "Fresh", type: "internal" }], 2000), true);

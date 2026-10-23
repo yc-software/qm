@@ -19,6 +19,7 @@ export interface ScopeMembershipDeps {
     groupMember(groupId: string, principalId: string): Promise<boolean>;
     channelMembership?(channelId: string, principalId: string): Promise<boolean | undefined>;
     groupMembership?(groupId: string, principalId: string): Promise<boolean | undefined>;
+    groupsSyncedAt?(): Promise<number | undefined>;
     channelPrivacy?(channelId: string): Promise<boolean | undefined>;
     conversationMembers?(
       kind: "channel" | "group",
@@ -141,6 +142,30 @@ export function withLiveTurnMembership(
   return async (principalId, scope) =>
     (turn.verified && scope === turn.scopeId && samePerson(principalId, turn.actorId)) ||
     (await stored?.(principalId, scope)) === true;
+}
+
+export interface LiveProof {
+  actorId: string;
+  scopeId: ScopeId;
+  provenAt: number;
+}
+
+export type LiveProofHolds = (principalId: string, scope: ScopeId, proof: LiveProof | undefined) => Promise<boolean>;
+
+export function createLiveProofHolds(deps: ScopeMembershipDeps): LiveProofHolds {
+  return async function liveProofHolds(principalId, scope, proof) {
+    if (!proof || scope !== proof.scopeId || !samePerson(principalId, proof.actorId)) return false;
+    const { kind, ref } = parseScopeId(scope);
+    if (kind !== "group" || deps.managedGroups?.recognizes(ref) || !activePrincipal(deps, principalId)) return false;
+    const syncedAt = await deps.directory
+      ?.groupsSyncedAt?.()
+      .catch(swallowAs("scope membership: groups sync", Infinity));
+    if (syncedAt === undefined || syncedAt < proof.provenAt) return true;
+    return (
+      (await deps.directory?.groupMembership?.(ref, principalId).catch(swallowAs("scope membership: group", false))) !==
+      false
+    );
+  };
 }
 
 export type CurrentScopeMembers = (scope: ScopeId) => Promise<Principal[] | undefined>;

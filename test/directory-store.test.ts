@@ -197,8 +197,10 @@ describe("group-DM (mpim) membership (addressed by participant set, §10)", () =
     const d = createDirectoryStore();
     assert.equal(await d.replaceGroups([{ groupId: "G-new", principalId: "U-alice" }], 2000), true);
     assert.equal(await d.replaceGroups([], 1000), false);
+    assert.equal(await d.groupsSyncedAt(), 2000);
     assert.equal(await d.groupMember("G-new", "U-alice"), true);
     assert.equal(await d.replaceGroups([], 3000), true);
+    assert.equal(await d.groupsSyncedAt(), 3000);
     assert.equal(await d.groupMember("G-new", "U-alice"), false);
   });
 

@@ -76,6 +76,7 @@ export interface DirectoryStore {
   resolveGroupByParticipants(participants: readonly string[]): Promise<GroupResolution>;
   groupMember(groupId: string, principalId: string): Promise<boolean>;
   groupMembership(groupId: string, principalId: string): Promise<boolean | undefined>;
+  groupsSyncedAt(): Promise<number | undefined>;
   listGroupsFor(principalId: string): Promise<string[]>;
   conversationMembers(kind: "channel" | "group", id: string): Promise<DirectoryMember[] | undefined>;
   listChannelsFor(principalId: string): Promise<DirectoryChannel[]>;
@@ -273,6 +274,9 @@ export function createDirectoryStore(): DirectoryStore {
       if (!listedGroupIds?.has(groupId)) return false;
       if (!knownGroupRosters?.has(groupId)) return undefined;
       return hasPerson(groupMembers?.get(groupId), principalId);
+    },
+    async groupsSyncedAt() {
+      return syncedAts.get("groups");
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;

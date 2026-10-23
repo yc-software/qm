@@ -54,6 +54,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!whats_new",
   "!search ",
   "!read_members",
+  "!open ",
   "!read_file ",
   "!set_standing_order ",
   "!get_standing_order",
@@ -853,6 +854,12 @@ export function createMockHarness(): Harness {
           reply = r.ok
             ? `search(${r.source ?? "?"}) ${(r.hits ?? []).length} hit(s)${first ? ` first=${first.author ?? "?"}:${first.snippet}` : ""}${r.coverageSince ? ` coverage=${r.coverageSince}` : ""}`
             : `[couldn't search] ${r.message ?? "unavailable"}`;
+        } else if (command0.startsWith("!open ")) {
+          const r = await turn.tools.sessionSyscalls?.open({
+            task: cmd.slice(cmd.indexOf("!open ") + "!open ".length),
+          });
+          usedTool = true;
+          reply = r?.ok ? `opened ${r.sessionId}` : `[couldn't open] ${r?.message ?? "unavailable"}`;
         } else if (command0 === "!read_members") {
           const r = await turn.tools.readMembers();
           await turn.emit({

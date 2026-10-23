@@ -598,6 +598,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       return rows[0]?.roster_known === true ? rows[0]?.member === true : undefined;
     },
 
+    async groupsSyncedAt() {
+      const rows = await q("SELECT groups_synced_at FROM directory_sync WHERE org_id = $1", [orgId]);
+      return rows[0]?.groups_synced_at == null ? undefined : Number(rows[0].groups_synced_at);
+    },
+
     async listGroupsFor(principalId) {
       const rows = await q(
         "SELECT DISTINCT group_id FROM directory_group_members WHERE org_id = $1 AND principal_id = ANY($2::text[]) ORDER BY group_id",
