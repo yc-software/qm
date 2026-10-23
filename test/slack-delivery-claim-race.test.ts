@@ -449,3 +449,20 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
   assert.deepEqual(uploads, [], "attachments behind a delivered marker are not replayed");
   assert.equal((await store.pending("slack")).length, 0, "the delivery is acked");
 });
+
+for (const code of ["not_in_channel", "restricted_action", "invalid_auth"]) {
+  test(`a post failing with ${code} is reported undeliverable once the tracker gives up`, async () => {
+    const { store, makeClient, makePoller, undeliverable } = harness();
+    const dead = await store.enqueue({
+      destination: { type: "slack", target: "C-kicked:100.0" },
+      text: "KICKED notice",
+      idempotencyKey: `post:${code}`,
+    });
+    const poller = makePoller();
+    for (let i = 0; i < 8 && undeliverable.length === 0; i++) {
+      await poller.pollDeliveries(makeClient("relay", {}, { KICKED: code }));
+      await sleep(CLAIM_MS + 50);
+    }
+    assert.deepEqual(undeliverable, [{ id: dead.id, reason: code }]);
+  });
+}
