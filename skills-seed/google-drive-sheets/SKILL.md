@@ -1,6 +1,7 @@
 ---
 name: google-drive-sheets
 description: Find, read, export, edit, and manage the user's Google Drive, Docs, Sheets, and Slides through per-user OAuth.
+connector: google
 requiredCapabilities:
   - egress:www.googleapis.com
   - egress:sheets.googleapis.com

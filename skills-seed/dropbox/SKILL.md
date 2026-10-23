@@ -1,6 +1,7 @@
 ---
 name: dropbox
 description: Browse, search, read, upload, and share the user's Dropbox — including team/shared folders — through per-user OAuth.
+connector: dropbox
 requiredCapabilities:
   - egress:api.dropboxapi.com
   - egress:content.dropboxapi.com

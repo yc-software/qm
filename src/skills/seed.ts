@@ -27,6 +27,7 @@ export function sameManifest(a: SkillManifest, b: SkillManifest): boolean {
   return (
     a.description === b.description &&
     a.body === b.body &&
+    a.connector === b.connector &&
     [...a.requiredCapabilities].sort().join("\0") === [...b.requiredCapabilities].sort().join("\0") &&
     canonicalFilesKey(a.files) === canonicalFilesKey(b.files)
   );

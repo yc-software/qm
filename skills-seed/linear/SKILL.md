@@ -1,6 +1,7 @@
 ---
 name: linear
 description: Search, read, create, and update the user's Linear issues, projects, and comments through per-user OAuth.
+connector: linear
 requiredCapabilities:
   - egress:api.linear.app
 ---

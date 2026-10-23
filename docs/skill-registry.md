@@ -71,6 +71,23 @@ commit.
 The skills are governed store records, visible and auditable on the admin Skills page, rather than
 ungoverned files on each box.
 
+## Connector skills
+
+A skill that only works through an OAuth connector declares that provider in its frontmatter:
+
+```yaml
+---
+name: linear
+description: Search, read, create, and update the user's Linear issues.
+connector: linear
+---
+```
+
+`connector` names one OAuth provider. The skill is left out of a turn's skill index until an
+admin has configured that provider; a skill without the field is always listed. Seed skills
+and imported packs read the same field, and changing it re-publishes the skill on the next
+seed or import.
+
 ## Loading published skills
 
 The skill index lists each visible skill. The agent's `skills` tool resolves the currently

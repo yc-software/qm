@@ -60,7 +60,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     assert.equal(result.status, "ok", JSON.stringify(result));
     return result.reply ?? "";
   };
-  const skill = async (scopeId: string, name: string, value: string) => {
+  const skill = async (scopeId: string, name: string, value: string, connector?: string) => {
     const s = await built.skills.create({
       scopeId,
       createdBy: "U1",
@@ -69,6 +69,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
         description: `${name} arithmetic helper`,
         body: `Read scripts/value.py and run python3 skills/${name}/scripts/value.py.`,
         requiredCapabilities: [],
+        ...(connector ? { connector } : {}),
         files: [{ path: "scripts/value.py", content: `print(${JSON.stringify(value)})\n` }],
       },
     });
@@ -380,9 +381,9 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
 
 test("sharing e2e: unavailable connector skills cannot be read or executed", async (t) => {
   const b = await fixture(t);
-  await b.skill("personal:U1", "google-workspace", "UNCONFIGURED_CONNECTOR");
-  assert.doesNotMatch(await b.turn("!sysprompt", true), /\*\*google-workspace\*\*/);
-  assert.match(await b.turn("!skill google-workspace", true), /no skill file/);
+  await b.skill("personal:U1", "mail-helper", "UNCONFIGURED_CONNECTOR", "google");
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /\*\*mail-helper\*\*/);
+  assert.match(await b.turn("!skill mail-helper", true), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
 });
 

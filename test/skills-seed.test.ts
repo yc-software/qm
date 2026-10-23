@@ -10,6 +10,7 @@ import { createHmac } from "node:crypto";
 import { installSeedSkills, parseSeedSkill, upsertSeedSkill } from "../src/skills/seed.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { createSkillStore, safeSkillFilePath } from "../src/skills/skill-store.ts";
+import { PROVIDERS } from "../src/connectors/oauth.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -33,6 +34,52 @@ Run the thing.
   assert.equal(manifest.description, "demo skill");
   assert.deepEqual(manifest.requiredCapabilities, ["egress:example.com", "command:demo"]);
   assert.match(manifest.body, /^# Demo/);
+});
+
+test("seed skill parser reads an optional connector and rejects a malformed one", () => {
+  const withConnector = parseSeedSkill(`---
+name: demo
+description: demo skill
+connector: linear
+---
+
+# Demo
+`);
+  assert.equal(withConnector.connector, "linear");
+  assert.equal("connector" in parseSeedSkill("---\nname: demo\ndescription: d\n---\n\n# Demo\n"), false);
+  assert.throws(
+    () => parseSeedSkill("---\nname: demo\ndescription: d\nconnector:\n  - a\n---\n\n# Demo\n"),
+    /connector must be a provider name/,
+  );
+});
+
+test("every seed skill connector names a built-in OAuth provider", () => {
+  const connectors = readdirSync("skills-seed")
+    .map((name) => parseSeedSkill(readFileSync(join("skills-seed", name, "SKILL.md"), "utf8")).connector)
+    .filter((connector) => connector !== undefined);
+  assert.ok(connectors.length > 0);
+  assert.deepEqual(
+    connectors.filter((connector) => !PROVIDERS[connector]),
+    [],
+  );
+});
+
+test("adding a connector to an installed seed skill re-publishes it with the field", async () => {
+  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const org = scopeId("org", "default-org");
+  const dir = mkdtempSync(join(tmpdir(), "seed-connector-"));
+  writeSeedSkill(dir, "tracker", "issue tracker", "# Tracker");
+  await installSeedSkills(skills, { dir, scopeId: org });
+  writeFileSync(
+    join(dir, "tracker", "SKILL.md"),
+    "---\nname: tracker\ndescription: issue tracker\nconnector: linear\n---\n\n# Tracker\n",
+  );
+  const result = await installSeedSkills(skills, { dir, scopeId: org });
+  assert.deepEqual(result, { installed: [], updated: ["tracker"], skipped: [] });
+  const stored = (await skills.list()).find((s) => s.manifest.name === "tracker")!;
+  assert.equal(stored.manifest.connector, "linear");
+  assert.equal(stored.status, "published");
+  assert.ok(skills.verify(stored));
 });
 
 test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
