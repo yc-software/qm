@@ -731,3 +731,33 @@ test("a queued steer remains durable until its native intake acknowledges it", a
   await stop();
   assert.deepEqual(await store.pending("intake"), []);
 });
+
+test("startSignalPoll: drainOnStop still delivers a steer that arrived during an in-flight drain", async () => {
+  const signals = createMemoryRunSignalStore();
+  const seen: string[] = [];
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  await signals.send("r", { kind: "steer", text: "first" });
+  const stop = startSignalPoll(
+    signals,
+    "r",
+    {
+      onSteer: async (text) => {
+        seen.push(text);
+        if (text === "first") {
+          entered.resolve();
+          await gate.promise;
+        }
+      },
+      onAbort: async () => {},
+    },
+    { intervalMs: 60_000, drainOnStop: true },
+  );
+  await signals.send("r", { kind: "steer", text: "kick" });
+  await entered.promise;
+  await signals.send("r", { kind: "steer", text: "late" });
+  const stopped = stop();
+  gate.resolve();
+  await stopped;
+  assert.ok(seen.includes("late"), `late steer was not drained on stop: ${seen.join(",")}`);
+});
