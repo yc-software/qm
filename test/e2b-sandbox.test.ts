@@ -1,6 +1,6 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +52,7 @@ const nativeClient = (): typeof fake.client => ({
     return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
   },
 });
-after(() => fake?.cleanup());
+afterEach(() => fake.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });

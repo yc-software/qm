@@ -46,21 +46,32 @@ export interface FakeE2b {
 
 const OWNER_ENV = "QM_FAKE_E2B_OWNER";
 
+function ownedPids(owner: string): number[] {
+  const tag = `${OWNER_ENV}=${owner}`;
+  const owned = (kv: string): boolean => kv === tag || kv.startsWith(`${tag}/`);
+  if (!existsSync("/proc/self/environ")) {
+    const ps = spawnSync("ps", ["-AEww", "-o", "pid=,command="], { encoding: "utf8" }).stdout ?? "";
+    return ps
+      .split("\n")
+      .filter((line) => line.split(" ").some(owned))
+      .map((line) => Number.parseInt(line, 10));
+  }
+  return readdirSync("/proc")
+    .map(Number)
+    .filter((pid) => {
+      if (!Number.isInteger(pid)) return false;
+      try {
+        return readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").some(owned);
+      } catch {
+        return false;
+      }
+    });
+}
+
 function killOwned(owner: string): void {
-  const owned = (kv: string): boolean => kv === `${OWNER_ENV}=${owner}` || kv.startsWith(`${OWNER_ENV}=${owner}/`);
-  const scan = (): number[] =>
-    readdirSync("/proc")
-      .map(Number)
-      .filter((pid) => {
-        if (!Number.isInteger(pid) || pid === process.pid) return false;
-        try {
-          return readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").some(owned);
-        } catch {
-          return false;
-        }
-      });
-  if (!existsSync("/proc")) return;
-  for (let pids = scan(); pids.length; pids = scan()) {
+  for (let pass = 0; pass < 50; pass++) {
+    const pids = ownedPids(owner);
+    if (!pids.length) return;
     for (const pid of pids) {
       try {
         process.kill(pid, "SIGKILL");
@@ -69,6 +80,7 @@ function killOwned(owner: string): void {
       }
     }
   }
+  throw new Error(`fake-e2b: processes survived cleanup: ${ownedPids(owner).join(", ")}`);
 }
 
 export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
