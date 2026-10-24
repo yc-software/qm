@@ -598,8 +598,9 @@ function expectedWorkloadImageRepository(config: QmConfig, workload: string): st
 }
 
 export function isPinnedWorkloadImage(config: QmConfig, workload: string, image: string): boolean {
-  const repository = expectedWorkloadImageRepository(config, workload).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${repository}@sha256:[0-9a-f]{64}$`).test(image);
+  const repository = expectedWorkloadImageRepository(config, workload);
+  const prefix = `${repository}@sha256:`;
+  return image.startsWith(prefix) && /^[0-9a-f]{64}$/.test(image.slice(prefix.length));
 }
 
 function dockerLogin(aws: AwsConfig): void {
@@ -3681,7 +3682,10 @@ export function githubTrustSubject(configDir: string, deployBranch?: string, dep
   const tfvars = join(configDir, "infra", "terraform.tfvars");
   const source = existsSync(tfvars) ? readFileSync(tfvars, "utf8") : undefined;
   const tfValue = (name: string): string | undefined => {
-    const raw = source?.match(new RegExp(`^${name}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*$`, "m"))?.[1];
+    const trimmedLine = source
+      ?.split("\n")
+      .find((line) => line.trimStart().startsWith(name) && /^\s*=/.test(line.trimStart().slice(name.length)));
+    const raw = trimmedLine?.match(/("(?:[^"\\]|\\.)*")\s*$/)?.[1];
     return raw ? (JSON.parse(raw) as string) : undefined;
   };
   let repo = process.env.GITHUB_REPOSITORY;
