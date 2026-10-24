@@ -1122,7 +1122,7 @@ function csvPaths(value: string | undefined): string[] | undefined {
     .map((p) => resolve(p));
 }
 
-function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
+export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
   const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
   if (!names.some((name) => env[name]?.trim())) return undefined;
   for (const name of names.filter((name) => name !== "MODEL_GATEWAY_MODELS")) {
