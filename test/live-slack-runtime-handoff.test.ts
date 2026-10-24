@@ -46,6 +46,12 @@ test("runtime handoff qualification rejects prose, uncorrelated results, errors,
 
 test("runtime inspection must follow the handoff and confirm the selected model and harness", () => {
   assert.throws(() => assertRuntimeHandoff(evidence().slice(0, 2)), /inspection after handoff/);
+  const failedGet = result("get-1", "get", { ok: false, resultTruncated: true });
+  assert.throws(
+    () => assertRuntimeHandoff([...evidence().slice(0, 3), failedGet]),
+    (error: Error) =>
+      error.message.includes('"callId":"get-1","action":"get","ok":false,"isError":false,"resultTruncated":true'),
+  );
   assert.throws(
     () => assertRuntimeHandoff([call("get-1", "get"), inspection, call("set-1", "set"), handoff]),
     /inspection after handoff/,
