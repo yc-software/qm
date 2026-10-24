@@ -56,3 +56,31 @@ test("runtime inspection must follow the handoff and confirm the selected model 
       ]),
     );
 });
+
+test("runtime inspection is read from the head of a parked long result", () => {
+  const full = JSON.stringify({ ok: true, active: choice, modelsByHarness: { pi: ["x".repeat(20_000)] } });
+  const parked = (text: string) => ({
+    type: "tool_result",
+    payload: {
+      tool: "runtime",
+      callId: "get-1",
+      isError: false,
+      result: `${text.slice(0, 8192)}\n…[output cut]…\n${text.slice(-8192)}`,
+      output: { blob: "b", chars: text.length, shownChars: 16_384 },
+    },
+  });
+  const entries = [call("set-1", "set"), handoff, call("get-1", "get"), parked(full)];
+  assert.deepEqual(assertRuntimeHandoff(entries), choice);
+  const unparked = [
+    call("set-1", "set"),
+    handoff,
+    call("get-1", "get"),
+    { ...parked(full), payload: { ...parked(full).payload, output: undefined } },
+  ];
+  assert.throws(() => assertRuntimeHandoff(unparked), /inspection after handoff/);
+  const failed = JSON.stringify({ ok: false, active: choice, error: "x".repeat(20_000) });
+  assert.throws(
+    () => assertRuntimeHandoff([call("set-1", "set"), handoff, call("get-1", "get"), parked(failed)]),
+    /inspection after handoff/,
+  );
+});

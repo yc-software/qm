@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import { isObj } from "../../src/util/objects.ts";
 
+const PARKED_RUNTIME_HEAD = /^\{"ok":true,"active":(\{[^{}]*\})/;
+
+// A long result is stored as a head-and-tail excerpt; its head still carries the active runtime.
+function runtimeResult(text: string, parked: boolean): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    return isObj(value) ? value : undefined;
+  } catch {
+    const head = parked ? PARKED_RUNTIME_HEAD.exec(text) : null;
+    return head ? { ok: true, active: JSON.parse(head[1]!) as unknown } : undefined;
+  }
+}
+
 export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; modelId: string } {
   const calls = new Map<string, { action: string; index: number }>();
   const results: Array<{ index: number; action: string; value: Record<string, unknown> }> = [];
@@ -15,13 +28,8 @@ export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; m
     const call = calls.get(payload.callId);
     if (entry.type !== "tool_result" || payload.isError !== false || !call || call.index >= index) continue;
     if (typeof payload.result !== "string") continue;
-    let value: unknown;
-    try {
-      value = JSON.parse(payload.result);
-    } catch {
-      continue;
-    }
-    if (isObj(value) && value.ok === true) results.push({ index, action: call.action, value });
+    const value = runtimeResult(payload.result, isObj(payload.output));
+    if (value?.ok === true) results.push({ index, action: call.action, value });
   }
   const handoff = results.find((result) => result.action === "set" && isObj(result.value.handoff));
   assert.ok(handoff && isObj(handoff.value.handoff), "no successful correlated runtime handoff recorded");
