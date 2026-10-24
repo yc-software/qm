@@ -4410,6 +4410,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           tool: "runtime",
           action: request.action,
           ok: result.ok,
+          ...(result.ok && request.action === "get" ? { active: result.active } : {}),
           ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
         },
         { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },

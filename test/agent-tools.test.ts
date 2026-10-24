@@ -3094,6 +3094,35 @@ test("runtime persists its decision before terminating and blocks later effects"
   assert.equal(events.at(-1)?.payload.runId, "run");
 });
 
+test("runtime get records the active runtime beside a result parked over the inline cap", async () => {
+  const emitted: Emitted[] = [];
+  const active = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "auto", fastMode: false };
+  const modelCatalog = Object.fromEntries(
+    Array.from({ length: 200 }, (_, i) => [`model-${i}`, { id: `model-${i}`, name: `Model ${i}` }]),
+  );
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      toolOutput: createMemoryToolOutputStore({
+        inlineTokens: 100,
+        sessions: { getEntries: async () => emitted as unknown as SessionEntry[] },
+      }),
+      runtime: async () => ({ ok: true, active, modelCatalog }),
+    },
+    scopeLabel: "personal:U1",
+    emit: (e) => void emitted.push(e as Emitted),
+  };
+  await call(
+    createAgentTools(ref).find((t) => t.name === "runtime"),
+    { action: "get" },
+  );
+  const payload = emitted.find((e) => e.type === "tool_result")!.payload;
+  assert.throws(() => JSON.parse(String(payload.result)));
+  assert.equal(payload.resultTruncated, true);
+  assert.deepEqual(payload.active, active);
+  assert.equal(payload.modelCatalog, undefined);
+});
+
 test("runtime persistence failure does not latch a handoff", async () => {
   const ref: ToolContextRef = {
     current: {
