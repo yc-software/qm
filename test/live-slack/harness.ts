@@ -2,6 +2,7 @@ import assert from "node:assert";
 import { SlackClient, sleep, type SlackMessage } from "./slack.ts";
 import { CoreClient } from "./core.ts";
 import { modelGatewayFromEnv } from "../../src/config.ts";
+import { modelGatewayRequest } from "../../src/model/provider-endpoints.ts";
 
 export interface Scenario {
   name: string;
@@ -59,12 +60,12 @@ export interface JudgeEndpoint {
 export function judgeEndpoint(env: NodeJS.ProcessEnv, model: string): JudgeEndpoint {
   const gateway = modelGatewayFromEnv(env);
   if (gateway) {
-    const target = gateway.models[model];
-    if (!target) throw new Error(`MODEL_GATEWAY_MODELS has no route for judge model ${model}`);
+    const request = modelGatewayRequest(gateway, { id: model, baseUrl: gateway.url, api: "anthropic-messages" });
+    if (!request) throw new Error(`MODEL_GATEWAY_MODELS has no route for judge model ${model}`);
     return {
-      url: `${gateway.url.replace(/\/+$/, "")}/v1/messages`,
-      headers: { [gateway.apiKeyHeader]: gateway.apiKey },
-      model: target,
+      url: `${request.model.baseUrl}/v1/messages`,
+      headers: request.headers,
+      model: request.target,
     };
   }
   const apiKey = env.ANTHROPIC_API_KEY;
