@@ -46,20 +46,25 @@ test("Pi and MCP security overrides are materialized by the root lockfile", () =
   assert.equal(pi?.resolved, piCodingAgentTarball);
 
   assert.deepEqual(lockedVersions(packages, "brace-expansion"), ["5.0.12"]);
-  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.8", "4.1.5"]);
+  assert.deepEqual(lockedVersions(packages, "fast-uri").sort(), ["3.1.9", "4.2.3"]);
   assert.deepEqual(lockedVersions(packages, "hono"), ["4.13.13"]);
   assert.deepEqual(lockedVersions(packages, "protobufjs"), ["7.6.5"]);
-  assert.deepEqual(lockedVersions(packages, "undici"), ["8.10.2"]);
+  assert.deepEqual(lockedVersions(packages, "undici"), ["8.12.3"]);
+  assert.equal(
+    packages["node_modules/undici8"]?.version,
+    "8.12.3",
+    "e2b 2.51 pins an exact undici8 alias; drop the e2b > undici8 override once e2b >= 2.56 removes it",
+  );
   assert.deepEqual(lockedVersions(packages, "@hono/node-server"), ["2.0.10"]);
   assert.equal(dependencyVersion(minimatchManifest, "brace-expansion"), "5.0.12");
   for (const dependency of ["@fastify/ajv-compiler", "ajv", "fast-json-stringify"]) {
     const parentManifest = new URL(`../node_modules/${dependency}/package.json`, import.meta.url);
     assert.equal(
       dependencyVersion(parentManifest, "fast-uri"),
-      dependency === "fast-json-stringify" ? "4.1.5" : "3.1.8",
+      dependency === "fast-json-stringify" ? "4.2.3" : "3.1.9",
     );
   }
-  assert.equal(dependencyVersion(piManifest, "undici"), "8.10.2");
+  assert.equal(dependencyVersion(piManifest, "undici"), "8.12.3");
   assert.equal(dependencyVersion(piManifest, "protobufjs"), "7.6.5");
   assert.equal(installedVersion("@hono/node-server"), "2.0.10");
   assert.match(
