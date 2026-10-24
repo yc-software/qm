@@ -1,22 +1,9 @@
 import assert from "node:assert/strict";
 import { isObj } from "../../src/util/objects.ts";
 
-const PARKED_RUNTIME_HEAD = /^\{"ok":true,"active":(\{[^{}]*\})/;
-
-// A long result is stored as a head-and-tail excerpt; its head still carries the active runtime.
-function runtimeResult(text: string, parked: boolean): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(text);
-    return isObj(value) ? value : undefined;
-  } catch {
-    const head = parked ? PARKED_RUNTIME_HEAD.exec(text) : null;
-    return head ? { ok: true, active: JSON.parse(head[1]!) as unknown } : undefined;
-  }
-}
-
 export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; modelId: string } {
   const calls = new Map<string, { action: string; index: number }>();
-  const results: Array<{ index: number; action: string; value: Record<string, unknown> }> = [];
+  const results: Array<{ index: number; action: string; payload: Record<string, unknown> }> = [];
   for (const [index, entry] of entries.entries()) {
     if (!isObj(entry) || !isObj(entry.payload)) continue;
     const payload = entry.payload;
@@ -26,23 +13,31 @@ export function assertRuntimeHandoff(entries: unknown[]): { harnessId: string; m
       continue;
     }
     const call = calls.get(payload.callId);
-    if (entry.type !== "tool_result" || payload.isError !== false || !call || call.index >= index) continue;
-    if (typeof payload.result !== "string") continue;
-    const value = runtimeResult(payload.result, isObj(payload.output));
-    if (value?.ok === true) results.push({ index, action: call.action, value });
+    if (
+      entry.type !== "tool_result" ||
+      payload.isError !== false ||
+      payload.ok !== true ||
+      !call ||
+      call.index >= index
+    )
+      continue;
+    results.push({ index, action: call.action, payload });
   }
-  const handoff = results.find((result) => result.action === "set" && isObj(result.value.handoff));
-  assert.ok(handoff && isObj(handoff.value.handoff), "no successful correlated runtime handoff recorded");
-  const { lifetime, choice } = handoff.value.handoff;
+  const handoff = results.find((result) => result.action === "set" && isObj(result.payload.runtimeHandoff));
+  assert.ok(handoff && isObj(handoff.payload.runtimeHandoff), "no successful correlated runtime handoff recorded");
+  const { lifetime, choice } = handoff.payload.runtimeHandoff;
   assert.equal(lifetime, "task");
   assert.ok(isObj(choice));
   assert.equal(choice.harnessId, "pi");
   assert.ok(typeof choice.modelId === "string" && choice.modelId.length > 0);
   const verification = results.find(
-    (result) => result.index > handoff.index && result.action === "get" && isObj(result.value.active),
+    (result) => result.index > handoff.index && result.action === "get" && isObj(result.payload.runtimeActive),
   );
-  assert.ok(verification && isObj(verification.value.active), "no successful runtime inspection after handoff");
-  assert.equal(verification.value.active.modelId, choice.modelId);
-  assert.equal(verification.value.active.harnessId, choice.harnessId);
+  assert.ok(
+    verification && isObj(verification.payload.runtimeActive),
+    "no successful runtime inspection after handoff",
+  );
+  assert.equal(verification.payload.runtimeActive.modelId, choice.modelId);
+  assert.equal(verification.payload.runtimeActive.harnessId, choice.harnessId);
   return { harnessId: "pi", modelId: choice.modelId };
 }

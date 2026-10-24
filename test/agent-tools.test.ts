@@ -3094,6 +3094,28 @@ test("runtime persists its decision before terminating and blocks later effects"
   assert.equal(events.at(-1)?.payload.runId, "run");
 });
 
+test("runtime get persists the active runtime beside a result too long to show in full", async () => {
+  const events: Emitted[] = [];
+  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      runtime: async () => ({ ok: true, active, modelCatalog: { big: "x".repeat(200_000) } }),
+    },
+    scopeLabel: "personal:U1",
+    emit: async (e) => {
+      events.push(e as Emitted);
+    },
+  };
+  await call(
+    createAgentTools(ref).find((t) => t.name === "runtime"),
+    { action: "get" },
+  );
+  const persisted = events.find((e) => e.type === "tool_result")!.payload;
+  assert.deepEqual(persisted.runtimeActive, active);
+  assert.ok(String(persisted.result).length < 200_000);
+});
+
 test("runtime persistence failure does not latch a handoff", async () => {
   const ref: ToolContextRef = {
     current: {

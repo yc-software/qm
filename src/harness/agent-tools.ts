@@ -4411,6 +4411,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           action: request.action,
           ok: result.ok,
           ...(handoff ? { runtimeHandoff: handoff, runId: ref.runtimeRunId, actorId: ref.runtimeActorId } : {}),
+          ...(result.ok && request.action === "get" && isObj(result.active) ? { runtimeActive: result.active } : {}),
         },
         { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },
         !result.ok,
