@@ -15,10 +15,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-static EXPECTED_FOREGROUND: AtomicI32 = AtomicI32::new(0);
+static INPUT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 fn screen_available() -> bool {
     let Some(session) = objc2_core_graphics::CGSessionCopyCurrentDictionary() else {
@@ -381,13 +381,13 @@ impl Focus {
             Rc::new(Activation { original, selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()), retained });
         ACTIVATION.with(|current| *current.borrow_mut() = Rc::downgrade(&activation));
         let guard = Self { activation, intervention: Some(intervention) };
-        EXPECTED_FOREGROUND.store(original, Ordering::Release);
+        INPUT_ACTIVE.store(true, Ordering::Release);
         guard.check()?;
         Ok(guard)
     }
 
     pub fn finish(&mut self) -> Result<(), Failure> {
-        EXPECTED_FOREGROUND.store(0, Ordering::Release);
+        INPUT_ACTIVE.store(false, Ordering::Release);
         ACTIVATION.with(|current| *current.borrow_mut() = Weak::new());
         self.activation.activated.borrow_mut().clear();
         self.intervention.take();
@@ -408,8 +408,7 @@ impl Focus {
 }
 
 pub fn check_current() -> Result<(), Failure> {
-    let expected = EXPECTED_FOREGROUND.load(Ordering::Acquire);
-    if expected == 0 {
+    if !INPUT_ACTIVE.load(Ordering::Acquire) {
         return Ok(());
     }
     if crate::cancellation::cancelled() {
@@ -419,9 +418,6 @@ pub fn check_current() -> Result<(), Failure> {
         return Err(Failure::new(ErrorCode::ActionFailed, "Screen is locked or console session unavailable"));
     }
     crate::intervention::check_current()?;
-    if !frontmost().is_some_and(crate::intervention::permits_foreground) {
-        return Err(Failure::new(ErrorCode::ActionFailed, "Foreground app changed during background input; stopped"));
-    }
     Ok(())
 }
 

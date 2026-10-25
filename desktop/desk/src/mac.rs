@@ -304,6 +304,8 @@ struct Enablement {
 pub struct Desk {
     cache: HashMap<i32, Snapshot>,
     touched: HashMap<i32, Instant>,
+    activity: std::sync::Arc<crate::activity::Registry>,
+    watcher: Option<crate::intervention::ActivityWatcher>,
     enabled: HashMap<i32, Enablement>,
     observers: HashMap<i32, Observer>,
     launches: HashMap<i32, Option<f64>>,
@@ -1519,6 +1521,7 @@ impl Desk {
         }
         let _ = self.enforcers.remove(app.pid, false);
         self.cache.remove(&app.pid);
+        self.activity.session(app.pid, false);
         self.touched.remove(&app.pid);
         self.enabled.remove(&app.pid);
         self.observers.remove(&app.pid);
@@ -1526,6 +1529,12 @@ impl Desk {
     }
 
     pub fn handle(&mut self, cmd: Command, pace: &mut dyn FnMut(u32, Point) -> Result<(), Failure>) -> Reply {
+        if self.watcher.is_none() {
+            match crate::intervention::ActivityWatcher::begin(std::sync::Arc::clone(&self.activity)) {
+                Ok(watcher) => self.watcher = Some(watcher),
+                Err(error) => return Reply::Error(error),
+            }
+        }
         objc2::rc::autoreleasepool(|_| self.handle_inner(cmd, pace))
     }
 
@@ -1605,6 +1614,7 @@ impl Desk {
 
     fn observe(&mut self, app: &App, shot: bool, diff: bool) -> Result<Observation, Failure> {
         self.sync_app(app);
+        self.wait_for_user(app)?;
         if let Some(at) = self.touched.remove(&app.pid) {
             let (_, w) = window(app)?;
             settle(&w, at, self.observers.get(&app.pid).map(|o| &*o.notices));
@@ -1716,7 +1726,31 @@ impl Desk {
                 ids: walk.ids.carry(),
             },
         );
+        self.activity.session(app.pid, true);
+        self.activity.clear(app.pid);
         Ok(obs)
+    }
+
+    fn wait_for_user(&self, app: &App) -> Result<(), Failure> {
+        let start = Instant::now();
+        loop {
+            if cancellation::cancelled() {
+                return Err(fail(ErrorCode::ActionFailed, "Computer action cancelled"));
+            }
+            if let Some(watcher) = &self.watcher {
+                watcher.check()?;
+            }
+            match self.activity.gate(app.pid, start, Instant::now()) {
+                crate::activity::Gate::Ready => return Ok(()),
+                crate::activity::Gate::Wait(duration) => cancellation::wait(duration),
+                crate::activity::Gate::Changed => {
+                    return Err(fail(
+                        ErrorCode::ActionFailed,
+                        format!("The user changed '{}'. Observe it again before sending more actions.", app.name),
+                    ))
+                }
+            }
+        }
     }
 
     fn act(
@@ -1767,11 +1801,15 @@ impl Desk {
                     break;
                 }
             }
-            let paced = focus
-                .as_ref()
-                .map_or(Ok(()), |f| f.check())
-                .and_then(|_| self.validate_window(&app))
-                .and_then(|_| self.check_menu(app.pid, &ax, a))
+            let paced = self
+                .wait_for_user(&app)
+                .and_then(|_| {
+                    focus
+                        .as_ref()
+                        .map_or(Ok(()), |f| f.check())
+                        .and_then(|_| self.validate_window(&app))
+                        .and_then(|_| self.check_menu(app.pid, &ax, a))
+                })
                 .and_then(|_| match pace.as_mut() {
                     Some(p) => match self.aim(app.pid, &w, a) {
                         Ok(Some(at)) => p(i as u32, Point { x: at.x, y: at.y }),
@@ -1780,11 +1818,7 @@ impl Desk {
                     },
                     None => Ok(()),
                 });
-            if let Err(mut e) = paced
-                .and_then(|_| self.validate_window(&app))
-                .and_then(|_| self.step(&app, &ax, &w, a))
-                .and_then(|_| focus.as_ref().map_or(Ok(()), |f| f.check()))
-            {
+            if let Err(mut e) = paced.and_then(|_| self.validate_window(&app)).and_then(|_| self.step(&app, &ax, &w, a)) {
                 e.action = Some(i as u32);
                 failure = Some(e);
                 break;
