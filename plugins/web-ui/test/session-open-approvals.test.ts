@@ -10,7 +10,6 @@ const OTHER = { ...SESSION, id: "sess-other", threadRef: "web:tester:other", tit
 const cards = (): number => document.querySelectorAll(".approval-btn").length;
 const chatText = (): string => document.querySelector(".main")?.textContent ?? "";
 
-// Opening must not wait on the held approvals request.
 function promptly<T>(opening: Promise<T>): Promise<T> {
   const stalled = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error("opening the chat waited for its approvals")), 3000),
