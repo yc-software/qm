@@ -1,10 +1,12 @@
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { reportForeignTenant } from "../tenant.ts";
 
 export interface PortalIdentity {
   p: string;
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 
@@ -24,5 +26,6 @@ export async function verifyPortalIdentity(
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
   if (nowMs > claims.exp) return null;
+  reportForeignTenant(claims.t, "portal identity");
   return claims;
 }

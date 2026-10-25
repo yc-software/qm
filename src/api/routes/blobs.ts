@@ -11,6 +11,7 @@ import { extendBodyDeadline, headerValue, pipeToResponse, sendJson, verifyOrReje
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 import type { BaseCtx, Route } from "./route.ts";
+import { reportForeignTenant } from "../../tenant.ts";
 
 type BlobDir = "read" | "write";
 
@@ -31,6 +32,7 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
       sendJson(res, 403, { error: "forbidden", message: "blob-transfer capability token not valid for this transfer" });
       return null;
     }
+    reportForeignTenant(claims.orgId, "blob transfer capability");
     if (!(await ctx.app.authorizesCapabilityScope(claims))) {
       req.resume();
       sendJson(res, 403, {

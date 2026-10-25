@@ -39,6 +39,7 @@ interface BlobGrant {
 type BlobTransferClaims = CapabilityClaims & { aud: typeof BLOB_TRANSFER_AUD; blob: BlobGrant };
 
 export interface CapabilityClaims {
+  orgId?: string;
   externalSlack?: true;
   actorId: string;
   browserModel?: string;

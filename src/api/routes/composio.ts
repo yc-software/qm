@@ -321,13 +321,14 @@ const SCOPES_TTL_MS = 5 * 60_000;
 const scopeCache = new Map<string, { scopes: string[]; expiresAt: number }>();
 
 async function configuredScopes(ctx: ApiCtx, key: string, authConfigId: string): Promise<string[]> {
-  const cached = scopeCache.get(authConfigId);
+  const cacheKey = `${tenant().orgId}:${authConfigId}`;
+  const cached = scopeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.scopes;
   try {
     const config = await request(ctx, key, `/auth_configs/${encodeURIComponent(authConfigId)}`);
     const listed = (config.credentials as { scopes?: unknown } | undefined)?.scopes;
     const scopes = Array.isArray(listed) ? listed.filter((scope): scope is string => typeof scope === "string") : [];
-    scopeCache.set(authConfigId, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
+    scopeCache.set(cacheKey, { scopes, expiresAt: Date.now() + SCOPES_TTL_MS });
     return scopes;
   } catch (error) {
     const mask = createExactSecretValueMasker([key]);

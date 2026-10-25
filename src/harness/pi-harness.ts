@@ -137,6 +137,7 @@ import {
   goalWorkDigest,
   type GovernorVerdict,
 } from "./goal.ts";
+import { perTenant } from "../tenant.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -1149,10 +1150,11 @@ export interface ProviderKeys {
   [provider: string]: string | undefined;
 }
 
-let cachedCustomModels: { version: number; path: string | null } | null = null;
+const customModelsFile = perTenant((): { version: number; path: string | null } => ({ version: -1, path: null }));
 function customModelsPath(): string | null {
+  const cached = customModelsFile();
   const version = customProvidersVersion() + gatewayModelsVersion();
-  if (cachedCustomModels?.version === version) return cachedCustomModels.path;
+  if (cached.version === version) return cached.path;
   const providers = { ...customModelsJson()?.providers, ...gatewayModelsJson() };
   const custom = Object.keys(providers).length ? { providers } : undefined;
   let path: string | null = null;
@@ -1160,7 +1162,8 @@ function customModelsPath(): string | null {
     path = join(mkdtempSync(join(tmpdir(), "pi-custom-models-")), "models.json");
     writeFileSync(path, JSON.stringify(custom));
   }
-  cachedCustomModels = { version, path };
+  cached.version = version;
+  cached.path = path;
   return path;
 }
 

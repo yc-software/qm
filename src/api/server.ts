@@ -32,6 +32,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployments.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
+import { reportForeignTenant } from "../tenant.ts";
 
 async function capabilityAdminDenied(
   access: AdminAccess,
@@ -123,6 +124,7 @@ async function verifyCapability(
     sendJson(res, 401, { error: "unauthorized", message: "invalid or expired capability token" });
     return null;
   }
+  reportForeignTenant(capability.orgId, "capability token");
   if (
     capability.externalSlack &&
     !(

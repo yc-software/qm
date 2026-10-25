@@ -14,6 +14,7 @@
  */
 
 import { parseProviderBaseUrl, PROVIDER_IDS } from "./provider-endpoints.ts";
+import { perTenant } from "../tenant.ts";
 
 export const CUSTOM_PROVIDER_PROTOCOLS = ["openai", "openai-responses", "anthropic"] as const;
 export type CustomProviderProtocol = (typeof CUSTOM_PROVIDER_PROTOCOLS)[number];
@@ -130,9 +131,12 @@ function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): Custo
   };
 }
 
-let registry = new Map<string, CustomRuntimeModel>();
-let providers: CustomProviderSpec[] = [];
-let version = 0;
+let registryChanges = 0;
+const registryState = perTenant(() => ({
+  registry: new Map<string, CustomRuntimeModel>(),
+  providers: [] as CustomProviderSpec[],
+  version: 0,
+}));
 
 /**
  * Called by wiring at boot and again after every admin write, with the
@@ -141,8 +145,9 @@ let version = 0;
  * built-in.
  */
 export function setCustomProviders(specs: CustomProviderSpec[]): void {
+  const state = registryState();
   const snapshot = JSON.stringify(specs);
-  if (snapshot === JSON.stringify(providers)) return;
+  if (snapshot === JSON.stringify(state.providers)) return;
   const next = new Map<string, CustomRuntimeModel>();
   for (const spec of specs) {
     for (const m of spec.models) {
@@ -150,14 +155,14 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
       next.set(model.id, model);
     }
   }
-  registry = next;
-  providers = specs.map((s) => ({ ...s, models: [...s.models] }));
-  version += 1;
+  state.registry = next;
+  state.providers = specs.map((s) => ({ ...s, models: [...s.models] }));
+  state.version = ++registryChanges;
 }
 
 /** Bumps on every registry change — lets callers cache derived artifacts. */
 export function customProvidersVersion(): number {
-  return version;
+  return registryState().version;
 }
 
 export function hasCustomModelPrefix(id: string): boolean {
@@ -165,15 +170,15 @@ export function hasCustomModelPrefix(id: string): boolean {
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {
-  return registry.get(id);
+  return registryState().registry.get(id);
 }
 
 export function isCustomModelId(id: string): boolean {
-  return registry.has(id);
+  return registryState().registry.has(id);
 }
 
 export function customModelCatalog(): Array<{ id: string; name: string; provider: string }> {
-  return [...registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
+  return [...registryState().registry.values()].map((m) => ({ id: m.id, name: m.name, provider: m.provider }));
 }
 
 /**
@@ -184,6 +189,7 @@ export function customModelCatalog(): Array<{ id: string; name: string; provider
  * providers the ModelsStore knows).
  */
 export function customModelsJson(): { providers: Record<string, unknown> } | undefined {
+  const { registry, providers } = registryState();
   if (providers.length === 0) return undefined;
   return {
     providers: Object.fromEntries(
