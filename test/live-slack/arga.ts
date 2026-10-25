@@ -38,8 +38,6 @@ async function argaFetch(apiKey: string, path: string, init: RequestInit = {}): 
   return body;
 }
 
-// Slack twins have taken 33-122s to become ready, and later stayed in "provisioning"
-// past a two-minute deadline on every attempt; leave room for a slow Arga start.
 const TWIN_READY_TIMEOUT_MS = 5 * 60_000;
 const TWIN_STATUS_POLL_MS = 5000;
 
