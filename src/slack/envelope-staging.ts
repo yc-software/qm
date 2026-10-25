@@ -30,10 +30,14 @@ const MAX_ATTEMPTS = 5;
 const REPLAY_WAIT_MS = 10_000;
 
 export function envelopeKey(account: string, body: Record<string, unknown>): string | null {
-  const event = body.event as { type?: string; channel?: string; ts?: string; event_ts?: string } | undefined;
-  if (body.type !== "event_callback" || !event?.type || !event.channel) return null;
+  const event = body.event as
+    { type?: string; channel?: string; ts?: string; event_ts?: string; item?: { channel?: string } } | undefined;
+  if (body.type !== "event_callback" || !event?.type) return null;
+  const channel =
+    event.type === "reaction_added" || event.type === "reaction_removed" ? event.item?.channel : event.channel;
+  if (!channel) return null;
   const ts = event.ts ?? event.event_ts;
-  return ts ? `slack:${account}:${event.type}:${event.channel}:${ts}` : null;
+  return ts ? `slack:${account}:${event.type}:${channel}:${ts}` : null;
 }
 
 export function createEnvelopeStaging(

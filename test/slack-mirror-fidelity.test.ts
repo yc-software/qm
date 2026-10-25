@@ -11,6 +11,7 @@ import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
+  getUserSnapshot: async () => undefined,
   classifyUserCached: async (_client: unknown, user: string) => ({ actor: { displayName: user } }),
 } as unknown as Directory;
 

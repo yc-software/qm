@@ -321,7 +321,7 @@ export function createMessagingMethods(
           reportFailureAs("revisions: surface revision record", undefined),
         );
       }
-      for (const container of new Set(events.filter((e) => !e.self).map((e) => e.container))) {
+      for (const container of new Set(events.filter((e) => !e.self && !e.reaction).map((e) => e.container))) {
         void judgeAmbientContainer(surface, container).catch(reportFailureAs("ambient: judge", undefined));
       }
       return out;

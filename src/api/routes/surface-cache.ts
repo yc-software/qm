@@ -13,6 +13,24 @@ export function toEvent(raw: unknown): IngestEvent | null {
   if (!isObj(raw)) return null;
   if (typeof raw.container !== "string" || !raw.container) return null;
   if (typeof raw.ts !== "string" || !raw.ts) return null;
+  let reaction: IngestEvent["reaction"];
+  if (raw.reaction !== undefined) {
+    const value = raw.reaction;
+    if (
+      !isObj(value) ||
+      typeof value.name !== "string" ||
+      !value.name ||
+      typeof value.userId !== "string" ||
+      !value.userId ||
+      typeof value.eventTs !== "string" ||
+      !Number.isFinite(Number(value.eventTs)) ||
+      Number.parseFloat(value.eventTs) !== Number(value.eventTs) ||
+      Number(value.eventTs) <= 0 ||
+      typeof value.added !== "boolean"
+    )
+      return null;
+    reaction = { name: value.name, userId: value.userId, eventTs: value.eventTs, added: value.added };
+  }
   const files = Array.isArray(raw.files)
     ? raw.files
         .filter((f): f is Record<string, unknown> => isObj(f) && typeof f.fileId === "string")
@@ -30,6 +48,7 @@ export function toEvent(raw: unknown): IngestEvent | null {
   return {
     container: raw.container,
     ts: raw.ts,
+    ...(reaction ? { reaction } : {}),
     ...(raw.sub === null || (typeof raw.sub === "string" && raw.sub) ? { sub: raw.sub } : {}),
     ...(typeof raw.subtype === "string" ? { subtype: raw.subtype } : {}),
     ...(typeof raw.broadcast === "boolean" ? { broadcast: raw.broadcast } : {}),

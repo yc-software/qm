@@ -1,6 +1,7 @@
 import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
 import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
+import { utcMinute } from "../util/time.ts";
 import { slackErrorCode } from "./payloads.ts";
 
 const REACTION_DIRECTIVE = /\[\[react:([^[\]]*)\]\]/gi;
@@ -147,13 +148,29 @@ export async function applyReactions(
 export interface ReactionTally {
   name: string;
   count: number;
+  users?: Array<{ id: string; name: string; isSelf?: boolean; ts?: string }>;
 }
+
+const MAX_SUMMARY_REACTORS = 5;
 
 export function summarizeReactions(reactions: readonly ReactionTally[] | undefined): string {
   if (!reactions?.length) return "";
   return reactions
     .filter((r) => r.name && r.count > 0)
-    .map((r) => (r.count > 1 ? `:${r.name}:×${r.count}` : `:${r.name}:`))
+    .map((r) => {
+      const emoji = r.count > 1 ? `:${r.name}:×${r.count}` : `:${r.name}:`;
+      const shown = r.users?.slice(0, MAX_SUMMARY_REACTORS);
+      const self = r.users?.find((user) => user.isSelf);
+      if (self && shown?.length && !shown.some((user) => user.isSelf)) shown[shown.length - 1] = self;
+      const users = shown?.map((user) => {
+        const name = user.isSelf ? "you" : user.name;
+        return user.ts ? `${name} at ${utcMinute(Number(user.ts) * 1000)}` : name;
+      });
+      if (!users?.length) return emoji;
+      const others = r.count - users.length;
+      if (others > 0) users.push(`${others} other${others === 1 ? "" : "s"}`);
+      return `${emoji} (${users.join(", ")})`;
+    })
     .join(" ");
 }
 

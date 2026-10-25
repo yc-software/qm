@@ -191,7 +191,7 @@ test("a system-message edit arriving first is already handled", async () => {
   assert.deepEqual(f.dispatches, []);
 });
 
-test("real Bolt ingests own channel/DM messages and edits without responses or self reactions", async () => {
+test("real Bolt ingests own messages and edits without responses and forwards self reactions to the handler", async () => {
   const f = fixture();
   for (const channel of ["C1", "D1"]) {
     const base = {
@@ -224,7 +224,7 @@ test("real Bolt ingests own channel/DM messages and edits without responses or s
     item: { type: "message", channel: "C1", ts: "4" },
   });
   assert.equal(f.events.length, 4);
-  assert.equal(f.dispatches.length, 0);
+  assert.equal(f.dispatches.length, 1);
   assert.ok(f.events.every((e) => e.self && e.handled && e.sub === "1.000001"));
   assert.equal(f.events[1].editedAt, 3000);
   assert.deepEqual(f.events[1].files, []);

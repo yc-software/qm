@@ -494,7 +494,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/surface-context",
         summary:
-          "fetch recent messages from a channel/DM YOU can see (count/before/match) — a private channel only if you're a member; live:true reads Slack directly for current reaction counts (reactions:[] means none), with no mirror fallback on failure; omitted uses configured history; directory-resolved, never a raw address",
+          "fetch recent messages from a channel/DM YOU can see (count/before/match) — a private channel only if you're a member; reactions include counts and named users (isSelf means you; ts only when observed; Slack may omit users); live:true reads Slack directly for current reactions (reactions:[] means none), with no mirror fallback on failure; omitted uses configured history; directory-resolved, never a raw address",
       },
       {
         method: "POST",

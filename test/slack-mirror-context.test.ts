@@ -9,6 +9,7 @@ import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
+  getUserSnapshot: async () => undefined,
   classifyUserCached: async (id: unknown, user: string) => ({ actor: { displayName: user } }),
 } as unknown as Directory;
 
@@ -507,7 +508,7 @@ test("explicit live context verifies reactions and never substitutes mirrored da
   assert.equal(outcome.error, undefined);
   assert.deepEqual(
     outcome.result.messages.map((m: any) => m.reactions),
-    [[], [{ name: "white_check_mark", count: 2 }]],
+    [[], [{ name: "white_check_mark", count: 2, users: [{ id: "U2", name: "U2" }] }]],
   );
   assert.deepEqual(calls, [{ channel: "C1", limit: 200, latest: "3.0", inclusive: false }]);
   assert.equal(outcome.result.hasMore, true);

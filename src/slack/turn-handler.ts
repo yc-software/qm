@@ -68,7 +68,6 @@ import type { CoreTurnBody, TurnFlow } from "./turn-flow.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { Mirror } from "./mirror.ts";
 import type { ConversationSerializer } from "./conversation-view.ts";
-import { reactionTallies } from "./conversation-view.ts";
 import type { SlackReactionEvent } from "./payloads.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import {
@@ -802,10 +801,11 @@ export function createTurnHandler(deps: {
       const res = await client.reactions.get({ channel, timestamp: ts, full });
       const m = res?.message;
       if (!m) return undefined;
+      const [message] = await serializer.shapeRecentMessages(client, [{ ...m, ts }], "", new Map());
       return {
         text: decodeSlackEntities(String(m.text ?? "").trim()),
         ...(m.thread_ts && m.thread_ts !== ts ? { threadTs: String(m.thread_ts) } : {}),
-        reactions: reactionTallies(m.reactions),
+        reactions: message?.reactions ?? [],
         ...(m.user ? { authorId: String(m.user) } : {}),
       };
     } catch {
@@ -824,6 +824,7 @@ export function createTurnHandler(deps: {
     const messageTs = evt.item?.ts;
     const emoji = evt.reaction;
     if (!reactorId || !channel || !messageTs || !emoji) return;
+    await mirror.mirrorReactionEvent(evt, client, added);
 
     const isDM = channel.startsWith("D");
     const onBotMessage = Boolean(ids.botUserId && evt.item_user === ids.botUserId);

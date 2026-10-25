@@ -25,10 +25,32 @@ const MEMBERS_SHOW_MAX = 40;
 
 export const slackFileName = (f: SlackFile): string => f.name || f.title || f.id || "file";
 
-export function reactionTallies(raw: unknown): ReactionTally[] {
+function reactionTallies(
+  raw: unknown,
+  nameById: ReadonlyMap<string, string> = new Map(),
+  botUserId?: string,
+): ReactionTally[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .map((r: any) => ({ name: String(r?.name ?? ""), count: Number(r?.count) || 0 }))
+    .map((r: any) => ({
+      name: String(r?.name ?? ""),
+      count: Number(r?.count) || 0,
+      ...(Array.isArray(r?.users)
+        ? {
+            users: [
+              ...new Set<string>(r.users.filter((id: unknown): id is string => typeof id === "string" && !!id)),
+            ].map((id) => {
+              const ts = r.timestamps?.[id];
+              return {
+                id,
+                name: id === botUserId ? "you" : (nameById.get(id) ?? id),
+                ...(id === botUserId ? { isSelf: true } : {}),
+                ...(typeof ts === "string" && Number.isFinite(Number(ts)) && Number(ts) > 0 ? { ts } : {}),
+              };
+            }),
+          }
+        : {}),
+    }))
     .filter((r) => r.name && r.count > 0);
 }
 
@@ -94,7 +116,7 @@ export function createConversationSerializer(deps: {
     return "someone";
   }
 
-  async function resolveMissingAuthorNames(
+  async function resolveMissingNames(
     client: any,
     messages: SlackHistoryMessage[],
     nameById: Map<string, string>,
@@ -107,11 +129,26 @@ export function createConversationSerializer(deps: {
       if (m.user && m.user !== ids.botUserId && !nameById.has(m.user)) needUsers.add(m.user);
       else if (!m.user && m.bot_id && m.bot_id !== ids.ownBotId && !botNameById.has(m.bot_id)) needBots.add(m.bot_id);
     }
+    for (const m of messages) {
+      for (const reaction of reactionTallies(m.reactions)) {
+        for (const user of reaction.users ?? []) {
+          if (user.id !== ids.botUserId && !nameById.has(user.id)) needUsers.add(user.id);
+        }
+      }
+    }
+    const snapshot = needUsers.size ? await directory.getUserSnapshot(client) : undefined;
+    for (const id of needUsers) {
+      const name = snapshot?.byId.get(id)?.actor.displayName;
+      if (name) nameById.set(id, name);
+    }
     await Promise.all([
-      ...[...needUsers].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
-        const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
-        if (dn) nameById.set(id, dn);
-      }),
+      ...[...needUsers]
+        .filter((id) => !nameById.has(id))
+        .slice(0, MAX_NAME_LOOKUPS)
+        .map(async (id) => {
+          const dn = (await directory.classifyUserCached(client, id)).actor.displayName;
+          if (dn) nameById.set(id, dn);
+        }),
       ...[...needBots].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
         try {
           const name = (await client.bots.info({ bot: id })).bot?.name;
@@ -135,9 +172,10 @@ export function createConversationSerializer(deps: {
       return 0;
     });
     const botNameById = new Map<string, string>();
-    await resolveMissingAuthorNames(client, kept, nameById, botNameById);
+    await resolveMissingNames(client, kept, nameById, botNameById);
     return kept.map((m) => {
       const content = messageWithForwardedContent(m);
+      const reactions = reactionTallies(m.reactions, nameById, ids.botUserId);
       return {
         ts: m.ts,
         name: messageAuthorName(m, nameById, botNameById),
@@ -147,7 +185,7 @@ export function createConversationSerializer(deps: {
         ...(m.bot_id ? { isBot: true } : {}),
         ...(isSelfMessage(m) ? { isSelf: true } : {}),
         ...(m.thread_ts && String(m.thread_ts) !== m.ts ? { parentTs: String(m.thread_ts) } : {}),
-        ...(reactionTallies(m.reactions).length ? { reactions: reactionTallies(m.reactions) } : {}),
+        ...(m.reactions !== undefined ? { reactions } : {}),
         ...(content.files.length ? { files: content.files.map((f) => slackFileName(f)) } : {}),
       };
     });

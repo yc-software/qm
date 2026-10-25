@@ -6,11 +6,12 @@ import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
-import type { SlackMessageEvent } from "./payloads.ts";
+import type { SlackMessageEvent, SlackReactionEvent } from "./payloads.ts";
 import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
 
 export interface Mirror {
   pushSurfaceEvents(events: IngestEvent[]): Promise<void>;
+  mirrorReactionEvent(event: SlackReactionEvent, client: any, added: boolean): Promise<void>;
   mirrorMessageEvent(
     m: Partial<SlackMessageEvent>,
     client: any,
@@ -107,6 +108,34 @@ export function createMirror(deps: {
     return Object.fromEntries(names);
   }
 
+  async function canMirrorRoom(client: any, container: string, kind: "channel" | "dm" | "group"): Promise<boolean> {
+    if (!(await externalParticipantsEnabled())) {
+      let gate = ambientRoomGate.get(container);
+      if (!gate || Date.now() - gate.at > 5_000) {
+        const info = kind === "group" ? undefined : await directory.getChannelInfo(client, container);
+        if (kind !== "group" && !info) throw new Error("Slack mirror room lookup unavailable");
+        const rosters = await directory.allInternalRosters(client, [{ id: container, ...(info ? { info } : {}) }], {
+          plural: "ambient rooms",
+          authz: "ambient-work",
+          item: "room",
+          requireComplete: true,
+        });
+        gate = { allowed: rosters.has(container), at: Date.now() };
+        ambientRoomGate.set(container, gate);
+      }
+      if (!gate.allowed) return false;
+    }
+    return true;
+  }
+
+  async function mirrorReactionEvent(event: SlackReactionEvent, client: any, added: boolean): Promise<void> {
+    const { user: userId, reaction: name, event_ts: eventTs, item } = event;
+    if (item?.type !== "message" || !item.channel || !item.ts || !userId || !name || !eventTs) return;
+    if (!Number.isFinite(Number(eventTs)) || Number(eventTs) <= 0) return;
+    if (!(await canMirrorRoom(client, item.channel, item.channel.startsWith("D") ? "dm" : "channel"))) return;
+    await pushSurfaceEvents([{ container: item.channel, ts: item.ts, reaction: { name, userId, eventTs, added } }]);
+  }
+
   async function mirrorMessageEvent(
     m: Partial<SlackMessageEvent>,
     client: any,
@@ -125,27 +154,12 @@ export function createMirror(deps: {
     const type = m.channel_type;
     if (!opts.kind && type !== "channel" && type !== "group" && type !== "mpim") return;
     const kind = opts.kind ?? (type === "mpim" ? "group" : "channel");
-    if (!(await externalParticipantsEnabled())) {
-      let gate = ambientRoomGate.get(container);
-      if (!gate || Date.now() - gate.at > 5_000) {
-        const info = kind === "group" ? undefined : await directory.getChannelInfo(client, container);
-        if (kind !== "group" && !info) throw new Error("Slack mirror room lookup unavailable");
-        const rosters = await directory.allInternalRosters(client, [{ id: container, ...(info ? { info } : {}) }], {
-          plural: "ambient rooms",
-          authz: "ambient-work",
-          item: "room",
-          requireComplete: true,
-        });
-        gate = { allowed: rosters.has(container), at: Date.now() };
-        ambientRoomGate.set(container, gate);
-      }
-      if (!gate.allowed) return;
-    }
+    if (!(await canMirrorRoom(client, container, kind))) return;
     const content = messageWithForwardedContent(m);
     const raw = content.text;
     const mentions = await resolveMentionNames(client, decodeSlackEntities(raw));
     await pushSurfaceEvents([slackMessageToIngestEvent(m, ids, { ...opts, mentions, kind })]);
   }
 
-  return { pushSurfaceEvents, mirrorMessageEvent };
+  return { pushSurfaceEvents, mirrorMessageEvent, mirrorReactionEvent };
 }
