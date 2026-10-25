@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  approvalDecisionMessage,
   approvalMessage,
   approvalCardDestination,
   recoveredApprovalContext,
@@ -300,4 +301,106 @@ test("a command too long to show in Slack can only be denied there", () => {
     { requestId: "req-2", command, reason: "needs approval", originUrl: "https://qm.example.com/s/abc" },
   ]);
   assert.match(JSON.stringify(linked.blocks), /<https:\/\/qm\.example\.com\/s\/abc\|this conversation in QM>/);
+});
+
+const catalogCall = {
+  requestId: "req-cat",
+  command:
+    'ycli {"arguments":{"attendee_emails":[],"end_time":"2026-10-26T08:15:00-07:00","start_time":"2026-10-26T08:00:00-07:00","summary":"Team sync"},"operation":"invoke","tool":"calendar_create_event"}',
+  summary: "ycli",
+  reason: "this tool asks for approval before each call",
+  kind: "approval" as const,
+  grantModes: { session: false, always: false },
+};
+
+test("a catalog tool call shows the invoked tool and its arguments as lines, not a JSON command", () => {
+  const msg = approvalMessage([catalogCall]);
+  assert.equal(msg.text, "Approval needed: ycli · `calendar_create_event`");
+  const section = msg.blocks.find((b) => b.type === "section") as any;
+  const text: string = section.text.text;
+  assert.match(text, /^:lock: \*Approval needed:\* ycli · `calendar_create_event`$/m);
+  assert.match(text, /^summary: `Team sync`$/m);
+  assert.match(text, /^start_time: `2026-10-26T08:00:00-07:00`$/m);
+  assert.match(text, /^attendee_emails: `\[\]`$/m);
+  assert.doesNotMatch(text, /\*Command:\*|"operation"/);
+  const actions = msg.blocks.find((b) => b.type === "actions") as any;
+  assert.deepEqual(
+    actions.elements.map((e: any) => e.action_id),
+    ["hilo_allow_once", "hilo_deny"],
+  );
+});
+
+test("a declared tool call with direct arguments lists them under the tool name", () => {
+  const msg = approvalMessage([
+    {
+      requestId: "req-2",
+      command: 'apps publish {"dir":"app","name":"demo"}',
+      summary: "apps publish",
+      reason: "this tool asks for approval before each call",
+    },
+  ]);
+  const text: string = (msg.blocks[0] as any).text.text;
+  assert.match(text, /^:lock: \*Approval needed:\* `apps publish`$/m);
+  assert.match(text, /^dir: `app`$/m);
+  assert.match(text, /^name: `demo`$/m);
+});
+
+test("a shell command that merely ends in JSON keeps the raw command line", () => {
+  const msg = approvalMessage([
+    {
+      requestId: "req-3",
+      command: 'curl {"a":1}',
+      summary: "Sends a request.",
+      reason: "network",
+    },
+  ]);
+  const text: string = (msg.blocks[0] as any).text.text;
+  assert.match(text, /\*Command:\* `curl \{"a":1\}`/);
+  assert.match(text, /Sends a request\./);
+});
+
+test("argument values cannot inject Slack links or mentions", () => {
+  const msg = approvalMessage([
+    {
+      ...catalogCall,
+      command: 'ycli {"arguments":{"note":"<!channel> <https://x.example|click>"},"operation":"invoke","tool":"t"}',
+    },
+  ]);
+  const text: string = (msg.blocks[0] as any).text.text;
+  assert.doesNotMatch(text, /<!channel>|<https:/);
+});
+
+test("the decision card names who decided and what, with the arguments in a context line", () => {
+  const at = Date.UTC(2026, 9, 25, 23, 3, 23);
+  const denied = approvalDecisionMessage(catalogCall, { decision: "deny", by: "U2", at, state: "done" });
+  const line: string = (denied.blocks[0] as any).text.text;
+  assert.equal(
+    line,
+    `:x: Denied by <@U2> · ycli · \`calendar_create_event\` · <!date^${at / 1000}^{date_short_pretty} at {time}|2026-10-25T23:03:23.000Z>`,
+  );
+  const context = denied.blocks[1] as any;
+  assert.equal(context.type, "context");
+  assert.equal(
+    context.elements[0].text,
+    "attendee_emails: [] · end_time: 2026-10-26T08:15:00-07:00 · start_time: 2026-10-26T08:00:00-07:00 · summary: Team sync",
+  );
+  assert.equal(
+    denied.blocks.some((b) => b.type === "actions"),
+    false,
+  );
+
+  const pending = approvalDecisionMessage(catalogCall, { decision: "once", by: "U2", at, state: "pending" });
+  assert.match(
+    (pending.blocks[0] as any).text.text,
+    /^:hourglass_flowing_sand: Allowed once by <@U2> · ycli · `calendar_create_event` — running…$/,
+  );
+  const denying = approvalDecisionMessage(catalogCall, { decision: "deny", by: "U2", at, state: "pending" });
+  assert.match((denying.blocks[0] as any).text.text, /^:hourglass_flowing_sand: Denying · ycli/);
+
+  const shell = approvalDecisionMessage(
+    { command: "rm -rf build", summary: "Deletes build." },
+    { decision: "always", by: "U2", at, state: "done" },
+  );
+  assert.match((shell.blocks[0] as any).text.text, /^:white_check_mark: Allowed always by <@U2> · `rm -rf build` · /);
+  assert.equal(shell.blocks.length, 1, "a short command needs no detail line");
 });

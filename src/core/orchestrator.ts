@@ -3999,7 +3999,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (turnRuntime) finalResult = { ...finalResult, runtime: turnRuntime };
         await fallbackTitleWrite;
 
-        if (input.background && finalResult.status !== "pending_approval") {
+        if (input.background) {
           tailOwnsCleanup = true;
           await catchUpMessageRevisions();
           await deps.sessions.releaseLease(lease);

@@ -239,3 +239,47 @@ test("a rejected grant scope preserves the same approval card instead of promisi
   assert.doesNotMatch(last, /new command needs approval/);
   assert.equal(f.posts.length, 0);
 });
+
+test("a deny click replaces the buttons before the resumed turn runs, then records who denied", async () => {
+  const f = fixture();
+  let release!: () => void;
+  f.state.hold = new Promise<void>((resolve) => (release = resolve));
+  f.state.result = { status: "ok", reply: "Understood, I won't run it." };
+
+  const clicked = f.click("U2", "hilo_deny");
+  for (let i = 0; i < 20 && !f.submitted.length; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.submitted.length, 1, "the resumed turn is in flight");
+  assert.equal(f.updates.length, 1, "the card was rewritten before the turn finished");
+  assert.match(String(f.updates[0].text), /^:hourglass_flowing_sand: Denying · `rm -rf \/tmp\/x`…$/);
+  assert.equal(JSON.stringify(f.updates[0].blocks).includes("hilo_"), false, "no buttons remain to click again");
+
+  release();
+  await clicked;
+  const final = f.updates.at(-1);
+  assert.match(String(final.text), /^:x: Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
+  assert.equal(JSON.stringify(final.blocks).includes("hilo_"), false);
+  assert.equal(f.ephemerals.length, 0);
+});
+
+test("an allow click shows who allowed it while running and keeps that record under the reply", async () => {
+  const f = fixture();
+  let release!: () => void;
+  f.state.hold = new Promise<void>((resolve) => (release = resolve));
+  f.state.result = { status: "ok", reply: "Removed it." };
+
+  const clicked = f.click("U2", "hilo_allow_once");
+  for (let i = 0; i < 20 && !f.submitted.length; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.match(
+    String(f.updates[0]?.text),
+    /^:hourglass_flowing_sand: Allowed once by <@U2> · `rm -rf \/tmp\/x` — running…$/,
+  );
+  assert.equal(JSON.stringify(f.updates[0].blocks).includes("hilo_"), false);
+
+  release();
+  await clicked;
+  const final = f.updates.at(-1);
+  assert.equal(final.text, "Removed it.");
+  const context = final.blocks.at(-1);
+  assert.equal(context.type, "context");
+  assert.match(context.elements[0].text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
+});
