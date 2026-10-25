@@ -107,3 +107,70 @@ test("Arga cleanup does not interpret missing or unauthorized status as successf
     fetchMock.mock.restore();
   }
 });
+
+function slowTwinFetch(readyAfterMs: number | null, clock: { now: number }, requests: string[]) {
+  let provisions = 0;
+  const tornDown = new Set<string>();
+  return async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    const method = init?.method ?? "GET";
+    requests.push(`${method} ${path}`);
+    if (String(input) === "https://admin.test/admin/config") return Response.json({});
+    if (method === "POST" && path === "/validate/twins/provision") {
+      provisions += 1;
+      return Response.json({ run_id: `run-${provisions}` });
+    }
+    const runId = path.split("/")[4] ?? "";
+    if (method === "POST" && path.endsWith("/teardown")) {
+      tornDown.add(runId);
+      return Response.json({ status: "tearing_down" });
+    }
+    if (tornDown.has(runId)) return Response.json({ status: "torn_down" });
+    clock.now += 30_000;
+    if (readyAfterMs === null || clock.now < readyAfterMs) return Response.json({ status: "provisioning" });
+    return Response.json({
+      status: "ready",
+      proxy_token: "proxy",
+      twins: {
+        slack: {
+          base_url: "https://slack.test",
+          admin_url: "https://admin.test",
+          env_vars: { SLACK_BOT_TOKEN: "bot", SLACK_SIGNING_SECRET: "signing" },
+        },
+      },
+    });
+  };
+}
+
+test("a twin that takes longer than two minutes to become ready is accepted", async (t) => {
+  const clock = { now: 0 };
+  const requests: string[] = [];
+  t.mock.method(Date, "now", () => clock.now);
+  t.mock.method(globalThis, "fetch", slowTwinFetch(4 * 60_000, clock, requests));
+
+  const session = await provisionSlackTwin("key", 60, { pollMs: 0 });
+
+  assert.equal(session.runId, "run-1");
+  assert.equal(requests.filter((request) => request.startsWith("POST")).length, 1);
+});
+
+test("a twin that never becomes ready times out, is torn down, and is retried once", async (t) => {
+  const clock = { now: 0 };
+  const requests: string[] = [];
+  t.mock.method(Date, "now", () => clock.now);
+  t.mock.method(globalThis, "fetch", slowTwinFetch(null, clock, requests));
+
+  await assert.rejects(
+    provisionSlackTwin("key", 60, { pollMs: 0 }),
+    /twin provisioning timed out after 3\d\ds \(last status: provisioning\)/,
+  );
+  assert.deepEqual(
+    requests.filter((request) => request.startsWith("POST")),
+    [
+      "POST /validate/twins/provision",
+      "POST /validate/twins/provision/run-1/teardown",
+      "POST /validate/twins/provision",
+      "POST /validate/twins/provision/run-2/teardown",
+    ],
+  );
+});

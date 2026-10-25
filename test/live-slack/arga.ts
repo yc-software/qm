@@ -38,7 +38,16 @@ async function argaFetch(apiKey: string, path: string, init: RequestInit = {}): 
   return body;
 }
 
-export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Promise<TwinSession> {
+// Slack twins have taken 33-122s to become ready, and later stayed in "provisioning"
+// past a two-minute deadline on every attempt; leave room for a slow Arga start.
+const TWIN_READY_TIMEOUT_MS = 5 * 60_000;
+const TWIN_STATUS_POLL_MS = 5000;
+
+export async function provisionSlackTwin(
+  apiKey: string,
+  ttlMinutes: number,
+  { pollMs = TWIN_STATUS_POLL_MS }: { pollMs?: number } = {},
+): Promise<TwinSession> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const { run_id } = await argaFetch(apiKey, "/validate/twins/provision", {
       method: "POST",
@@ -46,10 +55,12 @@ export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Pr
     });
     console.log(`twin provisioning started: ${run_id}`);
     try {
-      const deadline = Date.now() + 2 * 60_000;
+      const startedAt = Date.now();
+      const deadline = startedAt + TWIN_READY_TIMEOUT_MS;
       for (;;) {
         const status = await argaFetch(apiKey, `/validate/twins/provision/${run_id}/status`);
         if (status.status === "ready") {
+          console.log(`twin ${run_id} ready after ${Math.round((Date.now() - startedAt) / 1000)}s`);
           const slack = status.twins?.slack;
           if (!slack?.base_url || !slack?.admin_url)
             throw new Error(`twin ready but no slack urls: ${JSON.stringify(status).slice(0, 400)}`);
@@ -71,8 +82,11 @@ export async function provisionSlackTwin(apiKey: string, ttlMinutes: number): Pr
         }
         if (["failed", "expired", "cancelled"].includes(status.status))
           throw new Error(`twin provisioning ${status.status}: ${JSON.stringify(status.error).slice(0, 400)}`);
-        if (Date.now() > deadline) throw new Error(`twin provisioning timed out (last status: ${status.status})`);
-        await sleep(5000);
+        if (Date.now() > deadline)
+          throw new Error(
+            `twin provisioning timed out after ${Math.round((Date.now() - startedAt) / 1000)}s (last status: ${status.status})`,
+          );
+        await sleep(pollMs);
       }
     } catch (err) {
       try {
