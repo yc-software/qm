@@ -195,7 +195,7 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
         }
         let value = unsafe { event.as_ref() };
         let source = CGEvent::integer_value_field(Some(value), CGEventField::EventSourceUnixProcessID) as i32;
-        if source != std::process::id() as i32 {
+        if source != std::process::id() as i32 && matches!(kind.0, 1 | 3 | 25 | 22 | 10) {
             let destination = CGEvent::integer_value_field(Some(value), CGEventField::EventTargetUnixProcessID) as i32;
             let pid = if matches!(kind.0, 1 | 3 | 25 | 22) {
                 let window = CGEvent::integer_value_field(Some(value), CGEventField(51));

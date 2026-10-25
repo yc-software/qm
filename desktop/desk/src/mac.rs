@@ -1529,7 +1529,7 @@ impl Desk {
     }
 
     pub fn handle(&mut self, cmd: Command, pace: &mut dyn FnMut(u32, Point) -> Result<(), Failure>) -> Reply {
-        if self.watcher.is_none() {
+        if matches!(cmd, Command::Observe { .. } | Command::Act { .. }) && self.watcher.is_none() {
             match crate::intervention::ActivityWatcher::begin(std::sync::Arc::clone(&self.activity)) {
                 Ok(watcher) => self.watcher = Some(watcher),
                 Err(error) => return Reply::Error(error),

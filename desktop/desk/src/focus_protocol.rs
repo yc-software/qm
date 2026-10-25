@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 pub const PROCESS_NOTIFICATION: u32 = 21;
-pub const NEW_FRONT: i64 = 2;
 pub const KEY_FOCUS_TAKEN: i64 = 0x4000;
 pub const KEY_FOCUS_RETURNED: i64 = 0x8000;
 pub const KEY_FOCUS_CHANGED: i64 = 0xf102;
@@ -122,20 +121,6 @@ impl Scope {
         }
     }
 
-    pub fn user_event(&mut self, kind: u32, source: i32, destination: i32) -> Decision {
-        if source != self.owner && !self.yielded && matches!(kind, 10..=12) {
-            return self.keyboard(source, destination);
-        }
-        Decision::Pass
-    }
-
-    pub fn observe_user_event(&mut self, kind: u32, source: i32, destination: i32) -> Decision {
-        match self.user_event(kind, source, destination) {
-            Decision::Redirect(_) => Decision::Pass,
-            decision => decision,
-        }
-    }
-
     pub fn keyboard(&mut self, source: i32, destination: i32) -> Decision {
         if self.activation == Some(destination) && source != self.owner && !self.yielded {
             return Decision::Redirect(self.keyboard_owner);
@@ -159,12 +144,10 @@ mod tests {
     fn foreground_and_human_input_continue() {
         let mut scope = Scope::new(100, 200, 200, 300);
         assert!(scope.begin_activation(300));
-        assert_eq!(scope.observe_user_event(10, 0, 200), Decision::Pass);
         assert_eq!(scope.keyboard(0, 300), Decision::Redirect(200));
-        assert_eq!(scope.notification(200, NEW_FRONT, 400, 0), Decision::Pass);
+        assert_eq!(scope.notification(200, 2, 400, 0), Decision::Pass);
         scope.end_activation();
         assert!(scope.begin_activation(300));
-        assert_eq!(scope.observe_user_event(1, 0, 300), Decision::Pass);
     }
 
     #[test]
