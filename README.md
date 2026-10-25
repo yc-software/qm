@@ -9,7 +9,7 @@ Run it in your own cloud, with your own models and keys.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/yc-software/qm/cicd.yml?branch=main&label=CI&style=flat-square)](https://github.com/yc-software/qm/actions/workflows/cicd.yml)
 [![license](https://img.shields.io/badge/license-MIT-4c1?style=flat-square)](./LICENSE)
-[![node](https://img.shields.io/badge/node-24.15%2B-3178c6?style=flat-square)](./package.json)
+[![node](https://img.shields.io/badge/node-24.22.1%2B-3178c6?style=flat-square)](./package.json)
 [![npm](https://img.shields.io/npm/v/@yc-software/qm?label=npm&color=000&style=flat-square)](https://www.npmjs.com/package/@yc-software/qm)
 
 [Deploy](#deploy-it-for-your-org) · [How it works](#how-it-works) · [Security model](#security-and-secrets) · [Customize](#customize-your-instance) · [Contribute](#contributing) · [Documentation](#going-deeper)
