@@ -202,6 +202,9 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
     })();
     let restoration = (|| {
         check_current()?;
+        if !matches!(frontmost(), Some(pid) if pid == original || pid == target) {
+            return Ok(());
+        }
         if frontmost() != Some(original) && !original_app.activateWithOptions(NSApplicationActivationOptions::empty()) {
             return Err(Failure::new(ErrorCode::ActionFailed, "Cannot restore original foreground app after activation"));
         }
@@ -217,7 +220,9 @@ fn enforce_window(target: i32, window: u32, original: i32) -> Result<(), Failure
         if let Some((id, original_window)) = original_window {
             restore_order(target, id, &original_window)?;
         }
-        transition.verify_keyboard_owner()?;
+        if frontmost() == Some(original) {
+            transition.verify_keyboard_owner()?;
+        }
         check_current()
     })();
     let resumed = updates.resume();
@@ -374,9 +379,6 @@ impl Focus {
         let original = frontmost().ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Cannot identify the foreground app"))?;
         let keyboard_owner = crate::intervention::keyboard_focus_pid()?;
         let intervention = crate::intervention::Intervention::begin(target, original, keyboard_owner)?;
-        if keyboard_owner != crate::intervention::keyboard_focus_pid()? || frontmost() != Some(original) {
-            return Err(Failure::new(ErrorCode::ActionFailed, "Focus changed while starting input; stopped"));
-        }
         let activation =
             Rc::new(Activation { original, selected: Cell::new((target, window)), activated: RefCell::new(Vec::new()), retained });
         ACTIVATION.with(|current| *current.borrow_mut() = Rc::downgrade(&activation));

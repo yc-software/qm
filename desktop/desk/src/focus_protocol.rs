@@ -151,6 +151,36 @@ mod tests {
     }
 
     #[test]
+    fn human_keys_keep_the_original_owner_during_activation() {
+        let mut scope = Scope::new(100, 200, 200, 300);
+        assert!(scope.begin_activation(300));
+        assert_eq!(scope.keyboard(0, 200), Decision::Pass);
+        assert_eq!(scope.keyboard(0, 300), Decision::Redirect(200));
+        scope.end_activation();
+        assert!(scope.begin_activation(300));
+    }
+
+    #[test]
+    fn sequential_leases_keep_their_paired_returns() {
+        let mut scope = Scope::new(100, 200, 200, 300);
+        for id in [7, 8] {
+            assert_eq!(scope.notification(200, KEY_FOCUS_TAKEN, 300, 0), Decision::Suppress);
+            assert_eq!(scope.notification(400, KEY_FOCUS_CHANGED, 300, id), Decision::Release(id as u32));
+            scope.released(true);
+            assert_eq!(scope.notification(200, KEY_FOCUS_RETURNED, 0, 0), Decision::Suppress);
+            assert_eq!(scope.notification(200, KEY_FOCUS_RETURNED, 0, 0), Decision::Pass);
+        }
+    }
+
+    #[test]
+    fn invalid_lease_id_still_stops() {
+        let mut scope = Scope::new(100, 200, 200, 300);
+        scope.notification(200, KEY_FOCUS_TAKEN, 300, 0);
+        assert!(matches!(scope.notification(400, KEY_FOCUS_CHANGED, 300, -1), Decision::Stop(_)));
+        assert_eq!(scope.keyboard(0, 300), Decision::Pass);
+    }
+
+    #[test]
     fn nested_leases_release_inner_first() {
         let mut scope = Scope::new(100, 200, 200, 300);
         scope.include(301);
