@@ -356,6 +356,8 @@ import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
+import { createHttpChatAdapter } from "./chat-surface/http-chat.ts";
+import { createSurfaceRegistry, type SurfaceRegistry } from "./chat-surface/registry.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
 import { createEngagedRegistry } from "./wake/engaged-registry.ts";
 import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
@@ -550,6 +552,7 @@ export interface BuiltApp {
   sessionShareBytes: DurableByteStore;
   skillSyncEngine: SkillSyncEngine;
   slackCore: SlackCoreClient;
+  chatSurfaces: SurfaceRegistry;
 }
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
@@ -2336,6 +2339,17 @@ export function buildApp(
         resume: (ask, grant) => askResolution!(ask, grant),
       })
     : undefined;
+  const chatSurfaces = createSurfaceRegistry(
+    (config.chatSurfaces ?? []).map((surface) => createHttpChatAdapter(surface)),
+    {
+      turn: (request) => app.turn(request),
+      claimDeliveries: (type, claimMs) => app.pendingDeliveries(type, claimMs),
+      ackDelivery: (id) => app.ackDelivery(id),
+      onDeliveryEnqueued: (listener) => deliveries.onEnqueue(listener),
+      hold: (key, fn) => leaderLease.hold(key, fn),
+    },
+  );
+  orchestratorDeps.surfaceLabel = chatSurfaces.label;
   const slackCore = createSlackCoreClient({
     identity,
     memory,
@@ -3062,6 +3076,7 @@ export function buildApp(
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
     skillSyncEngine,
     slackCore,
+    chatSurfaces,
   };
 }
 
@@ -3116,6 +3131,7 @@ export function serverDeps(
     slackInstallation: built.slackInstallation,
     slackEnvironmentState,
     ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
+    chatSurfaces: built.chatSurfaces,
     ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
     resolveClient: built.resolveClient,
     consentLinks: built.consentLinks,

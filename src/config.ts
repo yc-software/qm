@@ -1,3 +1,4 @@
+import { httpChatConfigsFromEnv, type HttpChatConfig } from "./chat-surface/http-chat.ts";
 import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
@@ -150,6 +151,7 @@ export interface Config {
   flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
+  chatSurfaces?: HttpChatConfig[];
   runStore: "memory" | "postgres";
   skillSigningSecret?: string;
   seedSkills: boolean;
@@ -1623,6 +1625,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
+    chatSurfaces: httpChatConfigsFromEnv(env),
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),

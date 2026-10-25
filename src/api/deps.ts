@@ -1,3 +1,4 @@
+import type { SurfaceRegistry } from "../chat-surface/registry.ts";
 import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
@@ -111,6 +112,7 @@ export interface ServerDeps {
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";
   slackEventsPort?: number;
+  chatSurfaces?: SurfaceRegistry;
   slackEnvBotToken?: string;
   oauthStateSecret?: string;
   oauthFetch?: FetchLike;

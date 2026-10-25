@@ -123,8 +123,10 @@ const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((accoun
     onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
   }),
 );
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
+if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) {
   for (const runtime of slackAccountRuntimes) runtime.start();
+  built.chatSurfaces.start();
+}
 
 let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
 if (built.backgroundOwnership) {
@@ -139,6 +141,7 @@ if (built.backgroundOwnership) {
       .catch((error) => console.error("[qm] background claim stop failed:", errMessage(error)));
     for (const runtime of [slackRuntime, ...slackAccountRuntimes])
       void runtime.stop().catch((error) => console.error("[qm] Slack background stop failed:", errMessage(error)));
+    void built.chatSurfaces.stop();
   };
   backgroundController = createBackgroundController({
     store: built.backgroundOwnership.store,
@@ -152,6 +155,7 @@ if (built.backgroundOwnership) {
       built.scheduler.start(1000);
       await built.scheduler.ready();
       if (signal.aborted || epoch !== activationEpoch) return;
+      built.chatSurfaces.start();
       for (const runtime of [slackRuntime, ...slackAccountRuntimes]) {
         if (signal.aborted) return;
         runtime.start();
@@ -164,6 +168,7 @@ if (built.backgroundOwnership) {
         built.runtime.stopBackgroundClaims(),
         built.scheduler.stopClaims(),
         ...[slackRuntime, ...slackAccountRuntimes].map((runtime) => runtime.stop()),
+        built.chatSurfaces.stop(),
       ]);
     },
     async drained() {
@@ -183,6 +188,7 @@ function shutdown(signal: string): void {
   void slackRuntime.stop().catch((e: unknown) => console.error("[qm] slack plugin stop failed:", errMessage(e)));
   for (const runtime of slackAccountRuntimes)
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
+  void built.chatSurfaces.stop();
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
   server.close();
