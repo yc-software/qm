@@ -16,6 +16,8 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -57,6 +59,8 @@ after(() => {
 function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
+    ...singleProcessDeps(),
+    store: createMemoryMap(),
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,
@@ -111,7 +115,6 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   assert.equal(fake.volumes.has(localVolumeName(scope)), true);
   const c = fake.containers.get(h.id)!;
   assert.equal(c.labels["qm.sandbox"], "1");
-  assert.equal(c.labels["qm.scope"], scope);
   assert.equal(c.labels["qm.org"], "default-org");
   assert.equal(c.labels["agent_env"], "dev");
   assert.equal(c.volume, localVolumeName(scope));
@@ -237,7 +240,13 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const workspace = createLocalWorkspaceStore(dir);
   const shared = scopeId("org", "default-org");
   await workspace.write(shared, "guide.md", "shared doc");
-  const sb = createLocalSandbox(workspace, { dockerExec: fake.dockerExec, homeDir: guestHome, repoRoot: tmp });
+  const sb = createLocalSandbox(workspace, {
+    ...singleProcessDeps(),
+    store: createMemoryMap(),
+    dockerExec: fake.dockerExec,
+    homeDir: guestHome,
+    repoRoot: tmp,
+  });
   const h = await sb.provision([
     { scopeId: scopeId("personal", "U10"), mountPath: "", mode: "rw" as const },
     { scopeId: shared, mountPath: "shared", mode: "ro" as const },
@@ -283,17 +292,16 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
     if (url.endsWith("/health")) return Promise.resolve(new Response("", { status: 200 }));
     return Promise.resolve(new Response(JSON.stringify({ code: 0, stdout: "", stderr: "", timedOut: false })));
   };
-  const sb = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
   const layers = rw(scopeId("personal", "U39"));
-  const first = await sb.provision(layers);
+  const first = await makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl }).provision(layers);
   const connection = `${localNetworkName(first.id)}|qm-test-core`;
   assert.equal(fake.connections.has(connection), true);
   fake.connections.delete(connection);
-  const second = await sb.provision(layers);
+  const replacement = makeSandbox(fake, { coreContainer: "qm-test-core", fetchImpl });
+  const second = await replacement.provision(layers);
   assert.equal(second.id, first.id);
   assert.equal(fake.connections.has(connection), true);
-  await sb.teardown(first);
-  await sb.teardown(second, { destroy: true });
+  await replacement.teardown(second, { destroy: true });
 });
 
 test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {

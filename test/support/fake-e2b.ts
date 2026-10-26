@@ -236,7 +236,7 @@ export function installFakeE2b(fakeOpts: { info?: boolean } = {}): FakeE2b {
         async info(sandboxId) {
           const r = records.get(sandboxId);
           if (!r || r.expired) throw new E2bSandboxGoneError(sandboxId, "sandbox was not found");
-          return { state: r.state, expiresAtMs: Date.now() + 60_000, onTimeout: r.autoPause ? "pause" : "kill" };
+          return { state: r.state, expiresAtMs: Date.now() + 60_000 };
         },
       }
     : {};

@@ -60,7 +60,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
     sandbox: {
-      profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
+      profile: { backend: "fake", writablePersistence: "resident_disk", processSessions: false },
     } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,

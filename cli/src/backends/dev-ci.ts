@@ -71,7 +71,7 @@ export async function devCiUp(): Promise<void> {
   }
   if (process.env.SPRITES_TOKEN) {
     if (!process.env.SANDBOX_BACKEND) overlay.SANDBOX_BACKEND = "sprites";
-    if (!process.env.SPRITES_NAME_PREFIX) overlay.SPRITES_NAME_PREFIX = "qmci";
+    if (!process.env.SANDBOX_NAME_PREFIX) overlay.SANDBOX_NAME_PREFIX = "qmci";
   }
 
   if (!process.env.PUBLIC_API_URL && process.env.SPRITES_TOKEN) {

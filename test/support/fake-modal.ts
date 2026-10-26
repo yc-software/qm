@@ -32,6 +32,9 @@ export interface FakeModal {
   execScripts(): string[];
   tagsOf(sandboxId: string): Record<string, string>;
   createUntracked(tags: Record<string, string>): string;
+  onSnapshot(hook: (() => Promise<void>) | null): void;
+  snapshotCount(): number;
+  failRestoreOnce(): void;
   cleanup(): void;
 }
 
@@ -42,6 +45,9 @@ export function installFakeModal(): FakeModal {
   let nextId = 1;
   let clock = 0;
   let terminateFailures = 0;
+  let restoreFailures = 0;
+  let snapshots = 0;
+  let snapshotHook: (() => Promise<void>) | null = null;
 
   const byName = (name: string): FakeRecord | undefined => {
     const all = [...records.values()].filter((r) => r.name === name).sort((a, b) => b.createdAt - a.createdAt);
@@ -71,14 +77,21 @@ export function installFakeModal(): FakeModal {
 
   const session = (r: FakeRecord): ModalSession => ({
     sandboxId: r.sandboxId,
-    async snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }> {
+    async snapshotHome(): Promise<string> {
       alive(r);
+      snapshots++;
+      await snapshotHook?.();
       const imageId = `im-${nextId++}`;
       cpSync(r.home, join(root, imageId), { recursive: true });
-      return { imageId, expiresAtMs: Date.now() + 30 * 24 * 3600_000 };
+      return imageId;
     },
     async restoreHome(imageId: string): Promise<void> {
       alive(r);
+      if (restoreFailures > 0) {
+        restoreFailures--;
+        throw new Error("simulated restore outage");
+      }
+      rmSync(r.home, { recursive: true, force: true });
       cpSync(join(root, imageId), r.home, { recursive: true });
     },
     async runCommand(command, runOpts): Promise<ModalCommandResult> {
@@ -133,6 +146,7 @@ export function installFakeModal(): FakeModal {
   };
 
   const client: ModalClient = {
+    lifetimeMs: 24 * 3600_000,
     async create(opts): Promise<ModalSession> {
       if (opts.name) {
         const existing = byName(opts.name);
@@ -196,6 +210,13 @@ export function installFakeModal(): FakeModal {
       return { ...r.tags };
     },
     createUntracked: (tags) => spawn(undefined, tags).sandboxId,
+    onSnapshot: (hook) => {
+      snapshotHook = hook;
+    },
+    snapshotCount: () => snapshots,
+    failRestoreOnce: () => {
+      restoreFailures++;
+    },
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }

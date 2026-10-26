@@ -561,7 +561,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
         lifecycleState: "paused",
         expiresAtMs: Date.parse("2026-09-10T00:00:00Z"),
         recovery: {
-          strategy: "provider_pause",
+          strategy: "provider_snapshot",
           checkpointId: "checkpoint-1",
           checkpointAtMs: Date.parse("2026-09-09T00:00:00Z"),
           checkpointExpiresAtMs: Date.parse("2026-10-09T00:00:00Z"),
@@ -583,7 +583,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
   for (const expected of [
     "lifecycle: paused",
     "machine expires: 2026-09-10T00:00:00.000Z",
-    "recovery strategy: provider_pause",
+    "recovery strategy: provider_snapshot",
     "recovery state: failed",
     "checkpoint: checkpoint-1",
     "checkpoint captured: 2026-09-09T00:00:00.000Z",

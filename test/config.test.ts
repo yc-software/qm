@@ -27,19 +27,6 @@ const productionEnv = {
   SESSION_STORE: "postgres",
 } as const;
 
-test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
-  assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
-  const config = loadConfig({
-    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
-    SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
-  });
-  assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
-  assert.deepEqual(config.spritesSandbox.egressProxyAdditionalUrls, [
-    "https://old.example.com",
-    "https://next.example.com",
-  ]);
-});
-
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);
@@ -186,17 +173,23 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+test("a remote sandbox backend without the shared egress proxy warns once", () => {
   const warnings: string[] = [];
   const original = console.warn;
   console.warn = (msg: unknown) => void warnings.push(String(msg));
   try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+    loadConfig({ SANDBOX_BACKEND: "modal", MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
+    loadConfig({
+      SANDBOX_BACKEND: "modal",
+      MODAL_TOKEN_ID: "id",
+      MODAL_TOKEN_SECRET: "secret",
+      SANDBOX_EGRESS_PROXY_URL: "https://egress.test",
+    });
+    loadConfig({ SANDBOX_BACKEND: "local" });
   } finally {
     console.warn = original;
   }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+  assert.equal(warnings.filter((w) => w.includes("without SANDBOX_EGRESS_PROXY_URL")).length, 1);
 });
 
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
@@ -392,18 +385,6 @@ test("HARNESS=claude uses native Claude authentication and does not require an A
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8" }).claudeModel, "claude-opus-4-8");
 });
 
-test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
-  for (const value of ["9007199254740993", "-1", "0.5", "NaN", "Infinity"]) {
-    assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }), /SUPERSERVE_CONFIG_GENERATION/, value);
-  }
-  for (const value of [undefined, "", "  "]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, undefined);
-  }
-  for (const value of ["0", "7", " 42 ", String(Number.MAX_SAFE_INTEGER)]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, Number(value));
-  }
-});
-
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
@@ -425,26 +406,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   assert.throws(
     () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
     /SUPERSERVE_API_KEY/,
-  );
-  assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-      SUPERSERVE_CONFIG_GENERATION: "7",
-    }).superserveSandbox.configGeneration,
-    7,
-    "a deployment that tracks its own rollouts stamps the generation its sandboxes carry",
-  );
-  assert.throws(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "superserve",
-        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        SUPERSERVE_API_KEY: "ss_live_k",
-        SUPERSERVE_CONFIG_GENERATION: "later",
-      }),
-    /SUPERSERVE_CONFIG_GENERATION/,
   );
   assert.equal(
     loadConfig({
@@ -589,18 +550,6 @@ test("DEPLOY_PROVIDER=e2b selects E2B publishing and needs the E2B key", () => {
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "e2b" }), /missing or insecure required core secrets: E2B_API_KEY/);
 });
 
-test("the deploy runner image falls back to the sandbox image", () => {
-  const config = loadConfig({
-    DEPLOY_PROVIDER: "porter",
-    PORTER_DEPLOY_PROJECT_ID: "7",
-    PORTER_DEPLOY_CLUSTER_ID: "9",
-    PORTER_DEPLOY_API_TOKEN: "tok",
-    PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
-    PORTER_SANDBOX_IMAGE: "localhost:5000/qm-sandbox:latest",
-  });
-  assert.equal(config.porterDeploy.runnerImage, "localhost:5000/qm-sandbox:latest");
-});
-
 test("DEPLOY_PROVIDER=porter refuses to boot without a cluster and tolerates a missing apps domain", () => {
   assert.throws(
     () =>
@@ -659,10 +608,8 @@ test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's to
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
-    PORTER_SANDBOX_TTL_SEC: "120",
   });
   assert.equal(inCluster.porterSandbox.token, "tok");
-  assert.equal(inCluster.porterSandbox.ttlSec, 120);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 
@@ -842,31 +789,31 @@ test("retired brain environment does not configure a runtime integration and war
   assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
 
-test("Modal native retention and interval configuration are parsed into Config", () => {
+test("shared SANDBOX_* settings are parsed once for every provider", () => {
   const config = loadConfig({
-    MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
-    MODAL_SNAPSHOT_RETENTION_SEC: "86400",
+    SANDBOX_NAME_PREFIX: "qmdev",
+    SANDBOX_TIMEOUT_SEC: "900",
+    SANDBOX_EGRESS_PROXY_URL: "https://proxy.example.com",
+    SANDBOX_SNAPSHOT_INTERVAL_SEC: "120",
+    SANDBOX_CPUS: "2",
+    SANDBOX_MEMORY_MB: "4096",
+    SANDBOX_DISK_GB: "20",
+    SANDBOX_IDLE_PARK_SEC: "900",
+    SANDBOX_MAX_LIFETIME_SEC: "3600",
   });
-  assert.equal(config.modalSandbox.nativeSnapshotIntervalSec, 60);
-  assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
-});
-
-test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
-  const config = loadConfig({
-    SMOLMACHINES_TOKEN: "smk_test",
-    SMOLMACHINES_AUTOSTOP_SEC: "900",
-    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
-    SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
-    SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
+  assert.deepEqual(config.sandbox, {
+    namePrefix: "qmdev",
+    defaultTimeoutSec: 900,
+    egressProxyUrl: "https://proxy.example.com",
+    snapshotIntervalSec: 120,
+    cpus: 2,
+    memoryMb: 4096,
+    diskGb: 20,
+    idleParkSec: 900,
+    maxLifetimeSec: 3600,
   });
-  assert.equal(config.smolmachinesSandbox.autoStopSec, 900);
-  assert.equal(config.smolmachinesSandbox.egressProxyUrl, "https://proxy.example.com");
-  assert.equal(config.smolmachinesSandbox.snapshotS3Bucket, "qm-home-snapshots");
-  assert.equal(config.smolmachinesSandbox.snapshotIntervalSec, 300);
-  const bare = loadConfig({ SMOLMACHINES_TOKEN: "smk_test" });
-  assert.equal(bare.smolmachinesSandbox.autoStopSec, undefined);
-  assert.equal(bare.smolmachinesSandbox.snapshotS3Bucket, undefined);
-  assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
+  assert.deepEqual(loadConfig({}).sandbox, {});
+  assert.throws(() => loadConfig({ SANDBOX_IDLE_PARK_SEC: "soon" }), /SANDBOX_IDLE_PARK_SEC/);
 });
 
 test("suggestion generation defaults on and can be explicitly disabled", () => {

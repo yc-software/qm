@@ -37,10 +37,6 @@ export function credentialServiceForPath(path: string): string | undefined {
   return first.startsWith(".") && first.length > 1 ? first.slice(1) : undefined;
 }
 
-export function displacedPruneGlobs(): string[] {
-  return [`./${DISPLACED_DIR_REL}`, `./${DISPLACED_DIR_REL}/*`, `./${DISPLACED_DIR_REL}.*`];
-}
-
 export function ephemeralCredLinkPaths(
   extra: readonly CredentialPathSpec[] = [],
 ): Array<{ rel: string; kind: "dir" | "file" }> {

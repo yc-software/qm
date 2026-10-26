@@ -7,14 +7,12 @@ import { createModalSandbox } from "../src/sandbox/modal-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { ModalClient, ModalSession } from "../src/sandbox/modal-client.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
-import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 test("real Modal adapter creates blank worker computers without snapshot or restore calls", async () => {
   const fake = installFakeModal();
-  const snapshotStore = instrumentedSnapshotStore();
   let snapshotCalls = 0;
   let restoreCalls = 0;
   const guard = (session: ModalSession): ModalSession => ({
@@ -41,7 +39,6 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     store: createMemoryMap(),
     ...singleProcessDeps(),
     client,
-    snapshots: snapshotStore.store,
     namePrefix: "swarm-test",
   });
   const fixture = await swarmFixture({ backend });
@@ -68,7 +65,6 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     assert.equal(await fixture.sandbox.readFile(handles[1]!, "result"), null);
     assert.equal(snapshotCalls, 0);
     assert.equal(restoreCalls, 0);
-    assert.equal(snapshotStore.puts(), 0);
     assert.equal(fake.totalCreated(), 4);
   } finally {
     fake.cleanup();

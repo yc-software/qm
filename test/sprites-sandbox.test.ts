@@ -17,7 +17,6 @@ import {
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from "../src/sandbox/sandbox.ts";
-import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { sleep } from "../src/util/async.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
@@ -33,7 +32,7 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
-    initializationStore: createMemoryMap(),
+    store: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
@@ -223,39 +222,6 @@ test("force-through pins the platform policy and injects proxy env", async () =>
   assert.equal(h.env?.NO_PROXY, "localhost,127.0.0.1,::1");
 });
 
-test("proxy migration keeps both hosts reachable across cutover and rollback", async () => {
-  const token = await proxyToken();
-  const oldUrl = "https://old.example.com";
-  const newUrl = "https://new.example.com";
-  for (const [primary, additional] of [
-    [oldUrl, newUrl],
-    [newUrl, oldUrl],
-    [oldUrl, newUrl],
-  ]) {
-    const s = make({ egressProxyUrl: primary, egressProxyAdditionalUrls: [additional, primary] });
-    const h = await s.provision(layers, { egressToken: token });
-    assert.deepEqual(fake.policy(h.id), [
-      { domain: "new.example.com", action: "allow" },
-      { domain: "old.example.com", action: "allow" },
-    ]);
-    assert.equal(new URL(h.env!.HTTPS_PROXY!).hostname, new URL(primary!).hostname);
-  }
-});
-
-test("proxy migration rejects mismatched provider policy and invalid configuration", async () => {
-  const s = make({
-    egressProxyUrl: "https://new.example.com",
-    egressProxyAdditionalUrls: ["https://old.example.com"],
-  });
-  fake.breakPolicyReadback(sandboxScopeName("qmt", scope));
-  await assert.rejects(s.provision(layers, { egressToken: await proxyToken() }), /readback mismatch/);
-  assert.throws(() => make({ egressProxyAdditionalUrls: ["https://old.example.com"] }), /require a primary/);
-  assert.throws(
-    () => make({ egressProxyUrl: "https://new.example.com", egressProxyAdditionalUrls: ["file:///tmp/x"] }),
-    /HTTP\(S\)/,
-  );
-});
-
 test("force-through strips agent-supplied proxy vars", async () => {
   const s = make({ egressProxyUrl: "https://proxy.example.com" });
   const h = await s.provision(layers, {
@@ -343,7 +309,7 @@ test("teardown checkpoints a changed home, throttles repeats, and destroy delete
 });
 
 test("an unchanged home is not checkpointed once its state is known", async () => {
-  const s = make({ checkpointIntervalMs: 1 });
+  const s = make({ snapshotIntervalSec: 0 });
   const h = await s.provision(layers);
   await s.teardown(h, { homeUnchanged: true });
   assert.deepEqual(fake.checkpoints(h.id), ["v1"], "a sprite this core has not checkpointed yet is saved once");
@@ -387,7 +353,12 @@ test("computerStatus reports checkpoint recovery and a healthy machine whose she
 
 test("computerStatus names a faulted check and an unprovisioned scope", async () => {
   const none = await sandbox.computerStatus!(scope);
-  assert.deepEqual(none, { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false });
+  assert.deepEqual(none, {
+    recovery: { strategy: "provider_snapshot", checkpointExpiresAtMs: null },
+    machine: "no machine provisioned yet",
+    provisioned: false,
+    guestResponsive: false,
+  });
   const h = await sandbox.provision(layers);
   fake.unhealthy(h.id, "disk unreachable");
   const s = await sandbox.computerStatus!(scope);
@@ -693,35 +664,6 @@ test("a prep failure that writes nothing still names its cause", () => {
   assert.equal(execFailureDetail({ stdout: " out\n", stderr: "", code: 1, timedOut: false }, 60), "out");
 });
 
-test("destroying a scope exports the home to the snapshot store first and a replacement hydrates from it", async () => {
-  const snapshots = createMemorySnapshotStore();
-  const s = make({ snapshots });
-  const h = await s.provision(layers);
-  await s.run(h, 'printf survivor > "$HOME/notes.txt"');
-  assert.equal(await snapshots.open(scope), null);
-
-  await s.destroyScope!(scope);
-  assert.ok(!fake.names().includes(h.id), "the sprite is gone");
-  const stored = await snapshots.open(scope);
-  assert.ok(stored && stored.size > 0, "but its home was exported before deletion");
-
-  const again = await s.provision(layers);
-  assert.equal(again.coldStart, false, "the replacement is hydrated, not cold");
-  const back = await s.run(again, 'cat "$HOME/notes.txt"');
-  assert.equal(back.stdout, "survivor");
-  assert.equal(typeof s.persistHomeSnapshot, "function", "explicit export is offered when a store is wired");
-  assert.equal(typeof make().persistHomeSnapshot, "undefined");
-});
-
-test("a failed export refuses to destroy the sprite", async () => {
-  const snapshots = createMemorySnapshotStore();
-  const s = make({ snapshots });
-  const h = await s.provision(layers);
-  fake.fail502(h.id);
-  await assert.rejects(s.destroyScope!(scope), /WebSocket error/);
-  assert.ok(fake.names().includes(h.id), "an irreversible delete never follows a lost export");
-});
-
 test("without a snapshot store a destroy is a single delete that tolerates a missing sprite", async () => {
   await sandbox.destroyScope!(scope);
   assert.deepEqual(
@@ -734,11 +676,13 @@ test("without a snapshot store a destroy is a single delete that tolerates a mis
 
 test("control-plane reads retry 429 with Retry-After while exec is never retried", async () => {
   const h = await sandbox.provision(layers);
+  const checks = () => fake.calls.filter((c) => c.path.endsWith("/check")).length;
+  const checksBefore = checks();
   fake.failNext(429, { headers: { "retry-after": "0" }, match: (c) => c.path.endsWith("/check") });
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.provisioned, true);
   assert.equal(status.guestResponsive, true);
-  assert.equal(fake.calls.filter((c) => c.path.endsWith("/check")).length, 2);
+  assert.equal(checks() - checksBefore, 2);
 
   const before = fake.execScripts().length;
   fake.stallAfterRun(h.id);
@@ -792,42 +736,6 @@ for (const outcome of ["healthy", "unknown", "403", "503"]) {
   });
 }
 
-test("failed hydration and failed deletion remain pending across adapters without overwriting the saved home", async () => {
-  const snapshots = createMemorySnapshotStore();
-  const initializationStore = createMemoryMap<{ pending: boolean }>();
-  const advisoryLock = createMemoryAdvisoryLock();
-  let failOpen = false;
-  let opens = 0;
-  const wrapped = {
-    ...snapshots,
-    open: async (id: string) => {
-      opens++;
-      if (failOpen) throw new Error("snapshot unavailable");
-      return snapshots.open(id);
-    },
-  };
-  const options = { snapshots: wrapped, initializationStore, advisoryLock };
-  const a = make(options);
-  const h = await a.provision(layers);
-  await a.writeFile(h, "ledger", "saved");
-  await a.destroyScope!(scope);
-  failOpen = true;
-  fake.refuseDelete(403);
-  await assert.rejects(a.provision(layers), /snapshot unavailable/);
-  assert.deepEqual(await initializationStore.get(h.id), { pending: true });
-  const b = make(options);
-  await assert.rejects(b.persistHomeSnapshot!(scope), /initialization is incomplete/);
-  await assert.rejects(b.restartComputer!(scope), /initialization is incomplete/);
-  const before = opens;
-  await assert.rejects(b.provision(layers), /snapshot unavailable/);
-  assert.equal(opens, before + 1);
-  failOpen = false;
-  fake.refuseDelete();
-  const restored = await make(options).provision(layers);
-  assert.equal(await b.readFile(restored, "ledger"), "saved");
-  assert.equal(await initializationStore.get(h.id), null);
-});
-
 test("scratch allocation is deleted when resource initialization fails", async () => {
   const box = make({ memoryMb: 4096 });
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
@@ -838,7 +746,8 @@ test("scratch allocation is deleted when resource initialization fails", async (
 test("failed scratch initialization and deletion retain a safe retryable identity", async () => {
   const box = make({ memoryMb: 4096 });
   fake.failNext(400, { match: (call) => call.path.endsWith("/policy/resources") });
-  fake.failNext(400, { match: (call) => call.method === "DELETE" });
+  let deletes = 0;
+  fake.failNext(400, { match: (call) => call.method === "DELETE" && ++deletes === 2 });
   let pending: import("../src/sandbox/sandbox.ts").SandboxHandle | undefined;
   await assert.rejects(box.provision(layers, { scratch: { key: "failed-rollback" } }), (error: Error) => {
     assert.ok(error instanceof SandboxProvisionCleanupError);

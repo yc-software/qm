@@ -424,7 +424,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
         AWS_SANDBOX_EXEC_ROLE_ARN:
           config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
-        AWS_SANDBOX_S3_BUCKET: awsObjectStoreBucket(config),
+        AWS_DEPLOY_DATA_BUCKET: awsObjectStoreBucket(config),
         ...stores,
       });
     }

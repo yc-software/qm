@@ -205,9 +205,8 @@ services' private network, so it relays audit records through `apiUrl` (or
 `publicUrl`). Point a hostname covered by the certificate at the
 `egress_proxy_hostname` output. On Fly it serves TLS on 443 at
 `<appPrefix>-egress-proxy.fly.dev`. Docker publishes the plain listener on a host
-port and leaves TLS to the operator. Then set the sandbox backend's proxy URL, for
-example `env.core.SPRITES_EGRESS_PROXY_URL` or `MODAL_EGRESS_PROXY_URL`, to
-`https://<proxy hostname>`. Update vendored Terraform from the current scaffold
+port and leaves TLS to the operator. Then set `env.core.SANDBOX_EGRESS_PROXY_URL`
+to `https://<proxy hostname>`; every sandbox backend uses it. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
 ### Shared AWS foundations

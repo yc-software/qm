@@ -21,16 +21,16 @@ test("Superserve dev namespaces isolate worktrees and survive instance restarts"
   const first = await resolve("/worktrees/template-a");
   const restarted = await resolve("/worktrees/template-a");
   const second = await resolve("/worktrees/template-b");
-  const prefix = first.env.SUPERSERVE_NAME_PREFIX;
+  const prefix = first.env.SANDBOX_NAME_PREFIX;
   assert.ok(prefix);
   assert.match(prefix, /^qmdev-[a-f0-9]{12}$/);
-  assert.equal(restarted.env.SUPERSERVE_NAME_PREFIX, prefix);
-  assert.notEqual(second.env.SUPERSERVE_NAME_PREFIX, prefix);
+  assert.equal(restarted.env.SANDBOX_NAME_PREFIX, prefix);
+  assert.notEqual(second.env.SANDBOX_NAME_PREFIX, prefix);
 });
 
 test("Superserve dev namespaces preserve an explicit override", async () => {
-  const result = await resolve("/worktrees/template-a", { SUPERSERVE_NAME_PREFIX: "my-dev-namespace" });
-  assert.equal(result.env.SUPERSERVE_NAME_PREFIX, "my-dev-namespace");
+  const result = await resolve("/worktrees/template-a", { SANDBOX_NAME_PREFIX: "my-dev-namespace" });
+  assert.equal(result.env.SANDBOX_NAME_PREFIX, "my-dev-namespace");
 });
 
 test("Superserve dev settings trim credentials and template and reject blank values before boot", async () => {

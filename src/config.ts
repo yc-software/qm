@@ -189,6 +189,7 @@ export interface Config {
   };
   reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
+  sandbox: SandboxEnv;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
@@ -243,6 +244,34 @@ export function harnessCarriedModelAuth(config: Config): ModelProvider | undefin
   return undefined;
 }
 
+interface SandboxEnv {
+  namePrefix?: string;
+  defaultTimeoutSec?: number;
+  egressProxyUrl?: string;
+  snapshotIntervalSec?: number;
+  cpus?: number;
+  memoryMb?: number;
+  diskGb?: number;
+  idleParkSec?: number;
+  maxLifetimeSec?: number;
+}
+
+function sandboxEnv(env: NodeJS.ProcessEnv): SandboxEnv {
+  const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
+  const entries: Array<[keyof SandboxEnv, string | number | undefined]> = [
+    ["namePrefix", env.SANDBOX_NAME_PREFIX?.trim() || undefined],
+    ["defaultTimeoutSec", num("SANDBOX_TIMEOUT_SEC")],
+    ["egressProxyUrl", env.SANDBOX_EGRESS_PROXY_URL?.trim() || undefined],
+    ["snapshotIntervalSec", num("SANDBOX_SNAPSHOT_INTERVAL_SEC")],
+    ["cpus", num("SANDBOX_CPUS")],
+    ["memoryMb", num("SANDBOX_MEMORY_MB")],
+    ["diskGb", num("SANDBOX_DISK_GB")],
+    ["idleParkSec", num("SANDBOX_IDLE_PARK_SEC")],
+    ["maxLifetimeSec", num("SANDBOX_MAX_LIFETIME_SEC")],
+  ];
+  return Object.fromEntries(entries.filter(([, v]) => v !== undefined)) as SandboxEnv;
+}
+
 interface AwsSandboxEnv {
   region: string;
   profile?: string;
@@ -251,30 +280,20 @@ interface AwsSandboxEnv {
   executionRoleArn?: string;
   ingressConnectorArns?: string[];
   egressConnectorArns?: string[];
-  s3Bucket?: string;
-  s3Prefix?: string;
-  agentPort?: number;
-  maxIdleDurationSeconds?: number;
-  suspendedDurationSeconds?: number;
-  maximumDurationInSeconds?: number;
-  rotateAfterSeconds?: number;
-  snapshotIntervalMs?: number;
-  defaultTimeoutSec?: number;
-  cpus?: number;
-  memoryMb?: number;
-  diskGb?: number;
+  coreContainer?: string;
 }
 
+const csvList = (value: string | undefined): string[] | undefined => {
+  const items = (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length ? items : undefined;
+};
+
 function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
-  const csv = (s: string | undefined): string[] | undefined =>
-    s
-      ? s
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean)
-      : undefined;
-  const ingress = csv(env.AWS_SANDBOX_INGRESS_CONNECTORS);
-  const egress = csv(env.AWS_SANDBOX_EGRESS_CONNECTORS);
+  const ingress = csvList(env.AWS_SANDBOX_INGRESS_CONNECTORS);
+  const egress = csvList(env.AWS_SANDBOX_EGRESS_CONNECTORS);
   return {
     region: env.AWS_SANDBOX_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-west-2",
     ...(env.AWS_SANDBOX_PROFILE ? { profile: env.AWS_SANDBOX_PROFILE } : {}),
@@ -283,293 +302,84 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
     ...(env.AWS_SANDBOX_EXEC_ROLE_ARN ? { executionRoleArn: env.AWS_SANDBOX_EXEC_ROLE_ARN } : {}),
     ...(ingress ? { ingressConnectorArns: ingress } : {}),
     ...(egress ? { egressConnectorArns: egress } : {}),
-    ...(env.AWS_SANDBOX_S3_BUCKET ? { s3Bucket: env.AWS_SANDBOX_S3_BUCKET } : {}),
-    ...(env.AWS_SANDBOX_S3_PREFIX ? { s3Prefix: env.AWS_SANDBOX_S3_PREFIX } : {}),
-    ...(numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) !== undefined
-      ? { agentPort: numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) !== undefined
-      ? { maxIdleDurationSeconds: numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) !== undefined
-      ? { suspendedDurationSeconds: numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) !== undefined
-      ? { maximumDurationInSeconds: numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) !== undefined
-      ? { rotateAfterSeconds: numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) !== undefined
-      ? { snapshotIntervalMs: numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) }
-      : {}),
     ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) }
-      : {}),
   };
 }
 
 interface LocalSandboxEnv {
   image?: string;
   dockerBin?: string;
-  cpus?: number;
-  memoryMb?: number;
   coreContainer?: string;
-  defaultTimeoutSec?: number;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
   return {
     ...(env.LOCAL_SANDBOX_IMAGE ? { image: env.LOCAL_SANDBOX_IMAGE } : {}),
     ...(env.LOCAL_SANDBOX_DOCKER_BIN ? { dockerBin: env.LOCAL_SANDBOX_DOCKER_BIN } : {}),
-    ...(numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) !== undefined
-      ? { cpus: numEnvStrict("LOCAL_SANDBOX_CPUS", env.LOCAL_SANDBOX_CPUS) }
-      : {}),
-    ...(numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
 interface SpritesSandboxEnv {
   token?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  egressProxyUrl?: string;
-  egressProxyAdditionalUrls?: string[];
-  snapshotS3Bucket?: string;
-  memoryMb?: number;
-  defaultTimeoutSec?: number;
 }
 
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
-  return {
-    ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
-    ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
-    ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
-    ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
-    ...(env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS?.trim()
-      ? {
-          egressProxyAdditionalUrls: env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS.split(",")
-            .map((url) => url.trim())
-            .filter(Boolean),
-        }
-      : {}),
-    ...(env.SPRITES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SPRITES_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
+  return env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {};
 }
 
 interface E2bSandboxEnv {
   apiKey?: string;
   templateId?: string;
-  namePrefix?: string;
-  sandboxTtlSec?: number;
-
-  proxy?: string;
-
-  egressProxyUrl?: string;
-  snapshotS3Bucket?: string;
-  snapshotIntervalSec?: number;
-  nativeSnapshotIntervalSec?: number;
-  maxLifetimeSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
   return {
     ...(env.E2B_API_KEY ? { apiKey: env.E2B_API_KEY } : {}),
     ...(env.E2B_TEMPLATE_ID ? { templateId: env.E2B_TEMPLATE_ID } : {}),
-    ...(env.E2B_NAME_PREFIX ? { namePrefix: env.E2B_NAME_PREFIX } : {}),
-    ...(numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) !== undefined
-      ? { sandboxTtlSec: numEnvStrict("E2B_SANDBOX_TTL_SEC", env.E2B_SANDBOX_TTL_SEC) }
-      : {}),
-    ...(numEnvStrict("E2B_MAX_LIFETIME_SEC", env.E2B_MAX_LIFETIME_SEC) !== undefined
-      ? { maxLifetimeSec: numEnvStrict("E2B_MAX_LIFETIME_SEC", env.E2B_MAX_LIFETIME_SEC) }
-      : {}),
-    ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
-    ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
-    ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) !== undefined
-      ? { snapshotIntervalSec: numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) }
-      : {}),
-    ...(numEnvStrict("E2B_NATIVE_SNAPSHOT_INTERVAL_SEC", env.E2B_NATIVE_SNAPSHOT_INTERVAL_SEC) !== undefined
-      ? {
-          nativeSnapshotIntervalSec: numEnvStrict(
-            "E2B_NATIVE_SNAPSHOT_INTERVAL_SEC",
-            env.E2B_NATIVE_SNAPSHOT_INTERVAL_SEC,
-          ),
-        }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
 interface ManagedAgentsSandboxEnv {
   apiToken?: string;
-  apiBaseUrl?: string;
   template?: string;
-  namePrefix?: string;
-  sizeSlug?: string;
-  idleTimeoutSec?: number;
-  egressProxyUrl?: string;
-  snapshotS3Bucket?: string;
-  snapshotIntervalSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEnv {
   return {
     ...(env.DO_AGENTS_API_TOKEN ? { apiToken: env.DO_AGENTS_API_TOKEN } : {}),
-    ...(env.DO_AGENTS_API_BASE_URL ? { apiBaseUrl: env.DO_AGENTS_API_BASE_URL } : {}),
     ...(env.DO_AGENTS_TEMPLATE ? { template: env.DO_AGENTS_TEMPLATE } : {}),
-    ...(env.DO_AGENTS_NAME_PREFIX ? { namePrefix: env.DO_AGENTS_NAME_PREFIX } : {}),
-    ...(env.DO_AGENTS_SIZE_SLUG ? { sizeSlug: env.DO_AGENTS_SIZE_SLUG } : {}),
-    ...(numEnvStrict("DO_AGENTS_IDLE_TIMEOUT_SEC", env.DO_AGENTS_IDLE_TIMEOUT_SEC) !== undefined
-      ? { idleTimeoutSec: numEnvStrict("DO_AGENTS_IDLE_TIMEOUT_SEC", env.DO_AGENTS_IDLE_TIMEOUT_SEC) }
-      : {}),
-    ...(env.DO_AGENTS_EGRESS_PROXY_URL ? { egressProxyUrl: env.DO_AGENTS_EGRESS_PROXY_URL } : {}),
-    ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) !== undefined
-      ? { snapshotIntervalSec: numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
 interface ModalSandboxEnv {
-  nativeSnapshotIntervalSec?: number;
-  snapshotRetentionSec?: number;
   tokenId?: string;
   tokenSecret?: string;
   appName?: string;
   environment?: string;
   image?: string;
-  namePrefix?: string;
-  cpus?: number;
-  memoryMb?: number;
-  regions?: string[];
-  sandboxTimeoutSec?: number;
-  rotateAfterSec?: number;
-  reapIdleSec?: number;
-  egressProxyUrl?: string;
-  snapshotS3Bucket?: string;
-  defaultTimeoutSec?: number;
 }
 
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
-  const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
-    ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
-      ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
-      : {}),
-    ...(num("MODAL_SNAPSHOT_RETENTION_SEC") !== undefined
-      ? { snapshotRetentionSec: num("MODAL_SNAPSHOT_RETENTION_SEC") }
-      : {}),
     ...(env.MODAL_TOKEN_ID ? { tokenId: env.MODAL_TOKEN_ID } : {}),
     ...(env.MODAL_TOKEN_SECRET ? { tokenSecret: env.MODAL_TOKEN_SECRET } : {}),
     ...(env.MODAL_APP_NAME ? { appName: env.MODAL_APP_NAME } : {}),
     ...(env.MODAL_ENVIRONMENT ? { environment: env.MODAL_ENVIRONMENT } : {}),
     ...(env.MODAL_IMAGE ? { image: env.MODAL_IMAGE } : {}),
-    ...(env.MODAL_NAME_PREFIX ? { namePrefix: env.MODAL_NAME_PREFIX } : {}),
-    ...(num("MODAL_CPUS") !== undefined ? { cpus: num("MODAL_CPUS") } : {}),
-    ...(num("MODAL_MEMORY_MB") !== undefined ? { memoryMb: num("MODAL_MEMORY_MB") } : {}),
-    ...(env.MODAL_REGIONS?.trim()
-      ? {
-          regions: env.MODAL_REGIONS.split(",")
-            .map((r) => r.trim())
-            .filter(Boolean),
-        }
-      : {}),
-    ...(num("MODAL_SANDBOX_TIMEOUT_SEC") !== undefined ? { sandboxTimeoutSec: num("MODAL_SANDBOX_TIMEOUT_SEC") } : {}),
-    ...(num("MODAL_ROTATE_AFTER_SEC") !== undefined ? { rotateAfterSec: num("MODAL_ROTATE_AFTER_SEC") } : {}),
-    ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
-    ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
-    ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
-    ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
   };
 }
 
 interface SmolmachinesSandboxEnv {
   token?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  image?: string;
-  cpus?: number;
-  memoryMb?: number;
-  diskGb?: number;
-  autoStopSec?: number;
-  egressProxyUrl?: string;
-  snapshotS3Bucket?: string;
-  snapshotIntervalSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv {
-  return {
-    ...(env.SMOLMACHINES_TOKEN ? { token: env.SMOLMACHINES_TOKEN } : {}),
-    ...(env.SMOLMACHINES_BASE_URL ? { baseUrl: env.SMOLMACHINES_BASE_URL } : {}),
-    ...(env.SMOLMACHINES_NAME_PREFIX ? { namePrefix: env.SMOLMACHINES_NAME_PREFIX } : {}),
-    ...(env.SMOLMACHINES_IMAGE ? { image: env.SMOLMACHINES_IMAGE } : {}),
-    ...(numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) !== undefined
-      ? { cpus: numEnvStrict("SMOLMACHINES_CPUS", env.SMOLMACHINES_CPUS) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("SMOLMACHINES_MEMORY_MB", env.SMOLMACHINES_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("SMOLMACHINES_DISK_GB", env.SMOLMACHINES_DISK_GB) }
-      : {}),
-    ...(numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) !== undefined
-      ? { autoStopSec: numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) }
-      : {}),
-    ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
-    ...(env.SMOLMACHINES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SMOLMACHINES_SNAPSHOT_S3_BUCKET } : {}),
-    ...(numEnvStrict("SMOLMACHINES_SNAPSHOT_INTERVAL_SEC", env.SMOLMACHINES_SNAPSHOT_INTERVAL_SEC) !== undefined
-      ? {
-          snapshotIntervalSec: numEnvStrict(
-            "SMOLMACHINES_SNAPSHOT_INTERVAL_SEC",
-            env.SMOLMACHINES_SNAPSHOT_INTERVAL_SEC,
-          ),
-        }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
+  return env.SMOLMACHINES_TOKEN ? { token: env.SMOLMACHINES_TOKEN } : {};
 }
 
 interface PorterSandboxEnv {
-  image?: string;
   token?: string;
   baseUrl?: string;
-  namePrefix?: string;
-  homeDir?: string;
-  ttlSec?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
 }
 
 interface PorterDeployEnv {
@@ -614,14 +424,14 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
     );
   }
   const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
-  const runnerImage = env.PORTER_DEPLOY_RUNNER_IMAGE ?? env.PORTER_SANDBOX_IMAGE;
+  const namePrefix = env.SANDBOX_NAME_PREFIX?.trim();
   return {
     ...(token ? { token } : {}),
     ...(baseUrl ? { baseUrl } : {}),
-    ...(runnerImage ? { runnerImage } : {}),
+    ...(env.PORTER_DEPLOY_RUNNER_IMAGE ? { runnerImage: env.PORTER_DEPLOY_RUNNER_IMAGE } : {}),
     ...(env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: env.PORTER_DEPLOY_APPS_DOMAIN } : {}),
     ...(visibility ? { visibility } : {}),
-    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
+    ...(namePrefix ? { namePrefix } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
   };
 }
@@ -629,104 +439,29 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
 function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
   const token = env.PORTER_DEPLOY_API_TOKEN;
   const baseUrl = porterApiBaseUrl(env);
-  const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
   return {
-    ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
     ...(token ? { token } : {}),
     ...(baseUrl ? { baseUrl } : {}),
-    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
-    ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
-    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
 interface Agent37SandboxEnv {
   apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  template?: string;
-  cpus?: number;
-  memoryGb?: number;
-  diskGb?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
 }
 
 function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
-  return {
-    ...(env.AGENT37_API_KEY ? { apiKey: env.AGENT37_API_KEY } : {}),
-    ...(env.AGENT37_API_BASE_URL ? { baseUrl: env.AGENT37_API_BASE_URL } : {}),
-    ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
-    ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
-    ...(numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) }
-      : {}),
-    ...(numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) !== undefined
-      ? { memoryGb: numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) }
-      : {}),
-    ...(numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
-      : {}),
-    ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
+  return env.AGENT37_API_KEY ? { apiKey: env.AGENT37_API_KEY } : {};
 }
 
 interface SuperserveSandboxEnv {
   apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
   template?: string;
-  homeDir?: string;
-  idlePauseSec?: number;
-  retentionSec?: number;
-  egressAllow?: string[];
-  egressDeny?: string[];
-  defaultTimeoutSec?: number;
-  configGeneration?: number;
 }
 
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
-
 function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
-  const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
-  const egressDeny = csvList(env.SUPERSERVE_EGRESS_DENY);
-  const configGeneration = numEnvStrict("SUPERSERVE_CONFIG_GENERATION", env.SUPERSERVE_CONFIG_GENERATION);
-  if (configGeneration !== undefined && (!Number.isSafeInteger(configGeneration) || configGeneration < 0)) {
-    throw new Error(
-      `SUPERSERVE_CONFIG_GENERATION=${JSON.stringify(env.SUPERSERVE_CONFIG_GENERATION)} must be a nonnegative safe integer, or unset it.`,
-    );
-  }
   return {
     ...(env.SUPERSERVE_API_KEY ? { apiKey: env.SUPERSERVE_API_KEY } : {}),
-    ...(env.SUPERSERVE_BASE_URL?.trim() ? { baseUrl: env.SUPERSERVE_BASE_URL.trim() } : {}),
-    ...(env.SUPERSERVE_NAME_PREFIX ? { namePrefix: env.SUPERSERVE_NAME_PREFIX } : {}),
     ...(env.SUPERSERVE_TEMPLATE?.trim() ? { template: env.SUPERSERVE_TEMPLATE.trim() } : {}),
-    ...(env.SUPERSERVE_HOME_DIR ? { homeDir: env.SUPERSERVE_HOME_DIR } : {}),
-    ...(numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) !== undefined
-      ? { idlePauseSec: numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) }
-      : {}),
-    ...(numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) !== undefined
-      ? { retentionSec: numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) }
-      : {}),
-    ...(egressAllow ? { egressAllow } : {}),
-    ...(egressDeny ? { egressDeny } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-    ...(configGeneration !== undefined ? { configGeneration } : {}),
   };
 }
 
@@ -1018,7 +753,7 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
-    aws: Boolean(config.awsSandbox?.s3Bucket),
+    aws: Boolean(config.awsSandbox?.executionRoleArn),
     porter: Boolean(config.porterSandbox?.token),
   };
   const enabled = new Set<Config["sandboxBackend"]>([config.sandboxBackend]);
@@ -1232,63 +967,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const modelProvider = modelProviderEnvStrict(env);
   const { sessionStore, runStore } = resolveStoreKinds(env);
-  if (env.E2B_API_KEY && !env.E2B_SNAPSHOT_S3_BUCKET) {
-    console.warn(
-      "[config] e2b sandbox backend enabled without E2B_SNAPSHOT_S3_BUCKET — provider pause preserves the machine, but there are no home snapshots, so a sandbox the provider loses comes back with an empty home; set E2B_SNAPSHOT_S3_BUCKET for durable portable recovery.",
-    );
-  }
-  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
-    console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — homes are kept only as native Modal checkpoints (limited retention), and homes saved before native checkpoints cannot be restored. Configure DATABASE_URL for durable checkpoint references.",
-    );
-  }
-  if (env.SMOLMACHINES_TOKEN && !env.SMOLMACHINES_SNAPSHOT_S3_BUCKET) {
-    console.warn(
-      "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=sprites without SPRITES_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SPRITES_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "e2b" && !env.E2B_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=e2b without E2B_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set E2B_EGRESS_PROXY_URL to the public egress proxy so E2B's network rules admit only that host.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "do-managed-agents" && !env.DO_AGENTS_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=do-managed-agents without DO_AGENTS_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set DO_AGENTS_EGRESS_PROXY_URL to the public egress proxy so the session's egress allowlist admits only that host.",
-    );
-  }
-  if (env.DO_AGENTS_API_TOKEN && !env.DO_AGENTS_SNAPSHOT_S3_BUCKET) {
-    console.warn(
-      "[config] do-managed-agents sandbox backend enabled without DO_AGENTS_SNAPSHOT_S3_BUCKET — pause preserves the microVM, but a destroyed session takes the home with it; set DO_AGENTS_SNAPSHOT_S3_BUCKET so a replacement session can hydrate from a portable snapshot.",
-    );
-  }
-  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] modal sandbox backend enabled without MODAL_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set MODAL_EGRESS_PROXY_URL to the public https egress proxy so Modal's outbound allowlist admits only that host.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_SNAPSHOT_S3_BUCKET) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=sprites without SPRITES_SNAPSHOT_S3_BUCKET — retiring a computer deletes its sprite and every checkpoint irreversibly with no exported home; set SPRITES_SNAPSHOT_S3_BUCKET to export the home to S3 before a sprite is destroyed and to rehydrate a replacement.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "smolmachines" && !env.SMOLMACHINES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=smolmachines without SMOLMACHINES_EGRESS_PROXY_URL — machines are created with open outbound networking and NO egress enforcement (fail-open); set SMOLMACHINES_EGRESS_PROXY_URL to allow-list only the egress proxy.",
-    );
-  }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   const porterSandboxSelected = env.SANDBOX_BACKEND === "porter";
-  if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
-    );
-  }
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
@@ -1321,6 +1001,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
       legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
     }
+  }
+  const selectedBackend = env.SANDBOX_BACKEND?.trim();
+  if (selectedBackend && selectedBackend !== "local" && !env.SANDBOX_EGRESS_PROXY_URL?.trim()) {
+    console.warn(
+      `[config] SANDBOX_BACKEND=${selectedBackend} without SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SANDBOX_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.`,
+    );
   }
   const superserveSelected = sandboxBackend === "superserve";
   if (superserveSelected && !env.SUPERSERVE_TEMPLATE?.trim()) {
@@ -1655,6 +1341,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     securityScreenTimeoutMs,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
+    sandbox: sandboxEnv(env),
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),

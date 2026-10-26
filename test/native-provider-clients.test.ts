@@ -12,6 +12,7 @@ import {
   ModalNameConflictError,
   ModalSandboxGoneError,
   modalEgressAllowlist,
+  MODAL_CHECKPOINT_RETENTION_MS,
   MODAL_EXEC_GRACE_MS,
   MODAL_MAX_EXEC_ARG_BYTES,
 } from "../src/sandbox/modal-client.ts";
@@ -24,7 +25,6 @@ import {
 } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];
@@ -215,20 +215,13 @@ mock.module("e2b", {
   },
 });
 
-test("Modal native directory snapshot has a ten-minute timeout, finite retention, and restores the exact image", async () => {
-  const client = createSdkModalClient({
-    tokenId: "id",
-    tokenSecret: "secret",
-    appName: "test",
-    image: "ubuntu",
-    snapshotRetentionMs: 60_000,
-  });
+test("Modal native directory snapshot has a ten-minute timeout, thirty-day retention, and restores the exact image", async () => {
+  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
   const session = await client.create({ name: "test" });
-  const before = Date.now();
-  const snapshot = await session.snapshotHome!();
-  assert.deepEqual(modalCalls[0], ["snapshot", "/root", { ttlMs: 60_000, timeoutMs: 600_000 }]);
-  assert.ok(snapshot.expiresAtMs >= before + 60_000);
-  await session.restoreHome!(snapshot.imageId);
+  const imageId = await session.snapshotHome();
+  assert.deepEqual(modalCalls[0], ["snapshot", "/root", { ttlMs: MODAL_CHECKPOINT_RETENTION_MS, timeoutMs: 600_000 }]);
+  assert.equal(MODAL_CHECKPOINT_RETENTION_MS, 30 * 24 * 3600_000);
+  await session.restoreHome(imageId);
   assert.deepEqual(modalCalls[1], ["mount", "/root", { imageId: "im-native" }]);
   assert.equal(client.lifetimeMs, 24 * 3600_000);
 });
@@ -288,7 +281,6 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
     image: "ubuntu",
     cpus: 4,
     memoryMb: 8192,
-    regions: ["us-west-2"],
     idleTimeoutMs: 6 * 3600_000 + 1,
     egressProxyUrl: "https://egress.example.com",
   });
@@ -298,7 +290,6 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
     idleTimeoutMs: 6 * 3600_000 + 1000,
     cpu: 4,
     memoryMiB: 8192,
-    regions: ["us-west-2"],
     outboundDomainAllowlist: ["egress.example.com"],
   });
   assert.deepEqual(modalEgressAllowlist("http://10.1.2.3:3128"), { outboundCidrAllowlist: ["10.1.2.3/32"] });
@@ -366,22 +357,6 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
   await client.terminate("sb-native");
   modalPoll = new ModalInvalidError("malformed sandbox id");
   await assert.rejects(client.fromId("not-a-sandbox"), ModalSandboxGoneError, "an unknown id is a gone sandbox");
-});
-
-test("Modal rejects invalid checkpoint retention", () => {
-  for (const snapshotRetentionMs of [0, -1, Infinity, NaN]) {
-    assert.throws(
-      () =>
-        createSdkModalClient({
-          tokenId: "id",
-          tokenSecret: "secret",
-          appName: "test",
-          image: "ubuntu",
-          snapshotRetentionMs,
-        }),
-      /positive finite/,
-    );
-  }
 });
 
 test("E2B sends explicit pause lifecycle, reads state without connect, and surfaces failed pause", async () => {
@@ -509,7 +484,6 @@ test("E2B does not dispatch twice when execution occurs before its start acknowl
     rmSync(root, { recursive: true, force: true });
   });
   const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), {
-    snapshots: createMemorySnapshotStore(),
     store: createMemoryMap(),
     ...singleProcessDeps(),
     client: createSdkE2bClient({ apiKey: "test" }),
@@ -562,10 +536,10 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
   const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
   const session = await client.create({});
   const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
-    snapshots: createMemorySnapshotStore(),
     store: createMemoryMap(),
     ...singleProcessDeps(),
     client: {
+      lifetimeMs: 24 * 3600_000,
       create: async () => session,
       fromId: async () => session,
       fromName: async () => null,

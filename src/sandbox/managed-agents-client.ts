@@ -80,11 +80,9 @@ export class ManagedAgentsHitlRejectedError extends Error {
 
 interface ManagedAgentsCreateOpts {
   name: string;
-  egressAllow?: string[];
 }
 
 export interface ManagedAgentsClient {
-  readonly nativePause?: boolean;
   info(sessionId: string): Promise<ManagedAgentsSessionInfo>;
   create(opts: ManagedAgentsCreateOpts): Promise<ManagedAgentsSession>;
   connect(sessionId: string): Promise<ManagedAgentsSession>;
@@ -97,8 +95,6 @@ export interface SdkManagedAgentsClientOptions {
   apiToken: string;
   apiBaseUrl?: string;
   template?: string;
-  agent?: string;
-  sizeSlug?: string;
   idleTimeoutSec?: number;
   maxCommandMs?: number;
   stallProbeMs?: number;
@@ -107,7 +103,7 @@ export interface SdkManagedAgentsClientOptions {
 
 const DEFAULT_API_BASE_URL = "https://api.digitalocean.com";
 const DEFAULT_TEMPLATE = "";
-const DEFAULT_AGENT = "none";
+const AGENT = "none";
 const DEFAULT_MAX_COMMAND_MS = 3600_000;
 const CREATE_TIMEOUT_MS = 120_000;
 const CHECKPOINT_TIMEOUT_MS = 5 * 60_000;
@@ -153,21 +149,18 @@ export const managedAgentsSessionState = (wire: string | undefined): ManagedAgen
 
 export function managedAgentsEgressAllow(egressProxyUrl: string): string[] {
   const host = new URL(egressProxyUrl).hostname.replace(/^\[|\]$/g, "");
-  if (!host) throw new Error(`DO_AGENTS_EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
+  if (!host) throw new Error(`SANDBOX_EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
   return [host];
 }
 
 export function managedAgentsManifest(opts: {
   name: string;
   template: string;
-  agent?: string;
-  sizeSlug?: string;
   idleTimeoutSec?: number;
   egressAllow?: readonly string[];
 }): string {
-  const lines = [`name: ${JSON.stringify(opts.name)}`, `agent: ${JSON.stringify(opts.agent ?? DEFAULT_AGENT)}`];
+  const lines = [`name: ${JSON.stringify(opts.name)}`, `agent: ${JSON.stringify(AGENT)}`];
   if (opts.template) lines.push(`template: ${JSON.stringify(opts.template)}`);
-  if (opts.sizeSlug) lines.push(`size: ${JSON.stringify(opts.sizeSlug)}`);
   if (opts.idleTimeoutSec) lines.push(`idle_timeout: ${JSON.stringify(`${opts.idleTimeoutSec}s`)}`);
   if (opts.egressAllow?.length) {
     lines.push("egress:");
@@ -710,18 +703,14 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
   }
 
   return {
-    nativePause: true,
-
     info: getInfo,
 
     async create(createOpts): Promise<ManagedAgentsSession> {
       const manifest = managedAgentsManifest({
         name: createOpts.name,
         template,
-        ...(opts.agent ? { agent: opts.agent } : {}),
-        ...(opts.sizeSlug ? { sizeSlug: opts.sizeSlug } : {}),
         ...(opts.idleTimeoutSec ? { idleTimeoutSec: opts.idleTimeoutSec } : {}),
-        ...((createOpts.egressAllow ?? egressAllow) ? { egressAllow: createOpts.egressAllow ?? egressAllow } : {}),
+        ...(egressAllow ? { egressAllow } : {}),
       });
       const body = await callJson<{ session?: WireSession }>(
         "POST",

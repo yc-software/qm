@@ -47,7 +47,7 @@ export function hasParentPathSegment(path: string): boolean {
   return path.split("/").includes("..");
 }
 
-type WritablePersistence = "snapshot_to_workspace" | "resident_disk" | "provider_managed";
+export type WritablePersistence = "resident_disk" | "provider_managed";
 export type EgressEnforcement = "none" | "ip_port" | "domain";
 
 export interface AgentComputerSpec {
@@ -174,7 +174,7 @@ export interface ComputerStatus {
   lifecycleState?: "running" | "paused";
   expiresAtMs?: number;
   recovery?: {
-    strategy: "provider_snapshot" | "provider_pause" | "workspace_snapshot";
+    strategy: "provider_snapshot";
     checkpointId?: string;
     checkpointAtMs?: number;
     checkpointExpiresAtMs?: number | null;
@@ -242,7 +242,6 @@ export interface Sandbox {
   writeStdin?(handle: SandboxHandle, processId: string, data: string): Promise<void>;
   signalProcess?(handle: SandboxHandle, processId: string, signal: string): Promise<void>;
   listProcesses?(handle: SandboxHandle): Promise<ProcessSession[]>;
-  persistHomeSnapshot?(scopeId: string): Promise<void>;
   computerStatus?(scopeId: string): Promise<ComputerStatus>;
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;

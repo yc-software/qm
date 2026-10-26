@@ -133,7 +133,7 @@ export async function main(): Promise<void> {
         import("@fly/sprites"),
         import("../src/sandbox/exec-sandbox-base.ts"),
       ]);
-      const name = sandboxScopeName(process.env.SPRITES_NAME_PREFIX ?? "qm", `personal:${actorId}`);
+      const name = sandboxScopeName(process.env.SANDBOX_NAME_PREFIX ?? "qm", `personal:${actorId}`);
       await new SpritesClient(process.env.SPRITES_TOKEN).deleteSprite(name).catch(() => {});
     }
   }

@@ -3,50 +3,18 @@ import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
-import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
-import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
-import { ephemeralCredLinkPaths } from "../credentials/resident-paths.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createExecSandboxBase, sandboxScopeName } from "./exec-sandbox-base.ts";
-import { withConnectorSdk, type ConnectorSdkBundle } from "./connector-sdk.ts";
-import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import {
-  createHomeSnapshotOps,
-  HOME_SNAPSHOT_PRUNE,
-  snapshotDue,
-  type HomeSnapshotStore,
-  type SnapshotBookkeeping,
-} from "./home-snapshot.ts";
-import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import type {
-  AgentComputerProfile,
-  ComputerStatus,
-  ExecPressure,
-  ExecResult,
-  Sandbox,
-  SandboxHandle,
-  StartProcessOptions,
-  TeardownOptions,
-} from "./sandbox.ts";
+import { processSessionDir } from "./exec-process-session.ts";
+import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import type { ExecPressure, ExecResult, Sandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/home/sprite";
-const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
 export const SCRIPT_RUNNER = 's=$(mktemp) && cat > "$s" && sh "$s" </dev/null; rc=$?; rm -f "$s"; exit $rc';
 const EXIT_GRACE_MS = 60_000;
-const GUEST_PROBE_TIMEOUT_SEC = 15;
 const KEEPALIVE_TIMEOUT_SEC = 20;
-const CHECKPOINT_INTERVAL_MS = 5 * 60_000;
 const CHECKPOINT_COMMENT = "qm turn end";
 const KEEPALIVE_EXPIRE = "5m";
 const KEEPALIVE_RENEW_SEC = 60;
@@ -121,23 +89,12 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
-export interface SpritesSandboxOptions extends BlobStagingOptions {
+export type StoredSpritesSandbox = StoredSandboxRecord;
+
+export interface SpritesSandboxOptions extends SandboxShared {
   token?: string;
   baseUrl?: string;
-  namePrefix?: string;
-  defaultTimeoutSec?: number;
-  egressProxyUrl?: string;
-  egressProxyAdditionalUrls?: string[];
-  memoryMb?: number;
-  checkpointIntervalMs?: number;
-  snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
-  advisoryLock: AdvisoryLock;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
-  connectorSdk?: () => Promise<ConnectorSdkBundle>;
-  layerToolFiles?: () => readonly LayerInstallFile[];
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
+  store: DurableMap<StoredSpritesSandbox>;
 }
 
 interface RawExec {
@@ -150,23 +107,11 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
   if (!opts.token) throw new Error("SANDBOX_BACKEND=sprites requires SPRITES_TOKEN");
   const client = new SpritesClient(opts.token, opts.baseUrl ? { baseURL: opts.baseUrl } : {});
   const sprite = (name: string) => client.sprite(name);
-  const prefix = opts.namePrefix ?? "qm";
-  const initializationStore = opts.initializationStore;
-  const advisoryLock = opts.advisoryLock;
-  const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
-    advisoryLock.withLock(`sprites-lifecycle:${name}`, fn);
-  const requireInitialized = async (name: string): Promise<void> => {
-    if ((await initializationStore.get(name))?.pending)
-      throw new Error(`sprites ${name}: initialization is incomplete; refusing to capture or restore a checkpoint`);
-  };
-  const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const checkpointIntervalMs = opts.checkpointIntervalMs ?? CHECKPOINT_INTERVAL_MS;
 
-  const ensured = new Set<string>();
+  const live = new Set<string>();
   const resourcesApplied = new Set<string>();
   const egressPolicyByName = new Map<string, string>();
   const pressureEpisodes = new Set<string>();
-  const checkpointBooks = new Map<string, SnapshotBookkeeping>();
 
   const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
     try {
@@ -183,7 +128,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       throw new Error(`sprites ${what}: ${spritesErrorDetail(e)}`, { cause: e });
     }
   }
-
   async function spawnExec(name: string, argv: string[], stdin: Buffer, deadlineMs: number): Promise<RawExec> {
     const cmd = sprite(name).spawn(argv[0]!, argv.slice(1));
     let submissionStarted = false;
@@ -276,7 +220,7 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
         "agent_computer",
         "io_pressure_high",
         `sprite ${name}: io pressure full avg60=${pressure.ioFull60}% (load ${pressure.load1}) — disk-bound work is stalling`,
-        base.scopeFor(name),
+        sandbox.scopeFor(name),
       );
     } else if (pressure.ioFull60 < PRESSURE_CLEAR_FULL60) {
       pressureEpisodes.delete(name);
@@ -301,24 +245,12 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     }
   }
 
-  const norm = (domain?: string): string => (domain ?? "").toLowerCase().replace(/\.$/, "");
-  const egressProxyHosts = opts.egressProxyUrl
-    ? [
-        ...new Set(
-          [opts.egressProxyUrl, ...(opts.egressProxyAdditionalUrls ?? [])].map((value) => {
-            const url = new URL(value);
-            if (!["https:", "http:"].includes(url.protocol) || !url.hostname || url.username || url.password)
-              throw new Error("sprites egress proxy URLs must be HTTP(S) URLs without credentials");
-            return norm(url.hostname);
-          }),
-        ),
-      ].sort()
-    : [];
-  if (!opts.egressProxyUrl && opts.egressProxyAdditionalUrls?.length)
-    throw new Error("sprites additional egress proxy URLs require a primary proxy URL");
+  const egressProxyHost = opts.egressProxyUrl
+    ? new URL(opts.egressProxyUrl).hostname.toLowerCase().replace(/\.$/, "")
+    : "";
 
   async function ensureEgressPolicy(name: string): Promise<void> {
-    const rules = egressProxyHosts.map((domain) => ({ domain, action: "allow" as const }));
+    const rules = [{ domain: egressProxyHost, action: "allow" as const }];
     const want = JSON.stringify(rules);
     if (egressPolicyByName.get(name) === want) return;
     const s = sprite(name);
@@ -326,30 +258,22 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     const got = await attempt(`egress policy readback ${name}`, () => retrySpritesControl(() => s.getNetworkPolicy()));
     const actual = got.rules ?? [];
     const bound =
-      actual.length === rules.length &&
-      actual.every((rule) => rule.action?.toLowerCase() === "allow") &&
-      JSON.stringify(actual.map((rule) => norm(rule.domain)).sort()) === JSON.stringify(egressProxyHosts);
+      actual.length === 1 &&
+      actual[0]!.action?.toLowerCase() === "allow" &&
+      (actual[0]!.domain ?? "").toLowerCase().replace(/\.$/, "") === egressProxyHost;
     if (!bound)
       throw new Error(`sprites egress policy ${name}: readback mismatch (${JSON.stringify(got).slice(0, 200)})`);
     egressPolicyByName.set(name, want);
   }
 
-  async function applyResources(name: string): Promise<void> {
-    if (opts.memoryMb === undefined || resourcesApplied.has(name)) return;
-    await attempt(`resources policy ${name}`, () =>
-      sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
-    );
-    resourcesApplied.add(name);
-  }
-
-  async function spriteExists(name: string): Promise<boolean> {
-    try {
-      await retrySpritesControl(() => client.getSprite(name));
-      return true;
-    } catch (e) {
-      if (isMissing(e)) return false;
-      throw new Error(`sprites get ${name}: ${spritesErrorDetail(e)}`, { cause: e });
+  async function adopt(name: string): Promise<void> {
+    if (opts.memoryMb !== undefined && !resourcesApplied.has(name)) {
+      await attempt(`resources policy ${name}`, () =>
+        sprite(name).updateResourcesPolicy({ memory: { limitMB: opts.memoryMb! } }),
+      );
+      resourcesApplied.add(name);
     }
+    live.add(name);
   }
 
   async function deleteSprite(name: string): Promise<void> {
@@ -358,33 +282,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     } catch (e) {
       if (!isMissing(e)) throw new Error(`sprites delete ${name}: ${spritesErrorDetail(e)}`, { cause: e });
     }
-  }
-
-  const homeSnapshots = opts.snapshots
-    ? createHomeSnapshotOps<string>({
-        label: "sprites",
-        homeDir: HOME_DIR,
-        homeTarPath: HOME_TAR,
-        prunePaths: [
-          ...HOME_SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
-        ],
-        store: opts.snapshots,
-        io: {
-          runCommand: async (name, script, timeoutMs) => {
-            const r = await execRaw(name, script, Math.ceil(timeoutMs / 1000));
-            return { exitCode: r.code, stdout: r.stdout, stderr: r.stderr };
-          },
-          readFileBytes: readAbsBytes,
-          writeFileBytes: writeAbsBytes,
-        },
-      })
-    : undefined;
-
-  async function exportHome(name: string, scope: string): Promise<void> {
-    await requireInitialized(name);
-    if (!homeSnapshots || !(await spriteExists(name))) return;
-    await homeSnapshots.snapshotHome(scope, name);
   }
 
   async function settleStream(stream: AsyncIterable<StreamMessage>, what: string): Promise<void> {
@@ -396,10 +293,6 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     if (failure !== undefined) throw new Error(`${what}: ${failure}`);
   }
 
-  async function createCheckpoint(name: string): Promise<void> {
-    await settleStream(await sprite(name).createCheckpoint(CHECKPOINT_COMMENT), `sprites checkpoint ${name}`);
-  }
-
   async function latestCheckpoint(name: string): Promise<Checkpoint | undefined> {
     const list = await retrySpritesControl(() => sprite(name).listCheckpoints());
     return list
@@ -407,309 +300,135 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
       .sort((a, b) => b.createTime.getTime() - a.createTime.getTime())[0];
   }
 
-  async function restoreLatestCheckpoint(name: string): Promise<Checkpoint | undefined> {
-    const latest = await latestCheckpoint(name);
-    if (!latest) return undefined;
-    await settleStream(await sprite(name).restoreCheckpoint(latest.id), `sprites restore ${name} ${latest.id}`);
-    return latest;
+  async function restoreCheckpoint(name: string, checkpointId: string): Promise<void> {
+    await settleStream(await sprite(name).restoreCheckpoint(checkpointId), `sprites restore ${name} ${checkpointId}`);
   }
 
-  async function checkpointIfDue(name: string, tdOpts?: TeardownOptions): Promise<void> {
-    await requireInitialized(name);
-    const book = checkpointBooks.get(name) ?? {};
-    checkpointBooks.set(name, book);
-    if (!tdOpts?.homeUnchanged) book.homeDirty = true;
-    if (!snapshotDue(book, tdOpts, checkpointIntervalMs)) return;
-    try {
-      await createCheckpoint(name);
-      book.lastSnapshotMs = Date.now();
-      book.homeDirty = false;
-    } catch (e) {
-      reportError("sandbox_snapshot", "checkpoint_failed", errMessage(e), base.scopeFor(name));
-    }
+  async function captureCheckpoint(name: string): Promise<string> {
+    await settleStream(await sprite(name).createCheckpoint(CHECKPOINT_COMMENT), `sprites checkpoint ${name}`);
+    const latest = await latestCheckpoint(name);
+    if (!latest) throw new Error(`sprites checkpoint ${name}: completed but no checkpoint is listed`);
+    return latest.id;
   }
 
   const forget = (name: string): void => {
-    ensured.delete(name);
+    live.delete(name);
     resourcesApplied.delete(name);
     pressureEpisodes.delete(name);
     egressPolicyByName.delete(name);
-    checkpointBooks.delete(name);
   };
 
-  const base = createExecSandboxBase({
-    workspace,
-    label: "sprites",
-    prefix,
-    homeDir: HOME_DIR,
-    defaultTimeoutSec,
-    credentialPaths: opts.credentialPaths ?? [],
-    installLayerTools: withConnectorSdk(
-      HOME_DIR,
-      createLayerToolInstaller(opts.layerToolFiles ?? (() => [])),
-      opts.connectorSdk,
-    ),
-    combineLayerToolPrep: true,
-    egressProxyUrl: opts.egressProxyUrl,
-    deleteFailureCode: "sprite_delete_failed",
-    onError: opts.onError,
-    exec: execRaw,
-    writeAbsBytes,
-    readAbsBytes,
-    ensureResident(name, onStatus) {
-      return withLifecycle(name, async () => {
-        const pending = (await initializationStore.get(name))?.pending;
-        if (ensured.has(name) && !pending) return { coldStart: false };
-        const exists = await spriteExists(name);
-        if (exists && !pending) {
-          await applyResources(name);
-          ensured.add(name);
-          return { coldStart: false };
-        }
-        await initializationStore.put(name, { pending: true });
-        onStatus?.("Preparing the sandbox…");
-        const scope = base.scopeFor(name);
-        try {
-          if (!exists) await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
-          await applyResources(name);
-          const hydrated = homeSnapshots && scope ? await homeSnapshots.hydrateHome(scope, name) : false;
-          await initializationStore.delete(name);
-          ensured.add(name);
-          return { coldStart: !hydrated };
-        } catch (e) {
-          forget(name);
-          reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-          await deleteSprite(name).catch((deleteErr) =>
-            swallow("sprites-sandbox: delete after failed hydrate", deleteErr),
-          );
-          throw e;
-        }
-      });
-    },
-    isProvisioned: (name) => ensured.has(name),
-    async recreateScratch(name) {
-      if (await spriteExists(name)) await deleteSprite(name);
-      await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
-      await applyResources(name);
-      ensured.add(name);
-    },
-    deleteInstance: deleteSprite,
-    forgetInstance: forget,
-    ensureEgress: ensureEgressPolicy,
-  });
+  async function restart(name: string, ctx: { initializationPending: boolean }): Promise<void> {
+    if (ctx.initializationPending)
+      throw new Error(`sprites ${name}: initialization is incomplete; refusing to capture or restore a checkpoint`);
+    forget(name);
+    const s = sprite(name);
+    const restartFailure = await s.restart().then(
+      () => undefined,
+      (e) => spritesErrorDetail(e),
+    );
+    if (restartFailure === undefined) return;
+    let check: SpriteCheck;
+    try {
+      check = await retrySpritesControl(() => s.check());
+    } catch (e) {
+      throw new Error(
+        `sprites restart ${name}: ${restartFailure}; check failed: ${spritesErrorDetail(e)}; no checkpoint was restored`,
+        { cause: e },
+      );
+    }
+    if (check.status !== "unhealthy") {
+      throw new Error(
+        `sprites restart ${name}: ${restartFailure}; the health check reports no fault, so no checkpoint was restored`,
+      );
+    }
+    const fault = `check reports ${describeCheck(check)}`;
+    let restored: Checkpoint | undefined;
+    try {
+      restored = await latestCheckpoint(name);
+      if (restored) await restoreCheckpoint(name, restored.id);
+    } catch (e) {
+      throw new Error(
+        `sprites restart ${name}: ${restartFailure}; ${fault}; checkpoint restore failed: ${errMessage(e)}`,
+        {
+          cause: e,
+        },
+      );
+    }
+    if (!restored) throw new Error(`sprites restart ${name}: ${restartFailure}; ${fault}; no checkpoint to restore`);
+    reportError(
+      "agent_computer",
+      "checkpoint_restored",
+      `sprite ${name}: restart failed (${restartFailure}); ${fault}; restored checkpoint ${restored.id} from ${restored.createTime.toISOString()}`,
+      sandbox.scopeFor(name),
+    );
+  }
 
-  const profile: AgentComputerProfile = {
-    backend: "sprites",
-    writablePersistence: "resident_disk",
-    processSessions: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
-    spec: {
+  const sandbox = createProviderSandbox(
+    workspace,
+    {
+      backend: "sprites",
+      homeDir: HOME_DIR,
       os: "Ubuntu (25.10 for newly created sprites; existing sprites keep the release they were created with) — Fly Sprite microVM: the whole disk persists and idle sprites sleep; background processes are held awake while they run but do not survive a cold wake or restart",
-      runtimes: ["Node 24", "Python 3"],
-      get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
-      },
-      get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
-      },
+      tools: ["git", "curl", "jq", "tar", "python3"],
       cpus: SPRITE_CPUS,
       ...(opts.memoryMb !== undefined ? { memoryMb: opts.memoryMb } : {}),
       diskGb: SPRITE_DISK_GB,
-      homeDir: HOME_DIR,
-      workdir: base.workspaceDir,
+      egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+      combineRoundTrips: true,
+      exec: execRaw,
+      writeAbsBytes,
+      readAbsBytes,
+      async inspect(name) {
+        let check: SpriteCheck;
+        try {
+          check = await retrySpritesControl(() => sprite(name).check());
+        } catch (e) {
+          if (isMissing(e)) return null;
+          throw new Error(`sprites check ${name}: ${spritesErrorDetail(e)}`, { cause: e });
+        }
+        await adopt(name);
+        return { state: "running", detail: describeCheck(check) };
+      },
+      async create(name) {
+        await attempt(`create ${name}`, () => client.createSprite(name, { waitForCapacity: true }));
+        await adopt(name);
+      },
+      resume: adopt,
+      async destroy(name) {
+        forget(name);
+        await deleteSprite(name);
+      },
+      isLive: (name) => live.has(name),
+      forget,
+      restart,
+      ...(opts.egressProxyUrl ? { ensureEgress: ensureEgressPolicy } : {}),
+      checkpoints: { machineBound: true, capture: captureCheckpoint, restore: restoreCheckpoint },
     },
-  };
-
-  const procIo: ExecProcessIo = {
-    async run(handle, command, execOpts): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      return execRaw(handle.id, command, timeoutSec);
-    },
-  };
-  const procSessions = createExecProcessSessions(procIo);
-
-  const execFileOps = createExecFileOps({
-    combineRemoveAndList: true,
-    label: "sprites",
-    exec: (id, script, t) => execRaw(id, script, t),
-    writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
-  });
-
-  const blobStaging = createBackendBlobStaging("sprites", (id, script, t) => execRaw(id, script, t), opts);
-
-  const execExport = createExecExport({
-    label: "sprites",
-    exec: (id, script, t) => execRaw(id, script, t),
-    readAbsBytes,
-    defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
-  });
-
-  async function startProcess(
-    handle: SandboxHandle,
-    command: string,
-    spOpts?: StartProcessOptions,
-  ): Promise<{ processId: string }> {
-    const started = await procSessions.startProcess(handle, command, spOpts);
-    try {
-      const r = await execRaw(handle.id, processKeepaliveScript(started.processId), KEEPALIVE_TIMEOUT_SEC);
-      if (r.code !== 0 || !r.stdout.includes("OK")) throw new Error(r.stderr.trim() || `exit ${r.code}`);
-    } catch (e) {
-      reportError(
-        "agent_computer",
-        "process_keepalive_failed",
-        `sprite ${handle.id}: process ${started.processId} runs without a Tasks hold and may freeze when the sprite idles: ${errMessage(e)}`,
-        base.scopeFor(handle.id),
-      );
-    }
-    return started;
-  }
+    opts,
+    opts.store,
+  );
 
   return {
-    profile,
-    startProcess,
-    readProcess: procSessions.readProcess,
-    writeStdin: procSessions.writeStdin,
-    signalProcess: procSessions.signalProcess,
-    listProcesses: procSessions.listProcesses,
-    ...execFileOps,
-    ...blobStaging,
-    provision: base.provision,
-    run: base.run,
-    writeFileBytes: base.writeFileBytes,
-    writeFile: base.writeFile,
-    readFileBytes: base.readFileBytes,
-    readFile: base.readFile,
-    exportFiles: execExport.exportFiles,
-
-    async destroyScope(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
-      return base.provisionQueue(scopeId, () =>
-        withLifecycle(name, async () => {
-          if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
-          await deleteSprite(name);
-          forget(name);
-        }),
-      );
-    },
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
-            return base.provisionQueue(scopeId, () =>
-              withLifecycle(name, async () => {
-                await requireInitialized(name);
-                if (!(await spriteExists(name)))
-                  throw new Error(`sprites persistHomeSnapshot: no sprite for ${scopeId}`);
-                await homeSnapshots.snapshotHome(scopeId, name);
-              }),
-            );
-          },
-        }
-      : {}),
-
-    async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
-      const [checked, latest] = await Promise.allSettled([
-        retrySpritesControl(() => sprite(name).check()),
-        latestCheckpoint(name),
-      ]);
-      if (checked.status === "rejected" && isMissing(checked.reason)) {
-        return { machine: "no sprite provisioned yet", provisioned: false, guestResponsive: false };
-      }
-      const machine =
-        checked.status === "fulfilled"
-          ? describeCheck(checked.value)
-          : `check failed: ${spritesErrorDetail(checked.reason)}`;
-      const recovery: ComputerStatus["recovery"] = {
-        strategy: "provider_snapshot",
-        checkpointExpiresAtMs: null,
-        ...(latest.status === "fulfilled" && latest.value
-          ? { checkpointId: latest.value.id, checkpointAtMs: latest.value.createTime.getTime() }
-          : {}),
-        ...(latest.status === "rejected" ? { error: `checkpoint list failed: ${errMessage(latest.reason)}` } : {}),
-      };
-      let guestResponsive = false;
-      let pressure: ExecPressure | undefined;
-      let probeError: string | undefined;
+    ...sandbox,
+    async startProcess(handle, command, spOpts) {
+      const started = await sandbox.startProcess!(handle, command, spOpts);
       try {
-        const probe = await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC);
-        guestResponsive = probe.code === 0;
-        pressure = probe.pressure;
+        const r = await execRaw(handle.id, processKeepaliveScript(started.processId), KEEPALIVE_TIMEOUT_SEC);
+        if (r.code !== 0 || !r.stdout.includes("OK")) throw new Error(r.stderr.trim() || `exit ${r.code}`);
       } catch (e) {
-        probeError = errMessage(e);
+        reportError(
+          "agent_computer",
+          "process_keepalive_failed",
+          `sprite ${handle.id}: process ${started.processId} runs without a Tasks hold and may freeze when the sprite idles: ${errMessage(e)}`,
+          sandbox.scopeFor(handle.id),
+        );
       }
-      return {
-        machine,
-        provisioned: checked.status === "fulfilled",
-        guestResponsive,
-        recovery,
-        ...(pressure ? { pressure } : {}),
-        ...(probeError ? { probeError } : {}),
-      };
+      return started;
     },
-
-    restartComputer(scopeId: string): Promise<void> {
-      const name = sandboxScopeName(prefix, scopeId);
-      return base.provisionQueue(`restart:${name}`, () =>
-        withLifecycle(name, async () => {
-          await requireInitialized(name);
-          forget(name);
-          const s = sprite(name);
-          const restartFailure = await s.restart().then(
-            () => undefined,
-            (e) => spritesErrorDetail(e),
-          );
-          if (restartFailure === undefined) return;
-          let check: SpriteCheck;
-          try {
-            check = await retrySpritesControl(() => s.check());
-          } catch (e) {
-            throw new Error(
-              `sprites restart ${name}: ${restartFailure}; check failed: ${spritesErrorDetail(e)}; no checkpoint was restored`,
-              { cause: e },
-            );
-          }
-          const fault = check.status === "unhealthy" ? `check reports ${describeCheck(check)}` : undefined;
-          if (fault === undefined) {
-            throw new Error(
-              `sprites restart ${name}: ${restartFailure}; the health check reports no fault, so no checkpoint was restored`,
-            );
-          }
-          let restored: Checkpoint | undefined;
-          try {
-            restored = await restoreLatestCheckpoint(name);
-          } catch (e) {
-            throw new Error(
-              `sprites restart ${name}: ${restartFailure}; ${fault}; checkpoint restore failed: ${errMessage(e)}`,
-              {
-                cause: e,
-              },
-            );
-          }
-          if (!restored)
-            throw new Error(`sprites restart ${name}: ${restartFailure}; ${fault}; no checkpoint to restore`);
-          reportError(
-            "agent_computer",
-            "checkpoint_restored",
-            `sprite ${name}: restart failed (${restartFailure}); ${fault}; restored checkpoint ${restored.id} from ${restored.createTime.toISOString()}`,
-            base.scopeFor(name) ?? scopeId,
-          );
-        }),
-      );
-    },
-
-    async teardown(handle: SandboxHandle, tdOpts?: TeardownOptions): Promise<void> {
-      return withLifecycle(handle.id, async () => {
-        if (!handle.scratch) {
-          if (tdOpts?.destroy) {
-            if (!(await initializationStore.get(handle.id))?.pending)
-              await exportHome(handle.id, base.scopeFor(handle.id) ?? handle.id);
-          } else await checkpointIfDue(handle.id, tdOpts);
-        }
-        return base.teardown(handle, tdOpts);
-      });
+    async computerStatus(scopeId) {
+      const status = await sandbox.computerStatus!(scopeId);
+      return status.recovery ? { ...status, recovery: { ...status.recovery, checkpointExpiresAtMs: null } } : status;
     },
   };
 }

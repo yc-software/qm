@@ -14,7 +14,7 @@ The template uses `ubuntu:24.04` on linux/amd64 and includes:
 Tool versions are pinned in the build script. Downloaded Node and CLI archives
 are checksum-verified. Python and pip wrappers select the virtual environment
 regardless of the exec environment's `PATH`. Commands run as root; QM sets `HOME`
-to `SUPERSERVE_HOME_DIR` (default `/root`) and uses `<home>/workspace`.
+to `/root` and uses `/root/workspace`.
 
 Deployment tools and skills are installed during provisioning. The optional
 browser engine is not included.

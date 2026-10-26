@@ -204,7 +204,7 @@ function fakeSandbox(): Sandbox {
     throw new Error("the resume tests must not provision a sandbox");
   };
   return {
-    profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
+    profile: { backend: "fake", writablePersistence: "resident_disk", processSessions: false },
     provision: unreached as never,
     run: unreached as never,
     readFile: unreached as never,

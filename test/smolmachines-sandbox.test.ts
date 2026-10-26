@@ -15,8 +15,6 @@ import {
   FAKE_SMOLMACHINES_TOKEN,
   type FakeSmolmachines,
 } from "./support/fake-smolmachines.ts";
-import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
-import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
@@ -273,8 +271,7 @@ test("profile advertises resident disk, process sessions, and the documented def
   assert.equal(sandbox.profile.spec?.diskGb, undefined);
   assert.match(sandbox.profile.spec?.os ?? "", /codex image/);
   assert.doesNotMatch(sandbox.profile.spec?.os ?? "", /Debian|idle/);
-  const idle = make({ image: "ubuntu:24.04", autoStopSec: 900 });
-  assert.match(idle.profile.spec?.os ?? "", /ubuntu:24\.04 image/);
+  const idle = make({ idleParkSec: 900 });
   assert.match(idle.profile.spec?.os ?? "", /900s idle/);
 });
 
@@ -299,7 +296,7 @@ test("started is not ready: provisioning polls until the machine reports ready",
 });
 
 test("scratch machines carry a hard TTL and configured idle stop is sent on every create", async () => {
-  const s = make({ autoStopSec: 900 });
+  const s = make({ idleParkSec: 900 });
   const scratch = await s.provision(layers, { scratch: { key: "job-ttl" } });
   assert.equal(fake.machine(scratch.id)?.ttlSeconds, 24 * 3600);
   assert.equal(fake.machine(scratch.id)?.autoStopSeconds, 900);
@@ -319,74 +316,6 @@ test("exec requests carry no stdin field", async () => {
   assert.ok(execCall.body && typeof execCall.body === "object");
   assert.equal(Object.hasOwn(execCall.body, "stdin"), false);
   assert.ok(fake.execScripts().every((script) => !/stdin/.test(script)));
-});
-
-test("teardown snapshots the home to the configured store and a lost machine is rehydrated from it", async () => {
-  const snapshots = createMemorySnapshotStore();
-  const s = make({ snapshots });
-  const a = await s.provision(layers);
-  await s.writeFile(a, "notes.txt", "keep me\n");
-  await s.teardown(a);
-  assert.ok(await snapshots.open(scope), "teardown stored a home snapshot");
-  const status = await s.computerStatus!(scope);
-  assert.equal(status.recovery?.strategy, "workspace_snapshot");
-  assert.ok(status.recovery?.checkpointAtMs);
-  fake.deleteBehindCore(a.id);
-  const s2 = make({ snapshots });
-  const b = await s2.provision(layers);
-  assert.equal(b.coldStart, false, "a hydrated replacement is not a cold start");
-  assert.equal(await s2.readFile(b, "notes.txt"), "keep me\n");
-});
-
-test("teardown snapshots are throttled by snapshotIntervalMs and skipped for scratch machines", async () => {
-  const counting = instrumentedSnapshotStore();
-  const s = make({ snapshots: counting.store, snapshotIntervalMs: 60 * 60_000 });
-  const a = await s.provision(layers);
-  await s.teardown(a);
-  const b = await s.provision(layers);
-  await s.teardown(b);
-  assert.equal(counting.puts(), 1, "second teardown inside the interval skips the snapshot");
-  const scratch = await s.provision(layers, { scratch: { key: "job-snap" } });
-  await s.teardown(scratch);
-  assert.equal(counting.puts(), 1, "scratch machines are never snapshotted");
-});
-
-test("a failing snapshot store is recorded in status and a failed hydration never cold-starts empty", async () => {
-  const flaky = instrumentedSnapshotStore();
-  const errors: string[] = [];
-  const s = make({
-    snapshots: flaky.store,
-    onError: (e: { code: string }) => {
-      errors.push(e.code);
-    },
-  });
-  const a = await s.provision(layers);
-  await s.writeFile(a, "precious.txt", "irreplaceable\n");
-  await s.teardown(a);
-  flaky.failWrites(true);
-  await s.teardown(await s.provision(layers));
-  assert.ok(errors.includes("teardown_snapshot_failed"));
-  assert.match((await s.computerStatus!(scope)).recovery?.error ?? "", /simulated S3 outage/);
-  flaky.failWrites(false);
-  fake.deleteBehindCore(a.id);
-  const restarted = make({ snapshots: flaky.store });
-  flaky.failReads(true);
-  await assert.rejects(restarted.provision(layers), /hydration failed/);
-  assert.equal(fake.machine(a.id), null, "the empty replacement is deleted rather than adopted");
-  flaky.failReads(false);
-  const b = await restarted.provision(layers);
-  assert.equal(await restarted.readFile(b, "precious.txt"), "irreplaceable\n");
-});
-
-test("persistHomeSnapshot exists only with a snapshot store and stores the home on demand", async () => {
-  assert.equal(sandbox.persistHomeSnapshot, undefined);
-  assert.equal((await sandbox.computerStatus!(scope)).recovery, undefined);
-  const snapshots = createMemorySnapshotStore();
-  const s = make({ snapshots });
-  const h = await s.provision(layers);
-  await s.writeFile(h, "explicit.txt", "saved\n");
-  await s.persistHomeSnapshot!(scope);
-  assert.ok(await snapshots.open(scope));
 });
 
 test("computerStatus reports a stopped machine as paused without waking it", async () => {
@@ -445,15 +374,9 @@ test("exec is never retried and its failure names the request id", async () => {
 });
 
 for (const lostResponse of ["disconnect", "503"] as const) {
-  test(`accepted replacement create with ${lostResponse} restores the home on the next core`, async () => {
-    const snapshots = createMemorySnapshotStore();
+  test(`accepted replacement create with ${lostResponse} is adopted by the next core`, async () => {
     const store = createMemoryMap<StoredSmolmachinesSandbox>();
     const advisoryLock = createMemoryAdvisoryLock();
-    const first = make({ snapshots, store, advisoryLock });
-    const original = await first.provision(layers);
-    await first.writeFile(original, "notes.txt", "preserve me");
-    await first.teardown(original);
-    fake.deleteBehindCore(original.id);
     let inject = true;
     const fetchImpl: typeof fetch = async (input, init) => {
       const response = await fake.fetchImpl(input, init);
@@ -464,12 +387,12 @@ for (const lostResponse of ["disconnect", "503"] as const) {
       }
       return response;
     };
-    const replacing = make({ snapshots, store, advisoryLock, fetchImpl });
-    await assert.rejects(replacing.provision(layers), /response lost after create/);
+    const creating = make({ store, advisoryLock, fetchImpl });
+    await assert.rejects(creating.provision(layers), /response lost after create/);
     assert.equal((await store.get(scope))?.initializationPending, true);
-    const next = make({ snapshots, store, advisoryLock });
-    const restored = await next.provision(layers);
-    assert.equal(await next.readFile(restored, "notes.txt"), "preserve me");
+    const next = make({ store, advisoryLock });
+    const adopted = await next.provision(layers);
+    assert.equal((await next.run(adopted, "echo up")).stdout.trim(), "up");
     assert.equal((await store.get(scope))?.initializationPending, undefined);
     assert.equal(fake.names().length, 1);
   });

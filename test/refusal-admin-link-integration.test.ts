@@ -40,7 +40,7 @@ function fakeSandbox(): Sandbox {
   return {
     profile: {
       backend: "fake",
-      writablePersistence: "snapshot_to_workspace",
+      writablePersistence: "resident_disk",
       processSessions: false,
     },
     provision: unreached as never,

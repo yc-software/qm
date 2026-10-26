@@ -19,7 +19,7 @@ export interface ModalSession {
   runCommand(command: string, opts?: ModalRunOpts): Promise<ModalCommandResult>;
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
-  snapshotHome(): Promise<{ imageId: string; expiresAtMs: number }>;
+  snapshotHome(): Promise<string>;
   restoreHome(imageId: string): Promise<void>;
   terminate(): Promise<void>;
 }
@@ -42,7 +42,7 @@ interface ModalCreateOpts {
 }
 
 export interface ModalClient {
-  readonly lifetimeMs?: number;
+  readonly lifetimeMs: number;
   create(opts: ModalCreateOpts): Promise<ModalSession>;
   fromId(sandboxId: string): Promise<ModalSession>;
   fromName(name: string): Promise<ModalSession | null>;
@@ -58,11 +58,9 @@ export interface SdkModalClientOptions {
   environment?: string;
   cpus?: number;
   memoryMb?: number;
-  regions?: string[];
   sandboxTimeoutMs?: number;
   idleTimeoutMs?: number;
   maxCommandMs?: number;
-  snapshotRetentionMs?: number;
   egressProxyUrl?: string;
 }
 
@@ -74,6 +72,7 @@ const DEFAULT_MEMORY_MB = 2048;
 export const MODAL_EXEC_GRACE_MS = 30_000;
 export const MODAL_MAX_EXEC_ARG_BYTES = 64 * 1024;
 const SNAPSHOT_CALL_TIMEOUT_MS = 600_000;
+export const MODAL_CHECKPOINT_RETENTION_MS = 30 * 24 * 3600_000;
 
 function wholeSeconds(ms: number): number {
   return Math.max(1000, Math.ceil(ms / 1000) * 1000);
@@ -124,7 +123,7 @@ export function modalEgressAllowlist(
   if (ipVersion) return { outboundCidrAllowlist: [`${host}/${ipVersion === 4 ? 32 : 128}`] };
   if (url.protocol === "https:" && (url.port === "" || url.port === "443")) return { outboundDomainAllowlist: [host] };
   throw new Error(
-    "MODAL_EGRESS_PROXY_URL must be an https URL on port 443 or an IP address: Modal domain allowlists pass only TLS traffic on port 443",
+    "SANDBOX_EGRESS_PROXY_URL must be an https URL on port 443 or an IP address: Modal domain allowlists pass only TLS traffic on port 443",
   );
 }
 
@@ -132,10 +131,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const sandboxTimeoutMs = wholeSeconds(Math.min(opts.sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS));
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
-  const snapshotRetentionMs = opts.snapshotRetentionMs ?? 30 * 24 * 3600_000;
-  if (!Number.isFinite(snapshotRetentionMs) || snapshotRetentionMs <= 0)
-    throw new Error("Modal snapshot retention must be a positive finite duration");
-  const snapshotTtlMs = wholeSeconds(snapshotRetentionMs);
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
   type SdkClient = InstanceType<ModalSdk["ModalClient"]>;
   type SdkApp = Awaited<ReturnType<SdkClient["apps"]["fromName"]>>;
@@ -219,9 +214,11 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       }
     },
     async snapshotHome() {
-      const expiresAtMs = Date.now() + snapshotTtlMs;
-      const image = await sbx.snapshotDirectory("/root", { ttlMs: snapshotTtlMs, timeoutMs: SNAPSHOT_CALL_TIMEOUT_MS });
-      return { imageId: image.imageId, expiresAtMs };
+      const image = await sbx.snapshotDirectory("/root", {
+        ttlMs: MODAL_CHECKPOINT_RETENTION_MS,
+        timeoutMs: SNAPSHOT_CALL_TIMEOUT_MS,
+      });
+      return image.imageId;
     },
     async restoreHome(imageId): Promise<void> {
       const { client } = await loadCtx();
@@ -246,7 +243,6 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
           idleTimeoutMs,
           cpu: opts.cpus ?? DEFAULT_CPUS,
           memoryMiB: opts.memoryMb ?? DEFAULT_MEMORY_MB,
-          ...(opts.regions?.length ? { regions: opts.regions } : {}),
           ...network,
         });
         return wrap(sdk, sbx);

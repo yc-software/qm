@@ -152,7 +152,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     runs,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
-    sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
+    sandbox: { profile: { backend: "fake", writablePersistence: "resident_disk" } } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),

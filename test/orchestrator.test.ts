@@ -69,7 +69,7 @@ function freshApp(overrides: Partial<Config> = {}, securityScreener?: SecuritySc
     dataDir: mkdtempSync(join(tmpdir(), "ap-")),
     ...overrides,
   });
-  config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
+  config.sandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   return buildApp(config, securityScreener ? { securityScreener } : {});
 }
 

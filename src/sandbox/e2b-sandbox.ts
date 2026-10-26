@@ -1,638 +1,203 @@
-import { cleanupFailedProvision } from "./sandbox.ts";
-import { randomUUID } from "node:crypto";
-import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { createKeyedQueue } from "../util/async.ts";
-import { swallowAs, errMessage } from "../util/errors.ts";
-import { shq } from "../util/shell.ts";
-import { nonInteractiveShellPrefix, DROPPED_PROXY_ENV, forceThroughProxyEnv } from "./sandbox-env.ts";
-import { createExecProcessSessions, type ExecProcessIo } from "./exec-process-session.ts";
-import { materializeRoLayers } from "./ro-layers.ts";
-import { createLayerToolInstaller } from "./layer-tool-install.ts";
-import type { LayerInstallFile } from "../deployment/load-layer.ts";
-import {
-  createBackendBlobStaging,
-  createExecExport,
-  createExecFileOps,
-  posixJoin,
-  type BlobStagingOptions,
-} from "./exec-file-ops.ts";
-import {
-  ephemeralCredLinkScript,
-  ephemeralCredLinkPaths,
-  type CredentialPathSpec,
-} from "../credentials/resident-paths.ts";
-import { killableScript, killScript } from "./exec-kill.ts";
-import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { swallowAs } from "../util/errors.ts";
 import {
   E2bCommandLostError,
   E2bSandboxGoneError,
-  type E2bClient,
-  type E2bSandboxInfo,
-  type E2bSession,
   runE2bScript,
+  type E2bClient,
+  type E2bSession,
 } from "./e2b-client.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
-import type {
-  AgentComputerProfile,
-  ComputerStatus,
-  ExecOptions,
-  ExecResult,
-  ProvisionOptions,
-  Sandbox,
-  SandboxHandle,
-  TeardownOptions,
-} from "./sandbox.ts";
+import {
+  createProviderSandbox,
+  type MachineState,
+  type ProviderSandbox,
+  type SandboxShared,
+  type StoredSandboxRecord,
+} from "./provider-sandbox.ts";
+import type { Sandbox } from "./sandbox.ts";
 
 const HOME_DIR = "/home/user";
-const WORKSPACE_BASENAME = "workspace";
-const RO_LAYERS_TAR = ".ro-layers.tar";
-const RO_LAYERS_MANIFEST = ".ro-layers.manifest";
-const HOME_TAR = `${HOME_DIR}/.qm-home.tar`;
-
-const SNAPSHOT_PRUNE = HOME_SNAPSHOT_PRUNE;
 const DEFAULT_KEEP_WARM_SEC = 3600;
-const DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS = 5 * 60_000;
-
-export interface StoredE2bSandbox {
-  sandboxId: string;
-  nativePause?: boolean;
-  preservationState?: "running" | "paused" | "pause_failed";
-  preservationError?: string;
-  recoverySnapshotId?: string;
-  recoveryError?: string;
-  createdAtMs: number;
-  lastSnapshotMs?: number;
-  homeDirty?: boolean;
-}
 
 export const E2B_TEMPLATE_TOOLS = ["wget", "unzip", "gh", "aws", "x-api"];
 
-export interface E2bSandboxOptions extends BlobStagingOptions {
-  advisoryLock: AdvisoryLock;
-  client: E2bClient;
-  namePrefix?: string;
-  defaultTimeoutSec?: number;
-  keepWarmSec?: number;
+export interface StoredE2bSandbox extends StoredSandboxRecord {
+  sandboxId?: string;
+}
 
-  snapshotIntervalMs?: number;
-  nativeSnapshotIntervalMs?: number;
-  egressProxyUrl?: string;
-  extraTools?: string[];
-  credentialPaths?: CredentialPathSpec[];
-  layerToolFiles?: () => readonly LayerInstallFile[];
+export interface E2bSandboxOptions extends SandboxShared {
+  client: E2bClient;
   store: DurableMap<StoredE2bSandbox>;
-  snapshots?: HomeSnapshotStore;
-  onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
 export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOptions): Sandbox {
-  const client = opts.client;
-  const prefix = opts.namePrefix ?? "qm";
-  const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
+  const { client, store } = opts;
   const keepWarmMs = (opts.keepWarmSec ?? DEFAULT_KEEP_WARM_SEC) * 1000;
-  const snapshotIntervalMs = opts.snapshotIntervalMs ?? 0;
-  const nativeSnapshotIntervalMs = opts.nativeSnapshotIntervalMs ?? DEFAULT_NATIVE_SNAPSHOT_INTERVAL_MS;
+  const sessions = new Map<string, E2bSession>();
+  const scratchNames = new Set<string>();
+  const restoredFrom = new Map<string, string>();
+  const reviving = new Map<string, Promise<E2bSession>>();
   const observed: { cpus?: number; memoryMb?: number; diskGb?: number } = {};
-  const noteInfo = (info: E2bSandboxInfo | undefined): void => {
+
+  async function adopt(name: string, session: E2bSession): Promise<E2bSession> {
+    sessions.set(name, session);
+    const info = await client.info?.(session.sandboxId).catch(swallowAs("e2b-sandbox: info", undefined));
     if (info?.cpuCount) observed.cpus = info.cpuCount;
     if (info?.memoryMb) observed.memoryMb = info.memoryMb;
-  };
-  const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
-  const store = opts.store;
-  const localQueue = createKeyedQueue<string>();
-  const advisoryLock = opts.advisoryLock;
-  const provisionQueue = <T>(scope: string, action: () => Promise<T>): Promise<T> =>
-    localQueue(scope, () => advisoryLock.withLock(`e2b-provision:${scope}`, action));
-
-  const sessionByName = new Map<string, E2bSession>();
-  const scopeByName = new Map<string, string>();
-  const scratchKeyByName = new Map<string, string>();
-  const activeScratch = new Map<string, number>();
-
-  const reportError = (category: string, code: string, message: string, scopeLabel?: string): void => {
-    opts.onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
-  };
-
-  const homeSnapshots = opts.snapshots
-    ? createHomeSnapshotOps<E2bSession>({
-        label: "e2b",
-        homeDir: HOME_DIR,
-        homeTarPath: HOME_TAR,
-        prunePaths: [
-          ...SNAPSHOT_PRUNE,
-          ...ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => `./${rel}`),
-        ],
-        store: opts.snapshots,
-        io: {
-          runCommand: (session, script, timeoutMs) => session.runCommand(script, { timeoutMs }),
-          readFileBytes: (session, abs) => session.readFileBytes(abs),
-          writeFileBytes: (session, abs, data) => session.writeFileBytes(abs, data),
-        },
-      })
-    : undefined;
-
-  async function snapshotHome(scope: string, session: E2bSession): Promise<void> {
-    if (!homeSnapshots) return;
-    await homeSnapshots.snapshotHome(scope, session);
-    await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+    return session;
   }
 
-  const hydrateHome = async (scope: string, session: E2bSession): Promise<boolean> =>
-    homeSnapshots ? homeSnapshots.hydrateHome(scope, session) : false;
-
-  async function ensureSession(
-    scope: string,
-    name: string,
-    onStatus?: (text: string) => void,
-  ): Promise<{ session: E2bSession; coldStart: boolean }> {
-    return provisionQueue(scope, async () => {
-      const cached = sessionByName.get(name);
-      if (cached) return { session: cached, coldStart: false };
-
-      const adopt = (session: E2bSession): { session: E2bSession; coldStart: boolean } => {
-        sessionByName.set(name, session);
-        return { session, coldStart: false };
-      };
-
-      const stored = await store.get(scope);
-      if (stored) {
-        try {
-          const session = await client.connect(stored.sandboxId);
-          const info = await client.info?.(session.sandboxId);
-          noteInfo(info);
-          await store.merge(scope, {
-            preservationState: "running",
-            ...(info ? { nativePause: info.onTimeout === "pause" } : {}),
-          });
-          return adopt(session);
-        } catch (err) {
-          if (!(err instanceof E2bSandboxGoneError)) throw err;
-        }
-      }
-
-      const listed = await client.list({ name });
-      for (const summary of listed) {
-        try {
-          const session = await client.connect(summary.sandboxId);
-          const info = await client.info?.(session.sandboxId);
-          noteInfo(info);
-          await store.put(scope, {
-            ...stored,
-            sandboxId: session.sandboxId,
-            createdAtMs: Date.now(),
-            nativePause: info?.onTimeout === "pause",
-          });
-          return adopt(session);
-        } catch (err) {
-          if (!(err instanceof E2bSandboxGoneError)) throw err;
-        }
-      }
-
-      if (stored?.nativePause) {
-        if (!stored.recoverySnapshotId)
-          throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
-        onStatus?.("Restoring the sandbox from its recovery snapshot…");
-        let session: E2bSession;
-        try {
-          session = await client.create({
-            metadata: { name },
-            autoPause: true,
-            fromSnapshot: stored.recoverySnapshotId,
-          });
-        } catch (e) {
-          await store.merge(scope, { recoveryError: errMessage(e) });
-          reportError("sandbox_hydrate", "snapshot_restore_failed", errMessage(e), scope);
-          throw new Error(`e2b provision: restore from recovery snapshot ${stored.recoverySnapshotId} failed`, {
-            cause: e,
-          });
-        }
-        await store.merge(scope, {
-          sandboxId: session.sandboxId,
-          createdAtMs: Date.now(),
-          preservationState: "running",
-          preservationError: undefined,
-          recoveryError: undefined,
-        });
-        return adopt(session);
-      }
-      onStatus?.("Creating the sandbox…");
-      const session = await client.create({ metadata: { name }, autoPause: true });
-      sessionByName.set(name, session);
-      await store.put(scope, {
-        sandboxId: session.sandboxId,
-        createdAtMs: Date.now(),
-        nativePause: false,
-        preservationState: "running",
-      });
-      let hydrated: boolean;
-      try {
-        hydrated = await hydrateHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_hydrate", "hydrate_failed", errMessage(e), scope);
-        sessionByName.delete(name);
-        await client.kill(session.sandboxId).catch(() => undefined);
-        throw new Error(`e2b provision: home hydration failed (${errMessage(e)}); not risking the stored snapshot`, {
-          cause: e,
-        });
-      }
-      await store.merge(scope, { nativePause: client.nativePause });
-      noteInfo(await client.info?.(session.sandboxId).catch(() => undefined));
-      return { session, coldStart: !hydrated };
-    });
+  async function locate(name: string): Promise<{ sandboxId: string; state: string } | null> {
+    const listed = await client.list({ name });
+    return listed.find((s) => s.state === "running") ?? listed[0] ?? null;
   }
 
-  async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
-    return provisionQueue(`scratch:${key}`, async () => {
-      scratchKeyByName.set(name, key);
-      const active = activeScratch.get(name) ?? 0;
-      if (active === 0 && !sessionByName.has(name)) {
-        const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
-        sessionByName.set(name, session);
-      }
-      activeScratch.set(name, active + 1);
-      return { name, coldStart: active === 0 };
+  async function launch(name: string, scratch: boolean, fromSnapshot?: string): Promise<E2bSession> {
+    const session = await client.create({
+      metadata: { name, ...(scratch ? { scratch: "true" } : {}) },
+      autoPause: !scratch,
+      ...(fromSnapshot ? { fromSnapshot } : {}),
     });
+    if (scratch) scratchNames.add(name);
+    return adopt(name, session);
+  }
+
+  async function createResident(name: string, scope: string): Promise<E2bSession> {
+    const stored = await store.get(scope);
+    const checkpointId = stored?.checkpointId;
+    if (stored?.homeDirty && !checkpointId)
+      throw new Error("e2b sandbox is gone; explicitly import a recovery snapshot before replacing its home");
+    const session = await launch(name, false, checkpointId);
+    if (checkpointId) restoredFrom.set(name, checkpointId);
+    await store.merge(scope, { sandboxId: session.sandboxId });
+    return session;
+  }
+
+  async function connect(name: string): Promise<E2bSession> {
+    const cached = sessions.get(name);
+    if (cached) return cached;
+    const found = await locate(name);
+    if (!found) throw new Error(`e2b sandbox ${name} is not provisioned`);
+    return adopt(name, await client.connect(found.sandboxId));
+  }
+
+  async function replace(name: string): Promise<E2bSession> {
+    if (scratchNames.has(name)) return launch(name, true);
+    const found = await locate(name);
+    if (found) return adopt(name, await client.connect(found.sandboxId));
+    const scope = sandbox.scopeFor(name);
+    if (!scope) throw new Error(`e2b sandbox ${name} is not provisioned`);
+    return createResident(name, scope);
+  }
+
+  function revive(name: string): Promise<E2bSession> {
+    const pending = reviving.get(name) ?? replace(name).finally(() => reviving.delete(name));
+    reviving.set(name, pending);
+    return pending;
   }
 
   async function withSession<T>(name: string, action: (session: E2bSession) => Promise<T>): Promise<T> {
-    const scratchKey = scratchKeyByName.get(name);
-    if (scratchKey === undefined && !scopeByName.has(name)) throw new Error("sandbox handle has been released");
-
-    const reviveScratch = async (): Promise<E2bSession> => {
-      const session = await client.create({ metadata: { name, scratch: "true" }, autoPause: false });
-      sessionByName.set(name, session);
-      return session;
-    };
-    const first =
-      scratchKey !== undefined
-        ? { session: sessionByName.get(name) ?? (await reviveScratch()) }
-        : await ensureSession(scopeByName.get(name) ?? "default", name);
     try {
-      return await action(first.session);
+      return await action(await connect(name));
     } catch (err) {
-      if (err instanceof E2bCommandLostError) sessionByName.delete(name);
+      if (err instanceof E2bCommandLostError) sessions.delete(name);
       if (!(err instanceof E2bSandboxGoneError)) throw err;
-      sessionByName.delete(name);
-      const second =
-        scratchKey !== undefined
-          ? { session: await reviveScratch() }
-          : await ensureSession(scopeByName.get(name) ?? "default", name);
-      return action(second.session);
+      sessions.delete(name);
+      return action(await revive(name));
     }
   }
 
-  async function execRaw(name: string, script: string, timeoutSec: number): Promise<ExecResult> {
-    return withSession(name, (session) => runE2bScript(session, script, timeoutSec));
+  async function destroy(name: string): Promise<void> {
+    const ids = new Set([sessions.get(name)?.sandboxId, ...(await client.list({ name })).map((s) => s.sandboxId)]);
+    for (const id of ids) if (id) await client.kill(id);
+    sessions.delete(name);
+    restoredFrom.delete(name);
   }
 
-  const profile: AgentComputerProfile = {
-    backend: "e2b",
-    writablePersistence: client.nativePause ? "provider_managed" : "snapshot_to_workspace",
-    processSessions: true,
-    parksOnTeardown: true,
-    egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
-    spec: {
-      os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
-      runtimes: ["Node", "Python 3"],
-      get tools() {
-        return visibleTools(["git", "curl", "jq", "tar", "python3", ...(opts.extraTools ?? [])]);
-      },
-      get notInstalled() {
-        return visibleNotInstalled(["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"], opts.extraTools ?? []);
-      },
-      get cpus() {
-        return observed.cpus;
-      },
-      get memoryMb() {
-        return observed.memoryMb;
-      },
-      get diskGb() {
-        return observed.diskGb;
-      },
+  async function inspect(name: string): Promise<MachineState | null> {
+    const found = await locate(name);
+    if (!found) return null;
+    const running = found.state === "running";
+    const session = sessions.get(name);
+    const metrics = running && session ? await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null)) : null;
+    if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
+    return {
+      state: running ? "running" : "parked",
+      detail: `e2b sandbox ${found.sandboxId} ${found.state}`,
+      ...(metrics
+        ? {
+            resources: {
+              cpuUsedPct: metrics.cpuUsedPct,
+              memUsedMb: Math.round(metrics.memUsedBytes / 2 ** 20),
+              memTotalMb: Math.round(metrics.memTotalBytes / 2 ** 20),
+              diskUsedGb: Math.round((metrics.diskUsedBytes / 2 ** 30) * 10) / 10,
+              diskTotalGb: Math.round((metrics.diskTotalBytes / 2 ** 30) * 10) / 10,
+            },
+          }
+        : {}),
+    };
+  }
+
+  const sandbox: ProviderSandbox = createProviderSandbox(
+    workspace,
+    {
+      backend: "e2b",
       homeDir: HOME_DIR,
-      workdir: workspaceDir,
+      os: "Linux — E2B Firecracker sandbox (provider pause preserves state; publish durable work to git or Files)",
+      writablePersistence: "provider_managed",
+      egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
+      exec: (name, script, timeoutSec) => withSession(name, (s) => runE2bScript(s, script, timeoutSec)),
+      writeAbsBytes: (name, absPath, data) => withSession(name, (s) => s.writeFileBytes(absPath, data)),
+      readAbsBytes: (name, absPath) => withSession(name, (s) => s.readFileBytes(absPath)),
+      inspect,
+      async create(name, { scratch, scope }) {
+        if (scratch || !scope) await launch(name, scratch);
+        else await createResident(name, scope);
+      },
+      async resume(name) {
+        sessions.delete(name);
+        await connect(name);
+      },
+      async park(name, { keepWarm }) {
+        const session = sessions.get(name);
+        if (!session) return;
+        if (keepWarm) return session.keepAlive(keepWarmMs);
+        await session.pause();
+        sessions.delete(name);
+      },
+      destroy,
+      isLive: (name) => sessions.has(name),
+      forget(name) {
+        sessions.delete(name);
+        scratchNames.delete(name);
+        restoredFrom.delete(name);
+      },
+      async restart(name) {
+        const session = await connect(name);
+        await session.pause({ keepMemory: false });
+        sessions.delete(name);
+        await adopt(name, await client.connect(session.sandboxId));
+      },
+      checkpoints: {
+        capture: async (name) => (await (await connect(name)).createSnapshot()).snapshotId,
+        async restore(name, checkpointId) {
+          const fresh = restoredFrom.get(name) === checkpointId;
+          restoredFrom.delete(name);
+          if (fresh) return;
+          await destroy(name);
+          await launch(name, false, checkpointId);
+        },
+        drop: (_name, checkpointId) => client.deleteSnapshot(checkpointId),
+      },
     },
-  };
-
-  const procIo: ExecProcessIo = {
-    async run(handle, command, execOpts): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      return execRaw(handle.id, command, timeoutSec);
-    },
-  };
-  const procSessions = createExecProcessSessions(procIo);
-
-  const writeAbsBytes = (name: string, absPath: string, data: Uint8Array): Promise<void> =>
-    withSession(name, (session) => session.writeFileBytes(absPath, data));
-  const readAbsBytes = (name: string, absPath: string): Promise<Uint8Array | null> =>
-    withSession(name, (session) => session.readFileBytes(absPath));
-  const installLayerTools = opts.layerToolFiles ? createLayerToolInstaller(opts.layerToolFiles) : null;
-
-  const execFileOps = createExecFileOps({
-    label: "e2b",
-    exec: (id, script, t) => execRaw(id, script, t),
-    writeInline: (id, abs, data) => writeAbsBytes(id, abs, data),
+    opts,
+    opts.store,
+  );
+  Object.defineProperties(sandbox.profile.spec!, {
+    cpus: { get: () => observed.cpus, enumerable: true },
+    memoryMb: { get: () => observed.memoryMb, enumerable: true },
+    diskGb: { get: () => observed.diskGb, enumerable: true },
   });
-
-  const execExport = createExecExport({
-    label: "e2b",
-    exec: (id, script, t) => execRaw(id, script, t),
-    readAbsBytes,
-    defaultHomeDir: HOME_DIR,
-    ephemeralCredentialPrefixes: ephemeralCredLinkPaths(opts.credentialPaths ?? []).map(({ rel }) => rel),
-  });
-
-  const blobStaging = createBackendBlobStaging("e2b", (id, script, t) => execRaw(id, script, t), opts);
-
-  async function destroyStoredScope(scope: string): Promise<void> {
-    const name = sandboxScopeName(prefix, scope);
-    const stored = await store.get(scope);
-    const cached = sessionByName.get(name);
-    const ids = new Set([stored?.sandboxId, cached?.sandboxId].filter((id): id is string => !!id));
-    for (const id of ids) {
-      try {
-        await client.kill(id);
-      } catch (error) {
-        if (!(error instanceof E2bSandboxGoneError)) throw error;
-      }
-    }
-    await store.delete(scope);
-    sessionByName.delete(name);
-    scopeByName.delete(name);
-    await forgetSnapshot(stored?.recoverySnapshotId);
-  }
-
-  const forgetSnapshot = (snapshotId: string | undefined): Promise<void> =>
-    snapshotId
-      ? client.deleteSnapshot(snapshotId).catch(swallowAs("e2b-sandbox: recovery snapshot delete", undefined))
-      : Promise.resolve();
-
-  async function captureRecoverySnapshot(scope: string, session: E2bSession, previous?: string): Promise<void> {
-    try {
-      const { snapshotId } = await session.createSnapshot();
-      await store.merge(scope, {
-        recoverySnapshotId: snapshotId,
-        recoveryError: undefined,
-        lastSnapshotMs: Date.now(),
-        homeDirty: false,
-      });
-      if (previous !== snapshotId) await forgetSnapshot(previous);
-    } catch (e) {
-      await store.merge(scope, { recoveryError: errMessage(e) });
-      reportError("sandbox_snapshot", "recovery_snapshot_failed", errMessage(e), scope);
-    }
-  }
-
-  const sandbox: Sandbox = {
-    destroyScope(scopeId: string): Promise<void> {
-      return provisionQueue(scopeId, () => destroyStoredScope(scopeId));
-    },
-
-    profile,
-    startProcess: procSessions.startProcess,
-    readProcess: procSessions.readProcess,
-    writeStdin: procSessions.writeStdin,
-    signalProcess: procSessions.signalProcess,
-    listProcesses: procSessions.listProcesses,
-    ...execFileOps,
-    ...blobStaging,
-
-    async provision(layers: WorkspaceLayer[], provOpts?: ProvisionOptions): Promise<SandboxHandle> {
-      const scratch = provOpts?.scratch;
-      const writable = layers.find((l) => l.mode === "rw") ?? layers[0];
-      const scope = writable?.scopeId ?? "default";
-      let name: string;
-      let coldStart: boolean;
-      if (scratch) {
-        ({ name, coldStart } = await ensureScratch(scratch.key));
-      } else {
-        name = sandboxScopeName(prefix, scope);
-        scopeByName.set(name, scope);
-        ({ coldStart } = await ensureSession(scope, name, provOpts?.onStatus));
-      }
-
-      const forceEgress = !!opts.egressProxyUrl && !!provOpts?.egressToken;
-      const turnEnv = Object.fromEntries(
-        Object.entries(provOpts?.env ?? {}).filter(([k]) => !DROPPED_PROXY_ENV.has(k)),
-      );
-      const env = forceEgress ? forceThroughProxyEnv(opts.egressProxyUrl!, provOpts!.egressToken!, turnEnv) : turnEnv;
-      const handle: SandboxHandle = {
-        id: name,
-        rootDir: workspaceDir,
-        homeDir: HOME_DIR,
-        coldStart,
-        ...(scratch ? { scratch: true } : {}),
-        ...(Object.keys(env).length ? { env } : {}),
-      };
-
-      try {
-        const credLinks = scratch ? "" : ` && ${ephemeralCredLinkScript(HOME_DIR, opts.credentialPaths ?? [])}`;
-        const prep = await execRaw(name, `mkdir -p ${shq(workspaceDir)}${credLinks}`, 60);
-        if (prep.code !== 0)
-          throw new Error(`e2b provision prep failed: ${(prep.stderr || prep.stdout).slice(0, 200)}`);
-
-        await materializeRoLayers(
-          workspace,
-          layers,
-          handle,
-          {
-            readFile: (h, rel) => sandbox.readFile(h, rel),
-            writeFileBytes: (h, rel, data) => sandbox.writeFileBytes(h, rel, data),
-            exec: (script, t) => execRaw(name, script, t),
-          },
-          { manifest: RO_LAYERS_MANIFEST, tar: RO_LAYERS_TAR, label: "e2b" },
-        );
-        await installLayerTools?.({
-          exec: (script, t) => execRaw(name, script, t),
-          writeAbs: (abs, data) => writeAbsBytes(name, abs, data),
-        });
-
-        return handle;
-      } catch (err) {
-        await cleanupFailedProvision(sandbox, handle, err);
-        throw err;
-      }
-    },
-
-    async run(handle, command, execOpts?: ExecOptions): Promise<ExecResult> {
-      const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-      const exports = Object.entries(handle.env ?? {})
-        .map(([k, v]) => `export ${k}=${shq(v)}`)
-        .join("; ");
-      const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
-      const signal = execOpts?.signal;
-      if (!signal) return execRaw(handle.id, script, timeoutSec);
-      const killUid = randomUUID();
-      const fireKill = () => {
-        execRaw(handle.id, killScript(killUid), 15).catch(swallowAs("e2b-sandbox: kill in-flight exec", undefined));
-      };
-      signal.throwIfAborted();
-      const onAbort = () => fireKill();
-      signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        return await execRaw(handle.id, killableScript(script, killUid), timeoutSec);
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-
-    async writeFileBytes(handle, relPath, data): Promise<void> {
-      await writeAbsBytes(handle.id, posixJoin(handle.rootDir, relPath), data);
-    },
-    async writeFile(handle, relPath, data): Promise<void> {
-      await sandbox.writeFileBytes(handle, relPath, Buffer.from(data, "utf8"));
-    },
-    async readFileBytes(handle, relPath): Promise<Uint8Array | null> {
-      return readAbsBytes(handle.id, posixJoin(handle.rootDir, relPath));
-    },
-    async readFile(handle, relPath): Promise<string | null> {
-      const bytes = await sandbox.readFileBytes(handle, relPath);
-      return bytes === null ? null : Buffer.from(bytes).toString("utf8");
-    },
-
-    exportFiles: execExport.exportFiles,
-
-    ...(homeSnapshots
-      ? {
-          async persistHomeSnapshot(scopeId: string): Promise<void> {
-            const name = sandboxScopeName(prefix, scopeId);
-            scopeByName.set(name, scopeId);
-            const { session } = await ensureSession(scopeId, name);
-            await snapshotHome(scopeId, session);
-          },
-        }
-      : {}),
-
-    async computerStatus(scopeId: string): Promise<ComputerStatus> {
-      const name = sandboxScopeName(prefix, scopeId);
-      const stored = await store.get(scopeId);
-
-      if (!stored) return { machine: "no sandbox provisioned yet", provisioned: false, guestResponsive: false };
-      const machine = `e2b sandbox ${stored.sandboxId}`;
-      let expiresAtMs: number | undefined;
-      const recoveryError = stored.recoveryError ?? stored.preservationError;
-      const recovery = {
-        strategy: stored.nativePause ? ("provider_pause" as const) : ("workspace_snapshot" as const),
-        state: stored.preservationState,
-        ...(recoveryError ? { error: recoveryError } : {}),
-        ...(stored.recoverySnapshotId ? { checkpointId: stored.recoverySnapshotId, checkpointExpiresAtMs: null } : {}),
-        ...(stored.lastSnapshotMs ? { checkpointAtMs: stored.lastSnapshotMs } : {}),
-      };
-      try {
-        if (client.info) {
-          const info = await client.info(stored.sandboxId);
-          expiresAtMs = info.state === "running" ? info.expiresAtMs : undefined;
-          if (info.state === "paused")
-            return {
-              machine,
-              listed: info.state,
-              lifecycleState: "paused",
-              provisioned: true,
-              guestResponsive: false,
-              recovery: { ...recovery, state: info.state, checkpointExpiresAtMs: null },
-            };
-        }
-        scopeByName.set(name, scopeId);
-        let session = sessionByName.get(name);
-        if (!session) {
-          session = await client.connect(stored.sandboxId);
-          sessionByName.set(name, session);
-        }
-        const r = await session.runCommand("echo responsive", { timeoutMs: 30_000 });
-        const metrics = await session.metrics().catch(swallowAs("e2b-sandbox: metrics", null));
-        if (metrics?.diskTotalBytes) observed.diskGb = Math.round(metrics.diskTotalBytes / 2 ** 30);
-        return {
-          machine,
-          expiresAtMs,
-          recovery,
-          provisioned: true,
-          guestResponsive: r.exitCode === 0 && /responsive/.test(r.stdout),
-          ...(metrics
-            ? {
-                resources: {
-                  cpuUsedPct: metrics.cpuUsedPct,
-                  memUsedMb: Math.round(metrics.memUsedBytes / 2 ** 20),
-                  memTotalMb: Math.round(metrics.memTotalBytes / 2 ** 20),
-                  diskUsedGb: Math.round((metrics.diskUsedBytes / 2 ** 30) * 10) / 10,
-                  diskTotalGb: Math.round((metrics.diskTotalBytes / 2 ** 30) * 10) / 10,
-                },
-              }
-            : {}),
-        };
-      } catch (e) {
-        return {
-          recovery,
-          machine: `${machine} (${errMessage(e).slice(0, 120)})`,
-          provisioned: !(e instanceof E2bSandboxGoneError),
-          guestResponsive: false,
-        };
-      }
-    },
-
-    async teardown(handle, tdOpts?: TeardownOptions): Promise<void> {
-      if (handle.scratch) {
-        const key = scratchKeyByName.get(handle.id);
-        return provisionQueue(key ? `scratch:${key}` : handle.id, async () => {
-          const remaining = (activeScratch.get(handle.id) ?? 1) - 1;
-          if (remaining > 0) {
-            activeScratch.set(handle.id, remaining);
-            return;
-          }
-          activeScratch.delete(handle.id);
-          const session = sessionByName.get(handle.id);
-          if (session) {
-            if (tdOpts?.destroy) await session.kill();
-            else await session.kill().catch(swallowAs("e2b-sandbox: scratch kill", undefined));
-          }
-          sessionByName.delete(handle.id);
-          scratchKeyByName.delete(handle.id);
-        });
-      }
-      if (tdOpts?.destroy && !scopeByName.has(handle.id)) return;
-      const scope = scopeByName.get(handle.id) ?? "default";
-      return provisionQueue(scope, () => teardownScope(handle, scope, tdOpts));
-    },
-  };
-
-  async function teardownScope(handle: SandboxHandle, scope: string, tdOpts?: TeardownOptions): Promise<void> {
-    const session = sessionByName.get(handle.id);
-    if (tdOpts?.destroy) return destroyStoredScope(scope);
-    if (!session) return;
-
-    const stored = await store.get(scope);
-    if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-    if (!stored?.nativePause && snapshotDue(stored, tdOpts, snapshotIntervalMs)) {
-      try {
-        await snapshotHome(scope, session);
-      } catch (e) {
-        reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-      }
-    }
-    if (tdOpts?.keepWarm) {
-      try {
-        await session.keepAlive(keepWarmMs);
-      } catch (e) {
-        reportError("sandbox_preservation", "keep_warm_failed", errMessage(e), scope);
-      }
-      return;
-    }
-    if (stored?.nativePause && snapshotDue(stored, tdOpts, nativeSnapshotIntervalMs))
-      await captureRecoverySnapshot(scope, session, stored.recoverySnapshotId);
-    try {
-      await session.pause();
-      await store.merge(scope, { preservationState: "paused", preservationError: undefined });
-      sessionByName.delete(handle.id);
-    } catch (error) {
-      await store.merge(scope, { preservationState: "pause_failed", preservationError: errMessage(error) });
-      reportError("sandbox_preservation", "pause_failed", errMessage(error), scope);
-      throw error;
-    }
-  }
-
   return sandbox;
 }

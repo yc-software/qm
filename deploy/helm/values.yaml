@@ -36,7 +36,6 @@ secretEnv:
   PORTER_DEPLOY_URL: ""
   PORTER_DEPLOY_PROJECT_ID: ""
   PORTER_DEPLOY_CLUSTER_ID: ""
-  PORTER_SANDBOX_IMAGE: "ghcr.io/porter-dev/qm-sandbox:latest"
   PORTER_DEPLOY_RUNNER_IMAGE: "ghcr.io/porter-dev/qm-app-runner:latest"
   DEPLOY_APPS_DOMAIN: ""
   PORTER_DEPLOY_APPS_DOMAIN: ""

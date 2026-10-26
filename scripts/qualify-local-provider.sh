@@ -43,6 +43,6 @@ docker run --rm --name "$container" --group-add "$socket_group" \
   -e ANTHROPIC_API_KEY -e NODE_ENV=development \
   -e MODEL_GATEWAY_URL -e MODEL_GATEWAY_API_KEY -e MODEL_GATEWAY_API_KEY_HEADER -e MODEL_GATEWAY_MODELS \
   -e "EXPECTED_SOURCE_SHA=$source_sha" -e "QM_CORE_CONTAINER=$container" \
-  -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 -e LOCAL_SANDBOX_MEMORY_MB=2048 \
+  -e "LOCAL_SANDBOX_IMAGE=$local_image" -e SANDBOX_CPUS=2 -e SANDBOX_MEMORY_MB=2048 \
   -e PI_MODEL=claude-haiku-4-5 \
   "$core_image" node test/live-slack/local-provider.ts

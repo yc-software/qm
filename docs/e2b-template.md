@@ -18,7 +18,7 @@ change the image of new scopes.
 With `E2B_TEMPLATE_ID` set, the agent computer's profile lists gh, aws and `x-api` as
 installed. Without it, core uses E2B's stock `base` image and lists them as missing.
 
-On E2B plans capped at one hour, also set `E2B_MAX_LIFETIME_SEC=3600` in `env.core`.
+On E2B plans capped at one hour, also set `SANDBOX_MAX_LIFETIME_SEC=3600` in `env.core`.
 Core otherwise asks for a 61 minute sandbox timeout, and those plans reject every create
 with `400: Timeout cannot be greater than 1 hours`. The setting also caps a command at 59
 minutes.
@@ -93,7 +93,7 @@ point and uses E2B's rules only to make that proxy unavoidable:
 - The proxy also writes the egress audit log and checks the turn token; E2B's firewall
   does neither.
 
-Set `E2B_EGRESS_PROXY_URL` to a QM egress proxy reachable on port 443, for example
+Set `SANDBOX_EGRESS_PROXY_URL` to a QM egress proxy reachable on port 443, for example
 the `egress-proxy` service (TLS on 443 in front of the proxy's port 48080). Core then
 creates every agent computer with `allowOut: [<proxy host>]` and `denyOut: ["0.0.0.0/0"]`
 and points the computer's proxy settings at it with the turn's token. Without it, core

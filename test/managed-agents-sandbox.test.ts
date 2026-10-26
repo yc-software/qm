@@ -16,14 +16,13 @@ import {
 } from "../src/sandbox/managed-agents-client.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;
@@ -33,8 +32,8 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createManagedAgentsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-ws-"))), {
-    snapshots: createMemorySnapshotStore(),
     store: createMemoryMap(),
+    advisoryLock: createMemoryAdvisoryLock(),
     client: fake.client,
     namePrefix: "qmt",
     ...extra,
@@ -104,14 +103,13 @@ test("restart rolls a paused session back to its checkpoint without resuming the
   await sandbox.teardown(h);
   const before = await store.get(scope);
   assert.ok(before?.checkpointId);
-  assert.equal(before.preservationState, "paused");
+  const sandboxBefore = fake.current(scopeName())?.sandboxId;
   const resumes = fake.resumeCalls().length;
   const disconnects = fake.guestDisconnects().length;
   await sandbox.restartComputer!(scope);
   const after = await store.get(scope);
   assert.equal(after?.sessionId, before.sessionId);
-  assert.notEqual(after?.sandboxId, before.sandboxId);
-  assert.equal(after?.preservationState, "running");
+  assert.notEqual(fake.current(scopeName())?.sandboxId, sandboxBefore);
   assert.equal(after?.checkpointId, before.checkpointId);
   assert.deepEqual(fake.rollbackCalls(), [{ sessionId: before.sessionId, checkpointId: before.checkpointId }]);
   assert.equal(fake.resumeCalls().length, resumes);
@@ -120,7 +118,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
   assert.deepEqual(restored, ["checkpoint_restored"]);
   const again = await sandbox.provision(layers);
   assert.equal(again.coldStart, false);
-  assert.equal(fake.current(scopeName())?.sandboxId, after?.sandboxId);
+  assert.equal(fake.current(scopeName())?.state, "ready");
 });
 
 test("restart drops a warm guest's port-forward before rolling back", async () => {
@@ -132,12 +130,12 @@ test("restart drops a warm guest's port-forward before rolling back", async () =
   await sandbox.restartComputer!(scope);
   assert.equal(fake.guestDisconnects().length, disconnects + 1);
   assert.equal(fake.rollbackCalls().length, 1);
-  assert.equal((await store.get(scope))?.preservationState, "running");
 });
 
-test("restart without a checkpoint does not call rollback", async () => {
+test("restart without a checkpoint is refused and leaves the session in place", async () => {
   await sandbox.provision(layers);
-  await assert.rejects(() => sandbox.restartComputer!(scope), /no checkpoint to restore/);
+  await assert.rejects(sandbox.restartComputer!(scope), /no checkpoint to restore/);
+  assert.equal(fake.createdCount(scopeName()), 1);
   assert.equal(fake.rollbackCalls().length, 0);
 });
 
@@ -146,10 +144,10 @@ test("a failed rollback keeps the stored sandbox and the same session", async ()
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
-  const before = await store.get(scope);
+  const before = fake.current(scopeName())?.sandboxId;
   fake.failNextRollback(scopeName());
   await assert.rejects(() => sandbox.restartComputer!(scope), /rollback/);
-  assert.equal((await store.get(scope))?.sandboxId, before?.sandboxId);
+  assert.equal(fake.current(scopeName())?.sandboxId, before);
   assert.equal(fake.rollbackCalls().length, 0);
   const again = await sandbox.provision(layers);
   assert.equal(again.coldStart, false);
@@ -179,7 +177,7 @@ test("checkpoint capture is throttled across a pause and resume", async () => {
 
 test("a newer checkpoint replaces the previous one", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
-  sandbox = make({ store, snapshotIntervalMs: -1 });
+  sandbox = make({ store, snapshotIntervalSec: -1 });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
   const first = (await store.get(scope))?.checkpointId;
@@ -190,48 +188,20 @@ test("a newer checkpoint replaces the previous one", async () => {
   assert.ok(second);
   assert.notEqual(first, second);
   assert.deepEqual(fake.deletedCheckpoints(), [first]);
-  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes ?? [], []);
 });
 
-test("a failed checkpoint delete is remembered and retried without another capture", async () => {
+test("a replacement session starts fresh and drops the foreign checkpoint", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
-  const fast = make({ store, snapshotIntervalMs: -1 });
-  const h = await fast.provision(layers);
-  await fast.teardown(h);
-  const first = (await store.get(scope))?.checkpointId;
-  assert.ok(first);
-  fake.failNextCheckpointDelete(scopeName());
-  const again = await fast.provision(layers);
-  await fast.teardown(again);
-  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes, [first]);
-  assert.deepEqual(fake.deletedCheckpoints(), []);
-
-  const slow = make({ store });
-  const resumed = await slow.provision(layers);
-  const captures = fake.checkpointCalls().length;
-  await slow.teardown(resumed, { homeUnchanged: true });
-  assert.equal(fake.checkpointCalls().length, captures);
-  assert.deepEqual(fake.deletedCheckpoints(), [first]);
-  assert.deepEqual((await store.get(scope))?.pendingCheckpointDeletes ?? [], []);
-});
-
-test("a failed home snapshot retries without recapturing the checkpoint", async () => {
-  const uploads: number[] = [];
-  const snapshots: HomeSnapshotStore = {
-    open: async () => null,
-    put: async () => undefined,
-    createUpload: async () => {
-      uploads.push(1);
-      throw new Error("snapshot upload failed");
-    },
-  };
-  sandbox = make({ snapshots });
+  sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
+  assert.ok((await store.get(scope))?.checkpointId);
+  fake.destroy(scopeName());
   const again = await sandbox.provision(layers);
-  await sandbox.teardown(again);
-  assert.equal(fake.checkpointCalls().length, 1);
-  assert.equal(uploads.length, 2);
+  assert.equal(again.coldStart, true);
+  assert.equal(fake.rollbackCalls().length, 0);
+  assert.equal(fake.createdCount(scopeName()), 2);
+  assert.equal((await store.get(scope))?.checkpointId, undefined);
 });
 
 test("teardown pauses the session and the next provision resumes it", async () => {
@@ -268,9 +238,10 @@ test("a lost session is re-adopted by name when the durable record is gone", asy
   assert.equal(fake.current(scopeName())?.sessionId, before?.sessionId);
 });
 
-test("a destroyed session is replaced on the next provision", async () => {
+test("a session destroyed under a warm connection fails that provision and is replaced on the next", async () => {
   await sandbox.provision(layers);
   fake.destroy(scopeName());
+  await assert.rejects(() => sandbox.provision(layers), /is gone/);
   const again = await sandbox.provision(layers);
   assert.ok(again.id);
   assert.equal(fake.createdCount(scopeName()), 2);
@@ -309,11 +280,11 @@ test("files round trip through the data plane", async () => {
   assert.equal(await sandbox.readFile(h, "notes/missing.txt"), null);
 });
 
-test("destroy removes the session and its durable record", async () => {
+test("destroying the scope removes the session and its durable record", async () => {
   const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
-  const h = await sandbox.provision(layers);
-  await sandbox.teardown(h, { destroy: true });
+  await sandbox.provision(layers);
+  await sandbox.destroyScope!(scope);
   assert.equal(await store.get(scope), null);
   assert.equal(fake.current(scopeName()), null);
 });
@@ -363,7 +334,6 @@ test("the profile advertises provider-managed persistence and parks on teardown"
 });
 
 test("the QM template's tools are advertised as installed, not missing", () => {
-  assert.ok(sandbox.profile.spec?.notInstalled?.includes("jq"));
   const spec = make({ extraTools: QM_TEMPLATE_TOOLS }).profile.spec;
   for (const tool of QM_TEMPLATE_TOOLS) {
     assert.ok(spec?.tools?.includes(tool), tool);

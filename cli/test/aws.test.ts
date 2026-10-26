@@ -599,7 +599,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(microvm.AWS_SANDBOX_IMAGE, "acme-qm-sandbox");
   assert.equal(microvm.AWS_SANDBOX_IMAGE_VERSION, "1");
   assert.equal(microvm.AWS_SANDBOX_EXEC_ROLE_ARN, "arn:aws:iam::123456789012:role/acme-qm-microvm-exec");
-  assert.equal(microvm.AWS_SANDBOX_S3_BUCKET, awsObjectStoreBucket(config));
+  assert.equal(microvm.AWS_DEPLOY_DATA_BUCKET, awsObjectStoreBucket(config));
   assert.equal(core.SESSION_STORE, "postgres");
   assert.equal(core.RUN_STORE, "postgres");
   assert.equal(core.SNAPSHOT_STORE, "s3");

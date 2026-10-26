@@ -11,7 +11,7 @@ Build and verify an [agent template](../superserve/templates/README.md), then se
 SANDBOX_BACKEND=superserve
 SUPERSERVE_API_KEY=your-superserve-api-key
 SUPERSERVE_TEMPLATE=qm-agent-0.1.0
-SUPERSERVE_NAME_PREFIX=my-qm
+SANDBOX_NAME_PREFIX=my-qm
 ```
 
 Store the API key as a core service secret. Production requires `DATABASE_URL` for
@@ -28,7 +28,7 @@ key through the CLI's secret configuration:
   "env": {
     "core": {
       "SUPERSERVE_TEMPLATE": "qm-agent-0.1.0",
-      "SUPERSERVE_NAME_PREFIX": "my-qm"
+      "SANDBOX_NAME_PREFIX": "my-qm"
     }
   }
 }
@@ -51,27 +51,25 @@ to build and verify a new template, preserve resident work, and replace sandboxe
 
 ## Settings
 
-| Variable                       | Default     | Purpose                                                                            |
-| ------------------------------ | ----------- | ---------------------------------------------------------------------------------- |
-| `SUPERSERVE_API_KEY`           | Required    | Team API key, held by core.                                                        |
-| `SUPERSERVE_TEMPLATE`          | Required    | Ready template name.                                                               |
-| `SUPERSERVE_BASE_URL`          | SDK default | API endpoint override.                                                             |
-| `SUPERSERVE_NAME_PREFIX`       | `qm`        | Namespace for scope discovery.                                                     |
-| `SUPERSERVE_HOME_DIR`          | `/root`     | Guest home; workspace is `<home>/workspace`.                                       |
-| `SUPERSERVE_IDLE_PAUSE_SEC`    | `900`       | Active-time limit before pause, not an inactivity timer.                           |
-| `SUPERSERVE_RETENTION_SEC`     | `2592000`   | Delete the sandbox after this many continuous seconds paused (30 days by default). |
-| `SUPERSERVE_EGRESS_ALLOW`      | Unset       | Comma-separated outbound allow rules.                                              |
-| `SUPERSERVE_EGRESS_DENY`       | Unset       | Comma-separated outbound deny rules.                                               |
-| `SUPERSERVE_CONFIG_GENERATION` | Automatic   | Explicit rollout sequence.                                                         |
-| `SANDBOX_TIMEOUT_SEC`          | `600`       | Default command deadline in seconds.                                               |
+| Variable                   | Default  | Purpose                                                                      |
+| -------------------------- | -------- | ---------------------------------------------------------------------------- |
+| `SUPERSERVE_API_KEY`       | Required | Team API key, held by core.                                                  |
+| `SUPERSERVE_TEMPLATE`      | Required | Ready template name.                                                         |
+| `SANDBOX_NAME_PREFIX`      | `qm`     | Namespace for scope discovery.                                               |
+| `SANDBOX_IDLE_PARK_SEC`    | `900`    | Active-time limit before automatic pause, not an inactivity timer.           |
+| `SANDBOX_EGRESS_PROXY_URL` | Unset    | When set, sandboxes may reach only the proxy host; otherwise egress is open. |
+| `SANDBOX_TIMEOUT_SEC`      | `600`    | Default command deadline in seconds.                                         |
 
-Ending a turn leaves its sandbox running until the active-time limit, so other
-turns sharing it can continue. Background work can extend that limit to QM's
-configured maximum background job lifetime. Scratch sandboxes are deleted when
-their last local handle closes, with time limits as a cleanup fallback.
+The guest home is `/root` and the workspace is `/root/workspace`.
+
+Ending a turn pauses its sandbox; the next command or turn resumes it with its
+disk intact. Background work keeps it running up to QM's configured maximum
+background job lifetime instead. Scratch sandboxes are deleted when their last
+local handle closes, with time limits as a cleanup fallback. Restarting the
+computer pauses and resumes the same sandbox.
 
 Command output is limited to 2 MiB per stream; write larger results to files.
-Guest restart and the optional browser engine are not supported.
+The optional browser engine is not supported.
 
 ## Updates and retention
 
@@ -81,15 +79,13 @@ sandboxes and deletes their resident files. An egress change can also require
 replacement when a paused sandbox cannot accept the update. Export needed files
 before either change.
 
-A sandbox that remains paused for `SUPERSERVE_RETENTION_SEC` is automatically
-deleted, including its disk. Explicit scope destruction also deletes the disk.
+A sandbox that remains paused for 30 days is automatically deleted, including its
+disk. Explicit scope destruction also deletes the disk.
 
 Automatic configuration ordering assigns a generation to each build and
-configuration. Older instances cannot overwrite a newer sandbox configuration.
-A rollback reuses the earlier generation: to apply it, set
-`SUPERSERVE_CONFIG_GENERATION` to a strictly increasing rollout sequence and
-continue using that sequence for subsequent deployments. Template and egress
-changes during rollback have the same replacement behavior described above.
+configuration. Older instances cannot overwrite, pause or replace a sandbox a
+newer configuration already adopted. A rollback reuses the earlier generation,
+so it leaves sandboxes the newer generation adopted as they are.
 
 ## Tests
 

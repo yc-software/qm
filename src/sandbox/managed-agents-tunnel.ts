@@ -28,7 +28,7 @@ export interface ManagedAgentsTunnelOptions {
 export function tunnelUrl(apiBaseUrl: string, sessionId: string, remotePort: number): string {
   const url = new URL(apiBaseUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:")
-    throw new Error(`DO_AGENTS_API_BASE_URL must be http(s), got ${url.protocol}`);
+    throw new Error(`the Managed Agents API base URL must be http(s), got ${url.protocol}`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.pathname = `${url.pathname.replace(/\/$/, "")}/v2/agents/sessions/${sessionId}/port-forward/${remotePort}`;
   return url.toString();

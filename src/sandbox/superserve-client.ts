@@ -14,17 +14,11 @@ export interface SuperserveNetwork {
 
 export type SuperserveSandboxState = "starting" | "active" | "pausing" | "paused" | "resuming" | "failed" | "deleted";
 
-interface SuperserveSandboxSummary {
+export interface SuperserveSandboxInfo {
   id: string;
   name: string;
   status: SuperserveSandboxState;
   metadata: Record<string, string>;
-}
-
-export interface SuperserveSandboxInfo extends SuperserveSandboxSummary {
-  vcpuCount?: number;
-  memoryMib?: number;
-  timeoutSeconds?: number;
   autoDeleteAtMs?: number;
   network?: SuperserveNetwork;
 }
@@ -34,11 +28,11 @@ interface SuperserveRunOptions {
   maxOutputBytes?: number;
 }
 
-export interface SuperserveUpdate {
+interface SuperserveUpdate {
   network?: SuperserveNetwork;
   metadata?: Record<string, string>;
-  timeoutSeconds?: number | null;
-  autoDeleteSeconds?: number | null;
+  timeoutSeconds?: number;
+  autoDeleteSeconds?: number;
 }
 
 export interface SuperserveSession {
@@ -46,17 +40,15 @@ export interface SuperserveSession {
   run(command: string, opts?: SuperserveRunOptions): Promise<SuperserveCommandResult>;
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
-  update(patch: SuperserveUpdate): Promise<void>;
   pause(): Promise<void>;
-  kill(): Promise<void>;
 }
 
 export interface SuperserveCreateOptions {
   name: string;
   metadata: Record<string, string>;
-  template?: string;
-  timeoutSeconds?: number;
-  autoDeleteSeconds?: number;
+  template: string;
+  timeoutSeconds: number;
+  autoDeleteSeconds: number;
   network?: SuperserveNetwork;
 }
 
@@ -71,19 +63,16 @@ export interface SuperserveClient {
   create(opts: SuperserveCreateOptions): Promise<SuperserveSession>;
   connect(sandboxId: string): Promise<SuperserveSession>;
   update(sandboxId: string, patch: SuperserveUpdate): Promise<void>;
-  info(sandboxId: string, scopeMetadata?: Record<string, string>): Promise<SuperserveSandboxInfo>;
-  list(metadata: Record<string, string>): Promise<SuperserveSandboxSummary[]>;
+  list(metadata: Record<string, string>): Promise<SuperserveSandboxInfo[]>;
   kill(sandboxId: string): Promise<void>;
 }
 
 export interface SdkSuperserveClientOptions {
   apiKey: string;
   baseUrl?: string;
-  template?: string;
-  maxCommandMs?: number;
 }
 
-const DEFAULT_MAX_COMMAND_MS = 3600_000;
+const MAX_COMMAND_MS = 3600_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 export const clampUtf8 = (text: string, maxBytes: number): string => {
@@ -105,7 +94,6 @@ function isGoneError(err: unknown): boolean {
 }
 
 export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): SuperserveClient {
-  const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const connection = { apiKey: opts.apiKey, ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}) };
 
   type Sdk = typeof import("@superserve/sdk");
@@ -125,7 +113,7 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
   const wrap = (sbx: SdkSandbox): SuperserveSession => ({
     id: sbx.id,
     async run(command, runOpts): Promise<SuperserveCommandResult> {
-      const timeoutMs = runOpts?.timeoutMs ?? maxCommandMs;
+      const timeoutMs = runOpts?.timeoutMs ?? MAX_COMMAND_MS;
       const cap = runOpts?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       try {
         const r = await sbx.commands.run(command, {
@@ -172,14 +160,6 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
         throw err;
       }
     },
-    async update(patch): Promise<void> {
-      try {
-        await sbx.update(patch);
-      } catch (err) {
-        if (isGoneError(err)) gone(sbx.id, err);
-        throw err;
-      }
-    },
     async pause(): Promise<void> {
       try {
         await sbx.pause();
@@ -188,11 +168,6 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
         throw err;
       }
     },
-    async kill(): Promise<void> {
-      await sbx.kill().catch((err) => {
-        if (!isGoneError(err)) throw err;
-      });
-    },
   });
 
   const toInfo = (i: {
@@ -200,9 +175,6 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     name: string;
     status: SuperserveSandboxState;
     metadata: Record<string, string>;
-    vcpuCount?: number;
-    memoryMib?: number;
-    timeoutSeconds?: number;
     autoDeleteAt?: Date;
     network?: SuperserveNetwork;
   }): SuperserveSandboxInfo => ({
@@ -211,9 +183,6 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
     status: i.status,
     metadata: i.metadata ?? {},
     ...(i.network ? { network: i.network } : {}),
-    ...(i.vcpuCount !== undefined ? { vcpuCount: i.vcpuCount } : {}),
-    ...(i.memoryMib !== undefined ? { memoryMib: i.memoryMib } : {}),
-    ...(i.timeoutSeconds !== undefined ? { timeoutSeconds: i.timeoutSeconds } : {}),
     ...(i.autoDeleteAt ? { autoDeleteAtMs: i.autoDeleteAt.getTime() } : {}),
   });
 
@@ -224,9 +193,9 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
         ...connection,
         name: createOpts.name,
         metadata: createOpts.metadata,
-        ...((createOpts.template ?? opts.template) ? { fromTemplate: createOpts.template ?? opts.template } : {}),
-        ...(createOpts.timeoutSeconds !== undefined ? { timeoutSeconds: createOpts.timeoutSeconds } : {}),
-        ...(createOpts.autoDeleteSeconds !== undefined ? { autoDeleteSeconds: createOpts.autoDeleteSeconds } : {}),
+        fromTemplate: createOpts.template,
+        timeoutSeconds: createOpts.timeoutSeconds,
+        autoDeleteSeconds: createOpts.autoDeleteSeconds,
         ...(createOpts.network ? { network: createOpts.network } : {}),
         previewAccess: "private",
       });
@@ -250,25 +219,10 @@ export function createSdkSuperserveClient(opts: SdkSuperserveClientOptions): Sup
         throw err;
       }
     },
-    async info(sandboxId, scopeMetadata): Promise<SuperserveSandboxInfo> {
-      const { Sandbox } = await loadSdk();
-      const scoped = scopeMetadata && Object.keys(scopeMetadata).length ? scopeMetadata : undefined;
-      try {
-        const listed = await Sandbox.list({ ...connection, ...(scoped ? { metadata: scoped } : {}) });
-        const hit = listed.find((s) => s.id === sandboxId);
-        if (!hit || GONE_STATES.has(hit.status)) throw new SuperserveSandboxGoneError(sandboxId, "not listed");
-        return toInfo(hit);
-      } catch (err) {
-        if (isGoneError(err)) gone(sandboxId, err);
-        throw err;
-      }
-    },
-    async list(metadata): Promise<SuperserveSandboxSummary[]> {
+    async list(metadata): Promise<SuperserveSandboxInfo[]> {
       const { Sandbox } = await loadSdk();
       const listed = await Sandbox.list({ ...connection, ...(Object.keys(metadata).length ? { metadata } : {}) });
-      return listed
-        .filter((s) => !GONE_STATES.has(s.status))
-        .map((s) => ({ id: s.id, name: s.name, status: s.status, metadata: s.metadata ?? {} }));
+      return listed.filter((s) => !GONE_STATES.has(s.status)).map(toInfo);
     },
     async kill(sandboxId): Promise<void> {
       const { Sandbox } = await loadSdk();

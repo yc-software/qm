@@ -20,7 +20,7 @@ after(() => ff.cleanup());
 function spritesHandle(env?: Record<string, string>) {
   const dir = mkdtempSync(join(tmpdir(), "noninteractive-"));
   const sandbox = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    initializationStore: createMemoryMap(),
+    store: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

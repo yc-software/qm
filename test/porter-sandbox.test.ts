@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPorterSandbox, porterScopeSlug } from "../src/sandbox/porter-sandbox.ts";
-import { withPorterErrorDetails } from "../src/sandbox/porter-client.ts";
+import { createPorterSandbox, type StoredPorterSandbox } from "../src/sandbox/porter-sandbox.ts";
+import { porterSlug, withPorterErrorDetails, type PorterSandboxSpec } from "../src/sandbox/porter-client.ts";
 import { SandboxError } from "porter-sandbox";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
@@ -13,24 +13,29 @@ import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 
 let fake: FakePorter;
 let sandbox: Sandbox;
+let store: DurableMap<StoredPorterSandbox>;
 const scope = scopeId("personal", "tester");
 const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
-const slug = porterScopeSlug("qmt", scope);
+const slug = porterSlug("qmt", scope);
+const running = () => fake.bodies().filter((b) => b.phase === "running");
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createPorterSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "porter-ws-"))), {
     ...singleProcessDeps(),
     namePrefix: "qmt",
     client: fake.client,
+    store,
     ...extra,
   });
 }
 
 beforeEach(() => {
   fake = installFakePorter();
+  store = createMemoryMap<StoredPorterSandbox>();
   sandbox = make();
 });
 after(() => fake?.cleanup());
@@ -77,7 +82,7 @@ test("volume survives body replacement and coldStart stays false", async () => {
   const fresh = make();
   const h2 = await fresh.provision(layers);
   assert.equal(h2.coldStart, false);
-  assert.notEqual(h2.id, h1.id);
+  assert.equal(running().length, 1);
   assert.equal(await fresh.readFile(h2, "kept.txt"), "still here\n");
 });
 
@@ -98,13 +103,12 @@ test("egress proxy mode pins allowlist and injects proxy env; the pin is sticky"
 });
 
 test("a tokened turn on an open body rotates it into the proxy pin", async () => {
-  const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
-  const h = await proxied.provision(layers);
-  assert.equal(h.env, undefined);
+  await sandbox.provision(layers);
   const open = fake.bodies().filter((b) => b.phase === "running" && b.tags["qm-scope"] === slug);
   assert.equal(open[0]!.tags["qm-egress"], "open");
+  const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
   const h2 = await proxied.provision(layers, { egressToken: "tok-2" });
-  assert.notEqual(h2.id, h.id);
+  assert.equal(fake.bodies().find((b) => b.name === open[0]!.name)!.phase, "terminated");
   assert.match(h2.env?.HTTPS_PROXY ?? "", /x:tok-2@egress\.qm\.internal/);
   const pinned = fake.bodies().filter((b) => b.phase === "running" && b.tags["qm-scope"] === slug);
   assert.equal(pinned.length, 1);
@@ -130,8 +134,7 @@ test("scratch bodies are isolated, refcounted, and removed on release", async ()
   await sandbox.teardown(h1);
   assert.equal(await sandbox.readFile(h2, "s.txt"), "scratch\n");
   await sandbox.teardown(h2);
-  const remaining = fake.bodies().filter((b) => b.phase === "running");
-  assert.equal(remaining.length, 0);
+  assert.equal(running().length, 0);
 });
 
 test("abort signal kills an in-flight exec", async () => {
@@ -154,9 +157,16 @@ test("destroy terminates the body and deletes the volume", async () => {
 });
 
 test("computerStatus reports the live body and probes the guest", async () => {
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "no computer", guestResponsive: false });
+  assert.deepEqual(await sandbox.computerStatus!(scope), {
+    machine: "no machine provisioned yet",
+    provisioned: false,
+    guestResponsive: false,
+  });
   await sandbox.provision(layers);
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "running", guestResponsive: true });
+  const status = await sandbox.computerStatus!(scope);
+  assert.equal(status.lifecycleState, "running");
+  assert.equal(status.guestResponsive, true);
+  assert.match(status.machine ?? "", /^porter sandbox .* running$/);
 });
 
 test("restartComputer replaces the body but keeps the home volume", async () => {
@@ -172,7 +182,7 @@ test("restartComputer replaces the body but keeps the home volume", async () => 
   const h2 = await sandbox.provision(layers);
   assert.equal(h2.coldStart, false);
   assert.equal(await sandbox.readFile(h2, "keep.txt"), "survives restart");
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "running", guestResponsive: true });
+  assert.equal((await sandbox.computerStatus!(scope)).guestResponsive, true);
 });
 
 test("porter API errors surface the response body detail, not just the status", async () => {
@@ -213,9 +223,10 @@ test("restart and egress rotation drain the old body before mounting the volume 
   const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
   const h1 = await proxied.provision(layers);
   await proxied.writeFile(h1, "keep.txt", "kept");
+  const before = fake.bodies().find((b) => b.phase === "running")!.name;
   await proxied.restartComputer!(scope);
   const h2 = await proxied.provision(layers, { egressToken: "tok" });
-  assert.notEqual(h2.id, h1.id);
+  assert.notEqual(fake.bodies().find((b) => b.phase === "running")!.name, before);
   assert.equal(h2.coldStart, false);
   assert.equal(await proxied.readFile(h2, "keep.txt"), "kept");
   const running = fake.bodies().filter((b) => b.phase === "running");
@@ -223,37 +234,23 @@ test("restart and egress rotation drain the old body before mounting the volume 
   assert.equal(running[0]!.tags["qm-egress"], "proxy");
 });
 
-test("scratch bodies without an egress token stay open even when a proxy is configured", async () => {
-  const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
-  const h = await proxied.provision(layers, { scratch: { key: "k-open" } });
-  assert.equal(h.env, undefined);
-  const body = fake.bodies().find((b) => b.name === h.id)!;
-  assert.equal(body.tags["qm-egress"], "open");
-  assert.equal(body.egress, undefined);
-  await proxied.teardown(h);
-  const hp = await proxied.provision(layers, { scratch: { key: "k-proxy" }, egressToken: "tok" });
-  assert.match(hp.env?.HTTPS_PROXY ?? "", /tok@/);
-  assert.deepEqual(fake.bodies().find((b) => b.name === hp.id)!.egress, ["egress.qm.internal"]);
-});
-
 test("a running body past the first list page is still found", async () => {
   fake = installFakePorter({ pageSize: 1 });
   sandbox = make();
-  const h1 = await sandbox.provision(layers);
+  await sandbox.provision(layers);
   await sandbox.restartComputer!(scope);
   await sandbox.restartComputer!(scope);
   assert.equal(fake.bodies().length, 3);
   const fresh = make();
-  const h2 = await fresh.provision(layers);
-  assert.notEqual(h2.id, h1.id);
-  assert.equal(fake.bodies().filter((b) => b.phase === "running").length, 1);
-  assert.deepEqual(await fresh.computerStatus!(scope), { machine: "running", guestResponsive: true });
+  await fresh.provision(layers);
+  assert.equal(running().length, 1);
+  assert.equal((await fresh.computerStatus!(scope)).guestResponsive, true);
 });
 
 test("computerStatus reports no computer once every body is retired", async () => {
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h, { destroy: true });
-  assert.deepEqual(await sandbox.computerStatus!(scope), { machine: "no computer", guestResponsive: false });
+  assert.equal((await sandbox.computerStatus!(scope)).provisioned, false);
 });
 
 test("coldStart tracks whether the home volume was just created", async () => {
@@ -262,13 +259,20 @@ test("coldStart tracks whether the home volume was just created", async () => {
   assert.equal(h.coldStart, false);
 });
 
-test("scratch bodies never share across egress modes", async () => {
+test("every body is pinned to the egress proxy when one is configured, scratch included", async () => {
   const proxied = make({ egressProxyUrl: "https://egress.qm.internal:48080" });
-  const open = await proxied.provision(layers, { scratch: { key: "shared" } });
-  const locked = await proxied.provision(layers, { scratch: { key: "shared" }, egressToken: "tok" });
-  assert.notEqual(open.id, locked.id);
-  assert.deepEqual(fake.bodies().find((b) => b.name === locked.id)!.egress, ["egress.qm.internal"]);
-  await proxied.teardown(open);
-  await proxied.teardown(locked);
-  assert.equal(fake.bodies().filter((b) => b.phase === "running").length, 0);
+  const h = await proxied.provision(layers, { scratch: { key: "k-proxy" }, egressToken: "tok" });
+  assert.match(h.env?.HTTPS_PROXY ?? "", /tok@/);
+  const body = running().find((b) => b.tags["qm-kind"] === "scratch")!;
+  assert.deepEqual(body.egress, ["egress.qm.internal"]);
+  assert.equal(body.tags["qm-egress"], "proxy");
+});
+
+test("maxLifetimeSec becomes the body ttl and bodies boot the published sandbox image", async () => {
+  const specs: PorterSandboxSpec[] = [];
+  const create = fake.client.sandboxes.create.bind(fake.client.sandboxes);
+  fake.client.sandboxes.create = (spec) => (specs.push(spec), create(spec));
+  await make({ maxLifetimeSec: 3600 }).provision(layers);
+  assert.equal(specs[0]!.ttl_seconds, 3600);
+  assert.equal(specs[0]!.image, "ghcr.io/porter-dev/qm-sandbox:latest");
 });

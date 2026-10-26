@@ -210,10 +210,10 @@ import {
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
 import { createAwsSandbox, type StoredMicrovm } from "./sandbox/aws-sandbox.ts";
-import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
-import { createSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
+import { createLocalSandbox, type StoredLocalSandbox } from "./sandbox/local-sandbox.ts";
+import { createSpritesSandbox, type StoredSpritesSandbox } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, type StoredSmolmachinesSandbox } from "./sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
+import { createAgent37Sandbox, type StoredAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
 import {
   createConfigEpochResolver,
   createSuperserveSandbox,
@@ -229,10 +229,9 @@ import {
   type StoredManagedAgentsSandbox,
 } from "./sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "./sandbox/managed-agents-client.ts";
-import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
+import { createPorterSandbox, type StoredPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import {
   upgradeLegacySandboxes,
@@ -834,129 +833,77 @@ export function buildApp(
       },
       error,
     );
-  const buildLocal = (): Sandbox =>
-    createLocalSandbox(workspace, {
-      ...config.localSandbox,
-      onError: sandboxOnError,
-    });
-  const buildSprites = (): Sandbox => {
-    const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
-    return createSpritesSandbox(workspace, {
-      ...sprites,
-      initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
-      advisoryLock,
-      ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "sprites-home" }) }
-        : {}),
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
-  };
-  const smolmachinesBodies = artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies");
-  const buildSmolmachines = (): Sandbox => {
-    const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
-    return createSmolmachinesSandbox(workspace, {
-      ...smol,
-      ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: smolmachinesBodies,
-      advisoryLock,
-      ...(snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: snapshotS3Bucket, prefix: "smolmachines-home" }) }
-        : {}),
-      onError: sandboxOnError,
-    });
+  const sandboxShared = {
+    ...config.sandbox,
+    keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
+    advisoryLock,
+    blobTransfer,
+    extraTools: deploymentLayer.advertisedTools,
+    credentialPaths: deploymentLayer.credentialPaths,
+    layerToolFiles: () => deploymentLayer.installFiles,
+    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
+    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
+    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    onError: sandboxOnError,
   };
   const e2bBodies = artifactMap<StoredE2bSandbox>("e2b_sandbox_bodies");
   const modalBodies = artifactMap<StoredModalSandbox>("modal_sandbox_bodies");
   const awsBodies = artifactMap<StoredMicrovm>("aws_sandbox_bodies");
+  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
+  const buildLocal = (): Sandbox =>
+    createLocalSandbox(workspace, {
+      ...sandboxShared,
+      ...config.localSandbox,
+      store: artifactMap<StoredLocalSandbox>("local_sandbox_bodies"),
+    });
+  const buildSprites = (): Sandbox =>
+    createSpritesSandbox(workspace, {
+      ...sandboxShared,
+      ...config.spritesSandbox,
+      store: artifactMap<StoredSpritesSandbox>("sprites_initialization"),
+      connectorSdk: loadConnectorSdk,
+    });
+  const buildSmolmachines = (): Sandbox =>
+    createSmolmachinesSandbox(workspace, {
+      ...sandboxShared,
+      ...config.smolmachinesSandbox,
+      store: artifactMap<StoredSmolmachinesSandbox>("smolmachines_sandbox_bodies"),
+    });
   const e2bClient = (use: "computers" | "apps"): E2bClient => {
     const e2b = config.e2bSandbox;
     if (!e2b.apiKey)
       throw new Error(`${use === "apps" ? "DEPLOY_PROVIDER" : "SANDBOX_BACKEND"}=e2b requires E2B_API_KEY`);
-    const ttlSec = use === "apps" ? E2B_DEPLOY_IDLE_TIMEOUT_SEC : e2b.sandboxTtlSec;
     return createSdkE2bClient({
       apiKey: e2b.apiKey,
       ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
-      ...(ttlSec ? { sandboxTtlMs: ttlSec * 1000 } : {}),
-      ...(e2b.maxLifetimeSec ? { maxLifetimeMs: e2b.maxLifetimeSec * 1000 } : {}),
-      ...(e2b.proxy ? { proxy: e2b.proxy } : {}),
-      ...(use === "computers" && e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
+      ...(use === "apps" ? { sandboxTtlMs: E2B_DEPLOY_IDLE_TIMEOUT_SEC * 1000 } : {}),
+      ...(use === "computers" && config.sandbox.idleParkSec ? { sandboxTtlMs: config.sandbox.idleParkSec * 1000 } : {}),
+      ...(config.sandbox.maxLifetimeSec ? { maxLifetimeMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
+      ...(use === "computers" && config.sandbox.egressProxyUrl
+        ? { egressProxyUrl: config.sandbox.egressProxyUrl }
+        : {}),
     });
   };
-  const buildE2b = (): Sandbox => {
-    const e2b = config.e2bSandbox;
-    return createE2bSandbox(workspace, {
-      advisoryLock,
+  const buildE2b = (): Sandbox =>
+    createE2bSandbox(workspace, {
+      ...sandboxShared,
       client: e2bClient("computers"),
-      ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
-      ...(e2b.defaultTimeoutSec ? { defaultTimeoutSec: e2b.defaultTimeoutSec } : {}),
-      keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
-      ...(e2b.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: e2b.snapshotIntervalSec * 1000 } : {}),
-      ...(e2b.nativeSnapshotIntervalSec !== undefined
-        ? { nativeSnapshotIntervalMs: e2b.nativeSnapshotIntervalSec * 1000 }
-        : {}),
-      ...(e2b.egressProxyUrl ? { egressProxyUrl: e2b.egressProxyUrl } : {}),
-      extraTools: [...(e2b.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+      extraTools: [...(config.e2bSandbox.templateId ? E2B_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
       store: e2bBodies,
-      ...(e2b.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: e2b.snapshotS3Bucket, prefix: "e2b-home" }) }
-        : {}),
-      onError: sandboxOnError,
     });
-  };
-  const managedAgentsBodies = artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies");
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
     if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox(workspace, {
+      ...sandboxShared,
       client: createSdkManagedAgentsClient({
         apiToken: managedAgents.apiToken,
-        ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
         ...(managedAgents.template ? { template: managedAgents.template } : {}),
-        ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
-        ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
-        ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
+        ...(config.sandbox.idleParkSec ? { idleTimeoutSec: config.sandbox.idleParkSec } : {}),
+        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
-      ...(managedAgents.namePrefix ? { namePrefix: managedAgents.namePrefix } : {}),
-      ...(managedAgents.defaultTimeoutSec ? { defaultTimeoutSec: managedAgents.defaultTimeoutSec } : {}),
-      ...(managedAgents.snapshotIntervalSec !== undefined
-        ? { snapshotIntervalMs: managedAgents.snapshotIntervalSec * 1000 }
-        : {}),
-      ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
       extraTools: [...(managedAgents.template ? QM_TEMPLATE_TOOLS : []), ...deploymentLayer.advertisedTools],
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: managedAgentsBodies,
-      ...(managedAgents.snapshotS3Bucket
-        ? {
-            snapshots: createS3SnapshotStore({ bucket: managedAgents.snapshotS3Bucket, prefix: "managed-agents-home" }),
-          }
-        : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies"),
     });
   };
   const buildModal = (): Sandbox => {
@@ -964,135 +911,64 @@ export function buildApp(
     if (!modal.tokenId || !modal.tokenSecret)
       throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
-      advisoryLock,
+      ...sandboxShared,
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
         appName: modal.appName ?? "qm",
         ...(modal.image ? { image: modal.image } : {}),
         ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
-        ...(modal.regions?.length ? { regions: modal.regions } : {}),
-        ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
-        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
-        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
-        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
+        ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
+        ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),
+        ...(config.sandbox.maxLifetimeSec ? { sandboxTimeoutMs: config.sandbox.maxLifetimeSec * 1000 } : {}),
+        ...(config.sandbox.idleParkSec ? { idleTimeoutMs: 2 * config.sandbox.idleParkSec * 1000 } : {}),
+        ...(config.sandbox.egressProxyUrl ? { egressProxyUrl: config.sandbox.egressProxyUrl } : {}),
       }),
-      ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
-      ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
-      ...(modal.nativeSnapshotIntervalSec !== undefined
-        ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
-        : {}),
-      ...(modal.rotateAfterSec ? { rotateAfterMs: modal.rotateAfterSec * 1000 } : {}),
-      ...(modal.reapIdleSec ? { reapIdleMs: modal.reapIdleSec * 1000 } : {}),
-      ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
       connectorSdk: loadConnectorSdk,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: modalBodies,
-      ...(modal.snapshotS3Bucket
-        ? { snapshots: createS3SnapshotStore({ bucket: modal.snapshotS3Bucket, prefix: "modal-home" }) }
-        : {}),
-      onError: sandboxOnError,
     });
   };
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
+      ...sandboxShared,
       ...config.agent37Sandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredAgent37Sandbox>("agent37_sandbox_bodies"),
     });
-  const superserveBodies = artifactMap<StoredSuperserveSandbox>("superserve_sandbox_bodies");
   const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
     if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
-    const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
     const generationKey = createHash("sha256")
       .update(
         JSON.stringify([
           config.buildSha ?? "",
           ss.template,
-          ss.namePrefix ?? "",
-          ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
-          ss.retentionSec ?? null,
-          keepWarmSec,
-          [...(ss.egressAllow ?? [])].sort(),
-          [...(ss.egressDeny ?? [])].sort(),
+          sandboxShared.namePrefix ?? "",
+          sandboxShared.idleParkSec ?? null,
+          sandboxShared.maxLifetimeSec ?? null,
+          sandboxShared.keepWarmSec,
+          sandboxShared.egressProxyUrl ?? "",
         ]),
       )
       .digest("hex")
       .slice(0, 32);
     return createSuperserveSandbox(workspace, {
-      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
-      ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
+      ...sandboxShared,
+      configEpoch: createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
+      client: createSdkSuperserveClient({ apiKey: ss.apiKey }),
       template: ss.template,
-      ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
-      ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
-      ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
-      ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
-      ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
       store: superserveBodies,
-      onError: sandboxOnError,
     });
   };
-  const buildAws = (): Sandbox => {
-    if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
-      ...config.awsSandbox,
-      s3Bucket: config.awsSandbox.s3Bucket,
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: awsBodies,
-      onError: sandboxOnError,
-    });
-  };
+  const buildAws = (): Sandbox =>
+    createAwsSandbox(workspace, { ...sandboxShared, ...config.awsSandbox, store: awsBodies });
   const buildPorter = (): Sandbox =>
     createPorterSandbox(workspace, {
+      ...sandboxShared,
       ...config.porterSandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
+      store: artifactMap<StoredPorterSandbox>("porter_sandbox_bodies"),
     });
   const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
     local: buildLocal,
@@ -1142,8 +1018,12 @@ export function buildApp(
           ]);
           return [
             ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
+            ...modal.flatMap(([scopeId, body]) =>
+              body.sandboxId ? [{ scopeId, backend: "modal" as const, machineId: body.sandboxId }] : [],
+            ),
+            ...aws.flatMap(([scopeId, body]) =>
+              body.microvmId ? [{ scopeId, backend: "aws" as const, machineId: body.microvmId }] : [],
+            ),
             ...superserve.map(([scopeId, body]) => ({
               scopeId,
               backend: "superserve" as const,
@@ -1691,7 +1571,6 @@ export function buildApp(
   const buildAwsDeploy = (): DeployProvider =>
     createAwsDeployProvider({
       ...config.awsDeploy,
-      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
       store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
       onError: sandboxOnError,
@@ -1726,16 +1605,14 @@ export function buildApp(
         store: artifactMap<StoredPorterDeployBody>("porter_deploy_bodies"),
         onError: sandboxOnError,
       }),
-    e2b: () => {
-      const e2b = config.e2bSandbox;
-      return createE2bDeployProvider({
+    e2b: () =>
+      createE2bDeployProvider({
         client: e2bClient("apps"),
-        ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
+        ...(config.sandbox.namePrefix ? { namePrefix: config.sandbox.namePrefix } : {}),
         advisoryLock,
         store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
         onError: sandboxOnError,
-      });
-    },
+      }),
   };
   if (
     config.deployProvider === "fly" &&
@@ -1745,9 +1622,9 @@ export function buildApp(
     throw new Error("Fly durable application storage requires DATABASE_URL for persistent rollback configuration");
   }
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
-  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
+  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket) {
     console.warn(
-      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
+      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
     );
   }
   const adminGrantPersist = config.databaseUrl

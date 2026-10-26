@@ -16,7 +16,6 @@ DEPLOY_PROVIDER=porter
 PORTER_DEPLOY_API_TOKEN=<ADMIN-role api token from Settings -> API tokens>
 PORTER_DEPLOY_PROJECT_ID=<project id>
 PORTER_DEPLOY_CLUSTER_ID=<cluster id>
-PORTER_SANDBOX_IMAGE=ghcr.io/porter-dev/qm-sandbox:latest
 PORTER_DEPLOY_RUNNER_IMAGE=ghcr.io/porter-dev/qm-app-runner:latest
 # PORTER_DEPLOY_URL=            # only when the API host is not https://dashboard.porter.run
 # PORTER_DEPLOY_APPS_DOMAIN=    # optional; puts apps on sandbox ingress (see below)
@@ -350,8 +349,8 @@ domain like `onporter.run`).
 
 ## Forcing sandbox egress through the proxy
 
-`PORTER_SANDBOX_EGRESS_PROXY_URL` makes core pass `egress.allowed_destinations: [<proxy
-host>]` when it creates a sandbox, and inject `HTTPS_PROXY`/`HTTP_PROXY` pointing at the
+`SANDBOX_EGRESS_PROXY_URL` makes core pass `egress.allowed_destinations: [<proxy
+host>]` when it creates any sandbox, and inject `HTTPS_PROXY`/`HTTP_PROXY` pointing at the
 proxy with a capability token as the password. Two cluster-side facts decide whether that
 works at all, and both fail in ways that do not name the real cause:
 
@@ -377,7 +376,7 @@ available on this cluster` — so the agent ends up with no computer rather than
   range, which is where both the pod and service CIDRs live. A sandbox therefore cannot
   reach an in-cluster Service, so a `*.svc.cluster.local` proxy URL times out with no
   error worth reading. Give the proxy an internet-reachable address (a `LoadBalancer`
-  Service in front of it is enough) and point `PORTER_SANDBOX_EGRESS_PROXY_URL` there.
+  Service in front of it is enough) and point `SANDBOX_EGRESS_PROXY_URL` there.
   This is also why `deploy/helm/`'s `egress-proxy` service cannot serve Porter sandboxes
   as-is: it is a ClusterIP worker.
 
@@ -388,15 +387,17 @@ grep for that line rather than assuming the container's own metadata block is in
 
 ## Other knobs
 
-| Variable                                           | Meaning                                                                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `PORTER_DEPLOY_URL`                                | Porter API host, when it isn't `https://dashboard.porter.run`                                                  |
-| `PORTER_SANDBOX_IMAGE`                             | Image agent computers boot from                                                                                |
-| `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                 |
-| `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
-| `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
-| `PORTER_DEPLOY_VISIBILITY`                         | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
-| `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |
+| Variable                     | Meaning                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `PORTER_DEPLOY_URL`          | Porter API host, when it isn't `https://dashboard.porter.run`                                     |
+| `PORTER_DEPLOY_RUNNER_IMAGE` | Image published apps boot from (defaults to `ghcr.io/porter-dev/qm-app-runner:latest`)            |
+| `PORTER_DEPLOY_VISIBILITY`   | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress  |
+| `PORTER_DEPLOY_TTL_SEC`      | Reap app bodies after this long                                                                   |
+| `SANDBOX_EGRESS_PROXY_URL`   | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see above)    |
+| `SANDBOX_NAME_PREFIX`        | Prefix for sandbox and app names on the cluster                                                   |
+| `SANDBOX_MAX_LIFETIME_SEC`   | Porter retires an agent computer's body after this long (default 8h); `$HOME` stays on its volume |
+
+Agent computers boot `ghcr.io/porter-dev/qm-sandbox:latest`, built from `porter/`.
 
 To QA a branch against a real Porter cluster before deploying it, the dev instance takes
 the same backend:

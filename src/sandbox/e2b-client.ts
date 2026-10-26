@@ -29,7 +29,7 @@ export interface E2bSession {
   readFileBytes(absPath: string): Promise<Uint8Array | null>;
   writeFileBytes(absPath: string, data: Uint8Array): Promise<void>;
   keepAlive(ms: number): Promise<void>;
-  pause(): Promise<void>;
+  pause(opts?: { keepMemory?: boolean }): Promise<void>;
   createSnapshot(): Promise<{ snapshotId: string }>;
   metrics(): Promise<E2bMetrics | null>;
   kill(): Promise<void>;
@@ -41,10 +41,9 @@ interface E2bSandboxSummary {
   metadata?: Record<string, string>;
 }
 
-export interface E2bSandboxInfo {
+interface E2bSandboxInfo {
   state: string;
   expiresAtMs: number;
-  onTimeout?: string;
   cpuCount?: number;
   memoryMb?: number;
 }
@@ -74,7 +73,6 @@ interface E2bCreateOpts {
 }
 
 export interface E2bClient {
-  readonly nativePause?: boolean;
   info?(sandboxId: string): Promise<E2bSandboxInfo>;
 
   create(opts: E2bCreateOpts): Promise<E2bSession>;
@@ -91,15 +89,8 @@ export interface E2bClient {
 export interface SdkE2bClientOptions {
   apiKey: string;
   templateId?: string;
-
   sandboxTtlMs?: number;
-
   maxLifetimeMs?: number;
-
-  proxy?: string;
-
-  maxCommandMs?: number;
-
   egressProxyUrl?: string;
 }
 
@@ -142,7 +133,7 @@ export function e2bEgressNetwork(egressProxyUrl: string): E2bEgressNetwork {
   return { allowOut: [host], denyOut: [ALL_TRAFFIC] };
 }
 
-function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs" | "maxCommandMs">): {
+function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLifetimeMs">): {
   sandboxTtlMs: number;
   maxLifetimeMs: number;
   maxCommandMs: number;
@@ -150,7 +141,7 @@ function e2bSandboxTtlMs(opts: Pick<SdkE2bClientOptions, "sandboxTtlMs" | "maxLi
   const maxLifetimeMs = opts.maxLifetimeMs ?? E2B_PRO_MAX_LIFETIME_MS;
   if (!Number.isFinite(maxLifetimeMs) || maxLifetimeMs <= E2B_EXEC_MARGIN_MS)
     throw new Error(`e2b maxLifetimeMs must be a finite number of milliseconds above ${E2B_EXEC_MARGIN_MS}`);
-  const maxCommandMs = Math.min(opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS, maxLifetimeMs - E2B_EXEC_MARGIN_MS);
+  const maxCommandMs = Math.min(DEFAULT_MAX_COMMAND_MS, maxLifetimeMs - E2B_EXEC_MARGIN_MS);
   const requested = opts.sandboxTtlMs ?? Math.max(DEFAULT_TTL_MS, maxCommandMs + E2B_EXEC_MARGIN_MS);
   return { sandboxTtlMs: Math.min(maxLifetimeMs, requested), maxLifetimeMs, maxCommandMs };
 }
@@ -177,10 +168,7 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   const templateId = opts.templateId ?? DEFAULT_TEMPLATE;
   const { sandboxTtlMs, maxLifetimeMs, maxCommandMs } = e2bSandboxTtlMs(opts);
   const network = opts.egressProxyUrl ? e2bEgressNetwork(opts.egressProxyUrl) : undefined;
-  const common = {
-    apiKey: opts.apiKey,
-    ...(opts.proxy ? { proxy: opts.proxy } : {}),
-  };
+  const common = { apiKey: opts.apiKey };
 
   let sdk: Promise<E2bSdk> | null = null;
   const loadSdk = (): Promise<E2bSdk> => {
@@ -257,9 +245,9 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         }
       },
       keepAlive: (ms) => extend(ms),
-      async pause(): Promise<void> {
+      async pause(pauseOpts): Promise<void> {
         try {
-          await sbx.pause({ keepMemory: true });
+          await sbx.pause({ keepMemory: pauseOpts?.keepMemory ?? true });
         } catch (err) {
           throw gone(err);
         }
@@ -294,7 +282,6 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
   };
 
   return {
-    nativePause: true,
     async info(sandboxId) {
       const lib = await loadSdk();
       try {
@@ -302,7 +289,6 @@ export function createSdkE2bClient(opts: SdkE2bClientOptions): E2bClient {
         return {
           state: info.state,
           expiresAtMs: info.endAt.getTime(),
-          onTimeout: info.lifecycle?.onTimeout,
           cpuCount: info.cpuCount,
           memoryMb: info.memoryMB,
         };

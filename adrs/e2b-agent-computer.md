@@ -22,6 +22,6 @@ Live use of E2B as the only cloud showed gaps the CLI change alone leaves. Each 
 - Making an app public is refused (409) unless an apps domain and gate secret are set, on both the share route and the agent's apps tool. Before, it reported "anyone with the link" while signed-out visitors still got 401. `e2b.app` joins the shared domains refused as an apps domain.
 - The E2B profile lists gh, aws and x-api as installed only when `E2B_TEMPLATE_ID` is set, since E2B's stock image has none of them. The template now copies in `x-api`.
 
-One thing operators hit: core asks E2B for a 61 minute timeout, so plans capped at one hour reject every create. `E2B_MAX_LIFETIME_SEC=3600` fixes it, and the docs say so.
+One thing operators hit: core asks E2B for a 61 minute timeout, so plans capped at one hour reject every create. `SANDBOX_MAX_LIFETIME_SEC=3600` fixes it, and the docs say so.
 
 If you would rather take only this file and do the code yourselves, say so and I will trim the PR.

@@ -52,7 +52,8 @@ export interface ExecSandboxBaseDeps {
   egressProxyUrl?: string;
   deleteFailureCode: string;
   onError?(e: { category: string; code: string; message: string; scopeLabel?: string }): void;
-  exec(name: string, script: string, timeoutSec: number): Promise<ExecResult>;
+  exec(name: string, script: string, timeoutSec: number, env?: Record<string, string>): Promise<ExecResult>;
+  envViaExec?: boolean;
   writeAbsBytes(name: string, absPath: string, data: Uint8Array): Promise<void>;
   readAbsBytes(name: string, absPath: string): Promise<Uint8Array | null>;
   ensureResident(name: string, onStatus?: (text: string) => void): Promise<{ coldStart: boolean }>;
@@ -225,12 +226,13 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
 
   async function run(handle: SandboxHandle, command: string, execOpts?: ExecOptions): Promise<ExecResult> {
     const timeoutSec = execOpts?.timeoutMs ? Math.ceil(execOpts.timeoutMs / 1000) : defaultTimeoutSec;
-    const exports = Object.entries(handle.env ?? {})
+    const env = deps.envViaExec && handle.env ? handle.env : undefined;
+    const exports = Object.entries(env ? {} : (handle.env ?? {}))
       .map(([k, v]) => `export ${k}=${shq(v)}`)
       .join("; ");
     const script = `${nonInteractiveShellPrefix()}${exports ? exports + "; " : ""}cd ${handle.rootDir} 2>/dev/null; ${command}`;
     const signal = execOpts?.signal;
-    if (!signal) return deps.exec(handle.id, script, timeoutSec);
+    if (!signal) return deps.exec(handle.id, script, timeoutSec, env);
     const killUid = randomUUID();
     const fireKill = () => {
       deps
@@ -241,7 +243,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     const onAbort = () => fireKill();
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec);
+      return await deps.exec(handle.id, killableScript(script, killUid), timeoutSec, env);
     } finally {
       signal.removeEventListener("abort", onAbort);
     }

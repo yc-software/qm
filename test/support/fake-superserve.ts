@@ -11,7 +11,6 @@ import {
   type SuperserveSandboxInfo,
   type SuperserveSandboxState,
   type SuperserveSession,
-  type SuperserveUpdate,
 } from "../../src/sandbox/superserve-client.ts";
 
 interface FakeRecord {
@@ -23,7 +22,7 @@ interface FakeRecord {
   network?: SuperserveNetwork;
   timeoutSeconds?: number;
   autoDeleteSeconds?: number;
-  template?: string;
+  template: string;
   home: string;
   createdAt: number;
   resumes: number;
@@ -43,7 +42,6 @@ export interface FakeSuperserve {
   acceptNetworkUpdateWhilePaused(): void;
   ignoreNetworkUpdateWhilePaused(): void;
   beforeNextRun(hook: () => Promise<void>): void;
-  beforeNextInfo(hook: () => Promise<void>): void;
   cleanup(): void;
 }
 
@@ -56,7 +54,6 @@ export function installFakeSuperserve(): FakeSuperserve {
   let clock = 0;
   let listFailure: Error | null = null;
   let runHook: (() => Promise<void>) | null = null;
-  let infoHook: (() => Promise<void>) | null = null;
   let killFailure: Error | null = null;
   let pausedNetworkUpdates = false;
   let silentlyIgnorePausedNetwork = false;
@@ -123,32 +120,10 @@ export function installFakeSuperserve(): FakeSuperserve {
       mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, Buffer.from(data));
     },
-    async update(patch: SuperserveUpdate): Promise<void> {
-      if (r.expired) gone(r);
-      calls.push(`update:${r.id}`);
-      const dropNetwork = patch.network !== undefined && r.status !== "active" && silentlyIgnorePausedNetwork;
-      if (patch.network !== undefined && r.status !== "active" && !pausedNetworkUpdates && !dropNetwork)
-        throw Object.assign(new Error("Sandbox must be active to update network config"), { statusCode: 409 });
-      if (patch.network !== undefined && !dropNetwork) r.network = patch.network;
-      if (patch.metadata !== undefined) r.metadata = { ...patch.metadata };
-      if (patch.timeoutSeconds !== undefined) r.timeoutSeconds = patch.timeoutSeconds ?? undefined;
-      if (patch.autoDeleteSeconds !== undefined) r.autoDeleteSeconds = patch.autoDeleteSeconds ?? undefined;
-    },
     async pause(): Promise<void> {
       if (r.expired) gone(r);
       calls.push(`pause:${r.id}`);
       r.status = "paused";
-    },
-    async kill(): Promise<void> {
-      if (killFailure) {
-        const failure = killFailure;
-        killFailure = null;
-        throw failure;
-      }
-      calls.push(`kill:${r.id}`);
-      r.expired = true;
-      r.status = "deleted";
-      rmSync(r.home, { recursive: true, force: true });
     },
   });
 
@@ -158,9 +133,9 @@ export function installFakeSuperserve(): FakeSuperserve {
     status: r.status,
     metadata: r.metadata,
     ...(r.network ? { network: r.network } : {}),
-    vcpuCount: 2,
-    memoryMib: 2048,
-    ...(r.timeoutSeconds !== undefined ? { timeoutSeconds: r.timeoutSeconds } : {}),
+    ...(r.status === "paused" && r.autoDeleteSeconds !== undefined
+      ? { autoDeleteAtMs: Date.now() + r.autoDeleteSeconds * 1000 }
+      : {}),
   });
 
   const client: SuperserveClient = {
@@ -174,9 +149,9 @@ export function installFakeSuperserve(): FakeSuperserve {
         expired: false,
         metadata: { ...opts.metadata },
         ...(opts.network ? { network: opts.network } : {}),
-        ...(opts.timeoutSeconds !== undefined ? { timeoutSeconds: opts.timeoutSeconds } : {}),
-        ...(opts.autoDeleteSeconds !== undefined ? { autoDeleteSeconds: opts.autoDeleteSeconds } : {}),
-        ...(opts.template ? { template: opts.template } : {}),
+        timeoutSeconds: opts.timeoutSeconds,
+        autoDeleteSeconds: opts.autoDeleteSeconds,
+        template: opts.template,
         home: join(root, id),
         createdAt: ++clock,
         resumes: 0,
@@ -188,7 +163,14 @@ export function installFakeSuperserve(): FakeSuperserve {
     async update(sandboxId, patch): Promise<void> {
       const r = records.get(sandboxId);
       if (!r || r.expired) throw new SuperserveSandboxGoneError(sandboxId, "sandbox was not found");
-      await session(r).update(patch);
+      calls.push(`update:${r.id}`);
+      const dropNetwork = patch.network !== undefined && r.status !== "active" && silentlyIgnorePausedNetwork;
+      if (patch.network !== undefined && r.status !== "active" && !pausedNetworkUpdates && !dropNetwork)
+        throw Object.assign(new Error("Sandbox must be active to update network config"), { statusCode: 409 });
+      if (patch.network !== undefined && !dropNetwork) r.network = patch.network;
+      if (patch.metadata !== undefined) r.metadata = { ...patch.metadata };
+      if (patch.timeoutSeconds !== undefined) r.timeoutSeconds = patch.timeoutSeconds;
+      if (patch.autoDeleteSeconds !== undefined) r.autoDeleteSeconds = patch.autoDeleteSeconds;
     },
     async connect(sandboxId): Promise<SuperserveSession> {
       calls.push(`connect:${sandboxId}`);
@@ -196,15 +178,6 @@ export function installFakeSuperserve(): FakeSuperserve {
       if (!r || r.expired) throw new SuperserveSandboxGoneError(sandboxId, "sandbox was not found");
       alive(r);
       return session(r);
-    },
-    async info(sandboxId, scopeMetadata): Promise<SuperserveSandboxInfo> {
-      const hook = infoHook;
-      infoHook = null;
-      if (hook) await hook();
-      const r = records.get(sandboxId);
-      const matches = Object.entries(scopeMetadata ?? {}).every(([k, v]) => r?.metadata[k] === v);
-      if (!r || r.expired || !matches) throw new SuperserveSandboxGoneError(sandboxId, "sandbox was not found");
-      return info(r);
     },
     async list(metadata): Promise<SuperserveSandboxInfo[]> {
       if (listFailure) {
@@ -217,6 +190,11 @@ export function installFakeSuperserve(): FakeSuperserve {
         .map(info);
     },
     async kill(sandboxId): Promise<void> {
+      if (killFailure) {
+        const failure = killFailure;
+        killFailure = null;
+        throw failure;
+      }
       calls.push(`kill:${sandboxId}`);
       const r = records.get(sandboxId);
       if (!r) return;
@@ -257,9 +235,6 @@ export function installFakeSuperserve(): FakeSuperserve {
     },
     beforeNextRun: (hook) => {
       runHook = hook;
-    },
-    beforeNextInfo: (hook) => {
-      infoHook = hook;
     },
     failNextKill: (error) => {
       killFailure = error;

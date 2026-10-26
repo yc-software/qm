@@ -123,20 +123,22 @@ export function installFakeMicrovm(): FakeMicrovm {
       body.fs.set(truncated[1]!, new Uint8Array(0));
       return ok;
     }
-    if (cmd.includes("-cf '/tmp/agent-home.tar'")) {
+    const archived = cmd.match(/-cf '([^']+home\.tar)'/);
+    if (archived) {
       const dump: Record<string, string> = {};
       for (const [p, v] of body.fs)
-        if (p.startsWith("/root") && p !== "/tmp/agent-home.tar") dump[p] = Buffer.from(v).toString("base64");
-      body.fs.set("/tmp/agent-home.tar", enc(JSON.stringify(dump)));
+        if (p.startsWith("/root") && !p.startsWith(archived[1]!)) dump[p] = Buffer.from(v).toString("base64");
+      body.fs.set(archived[1]!, enc(JSON.stringify(dump)));
       return ok;
     }
-    if (cmd.includes("tar -xf '/tmp/agent-home.tar'")) {
-      const blob = body.fs.get("/tmp/agent-home.tar");
+    const extracted = cmd.match(/tar -xf '([^']+home\.tar)'/);
+    if (extracted) {
+      const blob = body.fs.get(extracted[1]!);
       if (blob) {
         const dump = JSON.parse(Buffer.from(blob).toString("utf8")) as Record<string, string>;
         for (const [p, b64] of Object.entries(dump)) body.fs.set(p, Buffer.from(b64, "base64"));
       }
-      body.fs.delete("/tmp/agent-home.tar");
+      body.fs.delete(extracted[1]!);
       return ok;
     }
     if (cmd.includes("tar -xf '.ro-layers.tar'")) return ok;

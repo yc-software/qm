@@ -11,6 +11,7 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./support/fake-agent37.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -26,6 +27,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     ...singleProcessDeps(),
     apiKey: FAKE_AGENT37_API_KEY,
     namePrefix: "qmt",
+    store: createMemoryMap(),
     fetchImpl: fake.fetchImpl,
     ...extra,
   });
@@ -253,9 +255,8 @@ test("create requests the template, the default shape and auto sleep", async () 
 });
 
 test("configured resources are requested at create and advertised in the profile", async () => {
-  const s = make({ template: "my-computer", cpus: 4, memoryGb: 8, diskGb: 20 });
+  const s = make({ cpus: 4, memoryMb: 7680, diskGb: 20 });
   const h = await s.provision(layers);
-  assert.equal(fake.instance(h.id)?.template, "my-computer");
   assert.deepEqual(fake.instance(h.id)?.resources, { cpu: 4, memory: 8, disk: 20 });
   assert.equal(s.profile.spec?.cpus, 4);
   assert.equal(s.profile.spec?.memoryMb, 8192);

@@ -206,7 +206,6 @@ export function installFakeManagedAgents(): FakeManagedAgents {
   });
 
   const client: ManagedAgentsClient = {
-    nativePause: true,
     async info(sessionId): Promise<ManagedAgentsSessionInfo> {
       const r = records.get(sessionId);
       if (!r || gone(r.state)) throw new ManagedAgentsSandboxGoneError(sessionId, "session was not found");

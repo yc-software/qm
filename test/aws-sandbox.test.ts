@@ -3,37 +3,38 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
+import { createAwsSandbox, type StoredMicrovm } from "../src/sandbox/aws-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aws-ws-"));
-  return createAwsSandbox(createLocalWorkspaceStore(dir), {
-    store: createMemoryMap(),
+  const store = (opts.store as DurableMap<StoredMicrovm> | undefined) ?? createMemoryMap<StoredMicrovm>();
+  const sb = createAwsSandbox(createLocalWorkspaceStore(dir), {
     ...singleProcessDeps(),
     region: "us-west-2",
     imageIdentifier: "img",
-    s3Bucket: "bucket",
     api: fake.api,
-    s3: fake.s3,
     fetchImpl: fake.fetchImpl,
     ...opts,
+    store,
   });
+  const vm = async (scope: string) => fake.bodies.get((await store.get(scope))!.microvmId!)!;
+  return Object.assign(sb, { store, vm });
 }
 const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as const }];
 
-test("profile declares the AWS MicroVM substrate with S3-backed durability", () => {
+test("profile declares the AWS MicroVM substrate with a resident disk", () => {
   const sb = makeSandbox(installFakeMicrovm());
-  assert.equal(sb.profile.backend, "aws-microvm");
-  assert.equal(sb.profile.writablePersistence, "snapshot_to_workspace");
+  assert.equal(sb.profile.backend, "aws");
+  assert.equal(sb.profile.writablePersistence, "resident_disk");
   assert.equal(sb.profile.processSessions, true);
+  assert.equal(sb.profile.parksOnTeardown, true);
   assert.equal(supportsProcessSessions(sb), true);
 });
 
@@ -53,20 +54,20 @@ test("first provision launches a body (cold) and run() execs over the daemon", a
 test("an already-aborted command neither resumes the body nor executes", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake);
-  const h = await sb.provision(rw(scopeId("personal", "U-aborted")));
+  const scope = scopeId("personal", "U-aborted");
+  const h = await sb.provision(rw(scope));
   await sb.teardown(h);
   const commandCount = fake.commands.length;
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(sb.run(h, "echo should-not-run", { signal: controller.signal }), /aborted/i);
-  assert.equal(fake.bodies.get(h.id)!.state, "SUSPENDED");
+  assert.equal((await sb.vm(scope)).state, "SUSPENDED");
   assert.equal(fake.commands.length, commandCount);
 });
 
-test("declared credential paths are symlinked outside the snapshotted home", async () => {
+test("declared credential paths are symlinked outside the home", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, {
-    snapshotIntervalMs: 0,
     credentialPaths: [
       { path: ".acmecli", kind: "directory" },
       { path: ".acme/token.json", kind: "file" },
@@ -77,77 +78,65 @@ test("declared credential paths are symlinked outside the snapshotted home", asy
   assert.ok(setup);
   assert.match(setup, /ln -s '\/tmp\/agent-creds\/\.acmecli' '\/root\/\.acmecli'/);
   await sb.teardown(handle);
-  const snapshot = fake.commands.find((command) => command.includes("agent-home.tar"));
-  assert.match(snapshot ?? "", /-path '\.\/\.acmecli'/);
-  assert.match(snapshot ?? "", /-path '\.\/\.acme\/token\.json'/);
 });
 
 test("between turns the body is suspended and the next turn resumes it warm (no relaunch)", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake);
-  const layers = rw(scopeId("personal", "U2"));
-  const h1 = await sb.provision(layers);
-  const id = h1.id;
+  const scope = scopeId("personal", "U2");
+  const h1 = await sb.provision(rw(scope));
+  const body = await sb.vm(scope);
   await sb.teardown(h1);
-  assert.equal(fake.bodies.get(id)!.state, "SUSPENDED");
+  assert.equal(body.state, "SUSPENDED");
 
-  const h2 = await sb.provision(layers);
-  assert.equal(h2.id, id, "same body reused");
+  const h2 = await sb.provision(rw(scope));
   assert.equal(h2.coldStart, false);
   assert.equal(fake.runCount, 1, "no new body launched");
-  assert.equal(fake.bodies.get(id)!.state, "RUNNING", "resumed");
+  assert.equal(await sb.run(h2, "true").then((r) => r.code), 0);
+  assert.equal(body.state, "RUNNING", "resumed");
 });
 
-test("durable $HOME: state survives the body dying via the S3 snapshot", async () => {
+test("a turn that ends while another is still running does not suspend the body", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
-  const layers = rw(scopeId("personal", "U3"));
-  const h1 = await sb.provision(layers);
-  await sb.writeFile(h1, "notes/todo.txt", "buy milk");
-  await sb.teardown(h1);
-
-  assert.equal(fake.s3store.size, 1, "a snapshot landed in S3");
-  fake.killBody(h1.id);
-
-  const h2 = await sb.provision(layers);
-  assert.notEqual(h2.id, h1.id, "a fresh body was launched");
-  assert.equal(fake.runCount, 2);
-  assert.equal(h2.coldStart, false, "rehydrated from S3, so not cold");
-  assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
+  const sb = makeSandbox(fake);
+  const scope = scopeId("personal", "U-overlap");
+  const a = await sb.provision(rw(scope));
+  const b = await sb.provision(rw(scope));
+  await sb.teardown(a);
+  assert.equal((await sb.vm(scope)).state, "RUNNING");
+  await sb.teardown(b);
+  assert.equal((await sb.vm(scope)).state, "SUSPENDED");
 });
 
-test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehydrate", async () => {
+test("a body past its maximum lifetime is terminated and replaced by a fresh one", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { rotateAfterSeconds: 0, snapshotIntervalMs: 0 });
-  const layers = rw(scopeId("personal", "U4"));
-  const h1 = await sb.provision(layers);
-  await sb.writeFile(h1, "keep.txt", "v1");
+  const sb = makeSandbox(fake, { maxLifetimeSec: 1 });
+  const scope = scopeId("personal", "U4");
+  const h1 = await sb.provision(rw(scope));
+  const first = await sb.vm(scope);
   await sb.teardown(h1);
-  await sleep(3);
-
-  const h2 = await sb.provision(layers);
-  assert.notEqual(h2.id, h1.id);
-  assert.equal(fake.bodies.get(h1.id)!.state, "TERMINATED", "old body terminated");
-  assert.equal(await sb.readFile(h2, "keep.txt"), "v1", "state carried across the rotation");
+  const h2 = await sb.provision(rw(scope));
+  assert.equal(first.state, "TERMINATED", "old body terminated");
+  assert.notEqual((await sb.vm(scope)).id, first.id);
+  assert.equal(h2.coldStart, true);
 });
 
-test("reapDeepIdle terminates a parked body but keeps its durable S3 state", async () => {
+test("idle and lifetime settings reach the microVM idle policy", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
-  const layers = rw(scopeId("personal", "U5"));
-  const h1 = await sb.provision(layers);
-  await sb.writeFile(h1, "state.txt", "x");
-  await sb.teardown(h1);
-  await sleep(5);
-
-  const { reaped } = await sb.reapDeepIdle!(1);
-  assert.equal(reaped, 1);
-  assert.equal(fake.bodies.get(h1.id)!.state, "TERMINATED");
-  assert.equal(fake.s3store.size, 1, "durable snapshot retained for the next visit");
-
-  const h2 = await sb.provision(layers);
-  assert.equal(fake.runCount, 2, "fresh body after reap");
-  assert.equal(await sb.readFile(h2, "state.txt"), "x");
+  const runs: unknown[] = [];
+  const run = fake.api.runMicrovm;
+  fake.api.runMicrovm = async (input) => {
+    runs.push(input);
+    return run(input);
+  };
+  const sb = makeSandbox(fake, { idleParkSec: 120, maxLifetimeSec: 7200 });
+  await sb.provision(rw(scopeId("personal", "U-policy")));
+  assert.deepEqual((runs[0] as { idlePolicy: unknown }).idlePolicy, {
+    autoResumeEnabled: true,
+    maxIdleDurationSeconds: 120,
+    suspendedDurationSeconds: 3600,
+  });
+  assert.equal((runs[0] as { maximumDurationInSeconds: number }).maximumDurationInSeconds, 7200);
 });
 
 test("a scratch box is a fresh, ephemeral body terminated on teardown", async () => {
@@ -157,8 +146,11 @@ test("a scratch box is a fresh, ephemeral body terminated on teardown", async ()
   assert.equal(h.scratch, true);
   assert.equal(h.coldStart, true);
   await sb.teardown(h);
-  assert.equal(fake.bodies.get(h.id)!.state, "TERMINATED", "scratch box destroyed, not parked");
-  assert.equal(fake.s3store.size, 0, "scratch boxes own nothing durable");
+  assert.deepEqual(
+    [...fake.bodies.values()].map((b) => b.state),
+    ["TERMINATED"],
+    "scratch box destroyed, not parked",
+  );
 });
 
 test("concurrent provisions for one scope launch a single body", async () => {
@@ -184,81 +176,43 @@ test("blob staging is advertised only when the channel is actually wired", async
   assert.equal(supportsBlobStaging(wired), true, "wired up, aws can move bytes by reference");
 });
 
-test("a hydrate failure terminates the fresh body instead of cold-starting over the stored snapshot", async () => {
+test("scope retirement terminates only its body and forgets its record, including from another process", async () => {
   const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
-  const layers = rw(scopeId("personal", "U7"));
-  const h1 = await sb.provision(layers);
-  await sb.writeFile(h1, "notes/todo.txt", "buy milk");
-  await sb.teardown(h1);
-  fake.killBody(h1.id);
-
-  fake.failS3Reads = true;
-  await assert.rejects(() => sb.provision(layers), /hydration failed/);
-  assert.equal(
-    [...fake.bodies.values()].filter((b) => b.state === "RUNNING").length,
-    0,
-    "the half-provisioned body was terminated, not left orphaned",
-  );
-  assert.equal(fake.s3store.size, 1, "the stored snapshot is untouched");
-
-  fake.failS3Reads = false;
-  const h2 = await sb.provision(layers);
-  assert.equal(await sb.readFile(h2, "notes/todo.txt"), "buy milk");
-});
-
-test("scope retirement terminates its body and removes only its snapshot, including after restart", async () => {
-  const fake = installFakeMicrovm();
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
-  const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
+  const sb = makeSandbox(fake);
   const first = await sb.provision(rw("personal:retire-one"));
   const other = await sb.provision(rw("personal:retire-other"));
+  const firstBody = await sb.vm("personal:retire-one");
+  const otherBody = await sb.vm("personal:retire-other");
   await sb.teardown(first);
   await sb.teardown(other);
-  assert.equal(fake.s3store.size, 2);
-  await makeSandbox(fake, { store }).destroyScope!("personal:retire-one");
-  assert.equal(fake.bodies.get(first.id)!.state, "TERMINATED");
-  assert.equal(fake.bodies.get(other.id)!.state, "SUSPENDED");
-  assert.equal(fake.s3store.size, 1);
-  assert.equal(await store.get("personal:retire-one"), null);
-  assert.ok(await store.get("personal:retire-other"));
+  await makeSandbox(fake, { store: sb.store }).destroyScope!("personal:retire-one");
+  assert.equal(firstBody.state, "TERMINATED");
+  assert.equal(otherBody.state, "SUSPENDED");
+  assert.equal(await sb.store.get("personal:retire-one"), null);
+  assert.ok(await sb.store.get("personal:retire-other"));
   await sb.destroyScope!("personal:retire-one");
-  assert.equal(fake.s3store.size, 1);
 });
 
-for (const stage of ["terminate", "snapshot"] as const) {
-  test(`scope retirement retains durable recovery metadata when ${stage} deletion fails`, async () => {
-    const fake = installFakeMicrovm();
-    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
-    const sb = makeSandbox(fake, { store });
-    const handle = await sb.provision(rw("personal:retire-failure"));
-    await sb.teardown(handle);
-    const terminate = fake.api.terminate;
-    const send = fake.s3.send;
-    if (stage === "terminate")
-      fake.api.terminate = async () => {
-        throw new Error("termination failed");
-      };
-    else
-      fake.s3.send = async () => {
-        throw new Error("snapshot deletion failed");
-      };
-    await assert.rejects(sb.destroyScope!("personal:retire-failure"), /failed/);
-    assert.ok(await store.get("personal:retire-failure"));
-    fake.api.terminate = terminate;
-    fake.s3.send = send;
-    await sb.destroyScope!("personal:retire-failure");
-    assert.equal(await store.get("personal:retire-failure"), null);
-  });
-}
-
-test("failed AWS readiness remains discoverable for retirement when immediate termination fails", async () => {
+test("scope retirement retains durable recovery metadata when terminate fails", async () => {
   const fake = installFakeMicrovm();
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
-  const sb = makeSandbox(fake, { store });
+  const sb = makeSandbox(fake);
+  const handle = await sb.provision(rw("personal:retire-failure"));
+  await sb.teardown(handle);
+  const terminate = fake.api.terminate;
+  fake.api.terminate = async () => {
+    throw new Error("termination failed");
+  };
+  await assert.rejects(sb.destroyScope!("personal:retire-failure"), /failed/);
+  assert.ok(await sb.store.get("personal:retire-failure"));
+  fake.api.terminate = terminate;
+  await sb.destroyScope!("personal:retire-failure");
+  assert.equal(await sb.store.get("personal:retire-failure"), null);
+});
+
+test("a launch that never became ready stays recorded and is resumed or retired later", async () => {
+  const fake = installFakeMicrovm();
+  const sb = makeSandbox(fake);
+  const scope = "personal:failed-launch";
   const wait = fake.api.waitForState;
   const terminate = fake.api.terminate;
   fake.api.waitForState = async () => {
@@ -267,74 +221,22 @@ test("failed AWS readiness remains discoverable for retirement when immediate te
   fake.api.terminate = async () => {
     throw new Error("unavailable");
   };
-  await assert.rejects(sb.provision(rw("personal:failed-launch")), /launch .* failed/);
-  const pending = await store.get("personal:failed-launch");
-  assert.ok(pending?.provisioning);
+  await assert.rejects(sb.provision(rw(scope)), /launch .* failed/);
+  const pending = await sb.store.get(scope);
+  assert.ok(pending?.microvmId);
+  assert.equal(pending.initializationPending, true);
   fake.api.waitForState = wait;
-  await assert.rejects(sb.provision(rw("personal:failed-launch")), /incomplete provisioning/);
   fake.api.terminate = terminate;
-  await makeSandbox(fake, { store }).destroyScope!("personal:failed-launch");
+  const h = await sb.provision(rw(scope));
+  assert.equal((await sb.store.get(scope))?.microvmId, pending.microvmId);
+  assert.equal((await sb.store.get(scope))?.initializationPending, undefined);
+  await sb.teardown(h);
+  await makeSandbox(fake, { store: sb.store }).destroyScope!(scope);
   assert.equal(fake.bodies.get(pending.microvmId)!.state, "TERMINATED");
-  assert.equal(await store.get("personal:failed-launch"), null);
+  assert.equal(await sb.store.get(scope), null);
 });
 
-test("destructive teardown of a stale AWS handle preserves a replacement scope", async () => {
-  const fake = installFakeMicrovm();
-  const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });
-  const layers = rw("personal:stale-destroy");
-  const old = await sb.provision(layers);
-  await sb.teardown(old);
-  fake.killBody(old.id);
-  const replacement = await sb.provision(layers);
-  await sb.teardown(replacement);
-  await sb.teardown(old, { destroy: true });
-  assert.equal(fake.bodies.get(replacement.id)!.state, "SUSPENDED");
-  assert.equal(fake.s3store.size, 1);
-  assert.equal((await sb.provision(layers)).id, replacement.id);
-});
-
-for (const writer of ["teardown", "reaper"] as const) {
-  test(`retirement waits for an in-flight ${writer} snapshot and prevents restoration`, async () => {
-    const fake = installFakeMicrovm();
-    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
-    const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
-    const scope = `personal:retire-race-${writer}`;
-    const handle = await sb.provision(rw(scope));
-    await sb.writeFile(handle, "retired.txt", "must not return");
-    if (writer === "reaper") {
-      await sb.teardown(handle);
-      await store.merge(scope, { lastActivityMs: 2, lastSnapshotMs: 1 });
-    }
-    const uploading = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const send = fake.s3.send;
-    fake.s3.send = async (command: unknown) => {
-      if (command?.constructor.name === "CompleteMultipartUploadCommand") {
-        uploading.resolve();
-        await release.promise;
-      }
-      return send(command);
-    };
-    const snapshot = writer === "reaper" ? sb.reapDeepIdle!(1) : sb.teardown(handle);
-    await uploading.promise;
-    let retired = false;
-    const retirement = sb.destroyScope!(scope).then(() => {
-      retired = true;
-    });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(retired, false);
-    release.resolve();
-    await Promise.all([snapshot, retirement]);
-    assert.equal(fake.s3store.size, 0);
-    assert.equal(await store.get(scope), null);
-    const replacement = await sb.provision(rw(scope));
-    assert.equal(await sb.readFile(replacement, "retired.txt"), null);
-    await sb.destroyScope!(scope);
-  });
-}
-
-test("failed overlapping preparation releases only its own sandbox lease", async () => {
+test("failed overlapping preparation leaves the running body alone", async () => {
   const fake = installFakeMicrovm();
   let failPreparation = false;
   const sb = makeSandbox(fake, {
@@ -346,12 +248,11 @@ test("failed overlapping preparation releases only its own sandbox lease", async
       return fake.fetchImpl(url, init);
     }) as typeof fetch,
   });
-  const layers = rw(scopeId("personal", "overlapping-preparation"));
-  const first = await sb.provision(layers);
+  const scope = scopeId("personal", "overlapping-preparation");
+  const first = await sb.provision(rw(scope));
   failPreparation = true;
-  await assert.rejects(sb.provision(layers), /injected preparation failure/);
-  assert.equal(fake.bodies.get(first.id)?.state, "RUNNING");
-  assert.equal(fake.s3store.size, 0);
+  await assert.rejects(sb.provision(rw(scope)), /injected preparation failure/);
+  assert.equal((await sb.vm(scope)).state, "RUNNING");
   await sb.teardown(first);
-  assert.equal(fake.bodies.get(first.id)?.state, "SUSPENDED");
+  assert.equal((await sb.vm(scope)).state, "SUSPENDED");
 });

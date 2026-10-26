@@ -38,7 +38,7 @@ after(() => ff.cleanup());
 function sprites(): Sandbox {
   const dir = mkdtempSync(join(tmpdir(), "sprites-kill-ws-"));
   return createSpritesSandbox(createLocalWorkspaceStore(dir), {
-    initializationStore: createMemoryMap(),
+    store: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

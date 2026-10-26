@@ -57,7 +57,7 @@ print("PHASE: image saved diffusion-out.png", flush=True)
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "monitor-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
-  initializationStore: createMemoryMap(),
+  store: createMemoryMap(),
   advisoryLock: createMemoryAdvisoryLock(),
 });
 if (!supportsProcessSessions(sb)) throw new Error("Sprites sandbox does not advertise process sessions");
