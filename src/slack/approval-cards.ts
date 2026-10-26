@@ -192,8 +192,8 @@ function approvalDecisionLine(
     return record.decision === "deny"
       ? `:hourglass_flowing_sand: Denying · ${subject}…`
       : `:hourglass_flowing_sand: ${DECISION_LABEL[record.decision]}${by} · ${subject} — running…`;
-  const icon = record.decision === "deny" ? ":x:" : ":white_check_mark:";
-  return `${icon} ${DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;
+  const icon = record.decision === "deny" ? "" : ":white_check_mark: ";
+  return `${icon}${DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;
 }
 
 function approvalDecisionDetail(p: { command: string; summary?: string; kind?: string }): string | null {

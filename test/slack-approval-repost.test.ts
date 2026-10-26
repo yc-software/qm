@@ -256,7 +256,7 @@ test("a deny click replaces the buttons before the resumed turn runs, then recor
   release();
   await clicked;
   const final = f.updates.at(-1);
-  assert.match(String(final.text), /^:x: Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
+  assert.match(String(final.text), /^Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
   assert.equal(JSON.stringify(final.blocks).includes("hilo_"), false);
   assert.equal(f.ephemerals.length, 0);
 });

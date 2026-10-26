@@ -376,7 +376,7 @@ test("the decision card names who decided and what, with the arguments in a cont
   const line: string = (denied.blocks[0] as any).text.text;
   assert.equal(
     line,
-    `:x: Denied by <@U2> · tools · \`calendar_create_event\` · <!date^${at / 1000}^{date_short_pretty} at {time}|2026-10-25T23:03:23.000Z>`,
+    `Denied by <@U2> · tools · \`calendar_create_event\` · <!date^${at / 1000}^{date_short_pretty} at {time}|2026-10-25T23:03:23.000Z>`,
   );
   const context = denied.blocks[1] as any;
   assert.equal(context.type, "context");
