@@ -66,7 +66,7 @@ export interface SandboxResources {
     jobOnly?: boolean,
   ): Promise<SandboxResource>;
   jobComputers(): Promise<SandboxResource[]>;
-  retireJobComputer(id: string): Promise<void>;
+  retireJobComputer(id: string, seenState: SandboxResource["state"]): Promise<void>;
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string): Promise<void>;
@@ -150,7 +150,7 @@ export function createSandboxResources(opts: {
     const retiring = { ...current, state: "retired" as const, cleanupPending: true };
     await opts.records.put(current.id, retiring);
     try {
-      await backend.destroyScope(current.backingScopeId);
+      await backend.destroyScope(current.backingScopeId, { keepHome: !current.jobOnly });
       await opts.records.put(current.id, { ...retiring, cleanupPending: false, error: undefined });
     } catch (error) {
       await opts.records.put(current.id, { ...retiring, error: String(error) });
@@ -227,10 +227,10 @@ export function createSandboxResources(opts: {
       await initialize();
       return (await opts.records.all()).filter((record) => record.jobOnly);
     },
-    async retireJobComputer(id) {
+    async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const current = await get(id);
-        if (!current.jobOnly) return;
+        if (!current.jobOnly || current.state !== seenState) return;
         await destroy(current);
         await opts.records.delete(id);
       });

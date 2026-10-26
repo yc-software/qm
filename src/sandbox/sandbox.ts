@@ -246,7 +246,7 @@ export interface Sandbox {
   computerStatus?(scopeId: string): Promise<ComputerStatus>;
   restartComputer?(scopeId: string): Promise<void>;
   teardown(handle: SandboxHandle, opts?: TeardownOptions): Promise<void>;
-  destroyScope?(scopeId: string): Promise<void>;
+  destroyScope?(scopeId: string, opts?: { keepHome?: boolean }): Promise<void>;
   reapDeepIdle?(idleMs: number, devIdleMs?: number): Promise<{ reaped: number }>;
 }
 

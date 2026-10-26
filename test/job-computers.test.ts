@@ -50,7 +50,7 @@ function fixture() {
   const sweep = createJobComputerSweep({
     resources: {
       jobComputers: async () => computers.filter((computer) => !retired.includes(computer.id)),
-      retireJobComputer: async (id) => {
+      retireJobComputer: async (id, _seenState) => {
         destroyAttempts.push(id);
         if (failDestroy.has(id)) throw new Error("provider unavailable");
         retired.push(id);

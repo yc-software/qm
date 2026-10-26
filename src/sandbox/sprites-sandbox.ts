@@ -582,11 +582,12 @@ export function createSpritesSandbox(workspace: WorkspaceStore, opts: SpritesSan
     readFile: base.readFile,
     exportFiles: execExport.exportFiles,
 
-    async destroyScope(scopeId: string): Promise<void> {
+    async destroyScope(scopeId: string, opts?: { keepHome?: boolean }): Promise<void> {
       const name = sandboxScopeName(prefix, scopeId);
       return base.provisionQueue(scopeId, () =>
         withLifecycle(name, async () => {
-          if (!(await initializationStore.get(name))?.pending) await exportHome(name, scopeId);
+          if (opts?.keepHome !== false && !(await initializationStore.get(name))?.pending)
+            await exportHome(name, scopeId);
           await deleteSprite(name);
           forget(name);
         }),

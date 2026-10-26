@@ -25,7 +25,7 @@ export function createJobComputerSweep(deps: {
     for (const computer of await deps.resources.jobComputers()) {
       try {
         const retire = async () => {
-          await deps.resources.retireJobComputer(computer.id);
+          await deps.resources.retireJobComputer(computer.id, computer.state);
           attemptedAt.delete(computer.id);
           emptySince.delete(computer.id);
         };

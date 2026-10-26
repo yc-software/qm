@@ -43,7 +43,9 @@ files, apps or skills, cannot be made a default, and refuses `send_input`. Only 
 own controls reach it: poll, stop, watch, the reaper and the web output pane, including
 from a later deploy. The process reaper's sweep settles the job's exit and credential
 write-back, then destroys the computer and deletes its record. A failed destroy, and a
-computer left provisioning for over fifteen minutes, are retried every five minutes. A provider that cannot retire computers (Porter today) refuses such
+computer left provisioning for over fifteen minutes, are retried every five minutes; a retire
+is skipped if the computer's state changed after the sweep looked. A job computer's home is not
+snapshotted when it is destroyed. A provider that cannot retire computers (Porter today) refuses such
 jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
