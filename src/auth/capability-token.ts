@@ -165,7 +165,11 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
   if (claims.exp === 0) {
-    if (![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD].includes(claims.aud ?? ""))
+    if (
+      ![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD, SANDBOX_MODEL_AUD].includes(
+        claims.aud ?? "",
+      )
+    )
       return null;
   } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
   return claims;

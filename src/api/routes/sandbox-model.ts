@@ -21,9 +21,11 @@ function endUser(actorId: string, secret: string): string {
 }
 
 function attributed(path: string, input: Record<string, unknown>, user: string): Record<string, unknown> {
-  if (!path.startsWith("/v1/messages")) return { ...input, user };
-  const metadata = input.metadata && typeof input.metadata === "object" ? input.metadata : {};
-  return { ...input, metadata: { ...metadata, user_id: user } };
+  const { user: _user, ...rest } = input;
+  if (path !== "/v1/messages") return { ...rest, user };
+  const metadata =
+    rest.metadata && typeof rest.metadata === "object" && !Array.isArray(rest.metadata) ? rest.metadata : {};
+  return { ...rest, metadata: { ...metadata, user_id: user } };
 }
 
 async function denied(ctx: ApiCtx): Promise<boolean> {
@@ -63,20 +65,23 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       data: Object.keys(gateway.models).map((id) => ({ id, object: "model", owned_by: "gateway" })),
     });
   let payload = body;
-  if (body && typeof body === "object" && !Array.isArray(body) && "model" in body) {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
     const input = body as Record<string, unknown>;
-    const target = typeof input.model === "string" ? gateway.models[input.model] : undefined;
-    if (!target)
-      return sendJson(res, 400, {
-        error: {
-          message: `model ${JSON.stringify(input.model)} is not available; choose one of: ${Object.keys(gateway.models).join(", ")}`,
-        },
-      });
-    payload = attributed(
-      path,
-      { ...input, model: target },
-      endUser(capability!.actorId, deps.capabilitySecret ?? secret ?? ""),
-    );
+    const user = endUser(capability!.actorId, deps.capabilitySecret ?? secret ?? "");
+    if (!Object.hasOwn(input, "model")) payload = attributed(path, input, user);
+    else {
+      const target =
+        typeof input.model === "string" && Object.hasOwn(gateway.models, input.model)
+          ? gateway.models[input.model]
+          : undefined;
+      if (!target)
+        return sendJson(res, 400, {
+          error: {
+            message: `model ${JSON.stringify(input.model)} is not available; choose one of: ${Object.keys(gateway.models).join(", ")}`,
+          },
+        });
+      payload = attributed(path, { ...input, model: target }, user);
+    }
   }
   const headers: Record<string, string> = {
     "content-type": "application/json",

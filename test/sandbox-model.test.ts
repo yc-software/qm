@@ -117,7 +117,16 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(calls[2]!.url, "/v1/embeddings?encoding_format=float");
   assert.deepEqual(calls[2]!.body, { model: "openai/gpt-6-luna", input: "x", user: endUser });
 
+  const bare = await fetch(`${base}/v1/responses/compact`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ input: "x", user: "spoofed" }),
+  });
+  assert.equal(bare.status, 200);
+  assert.deepEqual(calls[3]!.body, { input: "x", user: endUser });
+
   assert.equal((await openai({ ...chat, model: "gpt-4o" })).status, 400);
+  assert.equal((await openai({ ...chat, model: "constructor" })).status, 400);
   assert.equal((await openai({ model: 7, messages: [] })).status, 400);
   assert.equal(
     (await openai(chat, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
@@ -129,7 +138,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
     401,
   );
   assert.equal((await openai(chat, "not-a-token")).status, 401);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
 
   status = 429;
   const limited = await openai(chat);
@@ -147,7 +156,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   overBudget = false;
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await openai(chat)).status, 403);
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
 });
 
 test("a sandbox-model token is refused on every other route", async (t) => {
