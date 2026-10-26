@@ -206,10 +206,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   assert.equal(claims?.aud, SANDBOX_MODEL_AUD);
   assert.equal(claims?.actorId, "U1");
   assert.equal(claims?.scopeId, "personal:U1");
-  assert.match(
-    (await turn("!sysprompt", "prompt")).reply ?? "",
-    /## Model access\n[^\n]*\$MODEL_GATEWAY_URL\/v1\/models/,
-  );
+  assert.match((await turn("!sysprompt", "prompt")).reply ?? "", /MODEL_GATEWAY_TOKEN/);
 
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
