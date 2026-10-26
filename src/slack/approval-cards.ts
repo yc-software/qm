@@ -235,7 +235,14 @@ export function approvalDecisionContext(
   p: { command: string; summary?: string; kind?: string },
   record: ApprovalDecisionRecord,
 ): Record<string, unknown> {
-  return { type: "context", elements: [{ type: "mrkdwn", text: clip(approvalDecisionLine(p, record), 2900) }] };
+  const detail = approvalDecisionDetail(p);
+  return {
+    type: "context",
+    elements: [
+      { type: "mrkdwn", text: clip(approvalDecisionLine(p, record), 2900) },
+      ...(detail ? [{ type: "mrkdwn", text: detail }] : []),
+    ],
+  };
 }
 
 export interface StoredApproval {
