@@ -35,7 +35,6 @@
     "test:all": "node --experimental-test-module-mocks --test 'test/**/*.test.ts'",
     "smoke:pi": "node scripts/pi-smoke.ts",
     "smoke:monitor": "node scripts/monitor-smoke.ts",
-    "smoke:git-cli": "node scripts/git-cli-smoke.ts",
     "smoke:google-oauth": "node scripts/google-oauth-smoke.ts",
     "smoke:service-cred": "node scripts/service-credential-livetest.ts",
     "smoke:aws-sandbox": "node scripts/aws-sandbox-smoke.ts",

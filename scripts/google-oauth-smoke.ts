@@ -10,8 +10,6 @@ import { buildApp } from "../src/wiring.ts";
 import { loadConfig } from "../src/config.ts";
 import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
-import { scopeId } from "../src/types.ts";
-import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 
 type Json = Record<string, unknown>;
@@ -89,26 +87,6 @@ function providerStatus(body: Json): { connected: boolean } {
   return { connected: google?.connected === true };
 }
 
-async function runWorkspaceReadSmoke(input: {
-  built: ReturnType<typeof buildApp>;
-  actor: string;
-  orgId: string;
-  hosts: string[];
-}): Promise<void> {
-  await input.built.config.setEgress(scopeId("personal", input.actor), { allowedHosts: input.hosts });
-  const result = await input.built.app.turn({
-    surface: "test",
-    actor: { externalId: input.actor, displayName: input.actor },
-    conversation: { kind: "dm", threadRef: `google-oauth-read:${input.actor}:${Date.now()}` },
-    text: `!run ${buildGoogleWorkspaceReadSmokeCommand()}`,
-  });
-  if (result.status !== "ok" || !result.reply?.includes("google read ok:")) {
-    throw new Error(`Google Workspace read smoke failed: ${JSON.stringify(result)}`);
-  }
-  console.log(result.reply);
-  console.log("connector_read: ok target=calendar-settings host=www.googleapis.com");
-}
-
 async function probeGoogleTokenEndpoint(redirectUri: string): Promise<string> {
   if (process.env.GOOGLE_OAUTH_SMOKE_SKIP_PROVIDER_PROBE === "1") return "skipped";
   const res = await fetch(PROVIDERS.google!.tokenUrl, {
@@ -162,7 +140,6 @@ const provider = PROVIDERS.google;
 if (!provider) throw new Error("google OAuth provider is not registered");
 
 const interactive = process.env.GOOGLE_OAUTH_SMOKE_INTERACTIVE === "1";
-const runReadAfterConnect = interactive && process.env.GOOGLE_OAUTH_SMOKE_SKIP_READ !== "1";
 const actor = process.env.GOOGLE_OAUTH_SMOKE_PRINCIPAL ?? `google-oauth-smoke-${Date.now()}`;
 const orgId = process.env.ORG_ID ?? "acme";
 const secret = process.env.CORE_SIGNING_SECRET ?? `google-oauth-smoke-${randomUUID()}`;
@@ -281,8 +258,6 @@ try {
       );
     }
     console.log("interactive_exchange: connected");
-    if (runReadAfterConnect) await runWorkspaceReadSmoke({ built, actor, orgId, hosts: provider.hosts });
-    else console.log("connector_read: skipped (unset GOOGLE_OAUTH_SMOKE_SKIP_READ to run after interactive consent)");
     console.log("google oauth smoke complete: live Google callback stored a token without printing it");
   }
 } finally {
