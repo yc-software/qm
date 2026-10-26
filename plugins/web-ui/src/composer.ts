@@ -211,6 +211,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
       void refreshRuntimeSelection(ctx.chat.state.scopeId, ctx.chat.state.agent ?? undefined, true);
   };
   document.addEventListener("visibilitychange", revalidateRuntime);
+  // Waking from sleep revalidates before the network is back; retry once it returns.
+  window.addEventListener("online", revalidateRuntime);
   let runtimeRequest = 0;
   let runtimeIdentity = "";
   let unsubscribeRuntime: (() => void) | undefined;
@@ -401,7 +403,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     syncRuntimeSelection(agent);
     const config = actualScope === null ? null : await loadRuntimeConfig(actualScope, refresh, options.runtimeAccount);
     if (request !== runtimeRequest) return;
-    if (!config) composerState.error = "Could not load runtime settings.";
+    // A failed revalidation keeps the last good settings; only a cold miss is an error.
+    if (!config && (key === null || !getRuntimeConfig(key))) composerState.error = "Could not load runtime settings.";
     if (config && !loadoutRestored) {
       restoreLoadoutSelection();
       loadoutRestored = true;
@@ -2031,6 +2034,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     if (!pendingSubmissions) window.removeEventListener("qm:prepare-update", preventUnsafeUpdate);
     window.removeEventListener("model-account-changed", refreshAccount);
     document.removeEventListener("visibilitychange", revalidateRuntime);
+    window.removeEventListener("online", revalidateRuntime);
     modelPicker.dispose();
     unsubscribeRuntime?.();
     ++runtimeRequest;
