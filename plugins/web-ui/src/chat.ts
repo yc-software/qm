@@ -2235,16 +2235,15 @@ export function createChatSurface(
     const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
     const chip = (handle: string): TemplateResult =>
       html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-    return html`<div class="slack-wire-text" dir="auto">
-      ${splitSlackWire(text).map((seg) => {
-        if (seg.kind === "mention") return chip(seg.handle);
-        if (seg.kind === "link")
-          return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-            >${seg.label}</a
-          >`;
-        return seg.text;
-      })}
-    </div>`;
+    const segments = splitSlackWire(text).map((seg) => {
+      if (seg.kind === "mention") return chip(seg.handle);
+      if (seg.kind === "link")
+        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
+          >${seg.label}</a
+        >`;
+      return seg.text;
+    });
+    return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
