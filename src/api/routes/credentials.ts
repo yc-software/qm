@@ -1,4 +1,4 @@
-import { brokerCredentialCall, realBrokerFetch } from "../credential-broker.ts";
+import { brokerCredentialCall, createBrokerFetch } from "../credential-broker.ts";
 import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -13,7 +13,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     body: body as Record<string, unknown>,
     orgScopeId: orgScope,
     reader: deps.serviceCreds,
-    fetchImpl: deps.brokerFetch ?? realBrokerFetch,
+    fetchImpl: deps.brokerFetch ?? createBrokerFetch(deps.agentEgress),
     ...(deps.credentialUsage ? { usage: deps.credentialUsage } : {}),
     audit: (event) => deps.auditLog?.record({ at: Date.now(), ...event }),
   });

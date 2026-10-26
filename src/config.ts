@@ -77,6 +77,11 @@ export interface Config {
   sandboxSecondaryBackend?: SandboxBackendName;
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b";
   egressServiceHosts?: string[];
+  /**
+   * Egress proxy for core-originated requests made on the agent's behalf (credential broker,
+   * MCP tool calls, …). Defaults to the selected sandbox backend's egress proxy; unset means direct.
+   */
+  agentEgressProxyUrl?: string;
   brandingDefault?: OrgBranding;
   modelId?: string;
   codexAuthFile?: string;
@@ -1008,6 +1013,25 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
   throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
 }
 
+/** AGENT_EGRESS_PROXY_URL, else the egress proxy the selected sandbox backend already uses. */
+export function agentEgressProxyUrlFromEnv(
+  env: NodeJS.ProcessEnv,
+  sandboxBackend: SandboxBackendName,
+): string | undefined {
+  const explicit = env.AGENT_EGRESS_PROXY_URL?.trim();
+  if (explicit) return explicit;
+  const byBackend: Partial<Record<SandboxBackendName, string | undefined>> = {
+    sprites: env.SPRITES_EGRESS_PROXY_URL,
+    smolmachines: env.SMOLMACHINES_EGRESS_PROXY_URL,
+    agent37: env.AGENT37_EGRESS_PROXY_URL,
+    e2b: env.E2B_EGRESS_PROXY_URL,
+    "do-managed-agents": env.DO_AGENTS_EGRESS_PROXY_URL,
+    modal: env.MODAL_EGRESS_PROXY_URL,
+    porter: env.PORTER_SANDBOX_EGRESS_PROXY_URL,
+  };
+  return byBackend[sandboxBackend]?.trim() || undefined;
+}
+
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
   const credentialed: Record<Config["sandboxBackend"], boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -1322,6 +1346,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
     }
   }
+  const agentEgressProxyUrl = agentEgressProxyUrlFromEnv(env, sandboxBackend);
+  if (!agentEgressProxyUrl && env.NODE_ENV === "production") {
+    console.warn(
+      "[config] no AGENT_EGRESS_PROXY_URL and the selected sandbox backend has no egress proxy — core sends the agent's brokered credential calls and MCP requests directly, with NO proxy audit (fail-open); set AGENT_EGRESS_PROXY_URL to route them through the egress proxy.",
+    );
+  }
   const superserveSelected = sandboxBackend === "superserve";
   if (superserveSelected && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
@@ -1488,6 +1518,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxBackend,
     legacySandboxScopeDefaults,
     deployProvider,
+    ...(agentEgressProxyUrl ? { agentEgressProxyUrl } : {}),
     ...(env.EGRESS_SERVICE_HOSTS
       ? {
           egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")

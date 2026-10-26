@@ -7,6 +7,7 @@ import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./cr
 import { pipeToResponse, sendJson } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
+import type { AgentEgress, AgentEgressContext } from "../egress/agent-egress.ts";
 
 export const GIT_HTTP_BROKER_PREFIX = "/v1/credentials/git/";
 
@@ -21,26 +22,31 @@ interface GitHttpFetchResponse {
 export type GitHttpFetch = (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: NodeJS.ReadableStream },
+  /** Who the call is for; routes it through the agent egress proxy when one is configured. */
+  ctx?: AgentEgressContext,
 ) => Promise<GitHttpFetchResponse>;
 
-const realGitHttpFetch: GitHttpFetch = async (url, init) => {
-  const req: RequestInit & { duplex?: "half" } = {
-    method: init.method,
-    headers: init.headers,
-    redirect: "manual",
-    ...(init.body ? { body: init.body as unknown as RequestInit["body"], duplex: "half" as const } : {}),
+/** Upstream fetch for brokered git smart-HTTP calls: through `egress` when given, else direct. */
+export function createGitHttpFetch(egress?: AgentEgress): GitHttpFetch {
+  return async (url, init, ctx) => {
+    const req: RequestInit & { duplex?: "half" } = {
+      method: init.method,
+      headers: init.headers,
+      redirect: "manual",
+      ...(init.body ? { body: init.body as unknown as RequestInit["body"], duplex: "half" as const } : {}),
+    };
+    const resp = egress && ctx ? await egress.fetch(url, req, ctx) : await fetch(url, req);
+    const headers: Record<string, string> = {};
+    resp.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return {
+      status: resp.status,
+      headers,
+      body: resp.body ? Readable.fromWeb(resp.body as ReadableStream<Uint8Array>) : null,
+    };
   };
-  const resp = await fetch(url, req);
-  const headers: Record<string, string> = {};
-  resp.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
-  return {
-    status: resp.status,
-    headers,
-    body: resp.body ? Readable.fromWeb(resp.body as ReadableStream<Uint8Array>) : null,
-  };
-};
+}
 
 function parseBrokerPath(pathname: string): { slug: string; upstreamPath: string } | null {
   if (!pathname.startsWith(GIT_HTTP_BROKER_PREFIX)) return null;
@@ -158,11 +164,15 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
 
   let upstreamResp: GitHttpFetchResponse;
   try {
-    upstreamResp = await (ctx.deps.gitHttpFetch ?? realGitHttpFetch)(upstream.toString(), {
-      method,
-      headers,
-      ...(method === "POST" ? { body: ctx.req } : {}),
-    });
+    upstreamResp = await (ctx.deps.gitHttpFetch ?? createGitHttpFetch(ctx.deps.agentEgress))(
+      upstream.toString(),
+      {
+        method,
+        headers,
+        ...(method === "POST" ? { body: ctx.req } : {}),
+      },
+      { actorId: claims.actorId, scopeId: claims.scopeId },
+    );
   } catch {
     ctx.deps.credentialUsage?.record({
       slug,

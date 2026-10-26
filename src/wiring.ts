@@ -197,6 +197,7 @@ import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
 import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createAgentEgress, type AgentEgress } from "./egress/agent-egress.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -496,6 +497,7 @@ export interface BuiltApp {
   refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
+  agentEgress?: AgentEgress;
   acl: AclStore;
   skills: SkillStore;
   skillBundles: SkillBundleStore;
@@ -1273,9 +1275,21 @@ export function buildApp(
         console.warn(`[broker-credentials] could not check for overridden stored credentials: ${errMessage(error)}`),
     );
   }
+  const agentEgressSecret = config.capabilitySecret ?? config.signingSecret;
+  const agentEgress: AgentEgress | undefined =
+    config.agentEgressProxyUrl && agentEgressSecret
+      ? createAgentEgress({
+          proxyUrl: config.agentEgressProxyUrl,
+          capabilitySecret: agentEgressSecret,
+          capabilityTokenCompression: config.capabilityTokenCompression,
+        })
+      : undefined;
+  if (config.agentEgressProxyUrl && !agentEgressSecret)
+    console.warn("[agent-egress] AGENT_EGRESS_PROXY_URL set without a capability or signing secret — sending directly");
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    ...(agentEgress ? { egress: agentEgress } : {}),
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -2950,6 +2964,7 @@ export function buildApp(
       );
       await harness.turns.close?.();
       await semanticMemory.close();
+      await agentEgress?.close();
       await flyTunnel?.stop();
       await errors.flush();
     },
@@ -2992,6 +3007,7 @@ export function buildApp(
     refreshCustomProviders,
     mcpServers,
     mcpToolService,
+    ...(agentEgress ? { agentEgress } : {}),
     acl,
     skills,
     skillBundles,
@@ -3104,6 +3120,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
+    ...(built.agentEgress ? { agentEgress: built.agentEgress } : {}),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     ...(carriedModelAuth ? { harnessCarriedModelAuth: carriedModelAuth } : {}),
     harnessId: config.harness,

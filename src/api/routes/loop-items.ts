@@ -239,7 +239,13 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   }
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: authHeader, redirect: "follow" });
+    const init: RequestInit = { headers: authHeader, redirect: "follow" };
+    upstream = ctx.deps.agentEgress
+      ? await ctx.deps.agentEgress.fetch(url, init, {
+          actorId: ctx.capability?.actorId ?? loop.owner,
+          scopeId: loop.ownerScopeId,
+        })
+      : await fetch(url, init);
   } catch (e) {
     return sendJson(ctx.res, 502, { error: "upstream", message: errMessage(e) });
   }

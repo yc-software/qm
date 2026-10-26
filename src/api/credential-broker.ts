@@ -3,6 +3,7 @@ import { errMessage } from "../util/errors.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { ScopeId } from "../types.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
+import type { AgentEgress, AgentEgressContext } from "../egress/agent-egress.ts";
 import {
   credentialInjectionError,
   credentialRequestHeaders,
@@ -19,21 +20,29 @@ interface BrokerFetchResponse {
 export type BrokerFetch = (
   url: string,
   init: { method: string; headers: Record<string, string>; body?: string },
+  /** Who the call is for; routes it through the agent egress proxy when one is configured. */
+  ctx?: AgentEgressContext,
 ) => Promise<BrokerFetchResponse>;
 
-export const realBrokerFetch: BrokerFetch = async (url, init) => {
-  const r = await fetch(url, {
-    method: init.method,
-    headers: init.headers,
-    ...(init.body !== undefined ? { body: init.body } : {}),
-    redirect: "manual",
-  });
-  return {
-    status: r.status,
-    ...(r.headers.get("content-type") ? { contentType: r.headers.get("content-type")! } : {}),
-    text: () => r.text(),
+/** Upstream fetch for brokered credential calls: through `egress` when given, else direct. */
+export function createBrokerFetch(egress?: AgentEgress): BrokerFetch {
+  return async (url, init, ctx) => {
+    const request: RequestInit = {
+      method: init.method,
+      headers: init.headers,
+      ...(init.body !== undefined ? { body: init.body } : {}),
+      redirect: "manual",
+    };
+    const r = egress && ctx ? await egress.fetch(url, request, ctx) : await fetch(url, request);
+    return {
+      status: r.status,
+      ...(r.headers.get("content-type") ? { contentType: r.headers.get("content-type")! } : {}),
+      text: () => r.text(),
+    };
   };
-};
+}
+
+export const realBrokerFetch: BrokerFetch = createBrokerFetch();
 
 export interface BrokerRequest {
   credential?: unknown;
@@ -233,11 +242,15 @@ export async function brokerCredentialCall(opts: {
 
   let resp: BrokerFetchResponse;
   try {
-    resp = await fetchImpl(parsed.toString(), {
-      method,
-      headers,
-      ...(typeof body.body === "string" ? { body: body.body } : {}),
-    });
+    resp = await fetchImpl(
+      parsed.toString(),
+      {
+        method,
+        headers,
+        ...(typeof body.body === "string" ? { body: body.body } : {}),
+      },
+      { actorId: claims.actorId, scopeId: claims.scopeId },
+    );
   } catch {
     opts.usage?.record({
       slug,

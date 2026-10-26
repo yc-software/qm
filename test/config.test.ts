@@ -40,6 +40,29 @@ test("Sprites proxy transition URLs are optional and parsed independently of the
   ]);
 });
 
+test("agent egress proxy follows the selected sandbox backend unless set explicitly", () => {
+  const sprites = { SANDBOX_BACKEND: "sprites", SPRITES_TOKEN: "sprites-token-0123456789abcdef" };
+  assert.equal(loadConfig({}).agentEgressProxyUrl, undefined);
+  assert.equal(
+    loadConfig({ ...sprites, SPRITES_EGRESS_PROXY_URL: "https://egress.example.com" }).agentEgressProxyUrl,
+    "https://egress.example.com",
+  );
+  assert.equal(
+    loadConfig({ SANDBOX_BACKEND: "local", SPRITES_EGRESS_PROXY_URL: "https://egress.example.com" })
+      .agentEgressProxyUrl,
+    undefined,
+    "another backend's proxy is not borrowed",
+  );
+  assert.equal(
+    loadConfig({
+      ...sprites,
+      SPRITES_EGRESS_PROXY_URL: "https://egress.example.com",
+      AGENT_EGRESS_PROXY_URL: " https://core-egress.internal ",
+    }).agentEgressProxyUrl,
+    "https://core-egress.internal",
+  );
+});
+
 test("capability compression is explicitly enabled after verifier rollout", () => {
   assert.equal(loadConfig({}).capabilityTokenCompression, false);
   assert.equal(loadConfig({ CAPABILITY_TOKEN_COMPRESSION: "0" }).capabilityTokenCompression, false);

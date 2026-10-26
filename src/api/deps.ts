@@ -32,6 +32,7 @@ import type { AclStore } from "../acl/acl-store.ts";
 import type { CredentialUsageSink } from "../admin/credential-usage-sink.ts";
 import type { EgressAuditSink } from "../admin/egress-audit-sink.ts";
 import type { BrokerFetch } from "./credential-broker.ts";
+import type { AgentEgress } from "../egress/agent-egress.ts";
 import type { GitHttpFetch } from "./git-http-broker.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
@@ -130,6 +131,8 @@ export interface ServerDeps {
   egressAudit?: EgressAuditSink;
   brokerFetch?: BrokerFetch;
   gitHttpFetch?: GitHttpFetch;
+  /** Routes core-originated requests made for the agent through the sandbox egress proxy. */
+  agentEgress?: AgentEgress;
   baseModelDefault?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;

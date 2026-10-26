@@ -210,6 +210,15 @@ example `env.core.SPRITES_EGRESS_PROXY_URL` or `MODAL_EGRESS_PROXY_URL`, to
 `https://<proxy hostname>`. Update vendored Terraform from the current scaffold
 before enabling it on AWS.
 
+Core's own requests made on the agent's behalf — brokered credential and git
+calls, MCP tool calls, loop item image fetches — leave through the same proxy,
+each carrying a short-lived egress token for the principal and scope behind it
+that allows only the host being contacted. The proxy audits them into
+`egress_events` like sandbox traffic. By default core uses the selected sandbox
+backend's proxy URL; set `env.core.AGENT_EGRESS_PROXY_URL` to choose a different
+proxy for core (for example one reachable over a private network). With neither,
+core sends those requests directly and warns at startup in production.
+
 ### Shared AWS foundations
 
 Existing AWS deployments retain their company-owned resources by default. For a shared DynamoDB deployment table, set `aws.deploymentState` to `{ "table": "fleet-deploy-locks", "namespace": "acme" }`. Every lease, current pointer, label pointer and immutable manifest uses that namespace. Use a unique namespace for each company and scope its item IAM permissions with `dynamodb:LeadingKeys` to `acme/*`; grant `DescribeTable` separately. Changing an existing deployment's state location requires explicitly migrating its history while deployment operations are stopped.
