@@ -2,7 +2,7 @@ import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { Monitor, TurnRequest, TurnResult } from "../types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
@@ -33,7 +33,7 @@ export interface MonitorPollerDeps {
   monitors: MonitorStore;
   processes: ProcessRegistry;
   sandbox: Sandbox;
-  deliveries: DeliveryStore;
+  outbound: Outbound;
   idempotency: IdempotencyStore;
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
@@ -134,7 +134,7 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const leaderLease = deps.leaderLease;
 
   const triggerDeps: TriggerDeps = {
-    deliveries: deps.deliveries,
+    outbound: deps.outbound,
     idempotency: deps.idempotency,
     identity: deps.identity,
     run: deps.run,

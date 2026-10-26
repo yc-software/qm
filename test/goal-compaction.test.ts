@@ -20,7 +20,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   };
   await sessions.setGoal(lease, goal);
   for (let i = 0; i < 10; i++) {
-    await sessions.append(lease, { type: "user", payload: { text: `message ${i} `.repeat(100) }, scopeLabel: scope });
+    await sessions.append(lease, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
   }
   const compaction = createCompaction({
     sessions,
@@ -33,20 +33,18 @@ test("compaction leaves the session goal on its row and writes no goal entries",
       const rebuilt = await compaction.compactContextIfNeeded({
         session,
         lease,
-        visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
+        visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).items),
         scopeId: scope,
         orgScopeId: "org:test",
         actorId: "test",
       });
-      assert.ok(rebuilt.some((entry) => (entry.payload as { kind?: string }).kind === "context_summary"));
-      await sessions.append(lease, { type: "user", payload: { text: "more work ".repeat(1000) }, scopeLabel: scope });
+      assert.ok(rebuilt.some((item) => item.kind === "ContextCompaction"));
+      await sessions.append(lease, { kind: "UserMessage", text: "more work ".repeat(1000) });
     }
   } finally {
     await sessions.releaseLease(lease);
   }
-  const goalEntries = (await sessions.getEntries(session.id)).filter(
-    (entry) => (entry.payload as { kind?: string }).kind === "goal",
-  );
+  const goalEntries = (await sessions.getItems(session.id)).filter((item) => item.body.kind === "goal");
   assert.equal(goalEntries.length, 0, "compaction does not copy goals into the log");
   assert.deepEqual((await sessions.goals([session.id])).get(session.id), goal);
 });
@@ -59,7 +57,7 @@ test("background compaction cannot revive an older goal over one closed while it
   const goal = createGoalRecord({ objective: "verify the result" });
   await sessions.setGoal(lease, goal);
   for (let i = 0; i < 10; i++) {
-    await sessions.append(lease, { type: "user", payload: { text: `message ${i} `.repeat(100) }, scopeLabel: scope });
+    await sessions.append(lease, { kind: "UserMessage", text: `message ${i} `.repeat(100) });
   }
   await sessions.releaseLease(lease);
   const started = Promise.withResolvers<void>();
@@ -92,11 +90,7 @@ test("background compaction cannot revive an older goal over one closed while it
   await sessions.releaseLease(closing);
   finish.resolve("Earlier work.");
   const deadline = Date.now() + 3000;
-  while (
-    !(await sessions.getEntries(session.id)).some(
-      (entry) => (entry.payload as { kind?: string }).kind === "context_summary",
-    )
-  ) {
+  while (!(await sessions.getItems(session.id)).some((item) => item.kind === "ContextCompaction")) {
     assert.ok(Date.now() < deadline, "background compaction did not finish");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

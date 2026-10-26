@@ -381,7 +381,6 @@ export interface PostedFileMeta {
 
 export interface SurfacePostResult {
   ok: boolean;
-  deliveryId?: string;
   message?: string;
   matched?: string;
   attachments?: PostedFileMeta[];

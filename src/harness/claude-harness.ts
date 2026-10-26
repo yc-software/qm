@@ -369,14 +369,11 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const userEntry = continueTurn
       ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
       : await turn.emit({
-          type: "user",
-          payload: {
-            text: turn.input,
-            ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-            ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-          },
-          scopeLabel: turn.scopeLabel,
-          ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
+          kind: "UserMessage",
+          text: turn.input,
+          externalId: turn.triggerTs ?? turn.entryTs ?? null,
+          author: turn.runtimeActorId ?? null,
+          body: turn.attachments?.length ? { attachments: turn.attachments } : {},
         });
     const requestedModel = turn.runtime?.modelId;
     const model = modelSupportedByHarness(requestedModel, "claude") ? requestedModel! : resolveModelId(turn.scopeLabel);
@@ -389,7 +386,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               { requireUserStart: false },
             ),
           ),
-          userPromptText((userEntry?.payload ?? {}) as Parameters<typeof userPromptText>[0]),
+          userPromptText(userEntry ? { ...userEntry.body, text: userEntry.text } : {}),
           claudeReplayTranscript(
             reconstructMessagesFromHistory(
               turn.history.filter((e) => e.seq > turn.resumeUserSeq!),
@@ -410,8 +407,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     let result: SDKResultMessage | null = null;
     const thinking: string[] = [];
     const flushThinking = async () => {
-      for (const value of thinking.splice(0))
-        await turn.emit({ type: "thinking", payload: { thinking: value }, scopeLabel: turn.scopeLabel });
+      for (const value of thinking.splice(0)) await turn.emit({ kind: "Reasoning", text: value });
     };
     const taskStates = new Map<string, { callId: string; resultEmitted: boolean }>();
     const callUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number }>();
@@ -673,14 +669,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               taskStates.set(message.task_id, { callId, resultEmitted: false });
               if (!message.skip_transcript) {
                 await turn.emit({
-                  type: "tool_call",
-                  payload: {
-                    tool: "Agent",
-                    callId,
+                  kind: "ToolCall",
+                  tool: "Agent",
+                  callId,
+                  body: {
                     description: message.description,
                     ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
                   },
-                  scopeLabel: turn.scopeLabel,
                 });
               }
             }
@@ -691,14 +686,11 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
               if (!tracked.resultEmitted && !message.skip_transcript) {
                 tracked.resultEmitted = true;
                 await turn.emit({
-                  type: "tool_result",
-                  payload: {
-                    tool: "Agent",
-                    callId: tracked.callId,
-                    result: message.summary,
-                    isError: message.status !== "completed",
-                  },
-                  scopeLabel: turn.scopeLabel,
+                  kind: "ToolResult",
+                  tool: "Agent",
+                  callId: tracked.callId,
+                  text: message.summary,
+                  isError: message.status !== "completed",
                 });
               }
             }
@@ -718,7 +710,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
-            await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "AgentMessage", text });
           }
           streamedText = "";
           pendingPrompts = Math.max(0, pendingPrompts - 1);

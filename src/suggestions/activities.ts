@@ -5,6 +5,7 @@ import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
 import { scopeId, type Cron } from "../types.ts";
+import { isReply } from "../sessions/items.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate five suggested activities for the owner of this personal session's new-chat screen.
 First look for urgent work the owner owes another person and has not yet done: an unanswered direct question or request, a promise they made, a review or approval someone is waiting on, a reply in a thread where someone is waiting on them, an assigned ticket someone is blocked on, or an action only they can take that blocks a teammate. Their own project work counts only if a specific person is waiting on it. Check the sources you can already access (messages, email, assigned issues, review requests, recent conversations, memory, and scheduled-task notes), confirm each item is still open, and drop anything already handled or stale. Rank owed items by how blocked the other person is, explicit deadlines, how long they have waited, and how many people are affected. Never invent an obligation.
@@ -45,7 +46,7 @@ const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
   store: DurableMap<SuggestedActivityProfile>;
-  sessions: Pick<SessionStore, "latestEntrySeq" | "getEntries" | "get">;
+  sessions: Pick<SessionStore, "latestItemSeq" | "getItems" | "get">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
   enabled: boolean;
@@ -79,10 +80,9 @@ export function createSuggestedActivityService(deps: {
       const session = await deps.sessions.get(run.sessionId);
       if (!session || session.scopeId !== scopeId("personal", principalId) || session.threadRef !== run.threadRef)
         continue;
-      const seq = await deps.sessions.latestEntrySeq(session.id);
-      const entries = await deps.sessions.getEntries(session.id, { sinceSeq: Math.max(0, seq - 20), limit: 20 });
-      const final = entries.findLast((entry) => entry.type === "assistant");
-      const text = (final?.payload as { text?: unknown } | undefined)?.text;
+      const seq = await deps.sessions.latestItemSeq(session.id);
+      const items = await deps.sessions.getItems(session.id, { sinceSeq: Math.max(0, seq - 20), limit: 20 });
+      const text = items.findLast(isReply)?.text;
       if (typeof text !== "string") continue;
       try {
         const activities = parseSuggestedActivities(text);

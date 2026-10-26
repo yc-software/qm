@@ -11,7 +11,7 @@ import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
-import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
+import { isTerminal, isUnstarted, leaseLapsed, stopRun } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
@@ -40,6 +40,7 @@ const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { isUserMessage } from "../sessions/items.ts";
 
 const USER_STOP = "by user";
 
@@ -65,7 +66,7 @@ export function createTurnMethods(
   | "listSessionApprovals"
   | "pendingApprovalForThread"
   | "getRun"
-  | "getRunToolEntries"
+  | "getRunToolItems"
   | "subscribeRun"
   | "syncRunStream"
   | "activeRunForThread"
@@ -96,7 +97,7 @@ export function createTurnMethods(
       const session = await deps.sessions.getByThread(run.sessionId);
       if (session) return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals }, session, USER_STOP);
       await signals.send(run.id, { kind: "abort", reason: USER_STOP });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
+      await stopRun(deps.runs, run);
       return true;
     };
     return deps.advisoryLock ? deps.advisoryLock.withLock("session-tree-admission", stop) : stop();
@@ -790,22 +791,19 @@ export function createTurnMethods(
       };
     },
 
-    async getRunToolEntries(runId, viewer, afterSeq) {
+    async getRunToolItems(runId, viewer, afterSeq) {
       const run = await deps.runs.get(runId);
       if (!run || run.turnUserSeq === null) return [];
       if (viewer && !(await viewerMayUseRun(run, viewer))) return [];
       const session = await deps.sessions.getByThread(run.sessionId);
       if (!session) return [];
-      const entries = await deps.sessions.getEntries(session.id, {
+      const items = await deps.sessions.getItems(session.id, {
         sinceSeq: Math.max(run.turnUserSeq, (afterSeq ?? -1) + 1),
       });
-      const nextRun = entries.findIndex((e) => {
-        const owner = (e.payload as { runId?: unknown } | null)?.runId;
-        return e.type === "user" && typeof owner === "string" && owner !== runId;
-      });
-      return entries
+      const nextRun = items.findIndex((e) => isUserMessage(e) && e.turnId !== null && e.turnId !== runId);
+      return items
         .slice(0, nextRun < 0 ? undefined : nextRun)
-        .filter((e) => e.type === "tool_call" || e.type === "tool_result");
+        .filter((e) => e.kind === "ToolCall" || e.kind === "ToolResult");
     },
 
     async stopConversation(threadRef, viewer) {
@@ -900,7 +898,7 @@ export function createTurnMethods(
           queued.request.conversation.threadRef !== run.request.conversation.threadRef
         )
           return { accepted: false, reason: "conversation_mismatch" };
-        if (queued.id === run.id || queued.status !== "pending") return { accepted: false, reason: "queued_started" };
+        if (queued.id === run.id || !isUnstarted(queued)) return { accepted: false, reason: "queued_started" };
         const text = queued.request.displayText ?? queued.request.text;
         signal = {
           ...signal,
@@ -945,7 +943,7 @@ export function createTurnMethods(
         if (!(await deps.runs.steerQueued(signal.queuedRunId, runId, outbound, deps.signals))) {
           if (await deps.signals.hasDedupeKey(queuedKey!)) return { accepted: true };
           const queued = await deps.runs.get(signal.queuedRunId);
-          return { accepted: false, reason: queued?.status === "pending" ? "queued_changed" : "queued_started" };
+          return { accepted: false, reason: queued && isUnstarted(queued) ? "queued_changed" : "queued_started" };
         }
       } else await deps.signals.send(runId, outbound);
       const after = await deps.runs.get(runId);

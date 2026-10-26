@@ -20,21 +20,17 @@ for (const backend of ["memory", "postgres"] as const) {
       await store.addParticipant(session.id, "batch-test");
       const { lease } = await store.acquireLease(session.id);
       assert.ok(lease);
-      await store.append(lease, { type: "user", payload: { text: "Before batch" }, scopeLabel: scope });
+      await store.append(lease, { kind: "UserMessage", text: "Before batch" });
       const batch = await store.appendMany(lease, [
-        { type: "assistant", payload: { text: "First answer" }, scopeLabel: scope },
-        { type: "user", payload: { text: "Next question" }, scopeLabel: scope },
-        { type: "assistant", payload: { text: "Next answer" }, scopeLabel: scope },
+        { kind: "AgentMessage", text: "First answer" },
+        { kind: "UserMessage", text: "Next question" },
+        { kind: "AgentMessage", text: "Next answer" },
       ]);
       assert.deepEqual(
-        batch.map((entry) => [entry.seq, entry.parentSeq]),
-        [
-          [1, 0],
-          [2, 1],
-          [3, 2],
-        ],
+        batch.map((item) => item.seq),
+        [1, 2, 3],
       );
-      assert.deepEqual((await store.getEntries(session.id)).slice(1), batch);
+      assert.deepEqual((await store.getItems(session.id)).slice(1), batch);
       assert.deepEqual(await store.appendMany(lease, []), []);
       const pool = backend === "postgres" ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : null;
       try {
@@ -49,11 +45,11 @@ for (const backend of ["memory", "postgres"] as const) {
           try {
             await assert.rejects(
               store.appendMany(lease, [
-                { type: "user", payload: { text: "Rolled back" }, scopeLabel: scope },
-                { type: "assistant", payload: { text: "Fails item insert" }, scopeLabel: scope },
+                { kind: "UserMessage", text: "Rolled back" },
+                { kind: "AgentMessage", text: "Fails item insert" },
               ]),
             );
-            assert.equal((await store.getEntries(session.id)).length, 4);
+            assert.equal((await store.getItems(session.id)).length, 4);
             const after = await pool.query("SELECT messages, turns FROM sessions WHERE id = $1", [session.id]);
             assert.deepEqual(after.rows, rows);
           } finally {
@@ -61,12 +57,9 @@ for (const backend of ["memory", "postgres"] as const) {
           }
         }
         await store.releaseLease(lease);
-        await assert.rejects(
-          store.appendMany(lease, [{ type: "user", payload: { text: "Rejected" }, scopeLabel: scope }]),
-          /lease/,
-        );
+        await assert.rejects(store.appendMany(lease, [{ kind: "UserMessage", text: "Rejected" }]), /lease/);
         await assert.rejects(store.appendMany(lease, []), /lease/);
-        assert.equal((await store.getEntries(session.id)).length, 4);
+        assert.equal((await store.getItems(session.id)).length, 4);
       } finally {
         await pool?.end();
       }

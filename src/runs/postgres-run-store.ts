@@ -12,6 +12,7 @@ import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, Run
 import type { RunPriority } from "./run-store.ts";
 import {
   countedClaims,
+  crashLoopReason,
   isTerminal,
   releasesDedupKey,
   runPriority,
@@ -31,7 +32,7 @@ function isUniqueViolation(err: unknown): boolean {
   return isObj(err) && err.code === "23505";
 }
 
-function rowToRun(r: Record<string, unknown>): Run {
+export function rowToRun(r: Record<string, unknown>): Run {
   const request = JSON.parse(r.request as string) as OrchestratorInput;
   return {
     id: r.id as string,
@@ -54,10 +55,21 @@ function rowToRun(r: Record<string, unknown>): Run {
     startedAt: r.started_at === null ? null : Number(r.started_at),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     lastStop: r.last_stop != null ? (JSON.parse(r.last_stop as string) as RunStop) : null,
+    ...(r.engine === "absurd"
+      ? {
+          engine: "absurd" as const,
+          absurdQueue: (r.absurd_queue as string | null) ?? null,
+          absurdTaskId: r.absurd_task_id == null ? null : String(r.absurd_task_id),
+          absurdRunId: r.absurd_run_id == null ? null : String(r.absurd_run_id),
+          fairKey: (r.fair_key as string | null | undefined) ?? null,
+        }
+      : {}),
   };
 }
 
 const FENCE_HOLD_MS = 600_000;
+
+const UNSTARTED = "((engine = 'legacy' AND status = 'pending') OR status = 'queued')";
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
   const available = createPostgresNotifyBus<null>(connectionString, "qm_run_available", "run availability");
@@ -165,6 +177,33 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         id: "runs/store/0010-drop-turn-metrics",
         statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
       },
+      {
+        id: "runs/store/0011-turn-engine",
+        statements: [
+          `SET LOCAL lock_timeout = '3s'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS engine TEXT NOT NULL DEFAULT 'legacy'`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_queue TEXT`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_task_id UUID`,
+          `ALTER TABLE runs ADD COLUMN IF NOT EXISTS absurd_run_id UUID`,
+        ],
+      },
+      {
+        id: "runs/store/0012-turn-engine-indexes",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_in_flight ON runs(session_id, created_at, seq) WHERE status IN ('queued','pending','running')`,
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_queued ON runs(session_id, claim_priority, created_at, seq) WHERE status = 'queued'`,
+        ],
+      },
+      {
+        id: "runs/store/0013-turn-fairness",
+        statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ADD COLUMN IF NOT EXISTS fair_key TEXT`],
+      },
+      {
+        id: "runs/store/0014-turn-fairness-index",
+        statements: [
+          `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_fair_key ON runs(fair_key, status) WHERE fair_key IS NOT NULL AND status IN ('queued','pending','running')`,
+        ],
+      },
     ],
     [
       {
@@ -216,10 +255,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         availabilityTimer = undefined;
         availabilityProbe = q(
           `SELECT EXISTS (
-          SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
+          SELECT 1 FROM runs r WHERE r.status='pending' AND r.engine='legacy' AND r.retry_after <= $1
           AND NOT EXISTS (
             SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
-              AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
+              AND (blocked.status IN ('running','queued') OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
         ) AS available`,
           [Date.now()],
@@ -276,7 +315,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     }
     const reason =
       !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
-        ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
+        ? crashLoopReason(countedClaims(run))
         : error;
     const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
     const { rowCount } = await q(
@@ -289,10 +328,12 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     return { requeued: false, applied: rowCount > 0 };
   }
 
-  const claimable = (now: string) => `candidate.status='pending' AND candidate.retry_after <= ${now}
+  const claimable = (
+    now: string,
+  ) => `candidate.status='pending' AND candidate.engine='legacy' AND candidate.retry_after <= ${now}
     AND NOT EXISTS (
       SELECT 1 FROM runs sibling WHERE sibling.session_id=candidate.session_id
-        AND (sibling.status='running' OR (sibling.status='pending'
+        AND (sibling.status IN ('running','queued') OR (sibling.status='pending'
           AND (sibling.retry_after > ${now} OR (sibling.created_at, sibling.seq) < (candidate.created_at, candidate.seq))))
       OFFSET 0
     )`;
@@ -482,7 +523,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
            UNION
            SELECT child.* FROM runs wake JOIN runs child
            ON child.id = substring(wake.idempotency_key FROM length('subagent-return:') + 1)
-           WHERE wake.status = 'pending' AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
+           WHERE wake.status IN ('pending','queued') AND wake.attempts = 0 AND wake.turn_user_seq IS NULL
            AND wake.idempotency_key LIKE 'subagent-return:%'
            AND child.status IN ('done','failed') AND child.session_id LIKE 'agent:main:subagent:%'
            AND child.id > $2
@@ -512,12 +553,13 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     onTerminal(listener): void {
       terminalListeners.push(listener);
     },
+    emitTerminal: settle,
 
     get: getRun,
 
     async activeForThread(sessionId: string): Promise<Run | null> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, created_at ASC, seq ASC LIMIT 1",
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC LIMIT 1",
         [sessionId],
       );
       return rows[0] ? rowToRun(rows[0]) : null;
@@ -525,7 +567,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async inFlightForThread(sessionId: string): Promise<Run[]> {
       const { rows } = await q(
-        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY created_at ASC, seq ASC",
+        "SELECT * FROM runs WHERE session_id = $1 AND status IN ('queued','pending','running') ORDER BY (status = 'running') DESC, (status = 'queued') ASC, created_at ASC, seq ASC",
         [sessionId],
       );
       return rows.map(rowToRun);
@@ -534,7 +576,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     async editPendingText(runId: string, text: string, expectedText: string): Promise<boolean> {
       const { rowCount } = await q(
         `UPDATE runs SET request = (request::jsonb || jsonb_build_object('text', $2::text, 'displayText', $2::text))::text
-         WHERE id = $1 AND status = 'pending' AND attempts = 0 AND turn_user_seq IS NULL
+         WHERE id = $1 AND ${UNSTARTED} AND attempts = 0 AND turn_user_seq IS NULL
          AND COALESCE(request::jsonb ->> 'displayText', request::jsonb ->> 'text') = $3`,
         [runId, pgTextSafe(text), pgTextSafe(expectedText)],
       );
@@ -543,7 +585,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
     async withdraw(runId: string, opts): Promise<boolean> {
       const { rowCount } = await q(
-        "DELETE FROM runs WHERE id = $1 AND status = 'pending' AND (NOT $2::boolean OR (attempts = 0 AND turn_user_seq IS NULL))",
+        `DELETE FROM runs WHERE id = $1 AND ${UNSTARTED} AND (NOT $2::boolean OR (attempts = 0 AND turn_user_seq IS NULL))`,
         [runId, Boolean(opts?.unstartedOnly)],
       );
       return (rowCount ?? 0) > 0;
@@ -553,9 +595,9 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       await signals.hasDedupeKey(signal.dedupeKey!);
       const { rows } = await q(
         `WITH target AS (
-           SELECT id FROM runs WHERE id=$2 AND status IN ('pending','running') FOR UPDATE
+           SELECT id FROM runs WHERE id=$2 AND status IN ('queued','pending','running') FOR UPDATE
          ), moved AS (
-           DELETE FROM runs WHERE id=$1 AND id<>$2 AND status='pending'
+           DELETE FROM runs WHERE id=$1 AND id<>$2 AND ${UNSTARTED}
            AND COALESCE(request::jsonb->>'displayText',request::jsonb->>'text') = $5::jsonb->'request'->>'text'
            AND EXISTS (SELECT 1 FROM target) RETURNING id
          ), sent AS (
@@ -576,7 +618,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     },
 
     async activeSessionIds(): Promise<string[]> {
-      const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('pending','running')");
+      const { rows } = await q("SELECT DISTINCT session_id FROM runs WHERE status IN ('queued','pending','running')");
       return rows.map((r) => r.session_id as string);
     },
 
@@ -596,7 +638,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
     ): Promise<{ requeued: number; parked: number }> {
       const now = Date.now();
       const { rows } = await q(
-        "SELECT * FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
+        "SELECT * FROM runs WHERE status='running' AND engine='legacy' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1",
         [now],
       );
       const expired = rows.map(rowToRun);

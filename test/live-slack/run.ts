@@ -262,7 +262,7 @@ async function dumpTranscript(env: Env, scenario: Scenario, ctx: Ctx): Promise<s
       const file = path.join(OUT_DIR, "transcripts", `${slug(scenario.name)}-${found.id}.json`);
       await writeFile(
         file,
-        JSON.stringify({ scenario: scenario.name, dm: ctx.dmChannelId, entries: found.entries, llm }, null, 2),
+        JSON.stringify({ scenario: scenario.name, dm: ctx.dmChannelId, items: found.items, llm }, null, 2),
       );
       sessionIds.push(found.id);
     }
@@ -277,7 +277,7 @@ async function dumpTranscript(env: Env, scenario: Scenario, ctx: Ctx): Promise<s
       const file = path.join(OUT_DIR, "transcripts", `${slug(scenario.name)}-${found.id}.json`);
       await writeFile(
         file,
-        JSON.stringify({ scenario: scenario.name, channel: ch.id, entries: found.entries, llm }, null, 2),
+        JSON.stringify({ scenario: scenario.name, channel: ch.id, items: found.items, llm }, null, 2),
       );
       sessionIds.push(found.id);
     }

@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
@@ -28,7 +29,7 @@ test("a restored load cannot overwrite a newer open of the same session", async 
       session,
       Promise.resolve({
         session,
-        entries: [{ seq: 2, type: "assistant", createdAt: 2, payload: { text: "Newer response" } }],
+        items: [item("AgentMessage", { seq: 2, createdAt: 2, text: "Newer response" })],
       }),
     );
     h.releaseTranscript();

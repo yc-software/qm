@@ -21,7 +21,7 @@ import { defineHarness } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
@@ -80,7 +80,7 @@ async function scenario() {
     },
     {
       async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "UserMessage", text: turn.input });
         const ref = {
           current: turn.tools,
           scopeLabel: turn.scopeLabel,
@@ -92,7 +92,7 @@ async function scenario() {
         const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
         const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
         const reply = JSON.stringify(result.content);
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply, modelCalls: 1 };
       },
       async screenSecurity() {
@@ -126,7 +126,7 @@ async function scenario() {
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     featureFlags,
     sessionSyscalls,
   });

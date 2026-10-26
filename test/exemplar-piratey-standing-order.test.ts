@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -21,7 +21,7 @@ const DIRECTIVE = [
 
 test("exemplar (piratey X-link): the worker gets the standing order verbatim and threads its reply under the trigger", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-exemplar-pirate-"));
-  const built = buildApp(testConfig({ dataDir }));
+  const built = buildTestApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
     const container = "C-pirate";
@@ -45,7 +45,7 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
     const deadline = Date.now() + 5_000;
     let pending: any[] = [];
     while (Date.now() < deadline && !pending.length) {
-      pending = (await built.deliveries.pending("slack")) as any[];
+      pending = (await built.posts.pending("slack")) as any[];
       if (!pending.length) await sleep(50);
     }
     assert.equal(pending.length, 1, "exactly one pirate reply");
@@ -58,12 +58,10 @@ test("exemplar (piratey X-link): the worker gets the standing order verbatim and
 
     const workerSession = await built.sessions.getByThread(`slack:${container}:ambient:${X_LINK_TS}`);
     assert.ok(workerSession, "the ambient worker ran as its own sub-conversation");
-    const entries = await built.sessions.getEntries(workerSession!.id);
-    const wake = entries.find(
-      (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("<standing-orders"),
-    );
+    const entries = await built.sessions.getItems(workerSession!.id);
+    const wake = entries.find((e) => e.kind === "UserMessage" && (e.text ?? "").includes("<standing-orders"));
     assert.ok(wake, "the wake carries a standing-orders element");
-    const text = String((wake!.payload as any).text);
+    const text = wake!.text ?? "";
     for (const line of ["DON'T: respond piratey to messages without an X link", "(per alice, updated 2026-07-01)"]) {
       assert.ok(text.includes(line), `standing order not verbatim in the wake: missing "${line}"`);
     }

@@ -149,7 +149,7 @@ test("app-only sessions cannot reach or renew on any ordinary portal surface", a
     "/admin/api/whoami",
     "/api/whoami",
     "/api/sessions",
-    "/api/deliveries/events",
+    "/api/session-events",
     "/ws",
     "/v1/status",
     "/v1/deployments",

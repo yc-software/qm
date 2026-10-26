@@ -997,7 +997,7 @@ export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
     // One request per visitor per app per day — the idempotent outbox absorbs button mashing.
     const day = Math.floor(Date.now() / 86_400_000);
     try {
-      await app.enqueueDelivery({
+      await app.postToSurface({
         destination: {
           ...principalDestination(ownerId, viewer),
           deploymentAccess: { deploymentId: d.id, requesterId: viewer },

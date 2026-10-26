@@ -1,5 +1,6 @@
 import { fetchServerSentEvents } from "@tanstack/ai-client";
 import { errMessage } from "../../chassis/src/errors.ts";
+import type { RunActivityEntry } from "./items.ts";
 
 type Result = {
   content: string;
@@ -10,12 +11,12 @@ type Desk = {
   call(args: unknown, clientId?: string, deadline?: number): Promise<Result>;
   stop?(clientId: string): Promise<unknown>;
 };
-type Activity = {
-  type: string;
-  payload?: { client?: boolean; tool?: string; callId?: string; args?: unknown };
-  createdAt?: number;
+export type DesktopRun = {
+  desktopClientId?: string;
+  status?: string;
+  alive?: boolean;
+  activity?: RunActivityEntry[];
 };
-export type DesktopRun = { desktopClientId?: string; status?: string; alive?: boolean; activity?: Activity[] };
 
 function desktop(): Desk | undefined {
   return (globalThis as { window?: { qmDesktop?: { computer?: Desk; platform?: string } } }).window?.qmDesktop
@@ -44,24 +45,23 @@ export function createDesktopExecutor(
   const handled = new Set<string>();
   return async (run: DesktopRun): Promise<void> => {
     if (run.desktopClientId !== clientId || run.status !== "running" || !run.alive) return;
-    const complete = new Set(
-      run.activity?.filter((entry) => entry.type === "tool_result").map((entry) => entry.payload?.callId),
-    );
-    for (const entry of run.activity ?? []) {
-      const payload = entry.payload;
+    const items = (run.activity ?? []).flatMap((entry) => ("item" in entry ? [entry.item] : []));
+    const complete = new Set(items.filter((item) => item.kind === "ToolResult").map((item) => item.callId));
+    for (const item of items) {
+      const callId = item.callId;
       if (
-        entry.type !== "tool_call" ||
-        !payload?.client ||
-        payload.tool !== "desktop" ||
-        !payload.callId ||
-        complete.has(payload.callId) ||
-        handled.has(payload.callId)
+        item.kind !== "ToolCall" ||
+        item.body.client !== true ||
+        item.tool !== "desktop" ||
+        !callId ||
+        complete.has(callId) ||
+        handled.has(callId)
       )
         continue;
-      handled.add(payload.callId);
-      if (!entry.createdAt || Date.now() - entry.createdAt > 55_000) continue;
-      const result = await executeComputer(desk, payload.args, entry.createdAt + 50_000);
-      await send(payload.callId, result);
+      handled.add(callId);
+      if (!item.createdAt || Date.now() - item.createdAt > 55_000) continue;
+      const result = await executeComputer(desk, item.body.args, item.createdAt + 50_000);
+      await send(callId, result);
     }
   };
 }

@@ -1,7 +1,6 @@
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
-import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import { deliveryCandidatesFor } from "../core/orchestrator/turn-helpers.ts";
 import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -13,12 +12,15 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SpawnMeta } from "../types.ts";
+import { isReply, proseText, type Item } from "./items.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
+import { isUnstarted, stopRun, type Run, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+
+const CHILD_DONE_RECHECK_MS = 60_000;
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 
@@ -240,9 +242,9 @@ export interface SessionSyscallDeps {
     | "childrenOf"
     | "addParticipant"
     | "updateTitle"
-    | "getEntries"
-    | "latestEntrySeq"
-    | "visibleEntries"
+    | "getItems"
+    | "latestItemSeq"
+    | "visibleItems"
     | "getForParticipant"
   >;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "latestForThread" | "getByDedupKey" | "get" | "withdraw">;
@@ -276,26 +278,24 @@ function autoTitle(task: string): string {
   return line.length <= 60 ? line : `${line.slice(0, 57).trimEnd()}…`;
 }
 
-function entryText(entry: SessionEntry): string | undefined {
-  const payload = entry.payload as { text?: unknown; tool?: unknown; aside?: unknown } | null;
-  if (typeof payload?.text === "string" && payload.text.trim()) return payload.text;
-  if (typeof payload?.tool === "string") return `[${payload.tool}]`;
+function itemText(item: Item): string | undefined {
+  const text = proseText(item);
+  if (text?.trim()) return text;
+  if (item.tool) return `[${item.tool}]`;
   return undefined;
 }
 
-function lastAssistantText(entries: readonly SessionEntry[]): string | undefined {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i]!;
-    const stop = e.type === "system" ? (e.payload as { kind?: unknown; reason?: unknown } | null) : null;
-    if (stop?.kind === TURN_STOPPED_KIND) {
-      const before = entries[i - 1];
-      const partial = before?.type === "assistant" ? entryText(before) : "";
-      return (
-        partial || `[system] Subagent stopped${typeof stop.reason === "string" ? ` ${stop.reason}` : ""}. No reply.`
-      );
+function lastAssistantText(items: readonly Item[]): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const e = items[i]!;
+    if (e.kind === "Stop") {
+      const before = items[i - 1];
+      const partial = before && isReply(before) ? itemText(before) : "";
+      const reason = e.body.reason;
+      return partial || `[system] Subagent stopped${typeof reason === "string" ? ` ${reason}` : ""}. No reply.`;
     }
-    if (e.type !== "assistant" && e.type !== "text") continue;
-    const text = entryText(e);
+    if (e.kind !== "AgentMessage" || e.variant === "files_delivered") continue;
+    const text = itemText(e);
     if (text) return text;
   }
   return undefined;
@@ -476,22 +476,19 @@ async function sessionRunCancelled(
 export async function stopSessionTree(
   deps: {
     sessions: Pick<SessionStore, "childrenOf">;
-    runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get">;
+    runs: Pick<RunStore, "inFlightForThread" | "withdraw" | "get" | "cancelTurn" | "cancelTree">;
     signals: Pick<RunSignalStore, "send">;
   },
   root: Session,
   reason?: string,
 ): Promise<boolean> {
-  let stopped = false;
-  for (const session of await treeSessions(deps.sessions, root)) {
-    if (session.scopeId !== root.scopeId) continue;
-    for (const run of await deps.runs.inFlightForThread(session.threadRef)) {
-      await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
-      if (run.status === "pending") await deps.runs.withdraw(run.id);
-      stopped = true;
-    }
-  }
-  return stopped;
+  const tree = (await treeSessions(deps.sessions, root)).filter((session) => session.scopeId === root.scopeId);
+  const inFlight: Run[] = [];
+  for (const session of tree) inFlight.push(...(await deps.runs.inFlightForThread(session.threadRef)));
+  for (const run of inFlight) await deps.signals.send(run.id, { kind: "abort", ...(reason ? { reason } : {}) });
+  if (deps.runs.cancelTree) await deps.runs.cancelTree(tree.map((session) => session.threadRef));
+  for (const run of inFlight) if (run.engine !== "absurd" || !deps.runs.cancelTree) await stopRun(deps.runs, run);
+  return inFlight.length > 0;
 }
 
 export async function sessionTreeRunCount(
@@ -551,13 +548,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
       }
 
       const visibleTitle = (target: Session) => target.title?.trim() || target.id;
-      async function visibleHistory(target: Session): Promise<SessionEntry[]> {
+      async function visibleHistory(target: Session): Promise<Item[]> {
         const audience = binding.request.conversation.audience.length
           ? binding.request.conversation.audience
           : [binding.request.actor];
         const views = await Promise.all(
           [...new Set([binding.request.actor.id, ...audience.map((p) => p.id)])].map((id) =>
-            deps.sessions.visibleEntries(target.id, id),
+            deps.sessions.visibleItems(target.id, id),
           ),
         );
         const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
@@ -609,8 +606,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   ]);
                   const readable = await Promise.all(
                     [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
+                      (await deps.sessions.visibleItems(sender.id, id)).some(
+                        (entry) => entry.seq === message.sourceEntrySeq,
                       ),
                     ),
                   );
@@ -812,7 +809,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
+                const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -914,9 +911,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const entries = await visibleHistory(target);
           const lines: string[] = [];
           for (const entry of entries.slice(-limit)) {
-            const text = entryText(entry);
+            const text = itemText(entry);
             if (!text) continue;
-            lines.push(`${entry.type}#${entry.seq} ${snippet(text, 300)}`);
+            lines.push(`${entry.kind}#${entry.seq} ${snippet(text, 300)}`);
           }
           let rendered = lines.join("\n");
           if (rendered.length > maxChars) rendered = `…${rendered.slice(rendered.length - maxChars)}`;
@@ -1029,11 +1026,11 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
 
 export interface SubagentMailDeps {
   signals?: Pick<RunSignalStore, "pending">;
-  deliveries?: Pick<DeliveryStore, "enqueue">;
+  outbound?: Pick<Outbound, "send">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
-  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
+  sessions: Pick<SessionStore, "get" | "getByThread" | "getItems" | "latestItemSeq" | "visibleItems">;
+  runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw" | "deferReturn"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
@@ -1143,6 +1140,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     "detectContext",
     "detectOpener",
     "conversationHeader",
+    "wakeCause",
   ] as const)
     delete request[key];
   if (!originalParent) request.addressed = false;
@@ -1151,19 +1149,19 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
   if (outputSeq !== undefined && outputSeq !== null) {
     for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
+      const visible = await deps.sessions.visibleItems(child.id, id);
       if (!visible.some((entry) => entry.seq === outputSeq))
         throw new Error("the current parent audience cannot read this child result");
     }
   }
-  if (result?.attachments?.length && deps.deliveries) {
+  if (result?.attachments?.length && deps.outbound) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
       candidate ??
       (meta.origin?.kind === "automation" ? meta.origin.destination : undefined) ??
       principalDestination(meta.actor.id, meta.actor.id);
-    await deps.deliveries.enqueue({
+    await deps.outbound.send({
       destination,
       text: "",
       attachments: result.attachments,
@@ -1196,16 +1194,28 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     const existing = await deps.runs.getByDedupKey(dedupKey);
     const unread = (await deps.mailbox.pending(parent.id)).some((message) => message.id === `subagent-mail-${run.id}`);
     if (!unread) {
-      if (existing?.status === "pending") await deps.runs.withdraw(existing.id, { unstartedOnly: true });
+      if (existing && isUnstarted(existing)) await deps.runs.withdraw(existing.id, { unstartedOnly: true });
       return true;
     }
-    if (existing && (existing.status === "done" || existing.status === "failed")) return true;
-    if ((await deps.runs.inFlightForThread(parent.threadRef)).length) return false;
+    const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
+    const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
+    const absurdParent = inFlight.every((turn) => turn.engine === "absurd");
+    const sharedWake = inFlight.some(
+      (turn) =>
+        turn.status === "queued" &&
+        turn.request.wakeCause === "child_done" &&
+        turn.request.actor.id === prepared.actor.id,
+    );
+    if (inFlight.length && !absurdParent) return false;
+    if (sharedWake) {
+      await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
+      return false;
+    }
     const wake =
       "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
-    await deps.runs.enqueue({
+    const { run: woken } = await deps.runs.enqueue({
       sessionId: parent.threadRef,
-      dedupKey,
+      dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
       request: {
         ...prepared,
         ...(surfaceTools ? { surfaceTools } : {}),
@@ -1213,9 +1223,11 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         origin: sessionTurnOrigin(prepared.origin, wake),
         text: wake,
         displayText: "Delegated task completed",
+        wakeCause: "child_done",
       },
       maxAttempts: deps.maxAttempts,
     });
+    if (woken.engine === "absurd") await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
     return false;
   }
   return true;

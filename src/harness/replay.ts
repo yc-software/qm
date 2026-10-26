@@ -9,17 +9,24 @@ import type {
   Usage,
   UserMessage,
 } from "@earendil-works/pi-ai";
-import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.ts";
+import type { ConversationTurn, OverheardMessage } from "../types.ts";
+import {
+  isOverheard,
+  isReply,
+  isUserMessage,
+  messageTs,
+  stepMessage,
+  type Item,
+  type NewItem,
+} from "../sessions/items.ts";
 import { deliveryNote } from "../core/attachments.ts";
-import { goalCancelledNote } from "./goal.ts";
+import { GOAL_CANCELLED, goalCancelledNote } from "./goal.ts";
 import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
 import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
-import { contextSummaryPayload } from "../sessions/session-store.ts";
+import { contextSummary } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
-
-export const TURN_STOPPED_KIND = "turn_stopped";
 
 function turnStoppedNote(reason: string): string {
   return `[system] Turn stopped ${reason}.`;
@@ -29,31 +36,23 @@ function stoppedToolResult(reason: string): string {
   return `[system] Turn stopped ${reason} while this call was running; its outcome wasn't recorded. Check what happened before retrying.`;
 }
 
-function cutOffByStop(result: SessionEntry | undefined): boolean {
-  return !result || (result.payload as { stopped?: unknown } | null)?.stopped === true;
+function cutOffByStop(result: Item | undefined): boolean {
+  return !result || result.body.stopped === true;
 }
 
 function stoppedToolCalls(
-  history: readonly SessionEntry[],
-  resultByCallId: ReadonlyMap<string, SessionEntry>,
-): { reasons: Map<string, string>; folded: Set<SessionEntry> } {
+  history: readonly Item[],
+  resultByCallId: ReadonlyMap<string, Item>,
+): { reasons: Map<string, string>; folded: Set<Item> } {
   const reasons = new Map<string, string>();
-  const folded = new Set<SessionEntry>();
+  const folded = new Set<Item>();
   let open: string[] = [];
   for (const e of history) {
-    const p = (e.payload ?? {}) as {
-      callId?: unknown;
-      kind?: unknown;
-      reason?: unknown;
-      steered?: unknown;
-      overheard?: unknown;
-    };
-    if (e.type === "user" && p.steered !== true && p.overheard !== true) open = [];
-    else if (e.type === "tool_call" && typeof p.callId === "string" && cutOffByStop(resultByCallId.get(p.callId)))
-      open.push(p.callId);
-    else if (e.type === "system" && p.kind === TURN_STOPPED_KIND && typeof p.reason === "string") {
+    if (e.kind === "UserMessage" && !isOverheard(e)) open = [];
+    else if (e.kind === "ToolCall" && e.callId && cutOffByStop(resultByCallId.get(e.callId))) open.push(e.callId);
+    else if (e.kind === "Stop" && typeof e.body.reason === "string") {
       if (open.length) folded.add(e);
-      for (const callId of open) reasons.set(callId, p.reason);
+      for (const callId of open) reasons.set(callId, e.body.reason);
       open = [];
     }
   }
@@ -78,19 +77,27 @@ export interface OverheardEntryPayload {
   mentions?: Record<string, string>;
 }
 
-function overheardPayload(e: SessionEntry): OverheardEntryPayload | null {
-  if (e.type !== "user") return null;
-  const p = e.payload as { overheard?: unknown; ts?: unknown; text?: unknown } | null;
-  if (!p || p.overheard !== true || typeof p.ts !== "string") return null;
-  return p as unknown as OverheardEntryPayload;
+function overheardOf(e: Item): OverheardEntryPayload | null {
+  if (!isOverheard(e) || !e.externalId) return null;
+  const { overheard: _o, ...rest } = e.body;
+  return {
+    ...(rest as Omit<OverheardEntryPayload, "overheard" | "ts" | "text">),
+    overheard: true,
+    ts: e.externalId,
+    text: e.text ?? "",
+  };
 }
 
-export function recordedMessageTimestamps(history: readonly SessionEntry[]): Set<string> {
+export function overheardItem(p: OverheardEntryPayload): NewItem<"UserMessage"> {
+  const { ts, text, ...body } = p;
+  return { kind: "UserMessage", externalId: ts, text, body };
+}
+
+export function recordedMessageTimestamps(history: readonly Item[]): Set<string> {
   const seen = new Set<string>();
   for (const e of history) {
-    if (e.type !== "user") continue;
-    const ts = (e.payload as { ts?: unknown } | null)?.ts;
-    if (typeof ts === "string" && ts) seen.add(ts);
+    const ts = messageTs(e);
+    if (ts) seen.add(ts);
   }
   return seen;
 }
@@ -134,15 +141,15 @@ const DAY_MARKER_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: DEFAULT_CRON_TIMEZONE,
 });
 
-function entryDay(e: SessionEntry): string {
-  const ov = overheardPayload(e);
+function itemDay(e: Item): string {
+  const ov = overheardOf(e);
   const sent = ov ? Date.parse(isoFromTs(ov.ts)) : Number.NaN;
   return DAY_MARKER_FORMAT.format(Number.isFinite(sent) ? sent : e.createdAt);
 }
 
-export function dayMarkerPrefix(previous: SessionEntry | undefined, e: SessionEntry): string {
-  const day = entryDay(e);
-  return previous && entryDay(previous) === day ? "" : `── ${day} ──\n`;
+export function dayMarkerPrefix(previous: Item | undefined, e: Item): string {
+  const day = itemDay(e);
+  return previous && itemDay(previous) === day ? "" : `── ${day} ──\n`;
 }
 
 export function renderOverheard(p: OverheardEntryPayload): string {
@@ -180,13 +187,9 @@ export type ToolCallWire = Partial<Omit<ToolCall, "type" | "id" | "arguments">> 
 export type StoredResultContent = TextContent | Omit<ImageContent, "data">;
 export type ToolResultWire = Partial<Pick<ToolResultMessage, "isError">> & { content?: StoredResultContent[] };
 
-export const WAKE_KIND = "wake";
-
 export const AGENT_OPENED_TEXT = "[The agent opened this conversation.]";
 
 export const OMITTED_IMAGE_TEXT = "[image omitted from replay]";
-
-const ENVELOPE_KEYS = new Set(["step"]);
 
 export function zeroUsage(): Usage {
   return {
@@ -211,17 +214,19 @@ export function userPromptText(payload: {
     .join("\n\n");
 }
 
-function entryText(e: SessionEntry): string {
-  return String((e.payload as { text?: string } | null)?.text ?? "").trim();
+function itemText(e: Item): string {
+  return (e.text ?? "").trim();
 }
 
-function entryStep(e: SessionEntry): ReplayStep | null {
-  const step = (e.payload as { step?: unknown } | null)?.step;
-  return isObj(step) && typeof step.id === "string" ? (step as unknown as ReplayStep) : null;
+function itemStep(e: Item): ReplayStep | null {
+  const message = stepMessage(e);
+  if (!message || typeof message.id !== "string") return null;
+  return { ...(message as unknown as ReplayStep), ...(e.step !== null ? { index: e.step } : {}) };
 }
 
-function storedBlock(payload: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(payload).filter(([key]) => !ENVELOPE_KEYS.has(key)));
+function storedBlock(body: Record<string, unknown>): Record<string, unknown> {
+  const { wire: _wire, ...rest } = body;
+  return rest;
 }
 
 export function legacyAssistant(content: AssistantMessage["content"], timestamp: number): AssistantMessage {
@@ -239,35 +244,42 @@ export function legacyAssistant(content: AssistantMessage["content"], timestamp:
 
 type Positioned = { index: number; block: AssistantMessage["content"][number] };
 
-function stepBlocks(e: SessionEntry, step: ReplayStep): Positioned[] {
-  const p = (e.payload ?? {}) as Record<string, unknown>;
+function stepBlocks(e: Item, step: ReplayStep): Positioned[] {
+  const p = e.body;
   const at = step.index ?? 0;
-  if (e.type === "thinking") return [{ index: at, block: { ...storedBlock(p), type: "thinking" } as ThinkingContent }];
-  if (e.type === "text") return [{ index: at, block: { ...storedBlock(p), type: "text" } as TextContent }];
-  if (e.type === "tool_call") {
-    const id = typeof p.callId === "string" ? p.callId : "";
-    if (!id) return [];
-    const { argumentsJson, ...wire } = (p.wire ?? {}) as ToolCallWire;
+  if (e.kind === "Reasoning")
+    return [{ index: at, block: { ...storedBlock(p), type: "thinking", thinking: e.text ?? "" } as ThinkingContent }];
+  if (e.kind === "AgentMessage" && e.variant === "narration")
+    return [{ index: at, block: { ...storedBlock(p), type: "text", text: e.text ?? "" } as TextContent }];
+  if (e.kind === "ToolCall") {
+    if (!e.callId) return [];
+    const {
+      argumentsJson,
+      message: _message,
+      ...wire
+    } = (isObj(p.wire) ? p.wire : {}) as ToolCallWire & {
+      message?: unknown;
+    };
     const block: ToolCall = {
       type: "toolCall",
-      id,
-      name: typeof p.tool === "string" ? p.tool : "tool",
+      id: e.callId,
+      name: e.tool ?? "tool",
       arguments:
-        argumentsJson === undefined ? recordedToolArguments(p) : (JSON.parse(argumentsJson) as ToolCall["arguments"]),
+        argumentsJson === undefined ? recordedToolArguments(e) : (JSON.parse(argumentsJson) as ToolCall["arguments"]),
       ...wire,
     };
     return [{ index: at, block }];
   }
-  if (e.type !== "assistant") return [];
+  if (!isReply(e)) return [];
   if (Array.isArray(p.parts))
     return (p.parts as Array<TextContent & { index: number }>).map(({ index, ...block }) => ({ index, block }));
   if (step.index === undefined) return [];
   const extra = isObj(p.textBlock) ? p.textBlock : {};
-  return [{ index: at, block: { ...extra, type: "text", text: String(p.text ?? "") } as TextContent }];
+  return [{ index: at, block: { ...extra, type: "text", text: e.text ?? "" } as TextContent }];
 }
 
-export function recordedToolArguments(p: Record<string, unknown>): Record<string, unknown> {
-  const { tool: _tool, callId: _c, rerun, result: _r, step: _s, wire: _w, ...recorded } = p;
+export function recordedToolArguments(call: Pick<Item, "body">): Record<string, unknown> {
+  const { rerun, result: _r, wire: _w, ...recorded } = call.body;
   const input = (rerun as { input?: unknown } | undefined)?.input;
   if (isObj(input)) return { ...input, retrySafe: true };
   if (typeof recorded.bytes !== "number" || typeof recorded.text === "string") return recorded;
@@ -288,51 +300,44 @@ function resultContent(content: StoredResultContent[]): ToolResultMessage["conte
 
 function toolResultMessage(
   call: ToolCall,
-  recordedCall: SessionEntry | undefined,
-  re: SessionEntry | undefined,
+  recordedCall: Item | undefined,
+  re: Item | undefined,
   at: number,
   missing: string = INTERRUPTED_TOOL_RESULT,
 ): ToolResultMessage {
   const base = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name };
   const text = (value: string) => [{ type: "text" as const, text: value }];
   if (!re) {
-    const recorded = (recordedCall?.payload as { result?: unknown } | null)?.result;
+    const recorded = recordedCall?.body.result;
     return typeof recorded === "string"
       ? { ...base, content: text(recorded), isError: false, timestamp: at }
       : { ...base, content: text(missing), isError: true, timestamp: at };
   }
-  const p = (re.payload ?? {}) as {
-    interrupted?: unknown;
-    stop?: RunStop;
-    isError?: unknown;
-    result?: unknown;
-    wire?: ToolResultWire;
-  };
-  if (p.interrupted === true)
+  if (re.body.interrupted === true)
     return {
       ...base,
-      content: text(unrecordedToolResult(p.stop)),
+      content: text(unrecordedToolResult(re.body.stop as RunStop | undefined)),
       isError: true,
       timestamp: re.createdAt,
     };
+  const wire = re.body.wire as ToolResultWire | undefined;
   return {
     ...base,
-    content: p.wire?.content ? resultContent(p.wire.content) : text(String(p.result ?? "")),
-    isError: p.wire?.isError ?? p.isError === true,
+    content: wire?.content ? resultContent(wire.content) : text(re.text ?? ""),
+    isError: wire?.isError ?? re.isError === true,
     timestamp: re.createdAt,
   };
 }
 
 export function reconstructMessagesFromHistory(
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   opts?: { requireUserStart?: boolean },
 ): PiReplayMessage[] {
-  const resultByCallId = new Map<string, SessionEntry>();
-  const callById = new Map<string, SessionEntry>();
+  const resultByCallId = new Map<string, Item>();
+  const callById = new Map<string, Item>();
   for (const e of history) {
-    if (e.type !== "tool_result" && e.type !== "tool_call") continue;
-    const cid = (e.payload as { callId?: unknown } | null)?.callId;
-    if (typeof cid === "string" && cid) (e.type === "tool_call" ? callById : resultByCallId).set(cid, e);
+    if (e.kind === "ToolCall" && e.callId) callById.set(e.callId, e);
+    else if (e.kind === "ToolResult" && e.callId) resultByCallId.set(e.callId, e);
   }
   const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
@@ -345,18 +350,18 @@ export function reconstructMessagesFromHistory(
     timestamp: ts,
   });
 
-  let previous: SessionEntry | undefined;
-  let previousUser: SessionEntry | undefined;
+  let previous: Item | undefined;
+  let previousUser: Item | undefined;
   let batch: AssistantMessage | undefined;
   for (const e of history) {
     const prior = previous;
     previous = e;
-    const summary = contextSummaryPayload(e);
+    const summary = contextSummary(e);
     if (summary) {
       raw.push(userMsg(`${CONTEXT_SUMMARY_HEADER}\n${summary.text}`, e.createdAt));
       continue;
     }
-    const step = entryStep(e);
+    const step = itemStep(e);
     if (step) {
       if (step.stopReason === "aborted" || step.stopReason === "error") continue;
       const blocks = stepBlocks(e, step);
@@ -385,16 +390,15 @@ export function reconstructMessagesFromHistory(
       }
       continue;
     }
-    if (e.type === "user") {
+    if (isUserMessage(e)) {
       const day = dayMarkerPrefix(previousUser, e);
       previousUser = e;
-      const ov = overheardPayload(e);
+      const ov = overheardOf(e);
       if (ov) {
         if (ov.text.trim() || ov.files?.length) raw.push(userMsg(day + renderOverheard(ov), e.createdAt));
       } else {
-        const p = (e.payload ?? {}) as Record<string, unknown>;
-        const t = userPromptText(p);
-        const images = Array.isArray(p.images) ? (p.images as ReplayImageRef[]) : [];
+        const t = userPromptText({ ...e.body, text: e.text });
+        const images = Array.isArray(e.body.images) ? (e.body.images as ReplayImageRef[]) : [];
         if (t || images.length)
           raw.push({
             role: "user",
@@ -402,32 +406,32 @@ export function reconstructMessagesFromHistory(
             timestamp: e.createdAt,
           });
       }
-    } else if (e.type === "assistant") {
-      const t = entryText(e);
+    } else if (isReply(e)) {
+      const t = itemText(e);
       if (t) raw.push(legacyAssistant([{ type: "text", text: t }], e.createdAt));
-    } else if (e.type === "delivery") {
-      const t = entryText(e);
+    } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
+      const t = itemText(e);
       if (t) raw.push(userMsg(deliveryNote(t), e.createdAt));
-    } else if (e.type === "system") {
+    } else if (e.kind === "Retraction") {
       const revision = messageRevision(e);
-      const p = (e.payload ?? {}) as { kind?: unknown; text?: unknown; objective?: unknown; reason?: unknown };
       if (revision) raw.push(userMsg(renderMessageRevision(revision), e.createdAt));
-      else if (p.kind === WAKE_KIND && typeof p.text === "string") raw.push(userMsg(p.text, e.createdAt));
-      else if (p.kind === "goal_cancelled" && typeof p.objective === "string")
-        raw.push(userMsg(goalCancelledNote(p.objective), e.createdAt));
-      else if (p.kind === TURN_STOPPED_KIND && typeof p.reason === "string" && !stopped.folded.has(e))
-        raw.push(userMsg(turnStoppedNote(p.reason), e.createdAt));
-    } else if (e.type === "tool_call") {
-      const p = (e.payload ?? {}) as Record<string, unknown>;
-      const cid = typeof p.callId === "string" ? p.callId : "";
-      if (!cid) continue;
+    } else if (e.kind === "Wake") {
+      const { kind, text, objective } = e.body;
+      if (kind === GOAL_CANCELLED) {
+        if (typeof objective === "string") raw.push(userMsg(goalCancelledNote(objective), e.createdAt));
+      } else if (typeof text === "string") raw.push(userMsg(text, e.createdAt));
+    } else if (e.kind === "Stop") {
+      if (typeof e.body.reason === "string" && !stopped.folded.has(e))
+        raw.push(userMsg(turnStoppedNote(e.body.reason), e.createdAt));
+    } else if (e.kind === "ToolCall") {
+      if (!e.callId) continue;
       const block: ToolCall = {
         type: "toolCall",
-        id: cid,
-        name: typeof p.tool === "string" ? p.tool : "tool",
-        arguments: recordedToolArguments(p),
+        id: e.callId,
+        name: e.tool ?? "tool",
+        arguments: recordedToolArguments(e),
       };
-      if (prior?.type === "tool_call" && batch && raw.at(-1) === batch) batch.content.push(block);
+      if (prior?.kind === "ToolCall" && batch && raw.at(-1) === batch) batch.content.push(block);
       else {
         batch = legacyAssistant([block], e.createdAt);
         raw.push(batch);
@@ -510,16 +514,16 @@ export function planColdStartSeed(
   return "none";
 }
 
-export function replayPreamble(history: SessionEntry[]): string {
-  const textOf = (e: SessionEntry): string =>
-    String((e.payload as { text?: string } | null)?.text ?? "")
+export function replayPreamble(history: Item[]): string {
+  const textOf = (e: Item): string =>
+    (e.text ?? "")
       .trim()
       .replaceAll("<<<BEGIN TRANSCRIPT", "BEGIN_TRANSCRIPT")
       .replaceAll("END TRANSCRIPT>>>", "END_TRANSCRIPT");
   const lines: string[] = [];
   for (const e of history) {
-    const summary = contextSummaryPayload(e);
-    const overheard = overheardPayload(e);
+    const summary = contextSummary(e);
+    const overheard = overheardOf(e);
     if (summary) lines.push(`Prior summary: ${summary.text}`);
     else if (overheard) {
       if (overheard.text.trim() || overheard.files?.length) {
@@ -527,8 +531,8 @@ export function replayPreamble(history: SessionEntry[]): string {
           `Overheard (${overheard.sourceRole === "agent" ? "agent" : overheard.name?.trim() || "someone"}): ${overheard.text}${overheard.files?.length ? ` (files: ${overheard.files.join(", ")})` : ""}`,
         );
       }
-    } else if (e.type === "user" && textOf(e)) lines.push(`User: ${textOf(e)}`);
-    else if (e.type === "assistant" && textOf(e)) lines.push(`Assistant: ${textOf(e)}`);
+    } else if (isUserMessage(e) && textOf(e)) lines.push(`User: ${textOf(e)}`);
+    else if (isReply(e) && textOf(e)) lines.push(`Assistant: ${textOf(e)}`);
   }
   if (!lines.length) return "";
   return [

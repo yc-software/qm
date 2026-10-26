@@ -157,11 +157,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ? (text: string): void => {
           void deps
             .runActivity!.append(input.runId!, {
+              marker: "sandbox_status",
               seq: sandboxStatusSeq++,
-              parentSeq: null,
-              type: "sandbox_status",
-              payload: { text },
               createdAt: Date.now(),
+              text,
             })
             .catch(swallowAs("orchestrator: sandbox status append", undefined));
         }

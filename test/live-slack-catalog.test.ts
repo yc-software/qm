@@ -1,3 +1,4 @@
+import { storedItem } from "../src/sessions/items.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
@@ -121,22 +122,30 @@ for (const [name, tool] of [
     ctx.env.core = {
       findSessionByThread: async () => ({
         id: "session",
-        entries: [
-          {
-            type: "tool_result",
-            payload: {
+        items: [
+          storedItem(
+            {
+              kind: "ToolResult",
               tool,
-              action: "exec",
-              code: 0,
+              callId: "c1",
               isError: false,
-              timedOut: false,
-              result: `${output}\n\n[exit 0]`,
+              text: `${output}\n\n[exit 0]`,
+              body: { action: "exec", code: 0, timedOut: false },
             },
-          },
+            { sessionId: "session", seq: 1, createdAt: 1 },
+          ),
         ],
       }),
       getSession: async () => ({
-        entries: Date.now() >= 130_000 ? [{ type: "assistant", payload: { workFinishedAt: 130_000 } }] : [],
+        items:
+          Date.now() >= 130_000
+            ? [
+                storedItem(
+                  { kind: "AgentMessage", body: { workFinishedAt: 130_000 } },
+                  { sessionId: "session", seq: 2, createdAt: 2 },
+                ),
+              ]
+            : [],
       }),
       getSessionLlm: async () => {
         assert.ok(Date.now() >= 130_000, "metrics must be read after the turn finishes");
@@ -168,7 +177,12 @@ test("performance check rejects failed execution before evaluating timing", asyn
   ctx.env.core = {
     findSessionByThread: async () => ({
       id: "session",
-      entries: [{ type: "tool_result", payload: { tool: "execute", isError: true } }],
+      items: [
+        storedItem(
+          { kind: "ToolResult", tool: "execute", callId: "c1", isError: true },
+          { sessionId: "session", seq: 1, createdAt: 1 },
+        ),
+      ],
     }),
     getSessionLlm: async () => ({ requests: [{ stepGapMs: 1, gapPhases: {} }] }),
   } as never;

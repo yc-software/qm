@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
 import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
@@ -105,7 +105,7 @@ async function harness(opts?: {
   const fake = fakeSandbox();
   const monitors = createMonitorStore();
   const processes = createMemoryProcessRegistry();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -118,7 +118,7 @@ async function harness(opts?: {
     monitors,
     processes,
     sandbox: fake.sandbox,
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity,
     run,
@@ -149,7 +149,7 @@ async function harness(opts?: {
       ...overrides,
     });
 
-  return { ...fake, monitors, processes, deliveries, calls, poller, arm, identity };
+  return { ...fake, monitors, processes, outbound, calls, poller, arm, identity };
 }
 
 test("new output wakes the agent as a first-class live turn in the arming conversation", async () => {
@@ -174,7 +174,7 @@ test("new output wakes the agent as a first-class live turn in the arming conver
     audienceScopeId: scopeId("personal", "U1"),
   });
   assert.equal(
-    (await h.deliveries.pending("slack")).length,
+    (await h.outbound.pending("slack")).length,
     0,
     "no separate poller-side enqueue — the live turn owns delivery",
   );
@@ -329,7 +329,7 @@ test("a wake whose turn didn't complete is reported to the destination, not sile
   await h.poller.tick();
 
   assert.equal(h.calls.length, 1);
-  const pending = await h.deliveries.pending("slack");
+  const pending = await h.outbound.pending("slack");
   assert.match(pending[0]?.text ?? "", /⚠️.*could not run.*rate limit/);
   const after = await h.monitors.get(m.id);
   assert.equal(after?.cursor, "line\n".length);
@@ -531,7 +531,7 @@ test("watch wakes and Slack notices use the saved purpose with a legacy command 
     h.append("p-1", "compiling...\n");
     await h.poller.tick();
     assert.ok(h.calls[0]?.text.includes(purpose ?? "bg: npm run build"));
-    const notices = await h.deliveries.pending("slack");
+    const notices = await h.outbound.pending("slack");
     assert.ok(notices[0]?.text.includes(purpose ?? "bg: npm run build"));
   }
 });

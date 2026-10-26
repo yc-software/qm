@@ -73,7 +73,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
   const calls = { provision: 0, read: 0, put: 0, grant: 0 };
   const tools = createSurfaceToolDeps({
     deps: {
-      deliveries: {},
+      outbound: {},
       sandbox: {
         async readFileBytes() {
           calls.read += 1;
@@ -110,7 +110,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
 test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
   const channelPolicy = createMemoryChannelPolicyStore();
   const tools = createSurfaceToolDeps({
-    deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
+    deps: { outbound: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
     actor: { id: "U1" },
     conversation: { kind: "channel", channelRef: "C1" },
@@ -182,13 +182,12 @@ test("collectNamedOutbound: a doomed call's rollback never deletes an artifact a
 });
 
 test("surface post returns the sent attachments' metadata (so surfaces can render them)", async () => {
-  const enqueued: unknown[] = [];
+  const sent: unknown[] = [];
   const tools = createSurfaceToolDeps({
     deps: {
-      deliveries: {
-        async enqueue(input: unknown) {
-          enqueued.push(input);
-          return { id: "d1" };
+      outbound: {
+        async send(input: unknown) {
+          sent.push(input);
         },
       },
       sandbox: fakeSandbox({ "qm-brand/cover.png": bytes("PNGDATA") }),
@@ -216,7 +215,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
   } as unknown as SurfaceToolsContext)!;
   const r = await tools.post("Here they are", undefined, ["qm-brand/cover.png"]);
   assert.equal(r.ok, true);
-  assert.equal(enqueued.length, 1, "the delivery was enqueued");
+  assert.equal(sent.length, 1, "the delivery was sent");
   assert.equal(r.attachments?.length, 1, "the post result names what it sent");
   const a = r.attachments![0]!;
   assert.equal(a.name, "cover.png");

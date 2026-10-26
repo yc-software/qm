@@ -1,10 +1,11 @@
-export interface RunActivityEntry {
-  seq: number;
-  parentSeq: number | null;
-  type: string;
-  payload: unknown;
-  createdAt: number;
-}
+import type { Item } from "../sessions/items.ts";
+export type RunActivityEntry =
+  | { item: Item }
+  | { marker: "text_start"; seq: number; createdAt: number; phase?: string; streamOffset?: number }
+  | { marker: "sandbox_status"; seq: number; createdAt: number; text: string };
+
+export const activityCreatedAt = (entry: RunActivityEntry): number =>
+  "item" in entry ? entry.item.createdAt : entry.createdAt;
 
 export interface RunActivityStore {
   append(runId: string, entry: RunActivityEntry): Promise<void>;
@@ -26,7 +27,7 @@ export function createMemoryRunActivityStore(now: () => number = Date.now): RunA
         nextPruneAt = t + PRUNE_INTERVAL_MS;
         const cutoff = t - RUN_ACTIVITY_TTL_MS;
         for (const [id, list] of runs) {
-          const kept = list.filter((e) => e.createdAt >= cutoff);
+          const kept = list.filter((e) => activityCreatedAt(e) >= cutoff);
           if (kept.length) runs.set(id, kept);
           else runs.delete(id);
         }

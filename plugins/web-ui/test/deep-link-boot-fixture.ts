@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import { browserEnv } from "./browser-env.ts";
 import type { Conversation } from "../src/conv-types.ts";
 import type { CoreContext, CoreSession, TranscriptPage } from "../src/core-bridge.ts";
@@ -41,7 +42,7 @@ interface HarnessOptions {
   remoteCanvas?: unknown;
   listSessions?: unknown[];
   contexts?: CoreContext[];
-  entries?: unknown[];
+  items?: unknown[];
   savedCanvas?: boolean;
   welcome?: boolean;
   connectionReturn?: boolean;
@@ -205,16 +206,17 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
         const seqs = older ? [10, 11] : [80, 81];
         return Response.json({
           session,
-          entries: seqs.map((seq) => ({
-            seq,
-            type: seq % 2 ? "assistant" : "user",
-            createdAt: Date.now(),
-            payload: { text: `Linked QA message ${seq}` },
-          })),
-          earlierEntries: older ? 0 : 80,
+          items: seqs.map((seq) =>
+            item(seq % 2 ? "AgentMessage" : "UserMessage", {
+              seq,
+              createdAt: Date.now(),
+              text: `Linked QA message ${seq}`,
+            }),
+          ),
+          earlierItems: older ? 0 : 80,
         });
       }
-      return Response.json({ session, entries: opts.entries ?? [] });
+      return Response.json({ session, items: opts.items ?? [] });
     }
     if (path.startsWith("/api/sessions?")) {
       await sessionsHeld;

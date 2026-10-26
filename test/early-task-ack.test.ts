@@ -20,7 +20,7 @@ mock.module("./support/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("./support/build-app.ts");
+const { buildTestApp } = await import("./support/test-app.ts");
 
 for (const scenario of [
   { name: "human DM", enabled: true },
@@ -30,7 +30,7 @@ for (const scenario of [
   { name: "bot", enabled: false, botActor: true },
 ] as const) {
   test(`queued ${scenario.name} closes acknowledgement at tool start=${scenario.enabled}`, async () => {
-    const built = buildApp(testConfig({ workers: 1 }));
+    const built = buildTestApp(testConfig({ workers: 1 }));
     let release!: () => void;
     let started!: () => void;
     const block = new Promise<void>((r) => {
@@ -77,7 +77,7 @@ for (const scenario of [
 
 for (const action of ["read", "react", "post", "delegated-read"] as const) {
   test(`surface ${action} defers early acknowledgement until the parsed action`, async () => {
-    const built = buildApp(testConfig({ workers: 1 }));
+    const built = buildTestApp(testConfig({ workers: 1 }));
     let release!: () => void;
     let started!: () => void;
     const block = new Promise<void>((resolve) => {
@@ -90,11 +90,12 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
       turn.onTextBlockStart?.();
       turn.onDelta?.("Building the website now.");
       turn.onToolCallStart?.("slack");
-      assert.equal((await built.deliveries.pending("slack")).length, 0);
+      assert.equal((await built.posts.pending("slack")).length, 0);
       await turn.emit({
-        type: "tool_call",
-        payload: { tool: "slack", callId: `slack-${action}`, action: action === "delegated-read" ? "read" : action },
-        scopeLabel: turn.scopeLabel,
+        kind: "ToolCall",
+        tool: "slack",
+        callId: `slack-${action}`,
+        body: { action: action === "delegated-read" ? "read" : action },
       });
       started();
       await block;
@@ -114,9 +115,9 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
         async: true,
       });
       await ready;
-      const deliveries = await built.deliveries.pending("slack");
+      const outbound = await built.posts.pending("slack");
       assert.deepEqual(
-        deliveries.map((delivery) => delivery.text),
+        outbound.map((delivery) => delivery.text),
         action === "post" || action === "delegated-read" ? [] : ["Building the website now."],
       );
       release();

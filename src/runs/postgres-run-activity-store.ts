@@ -1,5 +1,11 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { RUN_ACTIVITY_TTL_MS, type RunActivityEntry, type RunActivityStore } from "./run-activity-store.ts";
+import {
+  activityCreatedAt,
+  RUN_ACTIVITY_TTL_MS,
+  type RunActivityEntry,
+  type RunActivityStore,
+} from "./run-activity-store.ts";
+import type { Item } from "../sessions/items.ts";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS run_activity(
@@ -29,25 +35,23 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
         nextPruneAt = t + PRUNE_INTERVAL_MS;
         await q("DELETE FROM run_activity WHERE created_at < $1", [t - RUN_ACTIVITY_TTL_MS]);
       }
+      const [type, seq, payload] =
+        "item" in entry ? ["item", entry.item.seq, entry.item] : [entry.marker, entry.seq, entry];
       await q(
-        `INSERT INTO run_activity(run_id, seq, parent_seq, type, payload, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [runId, entry.seq, entry.parentSeq, entry.type, JSON.stringify(entry.payload ?? null), entry.createdAt],
+        `INSERT INTO run_activity(run_id, seq, type, payload, created_at)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [runId, seq, type, JSON.stringify(payload), activityCreatedAt(entry)],
       );
     },
 
     async list(runId) {
       const { rows } = await q(
-        `SELECT seq, parent_seq, type, payload, created_at FROM run_activity WHERE run_id=$1 ORDER BY id`,
+        `SELECT type, payload FROM run_activity WHERE run_id=$1 AND type IN ('item', 'text_start', 'sandbox_status') ORDER BY id`,
         [runId],
       );
-      return rows.map((r): RunActivityEntry => ({
-        seq: Number(r.seq),
-        parentSeq: r.parent_seq == null ? null : Number(r.parent_seq),
-        type: r.type as string,
-        payload: r.payload,
-        createdAt: Number(r.created_at),
-      }));
+      return rows.map((r): RunActivityEntry =>
+        r.type === "item" ? { item: r.payload as Item } : (r.payload as RunActivityEntry),
+      );
     },
 
     async close() {

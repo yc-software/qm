@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webhook-receiver.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
@@ -17,7 +17,7 @@ void _deliverStatusIsNot413;
 
 function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
   const webhooks = createWebhookStore();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const identity = createIdentityService();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
@@ -26,12 +26,12 @@ function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }
   };
   const receiver = createWebhookReceiver({
     webhooks,
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity,
     run,
   });
-  return { webhooks, deliveries, identity, calls, receiver };
+  return { webhooks, outbound, identity, calls, receiver };
 }
 
 function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
@@ -48,7 +48,7 @@ function githubReq(rawBody: string, deliveryId = "d-1", event = "issues") {
 }
 
 test("a valid delivery fires a turn as the owner, in the owner scope, with the event rendered in", async () => {
-  const { webhooks, deliveries, calls, receiver } = harness();
+  const { webhooks, outbound, calls, receiver } = harness();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -75,7 +75,7 @@ test("a valid delivery fires a turn as the owner, in the owner scope, with the e
   assert.match(calls[0]?.text ?? "", /"action": "opened"/);
   assert.match(calls[0]?.securityScreenData ?? "", /"action": "opened"/);
   assert.doesNotMatch(calls[0]?.securityScreenData ?? "", /triage this issue/);
-  assert.equal((await deliveries.pending("slack"))[0]?.text, "DID-THE-WORK");
+  assert.equal((await outbound.pending("slack"))[0]?.text, "DID-THE-WORK");
   assert.equal((await webhooks.get(wh.id))?.lastDeliveryId, createHash("sha256").update(body).digest("hex"));
   assert.equal((await webhooks.get(wh.id))?.lastError, undefined);
 });
@@ -236,7 +236,7 @@ test("fail-closed: a deactivated owner accepts the delivery but runs no turn and
 });
 
 test("silent-failure surfacing: a refused turn delivers a notice (the sender already got a 202)", async () => {
-  const { webhooks, deliveries, receiver } = harness({ status: "refused", reason: "internal-only" });
+  const { webhooks, outbound, receiver } = harness({ status: "refused", reason: "internal-only" });
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -247,14 +247,14 @@ test("silent-failure surfacing: a refused turn delivers a notice (the sender alr
   });
   await receiver.deliver(wh.id, githubReq("{}"));
   await flush();
-  const pending = await deliveries.pending("slack");
+  const pending = await outbound.pending("slack");
   assert.equal(pending.length, 1);
   assert.match(pending[0]?.text ?? "", /did not complete/i);
   assert.match((await webhooks.get(wh.id))?.lastError ?? "", /internal-only/);
 });
 
 test("a third-party principal destination delivers to the recipient", async () => {
-  const { webhooks, deliveries, receiver } = harness();
+  const { webhooks, outbound, receiver } = harness();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
     owner: "U1",
@@ -265,13 +265,13 @@ test("a third-party principal destination delivers to the recipient", async () =
   });
   await receiver.deliver(wh.id, githubReq("{}"));
   await flush();
-  const pending = await deliveries.pending("principal");
+  const pending = await outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.destination.target, "U2");
   assert.equal(pending[0]?.text, "DID-THE-WORK");
 });
 
-test("linear rejects signed untimed deliveries without firing a turn", async () => {
+test("linear rejects signed untimed outbound without firing a turn", async () => {
   const { webhooks, calls, receiver } = harness();
   const wh = await webhooks.create({
     ownerScopeId: scopeId("personal", "U1"),
@@ -325,7 +325,7 @@ test("history records the agent payload once per delivery without request header
   assert.equal(JSON.stringify(events).includes("x-hub-signature"), false);
 });
 
-test("history excludes rejected signatures, handshakes and filtered deliveries", async () => {
+test("history excludes rejected signatures, handshakes and filtered outbound", async () => {
   const { webhooks, receiver } = harness();
   const wh = await webhooks.create({
     ...historyWebhook,

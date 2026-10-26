@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import type { ScopeId, SessionEntry } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");
@@ -38,7 +38,7 @@ const NOTE = "(system note: your previous attempt at the request above was pause
 
 test("the pi harness re-runs a retry-safe interrupted call before the model sees the resumed turn", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
-  const entries: Array<{ seq: number; type: string; payload: unknown }> = [];
+  const entries: Item[] = [];
   const queries: string[] = [];
   const requests: Array<Array<{ role: string; content: Array<Record<string, unknown>> | string }>> = [];
   const realFetch = globalThis.fetch;
@@ -47,31 +47,17 @@ test("the pi harness re-runs a retry-safe interrupted call before the model sees
     requests.push(body.messages ?? []);
     return sse(textReplyEvents("we kept the Q2 budget flat"));
   }) as typeof globalThis.fetch;
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s1",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: "what about the budget?" },
-      scopeLabel: scope,
-      createdAt: 1,
-    },
-    {
-      sessionId: "s1",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: {
+  const history: Item[] = [
+    storedItem({ kind: "UserMessage", text: "what about the budget?" }, { sessionId: "s1", seq: 1, createdAt: 1 }),
+    storedItem(
+      {
+        kind: "ToolCall",
         tool: "history",
-        query: "budget",
         callId: "c-budget",
-        retrySafe: true,
-        rerun: { tool: "history", input: { query: "budget" } },
+        body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
       },
-      scopeLabel: scope,
-      createdAt: 2,
-    },
+      { sessionId: "s1", seq: 2, createdAt: 2 },
+    ),
   ];
   let seq = 3;
   const turn: HarnessTurnInput = {
@@ -82,16 +68,16 @@ test("the pi harness re-runs a retry-safe interrupted call before the model sees
     tools: {
       async history(q: string) {
         queries.push(q);
-        return ["user#1: the budget doc is in shared/q2.md"];
+        return ["UserMessage#1: the budget doc is in shared/q2.md"];
       },
     } as unknown as ToolContext,
     scopeLabel: scope,
     orgScopeId: "org:test" as ScopeId,
     resumeToolCall: { callId: "c-budget", tool: "history", input: { query: "budget" } },
-    emit: async (entry: NewEntry) => {
-      const appended = { ...entry, sessionId: "s1", parentSeq: null, seq: seq++, createdAt: Date.now() };
-      entries.push({ seq: appended.seq, type: entry.type, payload: entry.payload });
-      return appended as SessionEntry;
+    emit: async (item: NewItem) => {
+      const appended = storedItem(item, { sessionId: "s1", seq: seq++, createdAt: Date.now() });
+      entries.push(appended);
+      return appended;
     },
     recordModelCall: () => {},
   };
@@ -104,11 +90,11 @@ test("the pi harness re-runs a retry-safe interrupted call before the model sees
 
   assert.deepEqual(queries, ["budget"], "the interrupted call ran exactly once");
   assert.deepEqual(
-    entries.map((e) => e.type),
-    ["tool_result", "user", "assistant"],
-    "the result closes the dangling call before this attempt's note is recorded; no second tool_call",
+    entries.map((e) => e.kind),
+    ["ToolResult", "UserMessage", "AgentMessage"],
+    "the result closes the dangling call before this attempt's note is recorded; no second tool call",
   );
-  assert.equal((entries[0]!.payload as { callId: string }).callId, "c-budget");
+  assert.equal(entries[0]!.callId, "c-budget");
 
   assert.equal(requests.length, 1);
   const flattened = JSON.stringify(requests[0]);

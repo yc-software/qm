@@ -2,22 +2,31 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/harness/context-compaction.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 
-function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+const RUN_0 = "00000000-0000-4000-8000-000000000000";
+const RUN_1 = "00000000-0000-4000-8000-000000000001";
+const RUN_2 = "00000000-0000-4000-8000-000000000002";
+const MY_TURN = "00000000-0000-4000-8000-0000000000aa";
+const OTHER_TURN = "00000000-0000-4000-8000-0000000000bb";
+
+function ent(item: NewItem, seq: number) {
+  return storedItem(item, { sessionId: "s", seq, createdAt: seq });
 }
 
-const user = (text: string, seq: number, runId = "run-1") => ent("user", { text, runId }, seq);
+const user = (text: string, seq: number, runId = RUN_1) => ent({ kind: "UserMessage", text, turnId: runId }, seq);
 const overheard = (text: string, seq: number) =>
-  ent("user", { overheard: true, ts: String(seq), name: "Alice", text }, seq);
+  ent({ kind: "UserMessage", text, externalId: String(seq), body: { overheard: true, name: "Alice" } }, seq);
 const LEGACY_NOTE = "[system] Your previous attempt was interrupted mid-turn. Continue from the recorded work.";
-const resumeEntry = (seq: number) => ent("user", { text: LEGACY_NOTE, hidden: true, resumeNote: true }, seq);
-const assistant = (text: string, seq: number) => ent("assistant", { text }, seq);
-const toolCall = (seq: number) => ent("tool_call", { tool: "execute", callId: `c${seq}`, command: "make build" }, seq);
-const toolResult = (seq: number) => ent("tool_result", { callId: `c${seq - 1}`, result: "ok" }, seq);
-const steer = (text: string, seq: number) => ent("user", { text, ts: String(seq), steered: true, runId: "run-1" }, seq);
-const delivered = (text: string, seq: number) => ent("assistant", { text, runId: "other-turn" }, seq);
+const resumeEntry = (seq: number) =>
+  ent({ kind: "UserMessage", text: LEGACY_NOTE, hidden: true, body: { resumeNote: true } }, seq);
+const assistant = (text: string, seq: number) => ent({ kind: "AgentMessage", text }, seq);
+const toolCall = (seq: number) =>
+  ent({ kind: "ToolCall", tool: "execute", callId: `c${seq}`, body: { command: "make build" } }, seq);
+const toolResult = (seq: number) => ent({ kind: "ToolResult", callId: `c${seq - 1}`, text: "ok" }, seq);
+const steer = (text: string, seq: number) =>
+  ent({ kind: "SteeringMessage", text, turnId: RUN_1, body: { ts: String(seq) } }, seq);
+const delivered = (text: string, seq: number) => ent({ kind: "AgentMessage", text, turnId: OTHER_TURN }, seq);
 
 test("findTrailingPartialTurn finds the dead attempt's user entry and counts its partial work", () => {
   const entries = [
@@ -28,55 +37,58 @@ test("findTrailingPartialTurn finds the dead attempt's user entry and counts its
     toolResult(5),
     toolCall(6),
   ];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 3, workEntries: 3 });
 });
 
 test("findTrailingPartialTurn returns null when the last turn completed (assistant entry present)", () => {
   const entries = [user("do the thing", 1), toolCall(2), toolResult(3), assistant("done", 4)];
-  assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
+  assert.equal(findTrailingPartialTurn(entries, RUN_1), null);
 });
 
 test("findTrailingPartialTurn returns null when the trailing user entry belongs to another run", () => {
-  const entries = [user("an older abandoned ask", 1, "run-0"), toolCall(2)];
-  assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
+  const entries = [user("an older abandoned ask", 1, RUN_0), toolCall(2)];
+  assert.equal(findTrailingPartialTurn(entries, RUN_1), null);
 });
 
 test("a trailing steer is not the run's turn", () => {
-  assert.equal(findTrailingPartialTurn([user("do the thing", 1), toolCall(2), steer("also this", 3)], "run-1"), null);
+  assert.equal(findTrailingPartialTurn([user("do the thing", 1), toolCall(2), steer("also this", 3)], RUN_1), null);
 });
 
 test("a trailing resume note from a prior dead resume is skipped, reaching the real user entry", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3), toolCall(4)];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 2 }, "the note itself is not work");
 });
 
 test("an attempt that died before recording ANY work reports workEntries 0", () => {
-  const found = findTrailingPartialTurn([user("build and deploy the release", 1)], "run-1");
+  const found = findTrailingPartialTurn([user("build and deploy the release", 1)], RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
 test("prior resume notes alone are NOT work — repeated no-work deaths still report 0", () => {
   const entries = [user("build and deploy the release", 1), resumeEntry(2)];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
 test("platform rails and render-only rows are NOT work — only tool rows replay to the resumed model", () => {
   const entries = [
     user("build and deploy the release", 1),
-    ent("system", { kind: "file_event", problem: "expired upload" }, 2),
-    ent("thinking", { thinking: "let me plan", thinkingSignature: "SIG" }, 3),
-    ent("text", { text: "on it" }, 4),
+    ent({ kind: "Wake", wakeCause: "system", body: { text: "expired upload" } }, 2),
+    ent({ kind: "Reasoning", text: "let me plan", body: { thinkingSignature: "SIG" } }, 3),
+    ent({ kind: "AgentMessage", variant: "narration", text: "on it" }, 4),
   ];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 });
 });
 
 test("a prior no-work retry's restart note is skipped — later retries anchor on the human's entry", () => {
-  const entries = [user("build and deploy the release", 1), ent("user", { text: LEGACY_NOTE, resumeNote: true }, 2)];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const entries = [
+    user("build and deploy the release", 1),
+    ent({ kind: "UserMessage", text: LEGACY_NOTE, body: { resumeNote: true } }, 2),
+  ];
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(found, { userSeq: 1, workEntries: 0 }, "provenance stays on the original, not attempt 2's prompt");
 });
 
@@ -87,7 +99,7 @@ test("overheard catch-up rows trailing the dead attempt are skipped, reaching th
     overheard("build and deploy the release please someone", 3),
     overheard("unrelated chatter", 4),
   ];
-  const found = findTrailingPartialTurn(entries, "run-1");
+  const found = findTrailingPartialTurn(entries, RUN_1);
   assert.deepEqual(
     found,
     { userSeq: 1, workEntries: 1 },
@@ -97,19 +109,19 @@ test("overheard catch-up rows trailing the dead attempt are skipped, reaching th
 
 test("a session whose only trailing user rows are overheard is NOT a resume", () => {
   const entries = [assistant("earlier reply", 1), overheard("build and deploy the release", 2)];
-  assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
+  assert.equal(findTrailingPartialTurn(entries, RUN_1), null);
 });
 
 test("an empty-reply completed turn still counts as completed (assistant entry with empty text)", () => {
   const entries = [user("do the thing", 1), assistant("", 2)];
-  assert.equal(findTrailingPartialTurn(entries, "run-1"), null);
+  assert.equal(findTrailingPartialTurn(entries, RUN_1), null);
 });
 
 test("a resume note in the ledger is skipped by its flag, not its text", () => {
   const entries = [user("build and deploy the release", 1), toolCall(2), resumeEntry(3)];
-  assert.deepEqual(findTrailingPartialTurn(entries, "run-1"), { userSeq: 1, workEntries: 1 });
-  const typed = [user("build and deploy the release", 1), toolCall(2), user(LEGACY_NOTE, 3, "run-2")];
-  assert.equal(findTrailingPartialTurn(typed, "run-1"), null, "typed text is a new request");
+  assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), { userSeq: 1, workEntries: 1 });
+  const typed = [user("build and deploy the release", 1), toolCall(2), user(LEGACY_NOTE, 3, RUN_2)];
+  assert.equal(findTrailingPartialTurn(typed, RUN_1), null, "typed text is a new request");
 });
 
 test("turnAtSeq carries the answer the attempt recorded, so a retry can replay it", () => {
@@ -171,7 +183,11 @@ test("turnAtSeq reads through a mid-turn steer, which is the person adding to th
 });
 
 test("turnAtSeq ignores another conversation's delivery", () => {
-  const entries = [ent("user", { text: "mine", runId: "my-turn" }, 10), toolCall(11), delivered("Nightly report", 12)];
+  const entries = [
+    ent({ kind: "UserMessage", text: "mine", turnId: MY_TURN }, 10),
+    toolCall(11),
+    delivered("Nightly report", 12),
+  ];
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
 });
 
@@ -186,13 +202,15 @@ test("turnAtSeq reports the turn's last answer, matching what the turn itself wo
 
 const safeCall = (seq: number, retrySafe: boolean) =>
   ent(
-    "tool_call",
     {
+      kind: "ToolCall",
       tool: "history",
-      query: "deploy",
       callId: `c${seq}`,
-      retrySafe,
-      ...(retrySafe ? { rerun: { tool: "history", input: { query: "deploy", limit: 5 } } } : {}),
+      body: {
+        query: "deploy",
+        retrySafe,
+        ...(retrySafe ? { rerun: { tool: "history", input: { query: "deploy", limit: 5 } } } : {}),
+      },
     },
     seq,
   );
@@ -254,8 +272,8 @@ test("the runtime switch note names the new runtime", () => {
   assert.match(runtimeSwitchNote(undefined), /^\[system\] Context was trimmed without a new summary\./);
 });
 
-test("a tool_result marked interrupted does not answer its call, so the call is still resumable", () => {
-  const killed = ent("tool_result", { callId: "c4", result: "[exit 143]", interrupted: true }, 5);
+test("a tool result marked interrupted does not answer its call, so the call is still resumable", () => {
+  const killed = ent({ kind: "ToolResult", callId: "c4", text: "[exit 143]", body: { interrupted: true } }, 5);
   const entries = [user("build and deploy the release", 1), safeCall(4, true), killed];
   assert.equal(resumeStrategy(entries, { userSeq: 1, workEntries: 2 }).kind, "retry");
   const unsafe = [user("build and deploy the release", 1), safeCall(4, false), killed];
@@ -267,9 +285,9 @@ test("a tool_result marked interrupted does not answer its call, so the call is 
 });
 
 test("resumeStrategy continues silently whenever every call is answered", () => {
-  const thinking = (seq: number) => ent("thinking", { text: "hm" }, seq);
+  const thinking = (seq: number) => ent({ kind: "Reasoning", text: "hm" }, seq);
   const killed = (seq: number) =>
-    ent("tool_result", { callId: `c${seq - 1}`, result: "[exit 143]", interrupted: true }, seq);
+    ent({ kind: "ToolResult", callId: `c${seq - 1}`, text: "[exit 143]", body: { interrupted: true } }, seq);
   const partial = { userSeq: 1, workEntries: 2 };
   assert.deepEqual(resumeStrategy([user("go", 1), toolCall(2), toolResult(3)], partial), { kind: "continue" });
   assert.deepEqual(resumeStrategy([user("go", 1), safeCall(2, true), toolResult(3)], partial), { kind: "continue" });
@@ -297,7 +315,11 @@ test("resumeStrategy continues silently whenever every call is answered", () => 
 });
 
 test("an unrelated message does not close an interrupted turn or supply its answer", () => {
-  const entries = [ent("user", { text: "mine", runId: "my-turn" }, 10), toolCall(11), delivered("Nightly report", 12)];
-  assert.deepEqual(findTrailingPartialTurn(entries, "my-turn"), { userSeq: 10, workEntries: 1 });
+  const entries = [
+    ent({ kind: "UserMessage", text: "mine", turnId: MY_TURN }, 10),
+    toolCall(11),
+    delivered("Nightly report", 12),
+  ];
+  assert.deepEqual(findTrailingPartialTurn(entries, MY_TURN), { userSeq: 10, workEntries: 1 });
   assert.deepEqual(turnAtSeq(entries, 10), { userSeq: 10, workEntries: 1 });
 });
