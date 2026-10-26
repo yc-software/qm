@@ -1,4 +1,5 @@
 import type { AdminToolAccess } from "./admin.ts";
+import type { GoalRecord } from "../harness/goal.ts";
 import { parkedOutputKey, type ToolOutputStore } from "../sessions/tool-output.ts";
 import { rankedSkills } from "../skills/materialize.ts";
 import type { SkillResolution } from "../skills/skill-store.ts";
@@ -202,6 +203,7 @@ export interface ToolContext extends SurfaceToolDeps {
   sessionSyscalls?: SessionSyscalls;
   /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
+  goalOwnerReplied?(goal: GoalRecord): Promise<boolean>;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
   commandCredentialHandles?: readonly string[];
   execute(
@@ -551,6 +553,7 @@ export interface ToolContextDeps {
   attach?: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
   humanTurn?: boolean;
+  goalOwnerReplied?(goal: GoalRecord): Promise<boolean>;
   toolOutput?: ToolOutputStore;
   sessionId?: string;
 }
@@ -1236,6 +1239,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     ...(deps.humanTurn ? { humanTurn: true } : {}),
+    ...(deps.goalOwnerReplied ? { goalOwnerReplied: deps.goalOwnerReplied } : {}),
     ...(deps.sessionSyscalls ? { sessionSyscalls: deps.sessionSyscalls } : {}),
 
     async history(q: string, limit?: number): Promise<string[]> {

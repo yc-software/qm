@@ -15,13 +15,14 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../harness/goal.ts";
+import { goalFromParams, GoalCreateParams, type GoalCreateInput, type GoalRecord } from "../harness/goal.ts";
 import { Check } from "typebox/value";
 import { createSwarmGoalContinuation } from "./swarm-goal-continuation.ts";
 import {
   appendMessage,
   assertSwarmOpen,
   controlState,
+  goalOwner,
   memberById,
   type SwarmControlState,
   SWARM_LIMITS,
@@ -95,6 +96,7 @@ export interface SwarmService {
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
   ): Promise<SwarmMessage[]>;
   handOver(input: OrchestratorInput, messageIds: readonly string[]): Promise<SwarmMessage[]>;
+  goalOwnerReplied(input: OrchestratorInput, goal: GoalRecord): Promise<boolean>;
 }
 
 export function swarmMessageText(message: SwarmMessage): string {
@@ -907,6 +909,20 @@ export function createSwarmService(deps: {
           await runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw handed run", false));
       }
       return handed;
+    },
+    async goalOwnerReplied(input, goal) {
+      if (goal.status !== "paused" || goal.governor?.verdict !== "pause") return false;
+      const session = input.swarm ? null : await sessions.getByThread(input.conversation.threadRef);
+      const target = input.swarm ?? (session && turnTarget(session));
+      const swarm = target ? await store.get(target.swarmId) : null;
+      if (!target || !swarm) return false;
+      const owners = [goalOwner(swarm, target.recipientId, goal.createdAt), swarm.id];
+      return swarm.messages.some(
+        (message) =>
+          message.createdAt > goal.updatedAt &&
+          message.audience.includes(target.recipientId) &&
+          owners.includes(message.senderId),
+      );
     },
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);

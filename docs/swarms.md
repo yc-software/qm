@@ -200,7 +200,18 @@ startup and every minute, queues these wake-ups, so one survives a restart. Thes
 by them, and the progress check and the goal's token cap bound them instead. `floor` and `token_cap` take the same keys as the goal tool, and
 neither is required. Goals go to workers, not the root session (a goal sent to
 `all` skips the root and the sender), and a goal needs `notify`. The worker treats the agent that sent the goal as the user for it and
-messages that agent when it needs a decision. When a goal is complete, the worker
+messages that agent when it needs a decision. That agent is the goal's owner; when
+a worker sent the goal to itself or set it with the goal tool, its parent is the
+owner (the root, for a first-level worker). When the governor pauses a worker's goal, the same
+sweep sends the owner a message from the worker, once per pause, carrying the
+governor's reason; it wakes the owner and, like a continuation, stays outside the
+message budgets. Outside swarms only a person's own message can resume a paused
+goal. A worker can also resume a goal the governor paused once the goal's owner or
+the root has sent it a message after the pause. The swarm checks the sender it
+recorded for the message, never the text, so a peer cannot resume the goal by
+relaying the owner's words, and messages from other peers or the worker's own
+continuations never count. A goal a person paused by stopping a turn still needs
+a person. When a goal is complete, the worker
 decides what comes next: a new goal for itself, a message to whoever must act, or
 other work. Each goal message
 installs a fresh goal once (a retried delivery does not reinstall it), so sending

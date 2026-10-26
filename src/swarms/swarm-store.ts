@@ -38,6 +38,7 @@ export interface SwarmMember {
   cleanupPending?: boolean;
   error?: string;
   goalContinuation?: { goalCreatedAt: number; tokensUsed: number };
+  goalPauseNotice?: { goalCreatedAt: number; pausedAt: number };
 }
 
 export interface SwarmMessage {
@@ -107,6 +108,14 @@ export function controlState(swarm: Swarm, memberId: string): SwarmControlState 
     id = member?.parentId;
   }
   return state;
+}
+
+export function goalOwner(swarm: Swarm, memberId: string, goalCreatedAt: number): string {
+  const assigner = swarm.messages.findLast(
+    (message) => message.goal && message.createdAt === goalCreatedAt && memberId in message.notifications,
+  )?.senderId;
+  if (assigner && assigner !== memberId) return assigner;
+  return memberById(swarm, memberId)?.parentId ?? swarm.id;
 }
 
 function messageBudget(swarm: Swarm, woken: number): string | undefined {
