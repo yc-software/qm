@@ -2680,11 +2680,6 @@ const apiRoutes: readonly WebRoute[] = [
       const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
       if ("error" in resolved) return json(res, 403, resolved);
 
-      // Core folds surfaceBriefing into conversationHeader, which this route strips from browser
-      // bodies on purpose. In anything but the caller's own one-to-one chat that would put their
-      // page state into history other people read. Both halves are load-bearing: a channel scope
-      // keeps an own-prefix name (newChat names every thread web:<user>:<uuid> whatever scope it
-      // was started in), and someone else's thread reports kind "dm" when it carries no scope.
       const privateConversation = threadRef.startsWith(ownPrefix) && resolved.conversation.kind === "dm";
 
       const turn = {

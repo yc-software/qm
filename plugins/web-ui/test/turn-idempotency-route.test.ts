@@ -175,8 +175,6 @@ test("a proxy that swallows core's 400 hides which surfaceBriefing field is malf
   assert.match(((await response.json()) as { error: string }).error, /surfaceBriefing\.name/);
 });
 
-// newChat names every thread web:<user>:<uuid> whatever scope it was started in, so an own-prefix
-// name is not evidence the conversation is private.
 for (const shared of [
   { label: "someone else's app thread", body: { threadRef: "web:bob:app-edit:sample-app" } },
   {
