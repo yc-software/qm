@@ -324,7 +324,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 export interface AgentToolsOptions {
   sessionTools?: boolean;
   commandCredentialHandles?: readonly string[];
-  scratchExec?: boolean;
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -349,7 +348,6 @@ export type CoreToolOptions = Omit<
 export function coreToolOptions(config: Config): CoreToolOptions {
   return {
     sandboxResources: true,
-    scratchExec: config.scratchExecEnabled,
     reachExec: config.reachExecEnabled,
     controlTools: Boolean(config.signingSecret && config.apiBaseUrl),
     execTimeoutMs: config.execTimeoutDefaultMs,
@@ -383,7 +381,6 @@ const outsideWorkspace = (path: string): string =>
   `[not in the computer's workspace: ${path}; only workspace files can be read, so copy it there or name it relative to the workspace]`;
 
 export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
-  const scratchExec = !!opts?.scratchExec;
   const reachExec = !!opts?.reachExec;
   const controlTools = !!opts?.controlTools;
   const surfaceTools = !!opts?.surfaceTools;
@@ -398,8 +395,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const capabilityTtlHours = capabilityTtlMs / 3_600_000;
   const capabilityExpiry =
     capabilityTtlMs === 0
-      ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
-      : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
+      ? "Those turn tokens do not expire here, but authorization checks still apply."
+      : `Those turn tokens expire ${capabilityTtlHours} hours after the launching turn started (then they 401), so publish checkpoints to Files before that and keep the file ID.`;
   const log = async (type: EntryType, payload: unknown): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     if (type === "tool_result" && isObj(payload)) {
@@ -589,43 +586,32 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     recordResult(callId, summary, ret, isError, sourceScopeId, false, undefined, { provenance: "external", source });
 
   const EXECUTE_TIMEOUT_GUIDANCE =
-    "Commands may run under a POSIX sh such as dash, not bash: wrap bash-only syntax like ${var/a/b} or arrays in bash -c. " +
-    `Each command has a wall-clock timeout (default ${execTimeoutSec}s, max ${execCeilingSec}s) — set \`timeout_seconds\` ` +
-    "higher for builds/installs/tsc/test runs that legitimately take minutes, or lower for " +
-    "commands you expect to be quick so a hang frees the machine fast. For work that " +
-    `legitimately exceeds the ${execCeilingSec}s ceiling (long builds, installs, test suites, servers), use ` +
-    "execute with background:true to run it detached, then use background to poll or watch the result across turns. " +
-    "Always start servers with execute background:true, not shell ampersand: inherited output streams can keep execute waiting even after its shell exits. " +
-    "If commands hang or fail with transport errors that nothing you ran explains, the computer itself may be " +
-    "wedged — use sandbox action=status to inspect it out-of-band and action=restart to recover it. If a restart or two does not bring the shell back, stop restarting: create a fresh sandbox, set it as the default, and retry there, recovering work from git or Files.";
+    "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
+    `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
+    "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
+    "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
 
   const executeBaseParams = {
     command: Type.String({ description: "The shell command to run." }),
     background: Type.Optional(
       Type.Boolean({
-        description:
-          "Run detached and return a process_id. Use background to poll, send input, stop, or watch the process. Only scoped execution supports background jobs.",
+        description: "Run detached and return a process_id for the background tool. Scoped only.",
       }),
     ),
     sandbox_id: Type.Optional(
       Type.String({
         minLength: 1,
-        description:
-          "Exact sandbox ID. Omit only when this scope has a stored default; otherwise select a target with sandbox list/create.",
+        description: "Exact sandbox ID; omit to use this scope's default.",
       }),
     ),
     purpose: Type.String({
       description:
-        "A human-readable intent label, at most 4 words (e.g. 'Check Python version'). " +
-        "Describe the purpose, not the code. Required on every call; shown in tool activity and approval requests.",
+        "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
     }),
     timeout_seconds: Type.Optional(
       Type.Integer({
         minimum: 1,
-        description:
-          `Max wall-clock seconds before the command is killed (exit 124). Default ${execTimeoutSec}, max ${execCeilingSec}; background:true uses a job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}). ` +
-          "Raise this for builds/installs/tsc/test runs that legitimately take minutes; lower it " +
-          "for commands you expect to be quick so a hang frees the machine fast.",
+        description: `Seconds until kill (exit 124); default ${execTimeoutSec}, max ${execCeilingSec}. With background:true, the job lifetime (default ${bgTtlSec}, max ${bgTtlMaxSec}).`,
       }),
     ),
 
@@ -709,7 +695,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const localExec = !route?.scratch && !scratchReroute && route?.reachTarget === undefined && !r.reached;
       const pressureNote =
         localExec && r.pressure && r.pressure.ioFull60 >= PRESSURE_WARN_FULL60
-          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work${scratchExec ? ', move self-contained runs to scope:"scratch"' : ""}, or check sandbox action=status`
+          ? `\n[pressure] this computer's disk is saturated (io ${r.pressure.ioFull60}%, load ${r.pressure.load1}) — sequence heavy work, move self-contained runs to scope:"scratch", or check sandbox action=status`
           : "";
       return recordResult(
         callId,
@@ -770,40 +756,32 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const outboundSandboxSchema = Type.Optional(
     Type.String({
       minLength: 1,
-      description: "Sandbox for workspace paths; omit for the default. Ignored for stored file IDs.",
+      description: "Sandbox for workspace paths.",
     }),
   );
   const sandboxSelector = (description: string) => Type.Optional(Type.String({ minLength: 1, description }));
   const FILE_SEND_GUIDANCE =
-    "execute, files, skills, and apps take an optional sandbox_id; omit it for the default. Sending accepts workspace paths with an optional sandbox_id, or {file_id: \"stored Files ID\"} without a sandbox. Use the surface `post` action's `files` when you have `post` (the only way there — a file needs a thread), otherwise `attach`, which rides it out with your reply. The tool result tells you what actually went. A background job can't deliver; have it write to the workspace and attach that from a live turn. ";
-  const DURABLE_PARAM_DESC =
-    "Retain working state for later turns within provider recovery limits? Scoped retains working state; scratch lasts for the turn. Publish durable code to git and artifacts to Files.";
+    "execute, files, skills and apps use the default sandbox when sandbox_id is omitted. Send files with the surface `post` action's `files` if present, else `attach` (workspace paths or {file_id}); background jobs cannot deliver files. ";
 
   const reachScopeDescription =
-    (scratchExec ? '"scoped" (default) | "scratch" | ' : '"scoped" (default) | ') +
-    "a room like \"#project-alpha\" — a channel you and this person are both in; runs the command on THAT room's computer (read-only by etiquette: read, search, fetch — don't rearrange).";
+    '"scoped" (default) | "scratch" | ' +
+    'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
+  const DURABLE_PARAM_DESC = "Fixed by scope: true on scoped, false elsewhere; omit.";
+  const scopedLine =
+    '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
+  const scratchLine =
+    '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const reachDescription =
-    "Run a shell command and return its stdout/stderr/exit code. Pick where it runs with `scope`:\n" +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
-    (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-      : "") +
-    "- a room like \"#project-alpha\": a channel you and this person are both in — runs the command on THAT room's computer. Other rooms are places you VISIT: read, search, fetch (ls/grep/cat); don't rearrange. That box has none of this conversation's logins or capability tokens. Say where anything you bring back came from.\n" +
-    "If a file or piece of work isn't on this computer, don't declare it lost — check the rooms listed under 'Other computers you can reach'.\n" +
-    (scratchExec
-      ? "`durable` defaults to true on scoped and false on scratch — the only supported pairings today; it doesn't apply to a reached room.\n"
-      : "") +
+    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
+    scopedLine +
+    scratchLine +
+    "- a room like \"#project-alpha\" (a shared channel): runs on that room's computer. Visit only — read, search, fetch; don't rearrange. It has none of this conversation's logins or tokens; say where anything you bring back came from. Before calling work lost, check the rooms under 'Other computers you can reach'.\n" +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
   const scopeDescription =
-    `Run a shell command and return its stdout/stderr/exit code. Pick a computer with \`scope\`:\n` +
-    '- "scoped" (DEFAULT): this conversation\'s sandbox — its workspace files, turn-private inbox paths, shared-file handles, and $AGENT_API_* tokens; saved credentials require execute.credentials; working state is retained within provider recovery limits; publish durable code to git and artifacts to Files.\n' +
-    (scratchExec
-      ? '- "scratch": a blank computer for this turn, with the same OS/tooling, read-only org-global files and skills, this conversation\'s scoped $AGENT_API_* capabilities (including Files), and only credentials explicitly requested for this execute call. It does not restore the resident workspace or cached CLI logins. Its local files are discarded after the turn. Use it for self-contained commands and API work, including credential-using work; publish any needed outputs to Files and verify success before finishing. Use scope:"scoped" when you need existing workspace files, installed state, or local work that must continue later.\n'
-      : "") +
-    (scratchExec
-      ? "`durable` defaults to true on scoped and false on scratch; scoped cannot discard writes, and scratch cannot be made durable.\n"
-      : "") +
+    "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
+    scopedLine +
+    scratchLine +
     FILE_SEND_GUIDANCE +
     EXECUTE_TIMEOUT_GUIDANCE;
 
@@ -823,21 +801,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const keyword = scope.toLowerCase();
     const durable = params.durable;
     if (keyword === "scoped") {
-      if (scratchExec && durable === false) {
+      if (durable === false) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
       }
       return runExecute(callId, params, { scratch: false });
     }
     if (keyword === "scratch") {
-      if (!scratchExec) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope });
-        return invalidExecute(
-          callId,
-          { tool: "execute", invalid: "scratch_unavailable" },
-          '[error] a scratch box isn\'t available here — use scope:"scoped" or name a room like "#project-alpha".',
-        );
-      }
       if (durable === true) {
         await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
         return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
@@ -861,13 +831,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        ...(scratchExec
-          ? {
-              durable: Type.Optional(
-                Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored when reaching a room.` }),
-              ),
-            }
-          : {}),
+        durable: Type.Optional(Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored for a room.` })),
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
@@ -879,12 +843,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       parameters: Type.Object({
         ...executeBaseParams,
         scope: Type.Optional(
-          Type.Union([Type.Literal("scoped"), ...(scratchExec ? [Type.Literal("scratch")] : [])], {
-            description:
-              'Which computer runs this command: "scoped" (default — this conversation\'s sandbox: its working files and explicitly requested credentials; recovery depends on the provider) or "scratch" (blank filesystem for this turn, scoped API capabilities and explicitly requested credentials; no resident workspace or cached logins).',
+          Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+            description: "Which computer runs this; see the tool description.",
           }),
         ),
-        ...(scratchExec ? { durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })) } : {}),
+        durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })),
       }),
       execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
     });
@@ -899,17 +862,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "sandbox",
     label: "sandbox",
     description:
-      "Manage sandbox resources. list returns providers, supported actions, inventory, and this scope's optional default. If work needs a computer and this scope has no default, do not report blocked: list providers, create a sandbox, set_default to it, and retry. Only report blocked if creation fails. create provisions a blank sandbox without changing the default or copying files. set_default changes routing only; pass sandbox_id:null to clear it. status reports health and recovery expiry without provisioning. restart recovers working state where supported and stops running processes. retire deletes the named sandbox after its default and jobs are cleared. Durable outputs belong in Files or git. Select an exact sandbox_id for status/restart or omit it to use the stored default.",
+      "Manage sandbox computers. list: providers, inventory, this scope's default. create: a blank sandbox (default unchanged). set_default: route commands there (null clears). status: health. restart: stop processes, recover state where supported. retire: delete (not while default or running jobs). If work needs a computer and there is no default, list, create, set_default and retry; report blocked only if creation fails. Durable outputs belong in git or Files.",
     parameters: Type.Object({
       action: Type.String({ enum: sandboxActions }),
       sandbox_id: Type.Optional(
         Type.Union([Type.String({ minLength: 1 }), Type.Null()], {
-          description: "Exact sandbox ID; null is allowed only for set_default.",
+          description: "Sandbox ID; status/restart use the default if omitted. null only for set_default.",
         }),
       ),
-      backend: Type.Optional(Type.String({ description: "create only: provider from list." })),
-      name: Type.Optional(Type.String({ description: "create only: human-readable name." })),
-      purpose: Type.String({ description: "Human-readable purpose, at most 4 words (e.g. 'Check sandbox health')." }),
+      backend: Type.Optional(Type.String({ description: "create: provider from list." })),
+      name: Type.Optional(Type.String({ description: "create: display name." })),
+      purpose: Type.String({ description: "As for execute." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1001,16 +964,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       name: search ? "search_skills" : "list_skills",
       label: search ? "Search skills" : "List skills",
       description: search
-        ? "Search current-scope and organization skills by name or description, including omitted skills. To search a carried source listed in the sharing context, set source. Read a skill before using it."
-        : "Browse current-scope and organization skills, including omitted or new skills. Set source to browse a carried source listed in the sharing context. Follow nextOffset within the same source; does not start a sandbox.",
+        ? "Search current-scope and org skills by name or description, including ones left out of the per-turn index (set source for a carried one); read one before using it."
+        : "Browse current-scope and org skills, including ones left out of the per-turn index (set source for a carried one); page with nextOffset.",
       parameters: Type.Object({
         ...(search
           ? { query: Type.String({ minLength: 1, description: "Words to find in skill names or descriptions." }) }
           : {}),
         source: Type.Optional(
           Type.String({
-            description:
-              "Exact authorized source scope from the sharing context; omitted means current scope and organization.",
+            description: "A carried source from the sharing context; omit for current scope and org.",
           }),
         ),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -1036,20 +998,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "skill",
     label: "skill",
     description:
-      "Load a skill by name before relying on it; use list or search for any left out of the per-turn index. Returns its SKILL.md instructions (or the relative file named by `path`) straight from the published source, without starting a sandbox. When the skill ships scripts or supporting files, this call also syncs them into a stable directory on the computer and reports it; run and read them there with execute and files action read. Reading the skill again refreshes that copy.",
+      "Load a skill's SKILL.md (or the file at `path`) before relying on it. Any scripts it ships are synced to a reported directory on the computer.",
     parameters: Type.Object({
       name: Type.String({ description: "Skill name from the skills index, list, or search." }),
-      source: Type.Optional(
-        Type.String({ description: "Use the same source as the discovery call to read that exact skill." }),
-      ),
-      path: Type.Optional(
-        Type.String({ description: "Relative file within the skill to return instead of SKILL.md." }),
-      ),
+      source: Type.Optional(Type.String({ description: "Source from the list/search call that found it." })),
+      path: Type.Optional(Type.String({ description: "Relative file to return instead of SKILL.md." })),
       ...(opts?.sandboxResources
         ? {
-            sandbox_id: Type.Optional(
-              Type.String({ description: "Sync the skill's files into this sandbox instead of the default." }),
-            ),
+            sandbox_id: Type.Optional(Type.String({ description: "Sandbox to sync into; omit for the default." })),
           }
         : {}),
     }),
@@ -1100,10 +1056,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a file from the workspace (scope, then global). Returns its contents.",
+    description: "Read a workspace or shared file.",
     parameters: Type.Object({
-      path: Type.String({ description: "Relative path within the workspace." }),
-      sandbox_id: sandboxSelector("Sandbox to read from; omit for the default. Shared files ignore it."),
+      path: Type.String({ description: "Workspace-relative path." }),
+      sandbox_id: sandboxSelector("Sandbox; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1146,8 +1102,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "install_canvas",
     label: "install_canvas",
     description:
-      "Replace this person's always-on canvas with a copy of an always-on canvas someone shared with them as a Files record. Always asks them to approve first.",
-    parameters: Type.Object({ id: Type.String({ description: "Files ID of the shared canvas." }) }),
+      "Replace this person's always-on canvas with a shared one (a Files record); asks them to approve first.",
+    parameters: Type.Object({ id: Type.String({ description: "Files ID of the canvas." }) }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc?.installSharedCanvas) return text("[error] installing a shared canvas isn't available on this turn");
@@ -1166,11 +1122,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "write",
     label: "write",
     description:
-      "Save file contents in the writable workspace scope. To share it, upload it to Files with POST /v1/files/uploads, then use files action share with the returned ID.",
+      "Write a workspace file. To share it, upload it with POST /v1/files/uploads, then share the returned ID.",
     parameters: Type.Object({
-      path: Type.String({ description: "Relative path within the workspace." }),
-      data: Type.String({ description: "File contents, including an empty string to empty the file." }),
-      sandbox_id: sandboxSelector("Sandbox to write on; omit for the default."),
+      path: Type.String({ description: "Workspace-relative path." }),
+      data: Type.String({ description: "File contents." }),
+      sandbox_id: sandboxSelector("Sandbox; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1206,69 +1162,46 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "publish",
     label: "publish",
     description:
-      "Publish a directory from the workspace as a durable web app " +
-      "(it keeps running after the turn ends and gets a stable link). Before publishing, verify the " +
-      "directory exists and contains files. For a new app or a code/file update, always pass `entrypoint`; " +
-      "the app must listen on the PORT env var. `dir` is workspace-relative: use `app`, never a path " +
-      "beginning with `/` or a redundant `workspace/app`. `renameFrom` takes an existing " +
-      "deployment name, not its ID. New apps are shared for read/use with their creation channel; DMs stay private. Republishing never changes access; " +
-      "grant access separately with apps action share. Share the full absolute URL " +
-      "returned by apps action publish so it works in Slack and other surfaces. Use `name` for a friendly, " +
-      "stable link /d/<name>/; `renameFrom` to rename; `rollbackTo` to flip back to an earlier version. " +
-      "Egress is open, " +
-      "so bake data in or have the app fetch it. When the runtime sets $DATA_DIR, state the app " +
-      "writes there survives restarts and redeploys; keep durable state there. For a database use " +
-      "SQLite at exactly $DATA_DIR/app.db — it gets the strongest durability the runtime offers " +
-      "(continuous replication where enabled, periodic snapshots otherwise; a crash can lose the " +
-      "most recent writes). The rest of the disk is reset from source on every relaunch. By default " +
-      "an app sleeps when idle and cold-starts on the next visit; set `alwaysOn: true` to keep it " +
-      "warm (no idle cold starts) — use it only when someone actually needs instant loads, and " +
-      "`alwaysOn: false` to turn it back off. An app cannot be shown inside another site's page " +
-      "(an iframe) unless `embedAncestors` names that site; set it when someone asks for the app in " +
-      "a panel or extension, and `[]` to turn it back off.",
+      "Publish a workspace directory (verify it exists and has files) as a durable web app with a stable link. It must listen on PORT; pass `entrypoint` for a new app or code update. " +
+      "New apps are readable by their creation channel (DMs private); republishing never changes access — use share. Give the user the full absolute URL. " +
+      "Egress is open. When the runtime sets $DATA_DIR, only it survives restarts and redeploys; for a database use SQLite at exactly $DATA_DIR/app.db (a crash can lose the latest writes). " +
+      "Apps sleep when idle; set `alwaysOn` only when someone needs instant loads. Iframes need `embedAncestors`.",
     parameters: Type.Object({
       dir: Type.Optional(
         Type.String({
           description:
-            "Workspace-relative directory to publish (default: the whole tree). Use `app`, not an absolute path or `workspace/app`.",
+            "Workspace-relative directory, e.g. `app` (default: whole tree); never absolute or `workspace/app`.",
         }),
       ),
       entrypoint: Type.Optional(
         Type.String({
-          description:
-            'Command the container runs, relative to the app root, e.g. "node server.js". Always provide it for a new app or file update.',
+          description: 'Command run from the app root, e.g. "node server.js".',
         }),
       ),
       name: Type.Optional(
         Type.String({
-          description: "Friendly, globally-unique handle → link is /d/<name>/. Lowercase letters/digits/hyphens.",
+          description: "Unique handle (lowercase letters/digits/hyphens) → /d/<name>/.",
         }),
       ),
-      renameFrom: Type.Optional(
-        Type.String({ description: "Existing deployment name to rename to `name`; this is a name, not an ID." }),
-      ),
+      renameFrom: Type.Optional(Type.String({ description: "Existing deployment name to rename to `name`." })),
       env: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
-          description:
-            "Env vars baked into the version. When republishing, omit to keep the env of the most recent version (including a failed attempt); pass an object to replace it ({} clears).",
+          description: "Env vars for the version; omit to keep the previous ones, {} clears.",
         }),
       ),
-      rollbackTo: Type.Optional(
-        Type.Integer({ description: "Flip the deployment named `name` back to this version number." }),
-      ),
+      rollbackTo: Type.Optional(Type.Integer({ description: "Version number to flip `name` back to." })),
       alwaysOn: Type.Optional(
         Type.Boolean({
-          description:
-            "true keeps the app always warm — it is never put to sleep for being idle, so there are no cold starts. false returns it to the default sleep-when-idle behavior. Omitted = leave the current setting alone.",
+          description: "true: never sleep when idle; false: default. Omit to keep.",
         }),
       ),
       embedAncestors: Type.Optional(
         Type.Array(Type.String(), {
           description:
-            "Sites allowed to embed the app in an iframe, as https origins (https://tools.example.com, or https://*.example.com for any subdomain). Every frame between the app and the browser tab must be listed, so a panel inside another site needs both. [] forbids embedding again. Omitted = leave the current setting alone.",
+            "https origins allowed to iframe the app (https://*.example.com works); list every intermediate frame. [] forbids. Omit to keep.",
         }),
       ),
-      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default. The app's owner is unchanged."),
+      sandbox_id: sandboxSelector("Sandbox holding `dir`; omit for the default."),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1323,60 +1256,38 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "memory",
     label: "memory",
     description:
-      "Your durable memory of the person or team you work for — the ONE way to read or change it. " +
-      "It is NOT a file: writing MEMORY.md with files or the shell does not touch it. It persists across every conversation and surface (continuity — " +
-      "you're a colleague who remembers, not a fresh chat each time). Reads may span authorized " +
-      "notebooks; writes only change this conversation's own notebook. " +
-      'action="search" finds remembered facts matching every word of `query` (case-insensitive) ' +
-      "across every notebook this conversation may read — check what you already know before asking. " +
-      "Only a bounded selection of memories is loaded into context; search the full notebooks " +
-      "for facts missing from that selection. Keep memory concise. Save pointers to data, never the data " +
-      "itself — working state (queues, backlogs, watermarks, ID lists, logs, per-item status) " +
-      "belongs in a file written with the files tool, with at most one memory line naming that file and what " +
-      "it holds. If a fact is a list that grows, it's a file. Files are this " +
-      "conversation's own (a pointer read from another conversation is a hint of where state " +
-      "lives, not a path you can open). " +
-      'action="add" saves new `facts` ([{text}, …]) now — short, self-contained facts (a preference, ' +
-      "an identifier, an ongoing project, how they like to work); never secrets, credentials, " +
-      "one-off trivia, or anything already recorded somewhere you can look up. " +
-      'action="read" lists this conversation\'s notebook, each fact with its #id; pass `scope` from a search result to read another authorized notebook. ' +
-      'action="edit" replaces the text of existing facts (`facts`: [{id, text}, …]); ' +
-      'action="delete" forgets facts by `ids`. Fix a fact that changed instead of adding a contradicting one, ' +
-      "and delete what is wrong or stale. Ids come from search or read; an edit or delete that names any id " +
-      "not in this conversation's notebook changes nothing and says which ids were bad.",
+      "Your durable memory of the person or team you work for; it persists across conversations and surfaces. It is not a file: writing MEMORY.md does nothing. " +
+      "Reads may span authorized notebooks; writes change only this conversation's notebook. " +
+      "search: facts matching every word of `query` across readable notebooks — only a bounded selection is loaded into context, so search before asking. " +
+      "read: this notebook with fact #ids (pass `scope` from a search result for another notebook). " +
+      "add: short, self-contained facts (preferences, identifiers, ongoing projects, how they work); never secrets, one-off trivia, or anything already recorded elsewhere. " +
+      "Save pointers, not data: growing lists and working state belong in a file written with the files tool, with one memory line naming it. Files are this conversation's own; a pointer read from another notebook is a hint of where state lives, not a path you can open. " +
+      "edit: replace facts' text by id; delete: forget by `ids`. Fix changed facts instead of adding contradictions; delete stale ones.",
     parameters: Type.Object({
-      action: Type.Union(
-        [
-          Type.Literal("search"),
-          Type.Literal("read"),
-          Type.Literal("add"),
-          Type.Literal("edit"),
-          Type.Literal("delete"),
-        ],
-        { description: "search facts, read this notebook, or add, edit, or delete facts." },
-      ),
-      query: Type.Optional(
-        Type.String({ description: "search only: words to look for among your remembered facts (all must match)." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "search only: max facts to return (default 20)." })),
+      action: Type.Union([
+        Type.Literal("search"),
+        Type.Literal("read"),
+        Type.Literal("add"),
+        Type.Literal("edit"),
+        Type.Literal("delete"),
+      ]),
+      query: Type.Optional(Type.String({ description: "search: words to look for (all must match)." })),
+      limit: Type.Optional(Type.Integer({ description: "search: max facts (default 20)." })),
       scope: Type.Optional(
         Type.String({
-          description:
-            "search/read only: exact notebook scope ID from a search result. Omit to search all authorized notebooks or read your own.",
+          description: "search/read: notebook scope ID from a search result; omit for all readable / your own.",
         }),
       ),
       facts: Type.Optional(
         Type.Array(
           Type.Object({
-            id: Type.Optional(Type.String({ description: "edit only: the fact's id, e.g. #42." })),
-            text: Type.String({
-              description: "one short self-contained fact — a pointer to data, never the data itself.",
-            }),
+            id: Type.Optional(Type.String({ description: "edit: the fact's id, e.g. #42." })),
+            text: Type.String({ description: "One short self-contained fact." }),
           }),
           { description: "add: [{text}, …]; edit: [{id, text}, …]." },
         ),
       ),
-      ids: Type.Optional(Type.Array(Type.String(), { description: "delete only: ids of the facts to forget." })),
+      ids: Type.Optional(Type.Array(Type.String(), { description: "delete: ids of the facts to forget." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1486,22 +1397,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "history",
     label: "history",
     description:
-      "Search or reopen THIS conversation's own durable transcript — past turns and tool calls, " +
-      "including parts compacted out of your current context. Tool results are excluded. Use it when something " +
-      'earlier in this conversation is referenced but not in front of you ("that file from last ' +
-      'week", "what did we decide"). Distinct from `memory` search, which searches remembered facts ' +
-      "across conversations; `history` searches only this one, verbatim. With `query`, matching is " +
-      "case-insensitive, all terms must match, and the newest matching entries return, each tagged " +
-      "type#seq with its timestamp. With `seq`, the one entry with that seq returns in full — use it " +
-      "to follow a type#seq pointer from a search hit or an earlier-conversation summary.",
+      "Search or reopen this conversation's own transcript (including parts compacted out of context; tool results excluded) when something said earlier is not in front of you. " +
+      "`query` returns the newest matching entries tagged type#seq; `seq` returns one entry (very long ones trimmed in the middle).",
     parameters: Type.Object({
-      query: Type.Optional(
-        Type.String({ description: "Words to look for in this conversation's transcript (all must match)." }),
-      ),
-      seq: Type.Optional(
-        Type.Integer({ description: "Reopen the single entry with this seq in full, instead of searching." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "Max entries to return (default 20, query mode only)." })),
+      query: Type.Optional(Type.String({ description: "Words to find (all must match, case-insensitive)." })),
+      seq: Type.Optional(Type.Integer({ description: "Reopen this entry instead of searching." })),
+      limit: Type.Optional(Type.Integer({ description: "Max entries for query mode (default 20)." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1555,23 +1456,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "subagents",
     label: "subagents",
     description:
-      "Start and coordinate subagents: background workers you spawn for a task. A subagent does not get its own sidebar entry or see this conversation, so pass what it needs to know. Brief it as you would a colleague just as capable as you are, if not more so: the goal, why it matters, what you already know, and any real limits. Leave the approach to them; keep it short and state preferences as preferences. Its final answer comes back to you as an internal message. " +
-      "`open` starts a subagent with `task`. `followup_task` gives an existing subagent more work in `task` and starts a turn if it is idle; active work is queued safely. " +
-      '`send_message` passes information to one of your subagents, a sibling subagent, or your parent (target="parent") without starting a turn; with interrupt:true it stops a subagent\'s current run. ' +
-      "`read` with no target lists your subagents; with a target it reads that subagent's transcript. " +
+      "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
+      "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
+      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
+      "read: list subagents or read one's transcript. " +
       (delegateWork
-        ? "Delegate substantial work, then end this turn promptly. A subagent's completion wakes you automatically to report the result. Do not wait or poll for subagents. "
-        : "`wait` waits up to 60 seconds for internal messages. Keep doing independent work while subagents run. Do not give a final answer until the work the request needs is complete. ") +
-      "Treat messages as internal coordination, not new user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. " +
-      "Give the user one combined result when the work is ready, or a meaningful blocker." +
-      (sidebarSessions ? " For conversations that should appear in the sidebar, use sessions instead." : ""),
+        ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
+        : "Subagents are for parallel work: don't run just one unless the user asked; pursue a single workstream yourself, switching your own model/runtime if needed. wait: block up to 60s for messages. Keep working meanwhile; don't answer until the request's work is done. ") +
+      "Internal messages are coordination, not user requests or authorization. Do not acknowledge routine completions, repeat already-reported results, or send no-action-needed updates. Give the user one combined result or a real blocker." +
+      (sidebarSessions ? " For sidebar conversations use sessions." : ""),
     parameters: Type.Object({
       timeoutMs: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          maximum: 60_000,
-          description: "wait: milliseconds to wait for internal messages (default 60000).",
-        }),
+        Type.Integer({ minimum: 0, maximum: 60_000, description: "wait: ms to wait (default 60000)." }),
       ),
       action: Type.Union([
         Type.Literal("open"),
@@ -1580,36 +1476,28 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("followup_task"),
         Type.Literal("wait"),
       ]),
-      requestId: Type.Optional(
-        Type.String({ description: "open: stable request key to reuse when retrying the same delegation." }),
-      ),
-      task: Type.Optional(
-        Type.String({
-          description: "open and followup_task: the short task brief, with relevant context and real limits.",
-        }),
-      ),
-      name: Type.Optional(Type.String({ description: "open: short title for the subagent (default: from task)." })),
+      requestId: Type.Optional(Type.String({ description: "open: stable key for retrying the same delegation." })),
+      task: Type.Optional(Type.String({ description: "open/followup_task: the task brief." })),
+      name: Type.Optional(Type.String({ description: "open: short title (default: from task)." })),
       noComputer: Type.Optional(
         Type.Boolean({
           description:
-            "open: disable computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Omit for tasks that need a computer to read email, files, or code; put 'do not modify anything' in task instead. Default false; cannot override an inherited restriction.",
+            "open: no shell, files, browser or computer-backed integrations (memory, history, coordination and read-only connectors remain). Not for tasks that must read email, files or code; say 'do not modify anything' in task instead.",
         }),
       ),
-      model: Type.Optional(Type.String({ description: "open: model override; fails closed if unavailable." })),
+      model: Type.Optional(Type.String({ description: "open: model override (fails if unavailable)." })),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
-      thinkingLevel: Type.Optional(Type.String({ description: "open: reasoning effort override." })),
-      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode override." })),
+      thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
+      fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
       target: Type.Optional(
         Type.String({
           description:
-            "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's). Do not invent filesystem paths such as /root/name. read: omit to list your subagents.",
+            "\"parent\", or a subagent's sessionId or exact title (yours or a sibling's), never a filesystem path. read: omit to list.",
         }),
       ),
-      text: Type.Optional(Type.String({ description: "send_message: the message to deliver." })),
-      interrupt: Type.Optional(
-        Type.Boolean({ description: "send_message: abort the target's current run instead of delivering text." }),
-      ),
-      limit: Type.Optional(Type.Integer({ description: "read: max transcript entries to show (default 30)." })),
+      text: Type.Optional(Type.String({ description: "send_message: the message." })),
+      interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
+      limit: Type.Optional(Type.Integer({ description: "read: max entries (default 30)." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -1767,13 +1655,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "sessions",
     label: "sessions",
     description:
-      "Work with sessions: the conversations people see in the web sidebar, with list/read scoped to this context. Subagents are not sessions; use the subagents tool for them. " +
-      "`search` finds matching entries across conversations visible to everyone here, with sessionId and entry seq references; it does not expand read/send_message access. " +
-      "`list` shows the sessions here that you can see. `read` shows a session's recent transcript. " +
-      "`send_message` delivers a private note to another session without starting a turn; it arrives there as internal context, not as a request from a person. " +
-      "`new` starts a clean session whose first message is `text`; it inherits nothing from this conversation. " +
-      "`fork` copies this conversation's visible history into a new session and, if you give `text`, runs it there as the next message. " +
-      "New and forked sessions appear in the sidebar under the person's name, so create one only when the person attending this turn asks for it; both are refused on automated turns.",
+      "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
+      "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
+      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
+      "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
@@ -1783,18 +1669,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("new"),
         Type.Literal("fork"),
       ]),
-      query: Type.Optional(Type.String({ description: "search: words to find across visible conversations." })),
-      target: Type.Optional(Type.String({ description: "read and send_message: a sessionId from list." })),
+      query: Type.Optional(Type.String({ description: "search: words to find." })),
+      target: Type.Optional(Type.String({ description: "read/send_message: a sessionId from list." })),
       text: Type.Optional(
         Type.String({
-          description:
-            "send_message: the note to deliver. new: the new session's first message (required). fork: an optional next message to run in the fork.",
+          description: "send_message: the note. new: first message (required). fork: optional next message.",
         }),
       ),
-      title: Type.Optional(Type.String({ description: "new and fork: optional sidebar title." })),
-      limit: Type.Optional(
-        Type.Integer({ description: "read: max entries (default 30). search: max matches (default 20, maximum 100)." }),
-      ),
+      title: Type.Optional(Type.String({ description: "new/fork: optional sidebar title." })),
+      limit: Type.Optional(Type.Integer({ description: "read: default 30. search: default 20, max 100." })),
     }),
     async execute(callId, params) {
       const syscalls = ref.current?.sessionSyscalls;
@@ -1962,98 +1845,49 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "background",
     label: "background",
     description:
-      "Manage a command launched with execute background:true, which returns a process_id immediately. The " +
-      "command keeps running across turns, even after you reply. action=poll reads new output and " +
-      "tells you whether it's still running or has exited (with its exit code); pass the cursor " +
-      "from your last poll as since_cursor to get only what's new, and call again to drain more " +
-      "(output is paginated, ~64KB per read). action=stop terminates it (and its child processes). " +
-      "action=list shows your background jobs (id, status, start time, command). " +
-      "action=watch turns a running job into a push notifier for THIS conversation: instead of you " +
-      "polling, new output (optionally only lines matching `pattern`) wakes you here as a new turn, " +
-      "and you're woken once more when the job exits — use it to keep the user posted on long work " +
-      "(builds, deploys, data jobs) without anyone asking. Pass the cursor from execute/poll as " +
-      "since_cursor so the first wake carries only output you haven't seen, and `instructions` to " +
-      "remind your future self what to do with each wake. action=unwatch (with monitor_id from " +
-      `watch) disarms it. Each job has a hard time-to-live (default ${bgTtlMin} minutes, max ${bgTtlMaxMin}) after which ` +
-      "it's stopped automatically (a watch survives just long enough to tell you) — for anything " +
-      `that finishes within ${execCeilingSec}s, just use \`execute\`. Start jobs with execute background:true on the default sandbox or an authorized explicit sandbox_id; ` +
-      "elsewhere, use `execute`. A background job carries the same environment a foreground `execute` " +
-      `does — $AGENT_API_URL, $AGENT_API_TOKEN and $AGENT_CREDENTIAL_TOKEN all work, so self-API calls and shared-credential broker calls run fine from background work. ${capabilityExpiry}, and a background job cannot deliver a file itself, so write results to ordinary workspace paths and attach them from a live turn after polling.\n` +
-      "INTERACTIVE LOGINS: device-flow logins (`gh auth login`, " +
-      "`glab auth login`, `gcloud auth login`, and anything that prints a verification URL/code then " +
-      "blocks waiting on a human) need execute background:true. Read the " +
-      "URL/code from the returned output and relay it to the user, then `watch` (or `poll`) until the " +
-      "command exits — that's when the login is done. If a prompt needs an answer typed in, use " +
-      "action=send_input. Never run a login with foreground execute (it blocks the whole turn) and never `stop`/kill a " +
-      "login mid-flight — that throws away the pending approval and wedges it. Read the `interactive-login` skill " +
-      "before starting one and run it as the skill says: under a temporary home, never this computer's $HOME, then " +
-      "saved to the keychain.",
+      "Manage a job started with execute background:true; it keeps running across turns. " +
+      "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
+      "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
+      `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
+      "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: Type.Object({
-      action: Type.Union(
-        [
-          Type.Literal("poll"),
-          Type.Literal("send_input"),
-          Type.Literal("stop"),
-          Type.Literal("list"),
-          Type.Literal("watch"),
-          Type.Literal("unwatch"),
-        ],
-        {
-          description:
-            "poll output by id, send_input to its stdin, stop it, list your background jobs, watch a job so its output/exit wakes you in this conversation, or unwatch.",
-        },
-      ),
-      purpose: Type.Optional(
-        Type.String({
-          description:
-            "Short job description, about 5 words (e.g. 'App preview server'). Optional context for approval requests.",
-        }),
-      ),
-      process_id: Type.Optional(
-        Type.String({ description: "poll/send_input/stop/watch only: the process_id execute returned." }),
-      ),
-      data: Type.Optional(
-        Type.String({
-          description:
-            "send_input only: text sent to the job's stdin (a trailing newline is NOT added — include \\n to submit a line).",
-        }),
-      ),
+      action: Type.Union([
+        Type.Literal("poll"),
+        Type.Literal("send_input"),
+        Type.Literal("stop"),
+        Type.Literal("list"),
+        Type.Literal("watch"),
+        Type.Literal("unwatch"),
+      ]),
+      purpose: Type.Optional(Type.String({ description: "Short job description, about 5 words." })),
+      process_id: Type.Optional(Type.String({ description: "The process_id execute returned." })),
+      data: Type.Optional(Type.String({ description: "send_input: stdin text; include \\n to submit a line." })),
       since_cursor: Type.Optional(
         Type.Integer({
           minimum: 0,
-          description:
-            "poll/watch only: the cursor from your last poll (watch: only output past it wakes you); omit to read from the start.",
+          description: "poll/watch: cursor from the last poll; omit for the start.",
         }),
       ),
       pattern: Type.Optional(
         Type.String({
-          description:
-            'watch only: literal alternatives separated by |, with optional ^/$ anchors; only matching output lines wake you (e.g. "error|FAILED|passed"). Omit to be woken on any new output.',
+          description: "watch: literal alternatives separated by |, optional ^/$ anchors; omit to wake on any output.",
         }),
       ),
-      instructions: Type.Optional(
-        Type.String({
-          description: "watch only: a note replayed to you with each wake, e.g. 'summarize test failures only'.",
-        }),
-      ),
-      monitor_id: Type.Optional(Type.String({ description: "unwatch only: the monitor id watch returned." })),
+      instructions: Type.Optional(Type.String({ description: "watch: note replayed to you on each wake." })),
+      monitor_id: Type.Optional(Type.String({ description: "unwatch: the monitor id watch returned." })),
       wait_seconds: Type.Optional(
         Type.Integer({
           minimum: 0,
           maximum: 60,
-          description: "poll only: block up to this long for new output or exit, then answer (default 0).",
+          description: "poll: block up to this long for output or exit (default 0).",
         }),
       ),
-      max_bytes: Type.Optional(
-        Type.Integer({
-          minimum: 1,
-          description: "poll only: cap bytes this read (default 65536); re-poll with the returned cursor for more.",
-        }),
-      ),
+      max_bytes: Type.Optional(Type.Integer({ minimum: 1, description: "poll: cap bytes this read (default 65536)." })),
       signal: Type.Optional(
         Type.Union(
           [Type.Literal("TERM"), Type.Literal("KILL"), Type.Literal("INT"), Type.Literal("HUP"), Type.Literal("QUIT")],
-          { description: "stop only: default TERM; use KILL to force." },
+          { description: "stop: default TERM." },
         ),
       ),
     }),
@@ -2311,83 +2145,36 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "cron",
     label: "cron",
     description:
-      "Schedule future or recurring work, and manage what you've scheduled. ALWAYS confirm the timing " +
-      "with the user before you create a schedule. ONE recurring job = ONE cron: before creating, " +
-      "action=list and if a cron for this job already exists, action=patch it in place — never create a " +
-      "second.\n" +
-      "action=create schedules it. Always set a `title`: a 2-5 word label naming what the cron is FOR " +
-      '(e.g. "Gmail unread digest", "GitLab CI watch", "DoorDash retry") — not the command it runs, ' +
-      'not a generic word like "Run" or "First". It sits in a list next to the owner\'s other crons, ' +
-      'so make it distinctive and scannable. Provide EITHER `task` (a prompt re-evaluated at fire time — "check Gmail and ' +
-      'summarize anything notable; if nothing changed, call finish_silently") OR `text` (exact words to send ' +
-      "verbatim, a reminder/relay), not both. `schedule` is one of: {cron,timezone} for calendar times " +
-      "(`cron` is a 5-field expression `minute hour day-of-month month day-of-week`; `timezone` is an IANA " +
-      'name like "America/Los_Angeles" — if the user gave a local time use the timezone from "The user\'s ' +
-      "local time\" unless they name another; omit to use this turn's timezone — do NOT compute future epochs " +
-      "for daily/weekly/monthly). DEFAULT to {cron,timezone} for anything that should happen at a time of day " +
-      "or on a calendar (digests, reminders, reports) — think about the timezone and the actual helpful hour. " +
-      "{everyMs} is ONLY for genuine sub-day polling where wall-clock time does not matter (first run one " +
-      "interval from now, not immediately; an everyMs of 24h+ is rejected — use {cron,timezone} instead), or " +
-      '{firstFireAt} (epoch ms; fires once then auto-cancels — use Date.now() for "send now").\n' +
-      "DELIVERY: by default a cron posts back to this conversation — the surface where you are talking now (a web session, Slack DM, or thread). " +
-      "Keep that default for watches and follow-ups on work started here (including delegated sessions) unless the person names another destination; don't pick a DM just because it is a DM. " +
-      "To deliver elsewhere, set `recipient` " +
-      "(a teammate's name → a DM; core resolves the name and the result echoes who it matched), `channel` " +
-      "(a channel name → that channel), `participants` (a list of member ids → a group DM, which has no name; " +
-      "you're added automatically; the group must already exist — post to it once with the slack tool's " +
-      "reach action, which opens it, then schedule into it), or `destinationKey` " +
-      '(a key from the "Where scheduled tasks post" ' +
-      'menu when one is shown). To schedule something privately for whoever asked instead, set scope="personal" ' +
-      '— it runs at their own personal scope and DMs them, even from a channel. Don\'t bury "send this to Slack" inside `task`; a cron with no destination ' +
-      "runs but has nowhere external to post. Use action=retarget to move an existing cron's delivery to a " +
-      "different destinationKey. Pass unfurlLinks=false when Slack should not show link previews for the delivered message.\n" +
-      "ACCESS — a cron belongs to whoever creates it and runs as them, with what its conversation has been granted " +
-      "plus, where they share Open with it, their own keychain. Everyone in the conversation " +
-      "can see it; only its owner can change it unless they share write access (action=share, permission=write). " +
-      "If the owner leaves the conversation, the cron is deleted.\n" +
-      'A cron whose fires read admin data (admin tool or API) needs `unattendedGrants`, and many admin reads have none: before creating it, follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list.\n' +
-      "action=list pages through your crons (and ones visible through shared scopes), 25 per page — enabled first, " +
-      "newest first, long task text trimmed; when there's more, a footer line names the offset for the next page. " +
-      "action=get inspects one in full; " +
-      "action=runs reads the retained fire log when a fresh run needs older history — fires appear the moment " +
-      'they start (status "running", updated with the outcome when they end), so an empty-looking log never ' +
-      "means nothing is running; " +
-      "action=patch edits IN PLACE (rename via `title`, change `schedule`/`task`/`text`, `enabled:false` " +
-      "pauses, `enabled:true` resumes, `archived:true` archives). `task` is the standing instructions every " +
-      "fire receives — patch it only to change what future fires are told to do; durable run-state (notes, " +
-      "workarounds, checkpoints a future fire needs) belongs in this conversation's durable Files via the available Files API, not in " +
-      "`task` or only on sandbox disk. Confirm publication succeeds, use a cron-specific filename, and leave the file ID in action=note for retrieval with GET /v1/files/:id/content. Small progress state can live directly in the note; never store credentials there. If publication is unavailable, report it and retain needed local state on a scoped computer. Keep tasks that need existing workspace files on that computer until their state has been migrated and verified. action=delete removes it for good; " +
-      "action=run fires it once now (no effect on a paused cron) and is refused while a fire of that cron is " +
-      "still running — repeating it never double-fires; action=disable pauses it.\n" +
-      "action=note (id + note, running inside a cron fire) leaves a short shift-change note the NEXT fire " +
-      `reads before it starts — one or two sentences, max ${CRON_FIRE_NOTE_MAX_CHARS} chars: the outcome plus ` +
-      "anything the next fire must know. It overwrites the previous fire's note.",
+      "Schedule future or recurring work and manage it. Confirm the timing with the user before creating. One job = one cron: list first and patch an existing one rather than creating a second.\n" +
+      'create: always set `title`, a distinctive 2-5 word label for what the cron is FOR (e.g. "Gmail unread digest"), never the command or a generic word. ' +
+      "Give either `task` (a prompt re-evaluated at each fire) or `text` (exact words to relay). " +
+      "`schedule`: {cron,timezone} for anything tied to a time of day or calendar (IANA timezone: the user's local one unless they name another; omit for this turn's), {everyMs} for sub-day polling only (first run one interval from now), or {firstFireAt} (epoch ms, one-shot; Date.now() means now). Never compute future epochs for calendar times.\n" +
+      "DELIVERY: by default a cron posts back to this conversation; keep that for watches and follow-ups on work started here, and don't pick a DM just because this is one. " +
+      'Otherwise set `recipient` (teammate → DM), `channel`, `participants` (member ids → an existing group DM; reach it once first), or `destinationKey` (from the "Where scheduled tasks post" menu); ' +
+      'scope="personal" runs it at the asker\'s own scope and DMs them. Never put the destination inside `task`. retarget changes the destinationKey.\n' +
+      'Crons whose fires read admin data need `unattendedGrants`, and many admin reads have none: first follow the admin skill\'s "Scheduling admin-reading work", which fetches the live grant list.\n' +
+      "ACCESS: a cron belongs to its creator and runs as them; everyone here can see it, only the owner can change it unless shared with permission=write; deleted at its next fire if the owner has left its private channel or group.\n" +
+      'list: 25 per page. get: one in full. runs: the fire log (a fire shows as "running" from the moment it starts). ' +
+      "patch: edit in place. `task` is the standing instructions; durable run-state goes in this conversation's Files with the file ID left in the note (recurring non-loop crons only), never only in `task` or on sandbox disk; small progress state can live in the note itself. " +
+      "delete: remove for good. run: fire once now (refused while a fire is running). disable: pause.\n" +
+      `note (inside a fire): a one- or two-sentence shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars) the next fire reads first; overwrites the previous one; never credentials.`,
     parameters: Type.Object({
-      action: Type.Union(
-        [
-          Type.Literal("create"),
-          Type.Literal("list"),
-          Type.Literal("get"),
-          Type.Literal("runs"),
-          Type.Literal("patch"),
-          Type.Literal("delete"),
-          Type.Literal("run"),
-          Type.Literal("disable"),
-          Type.Literal("retarget"),
-          Type.Literal("note"),
-        ],
-        {
-          description:
-            "create a cron, list yours, get/runs/patch/delete one by id, run one now, disable (pause) one, retarget where it delivers, or note — leave a short shift-change note for its next fire.",
-        },
-      ),
-      id: Type.Optional(
-        Type.String({ description: "get/runs/patch/delete/run/disable/retarget/note only: the cron id." }),
-      ),
+      action: Type.Union([
+        Type.Literal("create"),
+        Type.Literal("list"),
+        Type.Literal("get"),
+        Type.Literal("runs"),
+        Type.Literal("patch"),
+        Type.Literal("delete"),
+        Type.Literal("run"),
+        Type.Literal("disable"),
+        Type.Literal("retarget"),
+        Type.Literal("note"),
+      ]),
+      id: Type.Optional(Type.String({ description: "The cron id (all actions except create/list)." })),
       title: Type.Optional(
         Type.String({
-          description:
-            'create/patch: a 2-5 word label naming what the cron is FOR (e.g. "Gmail unread digest"), distinctive and scannable — not the command, not a generic word like "Run"/"First". Always set one.',
+          description: 'create/patch: distinctive 2-5 word label for what it is FOR, e.g. "Gmail unread digest".',
         }),
       ),
       schedule: Type.Optional(
@@ -2396,50 +2183,33 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             cron: Type.Optional(
               Type.String({ description: "5-field cron expression: minute hour day-of-month month day-of-week." }),
             ),
-            timezone: Type.Optional(
-              Type.String({ description: 'IANA timezone for a cron schedule, e.g. "America/Los_Angeles".' }),
-            ),
+            timezone: Type.Optional(Type.String({ description: 'IANA timezone, e.g. "America/Los_Angeles".' })),
             everyMs: Type.Optional(
               Type.Integer({
-                description:
-                  "recurring interval in ms, for sub-day polling only; first run one interval from now. For daily/weekly/monthly or any time-of-day run use {cron,timezone} instead — everyMs >= 24h is rejected (it has no timezone and drifts with DST).",
+                description: "Interval in ms for sub-day polling; >= 24h rejected.",
               }),
             ),
-            firstFireAt: Type.Optional(
-              Type.Integer({
-                description: "epoch ms for a one-shot (fires once, then auto-cancels); a time in the past is rejected.",
-              }),
-            ),
+            firstFireAt: Type.Optional(Type.Integer({ description: "Epoch ms for a one-shot; past times rejected." })),
           },
-          { description: "create/patch: when it runs — {cron,timezone} | {everyMs} | {firstFireAt}." },
+          { description: "create/patch: {cron,timezone} | {everyMs} | {firstFireAt}." },
         ),
       ),
       task: Type.Optional(
-        Type.String({
-          description: "create/patch: a prompt re-evaluated at fire time (a dynamic task). Use this OR text.",
-        }),
+        Type.String({ description: "create/patch: prompt re-evaluated at fire time. Use this OR text." }),
       ),
       text: Type.Optional(
-        Type.String({
-          description: "create/patch: exact words to send verbatim (a reminder/relay). Use this OR task.",
-        }),
+        Type.String({ description: "create/patch: exact words to send verbatim. Use this OR task." }),
       ),
-      recipient: Type.Optional(
-        Type.String({
-          description: "create: a teammate's name to DM (core resolves it; you can't author a raw address).",
-        }),
-      ),
-      channel: Type.Optional(Type.String({ description: "create: a channel name to post to (core resolves it)." })),
+      recipient: Type.Optional(Type.String({ description: "create: a teammate's name to DM." })),
+      channel: Type.Optional(Type.String({ description: "create: a channel name to post to." })),
       scope: Type.Optional(
         Type.Literal("personal", {
-          description:
-            "create: run privately at the asker's OWN personal scope (delivers to their DM), even from a channel. Don't combine with recipient/channel/participants/destinationKey.",
+          description: "create: run at the asker's own scope and DM them; not with other destinations.",
         }),
       ),
       participants: Type.Optional(
         Type.Array(Type.String(), {
-          description:
-            "create: a group DM's other member ids (you're added automatically); a group DM has no name, so core matches it by exact membership, and the group must already exist — reach it once first, which opens it.",
+          description: "create: the other member ids of an existing group DM.",
         }),
       ),
       destinationKey: Type.Optional(
@@ -2447,22 +2217,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
       session: Type.Optional(
         Type.Boolean({
-          description:
-            "create/patch: tie the cron to this conversation so it shows as ongoing work here. Created crons are tied by default; pass false to leave it untied, or patch true/false to tie or untie it.",
+          description: "Show as ongoing work in this conversation. create: default true; patch: omit to keep.",
         }),
       ),
-      unfurlLinks: Type.Optional(
-        Type.Boolean({
-          description:
-            "create/patch: Slack-only delivery option. false suppresses link/media previews; omit to keep the default or existing setting.",
-        }),
-      ),
+      unfurlLinks: Type.Optional(Type.Boolean({ description: "create/patch: false suppresses Slack link previews." })),
       note: Type.Optional(
         Type.String({
           maxLength: CRON_FIRE_NOTE_MAX_CHARS,
-          description:
-            `note only: the shift-change note for the cron's next fire — one or two sentences (max ${CRON_FIRE_NOTE_MAX_CHARS} chars): ` +
-            "outcome + anything the next fire must know. Overwrites the previous note.",
+          description: `note: the shift-change note (max ${CRON_FIRE_NOTE_MAX_CHARS} chars).`,
         }),
       ),
       runtime: Type.Optional(
@@ -2478,31 +2240,25 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           {
             description:
-              "create/patch: optional runtime override for an agent task. Omit to preserve defaults; null clears an override. Use runtime get to discover approved models/harnesses. Choose a cheaper model and explicit low effort when the whole task, including failure handling, is simple. Unavailable choices fail closed. Auto effort is not supported here yet.",
+              "create/patch: runtime override for an agent task (null clears). Use runtime get for approved models/harnesses; auto effort unsupported. Prefer a cheap model and low effort for simple tasks.",
           },
         ),
       ),
       unattendedGrants: Type.Optional(
         Type.Array(Type.Union(UNATTENDED_ADMIN_GRANTS.map((grant) => Type.Literal(grant))), {
           description:
-            "create/patch: read-only admin grants for this cron's fires (org admins only; the cron must live in and deliver to their own DM); the admin tool's unattended_grants action lists which read needs which. patch replaces; [] removes.",
+            "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
         }),
       ),
-      enabled: Type.Optional(Type.Boolean({ description: "patch only: false pauses the cron, true resumes it." })),
-      archived: Type.Optional(Type.Boolean({ description: "patch only: true archives the cron." })),
+      enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
+      archived: Type.Optional(Type.Boolean({ description: "patch: true archives the cron." })),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
-          description:
-            "list: page size (default 25, max 100). runs: return only the latest N retained fire log entries; omit for all retained entries.",
+          description: "list: page size (default 25, max 100). runs: latest N entries.",
         }),
       ),
-      offset: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
-        }),
-      ),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -2782,69 +2538,43 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "webhook",
     label: "webhook",
     description:
-      "Register and manage inbound webhooks — run a turn whenever an external system (GitHub, Stripe, " +
-      "Slack, CI, a vendor — anything that can POST) calls a URL. Confirm with the user before creating one.\n" +
-      "action=create takes `action` (what to do on each event; the event payload is appended " +
-      "automatically), `verification` (how the request is authenticated), optional `filters` (skip the turn " +
-      'unless the event matches — cheap pre-gating, e.g. [{path:"action",in:["opened"]}]), and optional ' +
-      `\`destinationKey\` (same delivery menu as crons). verification.scheme is one of ${WEBHOOK_SCHEMES.join(" | ")}: ` +
-      `for ${SENDER_WEBHOOK_SCHEMES.join("/")} the USER gives you the signing secret from the ` +
-      "sender's settings page; for hmac-sha256 generate a strong random secret yourself. A signing secret is always required.\n" +
-      "create returns the inbound `url` and `secret` ONCE. You CANNOT open the sender's settings page, so " +
-      "relay BOTH to the user verbatim — the `url` is already the full public inbound URL (hand it over as-is) " +
-      "and the `secret` — so they can point GitHub/Stripe/etc. at it. Until they do, it never fires.\n" +
-      "action=list pages through your webhooks (secrets elided, task text flattened and capped at 2000 chars, " +
-      "25 per page — a footer line names the offset for the next page when there's more); action=update replaces one's task in place " +
-      "(same URL and secret, used from the next event; live owner turns only); action=disable pauses one by id.",
+      "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
+      "create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (same delivery menu as crons). " +
+      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one. ` +
+      "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
+      "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({
-      action: Type.Union(
-        [Type.Literal("create"), Type.Literal("list"), Type.Literal("update"), Type.Literal("disable")],
-        {
-          description:
-            "create an inbound webhook, list yours, update one's task in place by id (URL and secret unchanged), or disable one by id.",
-        },
-      ),
-      id: Type.Optional(Type.String({ description: "update and disable: the webhook id." })),
-      task: Type.Optional(
-        Type.String({
-          description: "create and update: what to do on each event (the payload is appended automatically).",
-        }),
-      ),
+      action: Type.Union([
+        Type.Literal("create"),
+        Type.Literal("list"),
+        Type.Literal("update"),
+        Type.Literal("disable"),
+      ]),
+      id: Type.Optional(Type.String({ description: "update/disable: the webhook id." })),
+      task: Type.Optional(Type.String({ description: "create/update: what to do on each event." })),
       verification: Type.Optional(
         Type.Object(
           {
-            scheme: Type.Union(
-              WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme)),
-              { description: "how the inbound request is authenticated." },
-            ),
-            secret: Type.String({
-              description: `the signing secret (from the sender for ${SENDER_WEBHOOK_SCHEMES.join("/")}; self-generated for hmac-sha256).`,
-            }),
+            scheme: Type.Union(WEBHOOK_SCHEMES.map((scheme) => Type.Literal(scheme))),
+            secret: Type.String({ description: "The signing secret." }),
           },
-          { description: "create only: the inbound authentication scheme + secret." },
+          { description: "create: request authentication." },
         ),
       ),
       filters: Type.Optional(
         Type.Array(
           Type.Object({
-            path: Type.String({ description: 'dotted path into the event payload, e.g. "action".' }),
-            in: Type.Array(Type.String(), {
-              description: "values that pass; the turn is skipped unless the path's value is one of these.",
-            }),
+            path: Type.String({ description: "Dotted path into the payload." }),
+            in: Type.Array(Type.String(), { description: "Values that pass." }),
           }),
-          { description: "create only: skip the turn unless the event matches (cheap pre-gating)." },
+          { description: 'create: skip the turn unless the payload matches, e.g. [{path:"action",in:["opened"]}].' },
         ),
       ),
       destinationKey: Type.Optional(
-        Type.String({ description: 'create only: a key from the "Where scheduled tasks post" menu.' }),
+        Type.String({ description: 'create: a key from the "Where scheduled tasks post" menu.' }),
       ),
-      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list only: page size (default 25, max 100)." })),
-      offset: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "list only: start the page here — pass the offset the previous page's footer names to continue.",
-        }),
-      ),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "list: page size (default 25, max 100)." })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "list: page offset from the previous footer." })),
     }),
     async execute(callId, params) {
       const tc = ref.current;
@@ -2940,33 +2670,21 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "guidance",
     label: "guidance",
     description:
-      "Read or change your durable guidance — the standing instructions you carry into " +
-      "future turns. Two scopes: `channel` = how you behave in THIS channel (when to chime " +
-      "in unprompted, where replies land, ongoing 'whenever X, do Y' orders — evaluated " +
-      "against every new message automatically, so never build a poll or timer for these); " +
-      "`conversation` = your standing instructions for this conversation (tone, defaults, " +
-      "recurring preferences). Default scope: `channel` when you're in a channel, else " +
-      "`conversation`. Conversation guidance lives on the surrounding scope — in a personal " +
-      "context it is shared by ALL of that person's sessions, not tied to the session that " +
-      "wrote it. Never store session pins or 'for this session' notes here: ALL pinning goes " +
-      "through the pins self-API (POST /v1/pins), which routes by context — the session's own " +
-      "pins in the web UI, native pinning in Slack. `edit` swaps one exact passage `old` for `new` " +
-      "and fails unless `old` appears exactly once in that scope's guidance; prefer it for small changes. " +
-      "`replace` REPLACES that scope's entire guidance with `content` — include everything that " +
-      "should remain. Org-wide policy is always layered above and " +
-      "cannot be overridden. Don't store one-off facts here — that's what memory is for.",
+      "Read or change your durable guidance: standing instructions for future turns. " +
+      "Scope `channel`: how you behave in this channel (when to chime in unprompted, where replies land, 'whenever X, do Y' orders — evaluated on every message, so never build a poll or timer for them). " +
+      "`conversation`: tone, defaults and preferences, shared by all of a person's sessions in a personal context. Default: channel if in one, else conversation. " +
+      "Not for session pins (POST /v1/pins) or one-off facts (memory). " +
+      "edit swaps one exact passage `old` for `new`; replace overwrites the scope's whole guidance with `content`. Org-wide policy sits above and cannot be overridden.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("read"), Type.Literal("replace"), Type.Literal("edit")]),
       scope: Type.Optional(Type.Union([Type.Literal("channel"), Type.Literal("conversation")])),
-      content: Type.Optional(Type.String({ description: "replace: the full new guidance for the scope." })),
-      old: Type.Optional(
-        Type.String({ description: "edit: an exact passage that appears once in the scope's current guidance." }),
-      ),
-      new: Type.Optional(Type.String({ description: "edit: the text that takes the place of `old`." })),
+      content: Type.Optional(Type.String({ description: "replace: the full guidance." })),
+      old: Type.Optional(Type.String({ description: "edit: exact passage appearing once." })),
+      new: Type.Optional(Type.String({ description: "edit: replacement for `old`." })),
       ambientEnabled: Type.Optional(
         Type.Union([Type.Boolean(), Type.Null()], {
           description:
-            "Channel scope only. true judges every message for an unprompted reply, false responds only when addressed, and null uses the platform default.",
+            "Channel only. true: judge every message for a reply; false: only when addressed; null: default.",
         }),
       ),
       bots: Type.Optional(
@@ -2978,9 +2696,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           }),
           {
             description:
-              "Per-bot handling for automated posters in this channel, keyed by bot author name: " +
-              "ignore (never wakes you), rollup (batch; judge at most every rollupHours), action " +
-              "(their posts are triggers to act on), user (treat like a person).",
+              "Channel only, per bot author name: ignore, rollup (judge at most every rollupHours), action (posts are triggers), user (treat like a person).",
           },
         ),
       ),
@@ -3125,52 +2841,50 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
+  const ARTIFACT_ID_DESCRIPTIONS = {
+    file: "Artifact ID.",
+    skill: "Skill id from skills list or search.",
+    deploy: "App ID or handle.",
+    cron: "Artifact ID.",
+  };
   function sharingTool(type: "file" | "skill" | "deploy" | "cron", move = false): ToolDefinition {
     const tool = { file: "files", skill: "skills", deploy: "apps", cron: "cron" }[type];
     const action = move ? "move" : "share";
-    let description =
-      "Grant access to an artifact you own while keeping it in its current home. Only the owner can share; grantees cannot reshare.";
+    let description = "Grant access to an artifact you own; grantees cannot reshare.";
     if (type === "file")
-      description =
-        "Share an existing Files record by ID. A sandbox path cannot be shared; upload it with POST /v1/files/uploads first.";
+      description = "Share a Files record by ID (upload a sandbox path with POST /v1/files/uploads first).";
     if (move)
       description =
-        "Transfer the artifact to another context. Moving an app transfers ownership; existing shares survive. Moving a skill to the org requires an org admin in a user-started turn.";
+        "Move to another context; moving an app transfers ownership; shares survive. Moving a skill to the org needs an org admin on a user-started turn.";
     else if (type === "deploy")
       description =
-        "Change access to an app you own while keeping it in its current home. Set public to true or false for anonymous link access, or use toScope/email for authenticated access (external emails are view-only). Only the owner can share; grantees cannot reshare.";
+        "Change access to an app you own: `public`, or toScope/email for signed-in access (external emails view-only).";
     return defineTool({
       name: action,
       label: action,
       description,
       parameters: Type.Object({
-        id: Type.String({
-          description:
-            "Artifact ID (for a skill, the id from skills list or search); an app may also be named by its handle.",
-        }),
+        id: Type.String({ description: ARTIFACT_ID_DESCRIPTIONS[type] }),
         toScope:
           type === "deploy" && !move
             ? Type.Optional(
                 Type.String({
-                  description:
-                    'Authenticated destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name. Omit when setting public or email.',
+                  description: '"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
                 }),
               )
             : Type.String({
-                description: 'Destination: "org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
+                description: '"org", channel:<id>, team:<id>, personal:<id>, or a teammate name.',
               }),
         ...(type === "deploy" && !move
           ? {
               email: Type.Optional(
                 Type.String({
-                  description:
-                    "Exact email to grant view access, including people outside the directory. Use instead of toScope.",
+                  description: "Email granted view access; alternative to toScope.",
                 }),
               ),
               public: Type.Optional(
                 Type.Boolean({
-                  description:
-                    "true lets anyone with the link open the app without signing in; false makes it restricted again. Never enabled by default.",
+                  description: "true: anyone with the link; false: restricted.",
                 }),
               ),
             }
@@ -3179,7 +2893,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ? {
               permission: Type.Optional(
                 Type.Union([Type.Literal("read"), Type.Literal("write")], {
-                  description: "read = view/use (default); write = view/manage.",
+                  description: "read (default) or write (manage).",
                 }),
               ),
             }
@@ -3253,6 +2967,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     });
   }
 
+  function requiredSuffix(operation: ToolDefinition): string {
+    const required = ((operation.parameters as { required?: string[] }).required ?? []).filter(
+      (key) => key !== "action",
+    );
+    return required.length ? ` Requires ${required.join(", ")}.` : "";
+  }
   function resourceTool(name: string, actions: Record<string, ToolDefinition>): ToolDefinition {
     const groups = [...new Set(Object.values(actions))].map((operation) => ({
       operation,
@@ -3277,10 +2997,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       name,
       label: name,
       description: groups
-        .map(
-          ({ actions, operation }) =>
-            `${actions.join("/")}: ${operation.description} Required fields: ${((operation.parameters as { required?: string[] }).required ?? []).filter((key) => key !== "action").join(", ") || "none"}.`,
-        )
+        .map(({ actions, operation }) => `${actions.join("/")}: ${operation.description}${requiredSuffix(operation)}`)
         .join("\n\n"),
       parameters: Type.Object(properties, { additionalProperties: true }),
       async execute(callId, params, signal, onUpdate, ctx) {
@@ -3344,7 +3061,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   if (ref.current === null || ref.current.admin?.operationsAvailable)
     admin.description =
-      "Uses existing admin handlers and audit. Authority is rechecked on every call. Private content requires a live admin in a DM or Open conversation; unattended reads require explicit grants. Admin-role changes, impersonation, identity links, and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Binary/full captured-prompt downloads and raw-secret setters remain on the self-API; do not put secrets in native arguments.\n\n" +
+      "Admin API; authority is rechecked on every call and audited. Private content needs a live admin in a DM or Open conversation; unattended reads need explicit grants. Admin-role changes, impersonation, identity links and teammate invitations are portal-only. Confirm every mutation, report exactly what changed, and disclose only what this conversation needs. Never put secrets in arguments.\n\n" +
       admin.description;
 
   const surfaceName = opts?.surfaceName ?? "slack";
@@ -3792,9 +3509,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const attach = defineTool({
     name: "attach",
     label: "Attach",
-    description:
-      "Send files with this turn's reply, using workspace paths or stored Files IDs. " +
-      "Repeated sources replace their staged copy. Any invalid file stages nothing; the result lists what will be delivered.",
+    description: "Send files with this turn's reply; the result lists what will be delivered.",
     parameters: Type.Object({
       files: outboundFilesSchema,
       sandbox_id: outboundSandboxSchema,
@@ -3820,17 +3535,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "finish_silently",
     label: "finish_silently",
     description:
-      "Ends this turn silently. Use on surface turns when choosing not to reply at all, and on " +
-      "scheduled background fires with nothing worth reporting. After posting a reply, just stop; " +
-      "this is not needed. Keeps the audit log and any messages already posted. " +
-      "On a direct human turn without surface tools this does nothing — just answer.",
+      "End this turn without replying (surface turns that deserve none; scheduled fires with nothing to report). Not needed after posting; does nothing on a turn without surface tools unless it is a cron, webhook or watch fire.",
     parameters: Type.Object({
-      reason: Type.Optional(
-        Type.String({
-          description:
-            "Optional one short phrase on why there's nothing to report — recorded for the audit log, never delivered.",
-        }),
-      ),
+      reason: Type.Optional(Type.String({ description: "Short phrase for the audit log." })),
     }),
     async execute(callId, params) {
       if (!ref.pollFire && !surfaceTools) {
@@ -3887,15 +3594,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "create",
     label: "create",
     description:
-      "Register a goal for this session when the user explicitly asks for sustained, self-directed work " +
-      '("grind on X for 30 minutes", "do 20 minutes of research", "keep going until the tests are green"); never infer ' +
-      "one from an ordinary request. A request that names a duration or amount of work IS such a request: create the goal " +
-      "FIRST, before doing any of the work, with the floor set to exactly the amount the user named (20 minutes = " +
-      "minMs 1200000; never subtract time already spent). Do this even when the task looks hard, slow or impossible: " +
-      "the user asked for the effort, so create the goal and spend it rather than explaining why you will stop. Once registered the harness enforces it: trying to end a reply while the goal " +
-      "is active (or while a work floor is unmet) is answered with a keep-going prompt, not a hard stop. Only the user can stop it; " +
-      'when the work is verifiably done, request completion (goal action update "complete"); a fresh governor decides. ' +
-      "Fails if an unfinished goal exists.",
+      'Register a goal only when the user explicitly asks for sustained work ("grind on X for 30 minutes", "keep going until the tests pass"); never infer one. Create it first, before any work, with the floor set to exactly the amount named (20 minutes = minMs 1200000; never subtract time already spent), even if the task looks hard or impossible. ' +
+      "The harness then answers any attempt to end a reply with a keep-going prompt while the goal is active or the floor unmet (token_cap or a governor pause also ends it); only the user can cancel it. Fails if an unfinished goal exists.",
     parameters: GoalCreateParams,
     async execute(callId, params) {
       const p = params as GoalCreateInput;
@@ -3948,7 +3648,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const getGoal = defineTool({
     name: "get",
     label: "get",
-    description: "Read this session's goal: objective, status, work floor, token cap and usage.",
+    description: "Read this session's goal: objective, status, floor, cap and usage.",
     parameters: Type.Object({}),
     async execute(callId) {
       await recordCall(callId, { tool: "goal", action: "get" });
@@ -3965,15 +3665,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "update",
     label: "update",
     description:
-      'Request completion of the goal. Set to "complete" only when the objective has actually been achieved and no ' +
-      "required work remains. Do not mark a goal complete merely because its budget is nearly exhausted or because " +
-      "you are stopping work. An independent fresh-context governor reads the objective, your recent work, your note, and any " +
-      "workspace files you name in `files` (the harness reads them for it — name deliverables, never paste them into the note), and " +
-      "decides; if it rejects, the goal stays active and its reasons come back to you. You cannot block or pause a goal; " +
-      'only the user stops it. A paused goal resumes (status "resume") only when the person in this turn explicitly asks ' +
-      "to resume it; never resume one on your own initiative. Resume keeps the objective, floor and cap. " +
-      'Cancel (status "cancel") ends an active or paused goal without completing it, only when the person in this turn ' +
-      "explicitly asks to cancel, drop or replace it; never to escape unfinished work.",
+      "complete: only when the objective is actually achieved, never because budget is low or you are stopping; an independent governor reads the objective, your recent work, note and named files, and may reject (the goal stays active with its reasons) or pause it for the user. " +
+      "resume/cancel: only when the person in this turn explicitly asks; never to escape unfinished work.",
     parameters: Type.Object({
       status: Type.Union([
         Type.Literal("complete"),
@@ -3983,12 +3676,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ]),
       note: Type.String({
         description:
-          "complete: the concrete evidence (commands, output, results, links) that proves the objective is achieved. resume or cancel: quote the user's request. wait: what you are waiting on.",
+          "complete: concrete evidence. resume/cancel: quote the user's request. wait: what you are waiting on.",
       }),
       files: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: GOAL_EVIDENCE_FILES,
-          description: "Workspace paths of the deliverables; the governor reads them directly.",
+          description: "Workspace paths of deliverables for the governor to read.",
         }),
       ),
       sandbox_id: sandboxSelector("Sandbox holding `files`; omit for the default."),
@@ -4308,7 +4001,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "context",
     label: "context",
     description:
-      "Reduce this conversation's model context without calling a summarizer. compact with mode recent keeps bounded recent entries, a saved summary if it fits, and structured goal state. Stored history is not deleted. This stops the current segment and resumes the unfinished request; do not repeat completed actions. Call this by itself after other tools finish.",
+      "Shrink model context to recent entries, the saved summary if it fits, and goal state (stored history is untouched). The unfinished request then resumes; do not repeat completed actions. Call it alone after other tools finish.",
     parameters: Type.Object({ action: Type.Literal("compact"), mode: Type.Literal("recent") }),
     async execute(callId, params) {
       await recordCall(callId, { tool: "context", ...params });
@@ -4329,15 +4022,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, harness, reasoning effort, and fast mode. Use get to see the actual active runtime, saved defaults, and available choices. Use set for requests such as 'switch to Astra and do this'. A successful change stops this runtime and resumes the unfinished task on the selected runtime with saved tool results. Omitted settings are preserved. lifetime defaults to task (this user request or cron fire, including retries); scope changes the default for future requests in this scope too and requires a live user. Cron fires may change only their task runtime; the next fire keeps its configured runtime. inherit returns to the scope default, or clears the scope override when lifetime is scope. Never guess capabilities or claim you cannot switch before using this tool. Call a change by itself, after other tools finish.",
+      "Inspect or change your model, harness, effort and fast mode. get: active runtime and choices. set: change it (omitted settings kept). inherit: back to the scope default (with lifetime scope, clears the scope override). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
-      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get, such as Astra." })),
+      model: Type.Optional(Type.String({ description: "Model ID or exact display name from get." })),
       harness: Type.Optional(Type.String()),
       effort: Type.Optional(
         Type.String({
           description:
-            "Use modelCatalog[modelId].effortLevelsByHarness[harnessId] from get. adaptive = native Auto; default = provider default; auto = legacy harness default, not adaptive reasoning.",
+            "A level from get's modelCatalog[model].effortLevelsByHarness[harness]. adaptive = native Auto; default = provider default; auto = legacy harness default.",
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),

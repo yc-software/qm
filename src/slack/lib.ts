@@ -70,6 +70,8 @@ export {
   APPROVAL_ACTION_IDS,
   approvalCardDestination,
   approvalMessage,
+  approvalDecisionMessage,
+  type ApprovalDecisionRecord,
   type StoredApproval,
   recoveredApprovalContext,
   createApprovalRegistry,

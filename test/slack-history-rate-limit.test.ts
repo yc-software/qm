@@ -70,51 +70,45 @@ test("Slack history 429 returns immediately instead of sleeping inside the SDK",
   }
 });
 
-for (const source of ["live", "shadow", "mirror"] as const) {
-  for (const { managed, historyLimit } of [
-    { managed: false },
-    { managed: true },
-    { managed: false, historyLimit: 15 },
-    { managed: true, historyLimit: 200 },
-  ]) {
-    test(`${source} history uses the ${managed ? "shared" : "workspace-owned"} app page size (override ${historyLimit ?? "unset"})`, async () => {
-      const { createSlackHistoryReader } = await import("../src/slack/history.ts");
-      const calls: Array<{ method: string; args: any }> = [];
-      const client = {
-        conversations: Object.fromEntries(
-          ["history", "replies"].map((method) => [
-            method,
-            async (args: any) => {
-              calls.push({ method, args });
-              return { messages: [{ ts: "1.0", text: "parent", reply_count: 1 }], has_more: true };
-            },
-          ]),
-        ),
-      };
-      const reader = createSlackHistoryReader({
-        core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
-        ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
-        source,
-        managed,
-        historyLimit,
-      });
-      const channel = await reader(client, "C1", undefined, "10.0", true);
-      const thread = await reader(client, "C1", "1.0");
-      assert.equal(calls.length, source === "mirror" ? 2 : 3);
-      assert.ok(calls.some((call) => call.method === "history"));
-      assert.ok(calls.some((call) => call.method === "replies"));
-      assert.ok(calls.every((call) => call.args.limit === (managed ? 15 : (historyLimit ?? 200))));
-      assert.equal(calls[0]!.args.latest, "10.0");
-      assert.equal(calls[0]!.args.inclusive, false);
-      for (const page of [channel, thread]) {
-        assert.equal(page.hasMore, true);
-        assert.equal(
-          page.note,
-          source === "mirror" ? "Slack history is truncated; older messages may be absent." : undefined,
-        );
-      }
+for (const { managed, historyLimit } of [
+  { managed: false },
+  { managed: true },
+  { managed: false, historyLimit: 15 },
+  { managed: true, historyLimit: 200 },
+]) {
+  test(`history uses the ${managed ? "shared" : "workspace-owned"} app page size (override ${historyLimit ?? "unset"})`, async () => {
+    const { createSlackHistoryReader } = await import("../src/slack/history.ts");
+    const calls: Array<{ method: string; args: any }> = [];
+    const client = {
+      conversations: Object.fromEntries(
+        ["history", "replies"].map((method) => [
+          method,
+          async (args: any) => {
+            calls.push({ method, args });
+            return { messages: [{ ts: "1.0", text: "parent", reply_count: 1 }], has_more: true };
+          },
+        ]),
+      ),
+    };
+    const reader = createSlackHistoryReader({
+      core: {} as import("../src/api/slack-core-client.ts").SlackCoreClient,
+      ids: { botUserId: "UBOT", ownBotId: "BBOT" } as import("../src/slack/directory.ts").BotIdentity,
+      managed,
+      historyLimit,
     });
-  }
+    const channel = await reader(client, "C1", undefined, "10.0", true);
+    const thread = await reader(client, "C1", "1.0");
+    assert.equal(calls.length, 2);
+    assert.ok(calls.some((call) => call.method === "history"));
+    assert.ok(calls.some((call) => call.method === "replies"));
+    assert.ok(calls.every((call) => call.args.limit === (managed ? 15 : (historyLimit ?? 200))));
+    assert.equal(calls[0]!.args.latest, "10.0");
+    assert.equal(calls[0]!.args.inclusive, false);
+    for (const page of [channel, thread]) {
+      assert.equal(page.hasMore, true);
+      assert.equal(page.note, "Slack history is truncated; older messages may be absent.");
+    }
+  });
 }
 
 for (const { managed, historyLimit } of [

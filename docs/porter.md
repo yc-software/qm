@@ -157,7 +157,8 @@ kubeconfig, and `kubectl get ingress` lists every assigned host.
 Porter's own Postgres datastores are created from the dashboard. An RDS instance in the
 cluster's VPC works too, but Postgres 17 defaults to `rds.force_ssl=1`, so the URL needs
 `?sslmode=no-verify` (or a CA pinned with `DATABASE_CA_CERT`) or core dies on `no pg_hba.conf
-entry ... no encryption`.
+entry ... no encryption`. Use one or the other: a configured CA always verifies the certificate and
+host name, whatever `sslmode` the URL carries.
 
 `deploy/helm/` carries the same topology as a Helm chart for operators who would rather
 manage the release themselves; it expects the images published at

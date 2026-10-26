@@ -47,7 +47,7 @@ This is a general continuation mechanism, not a calendar-specific workflow. Exis
 
 - Explicit mentions, genuine replies in an engaged thread, and employee DMs are supported. Passive ambient ingestion is disabled for opted-in accounts so it cannot start an unclassified alternate turn.
 - Existing shared-scope approvals and legacy personal-agent bridges are not resumed in an opted-in workspace. Start a fresh request so it receives the current boundary.
-- Old shared replies without the restricted namespace are not released into an opted-in workspace during delivery recovery. Unprovenanced historical shared Slack requests are refused when an external policy is configured.
+- Old shared replies without the restricted namespace are not released into an opted-in workspace during delivery recovery. Unprovenanced historical shared Slack requests are refused when an external policy is configured. Server-side trigger resumes (credential approvals, secret drops, background-job monitors) carry the Slack source recorded on the thread's latest run and are checked against the current policy like a live Slack request.
 - Recovered DM run results also require the current external-account policy. Results admitted before this policy configuration or under a previous policy are not delivered.
 - Restricted sessions cannot be resumed through a surface that omits their authenticated workspace policy. External-account DMs also require admission under the current policy; after a policy change, start a fresh request. DMs on other accounts are unaffected.
 - Configuration is deployment-level; there is no new admin UI in this change.
