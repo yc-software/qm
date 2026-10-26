@@ -1,5 +1,5 @@
-import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenant } from "../tenant.ts";
 
 type AmbientDecisionKind = "act" | "ignore" | "fastlane";
 
@@ -40,7 +40,6 @@ export interface AmbientJudgmentStore {
 const emptyCounts = (): AmbientJudgmentCounts => ({ act: 0, ignore: 0, fastlane: 0 });
 
 export function createPostgresAmbientJudgmentStore(connectionString: string): AmbientJudgmentStore {
-  const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, "surface-cache/ambient-judgment/0001", [
     `CREATE TABLE IF NOT EXISTS ambient_judgments(
         id BIGSERIAL PRIMARY KEY,
@@ -77,7 +76,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
         `INSERT INTO ambient_judgments(org_id, surface, container, decision, reason, asked_by, prompt, model, latency_ms, ts_from, ts_to, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
-          configOrgId(),
+          tenant().orgId,
           j.surface,
           j.container,
           j.decision,
@@ -95,7 +94,7 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
     async list(opts) {
       const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
       const where = ["org_id = $1"];
-      const args: unknown[] = [orgId];
+      const args: unknown[] = [tenant().orgId];
       if (opts?.container) {
         args.push(opts.container);
         where.push(`container = $${args.length}`);
@@ -126,11 +125,11 @@ export function createPostgresAmbientJudgmentStore(connectionString: string): Am
       return rows.map(row);
     },
     async get(id) {
-      const rows = await q("SELECT * FROM ambient_judgments WHERE org_id = $1 AND id = $2", [orgId, id]);
+      const rows = await q("SELECT * FROM ambient_judgments WHERE org_id = $1 AND id = $2", [tenant().orgId, id]);
       return rows[0] ? row(rows[0]) : null;
     },
     async counts(opts) {
-      const args: unknown[] = [orgId];
+      const args: unknown[] = [tenant().orgId];
       let where = "org_id = $1";
       if (opts?.container) {
         args.push(opts.container);

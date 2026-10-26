@@ -1,11 +1,10 @@
 import type { TeamChange } from "../../teams/teams.ts";
 import { decisionsResource } from "./decisions-resource.ts";
 import { parseAckEmoji } from "../../slack/config.ts";
-import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModelForHarness,
   fastModeModelIds,
@@ -54,6 +53,7 @@ import type { ApprovalGrantModes } from "../../types.ts";
 import { parseEgressPolicy } from "../../resolution/egress-policy.ts";
 import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.ts";
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
+import { tenant } from "../../tenant.ts";
 
 export interface AutoFlaggerDraft {
   harnessId: HarnessId;
@@ -565,7 +565,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         });
       } else {
         const harnessId = harnessIdOrPi(ctx.deps.harnessId);
-        const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
+        const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, tenant().orgScope, scope, {
           harnessId,
           modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
         });

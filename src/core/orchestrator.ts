@@ -40,7 +40,6 @@ import type {
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
-import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
@@ -212,6 +211,7 @@ import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import { tenant } from "../tenant.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -676,7 +676,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const externalAllowed =
           external ||
           (input.surface === "slack" &&
-            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(toScopeId("org", orgId())) : false));
+            (deps.config ? await deps.config.getExternalSlackParticipantsDurable(tenant().orgScope) : false));
         if (!externalAllowed) {
           return {
             status: "refused",
@@ -1603,7 +1603,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         // Env delivery is gated by the same service-cred grants as the broker: the env var rides
         // only when every internal participant in this conversation is entitled to the credential.
 
-        const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
+        const browseSteps = deps.config?.getBrowseMaxSteps(tenant().orgScope);
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
       }

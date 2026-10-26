@@ -1,7 +1,8 @@
 import { sendJson } from "../http.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 import type { IngestEvent } from "../../surface-cache/surface-cache.ts";
+import { tenant } from "../../tenant.ts";
 
 function strMap(o: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -71,7 +72,7 @@ async function ingestSurfaceEvents(ctx: ApiCtx): Promise<void> {
     principalId: `surface:${surface}`,
     action: "surface.ingest",
     resource: "surface_cache",
-    scopeLabel: orgScope(deps),
+    scopeLabel: tenant().orgScope,
   });
   return sendJson(res, 200, { ok: true, upserted });
 }
@@ -98,7 +99,7 @@ async function setChannelPolicy(ctx: ApiCtx): Promise<void> {
     principalId: setBy ?? "system",
     action: "surface.policy.set",
     resource: b.container,
-    scopeLabel: orgScope(deps),
+    scopeLabel: tenant().orgScope,
   });
   return sendJson(res, 200, { policy });
 }

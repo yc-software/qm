@@ -65,6 +65,24 @@ export default tseslint.config(
     },
   },
   {
+    files: ["src/**/*.ts", "plugins/**/*.ts", "scripts/**/*.ts", "cli/**/*.ts", "test/**/*.ts"],
+    ignores: ["src/tenant.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/config.ts"],
+              importNames: ["processOrgId"],
+              message: "Read the org through tenant() (src/tenant.ts) so it follows the active tenant context.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["src/**/*.ts"],
     ignores: ["src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
     rules: {

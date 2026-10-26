@@ -4,7 +4,6 @@ import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
 import type { ScopeId } from "../types.ts";
-import { orgScope } from "../config.ts";
 import {
   defaultModelForHarness,
   harnessIdOrPi,
@@ -25,6 +24,7 @@ import {
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../harness/harness.ts";
+import { tenant } from "../tenant.ts";
 
 export type RuntimeDeps = Partial<
   Pick<
@@ -96,7 +96,7 @@ export async function runtimeConfigBody(
   const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
   const fallback = runtimeFallback(ctx);
-  const org = orgScope();
+  const org = tenant().orgScope;
   const approvedHarnesses = ((await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId]).filter(isHarnessId);
   const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
   const catalog =
@@ -237,10 +237,10 @@ export async function webuiModelEnabled(
 ): Promise<boolean> {
   modelId = codexProviderModelId(modelId);
   const config = ctx.deps.config!;
-  const picker = await config.getWebuiModelsDurable(orgScope());
+  const picker = await config.getWebuiModelsDurable(tenant().orgScope);
   if (picker == null || picker.includes(modelId)) return true;
   if (picker.length === 0) return false;
-  const org = orgScope();
+  const org = tenant().orgScope;
   const stored = await config.getRuntimeSelectionDurable(org);
   const orgModel = stored?.modelId ?? (await config.getBaseModelOwnDurable(org)) ?? runtimeFallback(ctx).modelId;
   const purposeModel = purpose ? (await config.getPurposeRuntimeDurable(purpose))?.modelId : undefined;

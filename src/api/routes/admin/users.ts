@@ -13,8 +13,9 @@ import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
 import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin, isObj } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { tenant } from "../../../tenant.ts";
 
 const EXTERNAL_ORG_ADMIN_PORTAL_ONLY =
   "granting or removing org admin for an external user is portal-only — the agent cannot manage who governs the org";
@@ -27,7 +28,7 @@ const FORGET_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export async function listUsers(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "users.read", resource: "users", scopeLabel: scope });
@@ -105,7 +106,7 @@ export async function inviteTeammate(ctx: ApiCtx): Promise<void> {
 
 async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
   const { res, deps, body } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
@@ -232,7 +233,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
 
 export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!deps.identity) return sendJson(res, 404, { error: "not_found" });
@@ -278,7 +279,7 @@ export async function revokeExternalUser(ctx: ApiCtx): Promise<void> {
 
 export async function searchDirectory(ctx: ApiCtx): Promise<void> {
   const { res, deps, app, url } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const q = (url.searchParams.get("q") ?? "").trim();
   if (!q || !deps.directory) return sendJson(res, 200, { members: [] });
@@ -293,7 +294,7 @@ export async function searchDirectory(ctx: ApiCtx): Promise<void> {
 
 export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "keychain.read", resource: "keychain", scopeLabel: scope });
@@ -369,7 +370,7 @@ async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string
 
 export async function getUserDetail(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const org = orgScope(deps);
+  const org = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
   const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -406,7 +407,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
 
 export async function startImpersonation(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, body } = ctx;
-  const org = orgScope(deps);
+  const org = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
@@ -419,7 +420,7 @@ export async function startImpersonation(ctx: ApiCtx): Promise<void> {
 
 export async function stopImpersonation(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  const org = orgScope(deps);
+  const org = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, org);
   if (!actor) return;
   const target = String((body as { target?: string } | undefined)?.target ?? "").trim();
@@ -431,7 +432,7 @@ const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending",
 
 export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -456,7 +457,7 @@ export async function setUserOnboarding(ctx: ApiCtx): Promise<void> {
 
 export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
@@ -482,7 +483,7 @@ export async function resetUserToBrandNew(ctx: ApiCtx): Promise<void> {
 
 export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const b = body as { principalId?: string; role?: string; scopeId?: string };
   try {
@@ -506,7 +507,7 @@ export async function createAdminGrant(ctx: ApiCtx): Promise<void> {
 
 export async function revokeAdminGrant(ctx: ApiCtx): Promise<void> {
   const { res, deps, url, params } = ctx;
-  const actor = await authorizeAdmin(ctx, orgScope(deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const principalId = params.principalId!;
   const scope = url.searchParams.get("scope") ?? "";

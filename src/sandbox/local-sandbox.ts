@@ -1,6 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
 import { join } from "node:path";
 import { readdir, readFile as fsReadFile } from "node:fs/promises";
@@ -28,6 +27,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { tenant } from "../tenant.ts";
 
 const DEFAULT_LOCAL_SANDBOX_IMAGE = "qm-sandbox-local:latest";
 const HOME_DIR = "/root";
@@ -264,7 +264,7 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
       "qm.sandbox=1",
       ...(scope ? ["--label", `qm.scope=${scope}`] : []),
       "--label",
-      `qm.org=${configOrgId()}`,
+      `qm.org=${tenant().orgId}`,
       "--label",
       "agent_env=dev",
       "--network",

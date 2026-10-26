@@ -1,13 +1,14 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope, requireScopedAdmin } from "../shared.ts";
+import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { renderFacts } from "../../../memory/facts.ts";
 import { memoryFacts, parseEdits, parseFacts, parseIds } from "../surface.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes } from "./common.ts";
+import { tenant } from "../../../tenant.ts";
 
 export async function listMemoryScopes(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!deps.memory) return sendJson(res, 404, { error: "not_found" });

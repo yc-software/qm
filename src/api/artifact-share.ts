@@ -1,9 +1,9 @@
 import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
-import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
 import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
+import { tenant } from "../tenant.ts";
 
 export const SHARED_SKILL_TRIGGER_REFUSAL =
   "a skill in a shared scope can only be changed by a person, not an automated trigger";
@@ -50,7 +50,7 @@ export async function resolveShareTarget(
   const recipient = (input.recipient ?? "").trim();
   if (scope && recipient) return { kind: "invalid", message: "pass either scope or recipient, not both" };
   if (scope) {
-    if (scope === "org") return { kind: "ok", scope: scopeId("org", configOrgId()), label: "everyone in the org" };
+    if (scope === "org") return { kind: "ok", scope: tenant().orgScope, label: "everyone in the org" };
     if (parseScopeId(scope).kind === null) return { kind: "invalid", message: hints.invalidScope(scope) };
     return { kind: "ok", scope, label: scope };
   }

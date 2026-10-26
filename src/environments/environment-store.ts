@@ -1,6 +1,6 @@
-import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
+import { tenant } from "../tenant.ts";
 
 export interface Environment {
   id: string;
@@ -69,7 +69,7 @@ export function createMemoryEnvironmentStore(opts: { now?: () => number } = {}):
       if (existing) return existing;
       const env: Environment = {
         id: input.id,
-        orgId: configOrgId(),
+        orgId: tenant().orgId,
         name: input.name ?? null,
         ownerActorId: input.ownerActorId ?? null,
         createdAt: now(),
@@ -83,7 +83,7 @@ export function createMemoryEnvironmentStore(opts: { now?: () => number } = {}):
     },
     async list(): Promise<Environment[]> {
       return [...environments.values()]
-        .filter((e) => e.orgId === configOrgId())
+        .filter((e) => e.orgId === tenant().orgId)
         .sort((a, b) => b.updatedAt - a.updatedAt);
     },
     async attach(scopeId, environmentId, attachedBy): Promise<void> {
@@ -122,7 +122,7 @@ export function createPostgresEnvironmentStore(
       await q(
         `INSERT INTO environments(id, org_id, name, owner_actor_id, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$5) ON CONFLICT (id) DO NOTHING`,
-        [input.id, configOrgId(), input.name ?? null, input.ownerActorId ?? null, ts],
+        [input.id, tenant().orgId, input.name ?? null, input.ownerActorId ?? null, ts],
       );
       const rows = await q("SELECT * FROM environments WHERE id = $1", [input.id]);
       return rowToEnvironment(rows[0]!);
@@ -132,7 +132,7 @@ export function createPostgresEnvironmentStore(
       return rows[0] ? rowToEnvironment(rows[0]) : null;
     },
     async list(): Promise<Environment[]> {
-      const rows = await q("SELECT * FROM environments WHERE org_id = $1 ORDER BY updated_at DESC", [configOrgId()]);
+      const rows = await q("SELECT * FROM environments WHERE org_id = $1 ORDER BY updated_at DESC", [tenant().orgId]);
       return rows.map(rowToEnvironment);
     },
     async attach(scopeId, environmentId, attachedBy): Promise<void> {

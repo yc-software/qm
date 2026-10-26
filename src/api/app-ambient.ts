@@ -1,5 +1,4 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
@@ -19,6 +18,7 @@ import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
+import { tenant } from "../tenant.ts";
 
 export function createAmbientHelpers(deps: AppDeps, app: App) {
   function shouldRouteToSpine(input: OrchestratorInput): boolean {
@@ -50,7 +50,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!deps.surfaceCache || !deps.ambientJudge) return { act: false };
     const scheduled = opts?.reason === "scheduled";
     const policy = await deps.channelPolicy?.get(container);
-    const cursorKey = `${orgIdOf()}:${surface}:${container}`;
+    const cursorKey = `${tenant().orgId}:${surface}:${container}`;
     const cursor = deps.ambientCursors ? await deps.ambientCursors.get(cursorKey) : null;
     const after = cursor?.lastJudgedTs;
     const all = await deps.surfaceCache.readMessages(container, { limit: 60, noFallback: true });
@@ -111,7 +111,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       await advanceCursor();
       return { act: false };
     }
-    const self = ambientSelf.get(`${orgIdOf()}:${surface}`);
+    const self = ambientSelf.get(`${tenant().orgId}:${surface}`);
     const forJudge = delta.filter((m) => !m.mentionsSelf);
     if (forJudge.length < delta.length)
       recordJudgment({
@@ -266,11 +266,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           surfaceTools: true,
           async: true,
           spawned: true,
-          idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
+          idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
         }
       : {
           surface: batch.surface,
-          actor: { externalId: `system:ambient:${orgIdOf()}` },
+          actor: { externalId: `system:ambient:${tenant().orgId}` },
           conversation,
           deliveryTarget: batch.container,
           text: buildWakeEnvelope({
@@ -291,7 +291,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
           surfaceTools: true,
           async: true,
           spawned: true,
-          idempotencyKey: `ambient:${orgIdOf()}:${batch.surface}:${batch.container}:${latestTs}`,
+          idempotencyKey: `ambient:${tenant().orgId}:${batch.surface}:${batch.container}:${latestTs}`,
         };
     if (!solicited && (await steerIntoLiveAmbientRun(batch, latestTs, req))) return;
     await app.turn(req).catch(reportFailureAs("ambient: spawn worker", undefined));
@@ -311,7 +311,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const decision = await deps.orchestrator
       .screenSecuritySteer({
         payload: req.text,
-        actor: { id: `system:ambient:${orgIdOf()}`, type: "internal" },
+        actor: { id: `system:ambient:${tenant().orgId}`, type: "internal" },
         conversation:
           batch.kind === "group"
             ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }

@@ -1,6 +1,6 @@
 import type { DurableMap } from "./persistence/durable-map.ts";
-import { orgId as configOrgId } from "./config.ts";
-import { scopeId, type ScopeId } from "./types.ts";
+import type { ScopeId } from "./types.ts";
+import { tenant } from "./tenant.ts";
 
 export const FEATURES = {
   app_annotations: {
@@ -50,7 +50,6 @@ export function createFeatureFlagStore(
   backing: DurableMap<FeatureFlagRecord>,
   opts: { now?: () => number } = {},
 ): FeatureFlagStore {
-  const orgScope = scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   return {
@@ -58,7 +57,7 @@ export function createFeatureFlagStore(
     get: (featureName) => backing.get(key(featureName)),
     async enabled(featureName, scope) {
       const row = await backing.get(key(featureName));
-      return row?.enabledScopes.includes(orgScope) === true || row?.enabledScopes.includes(scope) === true;
+      return row?.enabledScopes.includes(tenant().orgScope) === true || row?.enabledScopes.includes(scope) === true;
     },
     async setEnabled(featureName, scope, on, updatedBy) {
       if (!updatedBy.trim()) throw new Error("feature flag updater must not be empty");

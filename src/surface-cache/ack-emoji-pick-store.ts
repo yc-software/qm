@@ -1,5 +1,5 @@
-import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenant } from "../tenant.ts";
 
 type AckPickOutcome = "picked" | "declined";
 
@@ -40,7 +40,6 @@ export interface AckEmojiPickStore {
 const emptyCounts = (): AckPickCounts => ({ picked: 0, declined: 0 });
 
 export function createPostgresAckEmojiPickStore(connectionString: string): AckEmojiPickStore {
-  const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, "surface-cache/ack-emoji-pick/0001", [
     `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
         id BIGSERIAL PRIMARY KEY,
@@ -76,7 +75,7 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
         `INSERT INTO ack_emoji_picks(org_id, surface, channel, ts, outcome, picked, icon, message, candidates, model, latency_ms, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [
-          configOrgId(),
+          tenant().orgId,
           p.surface,
           p.channel,
           p.ts,
@@ -94,7 +93,7 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
     async list(opts) {
       const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
       const where = ["org_id = $1"];
-      const args: unknown[] = [orgId];
+      const args: unknown[] = [tenant().orgId];
       if (opts?.channel) {
         args.push(opts.channel);
         where.push(`channel = $${args.length}`);
@@ -125,11 +124,11 @@ export function createPostgresAckEmojiPickStore(connectionString: string): AckEm
       return rows.map(row);
     },
     async get(id) {
-      const rows = await q("SELECT * FROM ack_emoji_picks WHERE org_id = $1 AND id = $2", [orgId, id]);
+      const rows = await q("SELECT * FROM ack_emoji_picks WHERE org_id = $1 AND id = $2", [tenant().orgId, id]);
       return rows[0] ? row(rows[0]) : null;
     },
     async counts(opts) {
-      const args: unknown[] = [orgId];
+      const args: unknown[] = [tenant().orgId];
       let where = "org_id = $1";
       if (opts?.channel) {
         args.push(opts.channel);

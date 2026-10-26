@@ -1,8 +1,9 @@
 import type { App } from "../../app.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { mentionedUserIds } from "../../../slack/mrkdwn.ts";
+import { tenant } from "../../../tenant.ts";
 
 const SLACK_MIRROR_PAGE_MAX = 400;
 const SLACK_MIRROR_PAGE_DEFAULT = 200;
@@ -31,7 +32,7 @@ async function mirrorNames(deps: ApiCtx["deps"]) {
 
 export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "slack_mirror.read", resource: "slack-mirror", scopeLabel: scope });
@@ -47,7 +48,7 @@ export async function listSlackMirrorContainers(ctx: ApiCtx): Promise<void> {
 
 export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
   const { res, app, deps, url } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const container = (url.searchParams.get("container") ?? "").trim();
@@ -90,7 +91,7 @@ export async function listSlackMirrorMessages(ctx: ApiCtx): Promise<void> {
 
 export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const store = deps.ambientJudgments;
@@ -138,7 +139,7 @@ export async function listAmbientJudgments(ctx: ApiCtx): Promise<void> {
 
 export async function listAckEmojiPicks(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const store = deps.ackEmojiPicks;

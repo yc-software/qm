@@ -5,10 +5,11 @@ import {
 } from "../../../model/custom-providers.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
+import { tenant } from "../../../tenant.ts";
 
 async function actor(ctx: ApiCtx) {
-  const scope = orgScope(ctx.deps);
+  const scope = tenant().orgScope;
   return authorizeAdmin(ctx, scope);
 }
 
@@ -47,7 +48,7 @@ export async function getCustomProviders(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "custom-providers.read",
     resource: "custom-providers",
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   return sendJson(ctx.res, 200, { providers: await ctx.deps.customProviders.statuses() });
 }
@@ -100,7 +101,7 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "custom-providers.update",
     resource: id,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   const status = (await ctx.deps.customProviders.statuses()).find((item) => item.id === id);
   return sendJson(ctx.res, 200, { ok: true, status });
@@ -119,7 +120,7 @@ export async function deleteCustomProvider(ctx: ApiCtx): Promise<void> {
     principalId: authorized.id,
     action: "custom-providers.delete",
     resource: id,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   return sendJson(ctx.res, 200, { ok: true });
 }

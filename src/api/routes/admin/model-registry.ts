@@ -5,10 +5,10 @@ import { embeddingModelCatalog, MODEL_REGISTRY, safeModelMetadata } from "../../
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
-import { audit, authorizeAdmin, orgScope, isObj } from "../shared.ts";
+import { audit, authorizeAdmin, isObj } from "../shared.ts";
 
 export async function modelRegistry(ctx: ApiCtx): Promise<void> {
-  const scope = orgScope(ctx.deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const store = ctx.deps.modelRegistry;
@@ -78,9 +78,10 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
 import { builtinModelSpec, lookupModel, modelLookupInput } from "../../../model/model-lookup.ts";
 import { builtInModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { verificationFailure } from "../../../model/model-verification.ts";
+import { tenant } from "../../../tenant.ts";
 
 export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
-  if (!(await authorizeAdmin(ctx, orgScope(ctx.deps)))) return;
+  if (!(await authorizeAdmin(ctx, tenant().orgScope))) return;
   const input = modelLookupInput.safeParse(ctx.body);
   if (!input.success)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "Choose a provider and enter a valid model ID." });
@@ -128,7 +129,7 @@ export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
 }
 
 export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
-  const scope = orgScope(ctx.deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });

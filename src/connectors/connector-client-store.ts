@@ -1,8 +1,8 @@
-import { orgId as configOrgId } from "../config.ts";
 import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
 import { PROVIDERS, createSecretClientResolver } from "./oauth.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
+import { tenant } from "../tenant.ts";
 
 export interface StoredConnectorClient {
   scopeId: string;
@@ -129,7 +129,7 @@ export function createConnectorClientResolver(opts: {
   const envResolver = createSecretClientResolver(opts.secrets);
   return async (providerName, ctx): Promise<ResolvedClient> => {
     if (!PROVIDERS[providerName]) throw new Error(`unknown OAuth provider: ${providerName}`);
-    const orgId = configOrgId();
+    const orgId = tenant().orgId;
     const rec = await opts.reader.getConnectorClientSecret(opts.orgScopeId(orgId), providerName);
     if (rec) {
       if (!rec.enabled) throw new Error(`connector '${providerName}' is disabled for this org`);

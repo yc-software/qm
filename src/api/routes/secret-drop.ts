@@ -1,4 +1,3 @@
-import { orgId as configOrgId } from "../../config.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,
@@ -14,6 +13,7 @@ import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
+import { tenant } from "../../tenant.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -217,7 +217,7 @@ async function mintDrop(ctx: ApiCtx): Promise<void> {
   const dest = resolveCapabilityDestination(capability, undefined);
   const { dropId } = await deps.secretDrops.mint({
     ownerId,
-    orgId: configOrgId(),
+    orgId: tenant().orgId,
     service: b.service.trim(),
     ...(typeof b.envKey === "string" && b.envKey.trim() ? { envKey: b.envKey.trim() } : {}),
     ...(typeof b.host === "string" && b.host.trim() ? { host: b.host.trim() } : {}),
@@ -336,7 +336,7 @@ async function redeemDrop(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 404, { error: "not_found", message });
   }
   const drop = redeemed.rec;
-  if (drop.orgId !== undefined && drop.orgId !== configOrgId())
+  if (drop.orgId !== undefined && drop.orgId !== tenant().orgId)
     return sendJson(res, 404, { error: "not_found", message: "this drop link is for a different org" });
   try {
     const meta = await deps.keychain.save({

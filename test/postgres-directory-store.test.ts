@@ -1,6 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { tenantFor, withTenant } from "../src/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
@@ -520,4 +521,22 @@ test("pg directory: room membership follows a person's linked identities", { ski
   } finally {
     installPrincipalLinks(null);
   }
+});
+
+test("pg directory: one store keeps each tenant's roster to itself", { skip }, async () => {
+  const store = createPostgresDirectoryStore(URL!);
+  const alpha = tenantFor("tenant-alpha");
+  const beta = tenantFor("tenant-beta");
+  await withTenant(alpha, () =>
+    store.replace([{ principalId: "U-only-alpha", displayName: "Only Alpha", type: "internal" }]),
+  );
+  await withTenant(beta, () =>
+    store.replace([{ principalId: "U-only-beta", displayName: "Only Beta", type: "internal" }]),
+  );
+  assert.deepEqual(
+    (await withTenant(alpha, () => store.list())).map((m) => m.principalId),
+    ["U-only-alpha"],
+  );
+  assert.equal(await withTenant(beta, () => store.get("U-only-alpha")), null);
+  assert.equal((await withTenant(beta, () => store.resolve("Only Alpha"))).kind, "none");
 });

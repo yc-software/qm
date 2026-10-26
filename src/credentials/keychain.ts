@@ -1,5 +1,4 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { orgId as configOrgId } from "../config.ts";
 import { randomBytes } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
@@ -13,6 +12,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { connectorTokenNote, envKey } from "./connector-token.ts";
+import { tenant } from "../tenant.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -793,7 +793,7 @@ export function createKeychain(deps: {
     const rec: KeychainCredential = {
       id,
       ownerId: principalId,
-      orgId: token.orgId ?? configOrgId(),
+      orgId: token.orgId ?? tenant().orgId,
       service: host.toLowerCase(),
       kind: "env",
       host: host.toLowerCase(),
@@ -967,7 +967,7 @@ export function createKeychain(deps: {
       return {
         id,
         ownerId,
-        orgId: configOrgId(),
+        orgId: tenant().orgId,
         service,
         kind,
         ...(envKey ? { envKey } : {}),
@@ -1300,7 +1300,7 @@ export function createKeychain(deps: {
         credentialId: cred.id,
         ownerId: cred.ownerId,
         requesterId: input.requesterId,
-        orgId: configOrgId(),
+        orgId: tenant().orgId,
         requesterScopeId: input.requesterScopeId,
         ...(input.requesterDestination ? { requesterDestination: input.requesterDestination } : {}),
         ...(input.requesterThreadRef ? { requesterThreadRef: input.requesterThreadRef } : {}),

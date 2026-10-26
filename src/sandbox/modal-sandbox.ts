@@ -4,7 +4,6 @@ import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { orgId as configOrgId } from "../config.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -41,6 +40,7 @@ import type {
   SandboxHandle,
   TeardownOptions,
 } from "./sandbox.ts";
+import { tenant } from "../tenant.ts";
 
 const HOME_DIR = "/root";
 const WORKSPACE_BASENAME = "workspace";
@@ -110,7 +110,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const rotationHoldUntil = new Map<string, number>();
   const orphanFirstSeenMs = new Map<string, number>();
   const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
-    "qm-org": configOrgId(),
+    "qm-org": tenant().orgId,
     "qm-prefix": prefix,
     "qm-kind": kind,
   });
@@ -222,7 +222,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           sandboxId: adopted.sandboxId,
           createdAtMs: Date.now(),
           lastActivityMs: Date.now(),
-          orgId: configOrgId(),
+          orgId: tenant().orgId,
         });
       }
       return { session: adopted, coldStart: false };
@@ -235,7 +235,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       sandboxId: session.sandboxId,
       createdAtMs: Date.now(),
       lastActivityMs: Date.now(),
-      orgId: configOrgId(),
+      orgId: tenant().orgId,
     });
     const terminateOrphan = (): Promise<unknown> =>
       session.terminate().then(
@@ -356,7 +356,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
             sandboxId: found.sandboxId,
             createdAtMs: Date.now(),
             lastActivityMs: Date.now(),
-            orgId: configOrgId(),
+            orgId: tenant().orgId,
           });
           sessionByName.set(name, found);
           return { session: found, coldStart: false };
@@ -896,7 +896,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const cutoff = now - Math.min(idleMs, reapIdleMs);
       let reaped = 0;
       for (const [scope, rec] of await store.entries()) {
-        if (rec.orgId && rec.orgId !== configOrgId()) continue;
+        if (rec.orgId && rec.orgId !== tenant().orgId) continue;
         if (rec.hydrationPending) continue;
         const name = sandboxScopeName(prefix, scope);
         scopeByName.set(name, scope);

@@ -1,8 +1,8 @@
 import { promisify } from "node:util";
 import { deflateRaw, inflateRaw } from "node:zlib";
-import { orgId as configOrgId } from "../config.ts";
 import type { CandidateDestination, Destination, EgressPolicy, Principal, ScopeId } from "../types.ts";
 import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
+import { tenant } from "../tenant.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
@@ -83,7 +83,7 @@ export async function mintCapabilityToken(
   secret: string,
   compressionEnabled = false,
 ): Promise<string> {
-  const value = { orgId: configOrgId(), ...claims };
+  const value = { orgId: tenant().orgId, ...claims };
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > MAX_CLAIMS_BYTES) throw new Error("Capability claims exceed size limit");
   return mintSignedPayload(

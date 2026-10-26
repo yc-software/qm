@@ -1,13 +1,14 @@
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../../../audit/audit-log.ts";
+import { tenant } from "../../../tenant.ts";
 
 const MAX_FLAGS = 200;
 const FLAG_ACTIONS = [SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE];
 
 export async function listSecurityFlags(ctx: ApiCtx): Promise<void> {
-  const scope = orgScope();
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   const requested = Number(ctx.url.searchParams.get("limit") ?? 50);

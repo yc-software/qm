@@ -2,8 +2,9 @@ import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
 import { parseScopeId, scopeId as makeScopeId, type Principal } from "../../../types.ts";
 import { sendJson } from "../../http.ts";
-import { orgScope, requireScopedAdmin } from "../shared.ts";
+import { requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { tenant } from "../../../tenant.ts";
 
 export async function requireScopedResource<T>(
   ctx: ApiCtx,
@@ -36,7 +37,7 @@ export async function discoverScopes(
   deps: ServerDeps,
   extraScopeIds: Iterable<string> = [],
 ): Promise<Map<string, string>> {
-  const labels = new Map<string, string>([[orgScope(deps), "org-wide"]]);
+  const labels = new Map<string, string>([[tenant().orgScope, "org-wide"]]);
   const [scopes, participants, grants] = await Promise.all([
     deps.sessions?.distinctScopes() ?? [],
     deps.sessions?.distinctParticipants() ?? [],

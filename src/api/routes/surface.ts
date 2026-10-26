@@ -24,7 +24,7 @@ import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -41,6 +41,7 @@ import {
   splitToScope,
   SHARED_SKILL_TRIGGER_REFUSAL,
 } from "../artifact-share.ts";
+import { tenant } from "../../tenant.ts";
 
 function isGrant(b: unknown): b is Grant {
   return (
@@ -1169,10 +1170,10 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
   if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
-    deps.config.getWebuiModelsDurable(orgScope(deps)),
-    deps.config.getBaseModelDurable(orgScope(deps)),
-    deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
-    resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
+    deps.config.getWebuiModelsDurable(tenant().orgScope),
+    deps.config.getBaseModelDurable(tenant().orgScope),
+    deps.config.getExternalSlackParticipantsDurable(tenant().orgScope),
+    resolveBranding(deps.config, tenant().orgScope, deps.brandingDefault),
   ]);
   const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;

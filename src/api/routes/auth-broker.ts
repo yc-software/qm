@@ -5,8 +5,9 @@ import { AdminError } from "../../admin/admin-service.ts";
 import { sendJson } from "../http.ts";
 import { deployRef, encodeRef } from "../../acl/resource-ref.ts";
 import { externalMemberActive, validEmail } from "../../identity/external-members.ts";
-import { isObj, authorizeAdmin, orgScope, audit, activePrincipal } from "./shared.ts";
+import { isObj, authorizeAdmin, audit, activePrincipal } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
+import { tenant } from "../../tenant.ts";
 
 const NAMESPACE = "authbroker:";
 const MAX_IDS = 64;
@@ -100,13 +101,13 @@ async function brokerSession(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "invalid_email" });
   const email = b.email.trim().toLowerCase();
   if (ctx.pathname.endsWith("/revoke")) {
-    if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, orgScope()))) return;
+    if (ctx.actor?.p.toLowerCase() !== email && !(await authorizeAdmin(ctx, tenant().orgScope))) return;
     await deps.brokerSessions.revoke(email);
     audit(deps, {
       principalId: ctx.actor?.p ?? "admin",
       action: "auth.broker.revoke",
       resource: email,
-      scopeLabel: orgScope(),
+      scopeLabel: tenant().orgScope,
     });
     return sendJson(res, 200, { ok: true });
   }
@@ -136,7 +137,7 @@ async function trustedAdmin(ctx: ApiCtx): Promise<void> {
   if (
     !isObj(claims) ||
     claims.purpose !== "trusted-entry-admin" ||
-    claims.org !== orgScope() ||
+    claims.org !== tenant().orgScope ||
     typeof claims.issuer !== "string" ||
     typeof claims.subject !== "string" ||
     !claims.subject ||
@@ -181,7 +182,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
   if (
     !isObj(claims) ||
     claims.purpose !== "teammate-invite" ||
-    claims.org !== orgScope(deps) ||
+    claims.org !== tenant().orgScope ||
     claims.aud !== deps.portalUrl.replace(/\/+$/, "") ||
     typeof claims.email !== "string" ||
     typeof claims.iat !== "number" ||
@@ -213,7 +214,7 @@ async function redeemInvitation(ctx: ApiCtx): Promise<void> {
     principalId: claims.email,
     action: "user.invite.redeem",
     resource: claims.email,
-    scopeLabel: orgScope(deps),
+    scopeLabel: tenant().orgScope,
   });
   return sendJson(res, 200, { email: claims.email });
 }

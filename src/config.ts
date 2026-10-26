@@ -918,12 +918,8 @@ function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
 
 const DEFAULT_ORG_ID = "default-org";
 
-export function orgId(): string {
+export function processOrgId(): string {
   return process.env.ORG_ID ?? DEFAULT_ORG_ID;
-}
-
-export function orgScope(): string {
-  return `org:${orgId()}`;
 }
 
 export const CONFIG_DEFAULTS = {

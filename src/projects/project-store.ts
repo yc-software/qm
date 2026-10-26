@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 import { samePerson } from "../directory/person.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { tenant } from "../tenant.ts";
 
 const PROJECT_GROUP_PREFIX = "web-project-";
 
@@ -115,7 +115,7 @@ export function createProjectStore(
     const id = projectIdFromGroupRef(groupRef);
     if (!id) return undefined;
     const project = await backing.get(id);
-    return project?.orgId === configOrgId() ? project : undefined;
+    return project?.orgId === tenant().orgId ? project : undefined;
   }
 
   function effectiveMemberIds(project: Project): string[] {
@@ -173,7 +173,7 @@ export function createProjectStore(
       const at = now();
       const project: Project = {
         id: nextId(),
-        orgId: configOrgId(),
+        orgId: tenant().orgId,
         name,
         ownerId: input.ownerId,
         memberIds: [input.ownerId],
@@ -193,7 +193,7 @@ export function createProjectStore(
       return (await backing.all())
         .filter(
           (project) =>
-            project.orgId === configOrgId() &&
+            project.orgId === tenant().orgId &&
             isActiveMember(project.ownerId) &&
             isActiveMember(principalId) &&
             effectiveMemberIds(project).includes(principalId),
@@ -300,7 +300,9 @@ export function createProjectStore(
     },
     async listLinked() {
       return (await backing.all())
-        .filter((project) => project.orgId === configOrgId() && project.slackChannel && isActiveMember(project.ownerId))
+        .filter(
+          (project) => project.orgId === tenant().orgId && project.slackChannel && isActiveMember(project.ownerId),
+        )
         .map(visible);
     },
     async slackChannel(groupRef) {
@@ -333,7 +335,7 @@ export function createProjectStore(
       if (!id) return undefined;
       return withLock(id, async () => {
         const project = await backing.get(id);
-        if (!project || project.orgId !== configOrgId() || String(project.updatedAt) !== version) return undefined;
+        if (!project || project.orgId !== tenant().orgId || String(project.updatedAt) !== version) return undefined;
         return fn();
       });
     },

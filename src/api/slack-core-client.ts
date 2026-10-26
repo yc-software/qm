@@ -12,7 +12,6 @@ import type { IdentityService } from "../identity/identity-service.ts";
 import type { ActorAssertion } from "../types.ts";
 import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createTaskAcknowledgements, type TaskAckState, type TaskAcknowledgements } from "../slack/task-ack.ts";
-import { orgId as configOrgId } from "../config.ts";
 import type { StagedEnvelope } from "../slack/envelope-staging.ts";
 import { resolveBranding } from "../resolution/branding.ts";
 import { createHash } from "node:crypto";
@@ -48,6 +47,7 @@ import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";
+import { tenant } from "../tenant.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -177,7 +177,7 @@ const RUN_STALL_BUDGET_MS = 300_000;
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
-  const orgScope: ScopeId = scopeId("org", configOrgId());
+  const orgScope: ScopeId = tenant().orgScope;
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {
     for (const wake of terminalWaiters.get(run.id) ?? []) wake();

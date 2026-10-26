@@ -1,10 +1,11 @@
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
-import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { audit, authorizeAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
+import { tenant } from "../../../tenant.ts";
 
 export async function manageSandboxResources(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const resources = ctx.deps.sandboxResources;
   if (!resources) return sendJson(ctx.res, 404, { error: "not_supported" });

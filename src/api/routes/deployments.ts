@@ -18,7 +18,7 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { canonicalPayload } from "../../../plugins/chassis/src/source-auth-sign.ts";
 import { sendJson, verifyOrReject } from "../http.ts";
 import { mintPortalIdentity, verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../auth/portal-identity.ts";
-import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin, isObj } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
@@ -31,6 +31,7 @@ import { principalDestination } from "../../reach/reach.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
+import { tenant } from "../../tenant.ts";
 
 function deploymentProxyAgent(port?: number): { agent?: SocksProxyAgent } {
   if (port === undefined) return {};
@@ -146,7 +147,10 @@ async function proxyAdminDeployment(ctx: BaseCtx): Promise<void> {
   )
     return;
   const deployment = (await app.listDeployments()).find((d) => d.id === parts.id);
-  const actor = await authorizeAdmin({ req, res, deps, capability: null }, deployment?.ownerScopeId ?? orgScope(deps));
+  const actor = await authorizeAdmin(
+    { req, res, deps, capability: null },
+    deployment?.ownerScopeId ?? tenant().orgScope,
+  );
   if (!actor) return;
   if (!deployment) return sendJson(res, 404, { error: "not_found" });
   audit(deps, {

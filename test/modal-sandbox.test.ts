@@ -13,13 +13,13 @@ import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/san
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
-import { orgId } from "../src/config.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
 import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../src/sandbox/modal-client.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { tenant } from "../src/tenant.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -979,7 +979,7 @@ test("turn env reaches commands through the exec env parameter, never as inlined
 test("scope and scratch sandboxes carry ownership tags", async () => {
   const h = await sandbox.provision(layers);
   assert.deepEqual(fake.tagsOf(fake.current(h.id)!.sandboxId), {
-    "qm-org": orgId(),
+    "qm-org": tenant().orgId,
     "qm-prefix": "qmt",
     "qm-kind": "scope",
   });
@@ -987,7 +987,7 @@ test("scope and scratch sandboxes carry ownership tags", async () => {
   const scratchIds: string[] = [];
   for await (const id of fake.client.listRunning!({ "qm-kind": "scratch" })) scratchIds.push(id);
   assert.equal(scratchIds.length, 1);
-  assert.deepEqual(fake.tagsOf(scratchIds[0]!), { "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scratch" });
+  assert.deepEqual(fake.tagsOf(scratchIds[0]!), { "qm-org": tenant().orgId, "qm-prefix": "qmt", "qm-kind": "scratch" });
   await sandbox.teardown(scratch);
 });
 
@@ -1057,9 +1057,9 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   const s = make({ store, orphanGraceMs: 40 });
   const handle = await s.provision(layers);
   const tracked = fake.current(handle.id)!.sandboxId;
-  const orphan = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scope" });
-  const scratch = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scratch" });
-  const foreign = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "other", "qm-kind": "scope" });
+  const orphan = fake.createUntracked({ "qm-org": tenant().orgId, "qm-prefix": "qmt", "qm-kind": "scope" });
+  const scratch = fake.createUntracked({ "qm-org": tenant().orgId, "qm-prefix": "qmt", "qm-kind": "scratch" });
+  const foreign = fake.createUntracked({ "qm-org": tenant().orgId, "qm-prefix": "other", "qm-kind": "scope" });
   assert.equal((await s.reapDeepIdle!(72 * 3600_000)).reaped, 0, "first sighting starts the grace period");
   assert.equal(fake.runningCount(), 4);
   await new Promise((resolve) => setTimeout(resolve, 60));

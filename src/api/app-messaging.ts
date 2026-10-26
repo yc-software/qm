@@ -1,5 +1,4 @@
 import type { ScopeId } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
@@ -29,11 +28,12 @@ import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
 import { CONTEXT_REQUEST_EXPIRY_MS } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
+import { tenant } from "../tenant.ts";
 
 export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: string) {
   const viewerKeys = personKeys(await deps.directory.get(principalId).catch(() => null), principalId);
   const viewersOwn = (id: string): boolean => viewerKeys.has(personKey(id));
-  const scopeNames = new Map<ScopeId, string | null>([[scopeId("org", orgIdOf()), null]]);
+  const scopeNames = new Map<ScopeId, string | null>([[tenant().orgScope, null]]);
   if (deps.identity.isInternal(deps.identity.classify(principalId))) {
     for (const c of await deps.directory.listChannelsFor(principalId)) {
       scopeNames.set(scopeId("channel", c.channelId), c.name);
@@ -314,7 +314,7 @@ export function createMessagingMethods(
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
-      if (self && (self.name || self.mentionId)) ambientSelf.set(`${orgIdOf()}:${surface}`, self);
+      if (self && (self.name || self.mentionId)) ambientSelf.set(`${tenant().orgId}:${surface}`, self);
       const out = await deps.surfaceCache.ingest(events);
       if (surface === "slack" && hasRevisionEvents(events)) {
         void recordMessageRevisions(deps.sessions, events).catch(
@@ -432,7 +432,7 @@ export function createMessagingMethods(
       const presentSet = new Set(present);
       const removed = previous.map((m) => m.principalId).filter((id) => !presentSet.has(id));
       const outcome = await deps.identity.recordDirectorySync(removed, present);
-      const orgScope = scopeId("org", orgIdOf());
+      const orgScope = tenant().orgScope;
       for (const id of outcome.deactivated) {
         deps.auditLog.record({
           at: Date.now(),

@@ -8,7 +8,6 @@ import type {
   Session,
   TurnResult,
 } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
 import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, type Run } from "../runs/run-store.ts";
@@ -51,6 +50,7 @@ import {
 import type { ParticipantScope } from "../sessions/session-store.ts";
 import type { App, AppDeps, ContextSummary, ProjectView, FileListPage } from "./app-types.ts";
 import { toFileItem } from "./app-types.ts";
+import { tenant } from "../tenant.ts";
 
 export function createAppHelpers(deps: AppDeps, app: App) {
   const adminBase = deps.publicWebUrl?.replace(/\/$/, "");
@@ -289,7 +289,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     if (kind !== "group" || projectIdFromGroupRef(ref) === null) return undefined;
     if (!deps.projects) return false;
     const project = await deps.projects.get(projectIdFromGroupRef(ref)!);
-    if (!project || project.orgId !== orgIdOf()) return false;
+    if (!project || project.orgId !== tenant().orgId) return false;
     if (!deps.identity.isInternal(deps.identity.classify(project.ownerId))) return false;
     if (!deps.identity.isInternal(deps.identity.classify(principalId))) return false;
     return (await deps.projects.membership(ref, principalId).catch(() => false)) === true;
@@ -403,7 +403,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const scopes = new Set<ScopeId>([
       scopeId("personal", principalId),
       ...(actor?.teamIds ?? []).map((teamId) => scopeId("team", teamId)),
-      scopeId("org", orgIdOf()),
+      tenant().orgScope,
     ]);
     try {
       const [sessionScopes, channels, groups, projects] = await Promise.all([

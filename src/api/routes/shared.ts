@@ -1,4 +1,3 @@
-import { orgId as configOrgId, orgScope as configOrgScope } from "../../config.ts";
 import type { Principal } from "../../types.ts";
 import type { AuditEvent } from "../../audit/audit-log.ts";
 import { adminStatusFromGrants } from "../../admin/admin-service.ts";
@@ -7,8 +6,7 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { headerValue, sendJson } from "../http.ts";
-
-export const orgScope = (_deps?: unknown): string => configOrgScope();
+import { tenant } from "../../tenant.ts";
 
 export { isObj } from "../../util/objects.ts";
 
@@ -19,7 +17,7 @@ export function audit(deps: ServerDeps, e: Omit<AuditEvent, "at">): void {
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
   if (ctx.capability) return { id: ctx.capability.actorId, type: "internal" };
   if (ctx.actor)
-    return ctx.deps.admin?.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
+    return ctx.deps.admin?.resolveActor(`${ctx.actor.p}@${tenant().orgId}`) ?? { id: ctx.actor.p, type: "internal" };
   return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 

@@ -1,5 +1,4 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
@@ -22,6 +21,7 @@ import {
   waitAppReady,
   type AppErrorSink,
 } from "./shared-deploy-provider.ts";
+import { tenant } from "../tenant.ts";
 
 const AGENT_PORT_DEFAULT = 8080;
 const APP_PORT_DEFAULT = 8081;
@@ -425,7 +425,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         endpoint: body.endpoint,
         createdAtMs: Date.now(),
         lastSnapshotMs: Date.now(),
-        orgId: configOrgId(),
+        orgId: tenant().orgId,
       });
       return { id: body.id, endpoint: body.endpoint, fresh: true };
     });

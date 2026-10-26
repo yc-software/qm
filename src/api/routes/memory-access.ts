@@ -3,7 +3,7 @@ import type { MemoryService } from "../../memory/memory-service.ts";
 import { parseScopeId, personalScope, type Principal } from "../../types.ts";
 import { livePersonCapability } from "../artifact-share.ts";
 import type { ApiCtx } from "./route.ts";
-import { orgScope } from "./shared.ts";
+import { tenant } from "../../tenant.ts";
 
 export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryService | undefined {
   if (!ctx.deps.memory) return undefined;
@@ -17,7 +17,7 @@ export function memoryForRequest(ctx: ApiCtx, sourcePrincipal?: string): MemoryS
       )
     : [personalScope(id)];
   const nativeScopes = claimed.filter(
-    (scope) => scope === targetScope || scope === orgScope(ctx.deps) || parseScopeId(scope).kind === "team",
+    (scope) => scope === targetScope || scope === tenant().orgScope || parseScopeId(scope).kind === "team",
   );
   return disclosedMemory(ctx.deps.memory, {
     actor,

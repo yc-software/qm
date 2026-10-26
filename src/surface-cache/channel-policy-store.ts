@@ -1,5 +1,5 @@
-import { orgId as configOrgId } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { tenant } from "../tenant.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
 export const DEFAULT_ROLLUP_HOURS = 24;
@@ -77,7 +77,6 @@ export interface ChannelPolicyStore {
 const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
-  const orgId = configOrgId();
   const { q, close } = createPgPool(connectionString, "surface-cache/channel-policy/0001", [
     `CREATE TABLE IF NOT EXISTS channel_policy(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
@@ -119,7 +118,10 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
   });
   return {
     async get(container) {
-      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 AND container = $2", [orgId, container]);
+      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 AND container = $2", [
+        tenant().orgId,
+        container,
+      ]);
       return rows[0] ? row(rows[0]) : null;
     },
     async set(container, orders, opts) {
@@ -149,7 +151,7 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
          )
          SELECT * FROM up`,
         [
-          orgId,
+          tenant().orgId,
           container,
           orders ?? null,
           opts?.bots ? JSON.stringify(opts.bots) : null,
@@ -167,12 +169,12 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
     async history(container, limit = HISTORY_DEFAULT_LIMIT) {
       const rows = await q(
         "SELECT * FROM channel_policy_history WHERE org_id = $1 AND container = $2 ORDER BY id DESC LIMIT $3",
-        [orgId, container, limit],
+        [tenant().orgId, container, limit],
       );
       return rows.map(revision);
     },
     async list() {
-      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 ORDER BY updated_at DESC", [orgId]);
+      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 ORDER BY updated_at DESC", [tenant().orgId]);
       return rows.map(row);
     },
     close,

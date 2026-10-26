@@ -2,8 +2,9 @@ import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
-import { audit, isObj, orgScope } from "./shared.ts";
+import { audit, isObj } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
+import { tenant } from "../../tenant.ts";
 
 const numOrUndef = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
@@ -13,7 +14,12 @@ async function deactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.deactivate(id);
-  audit(deps, { principalId: id, action: "principal.deactivate", resource: "principal", scopeLabel: orgScope(deps) });
+  audit(deps, {
+    principalId: id,
+    action: "principal.deactivate",
+    resource: "principal",
+    scopeLabel: tenant().orgScope,
+  });
   return sendJson(res, 200, { ok: true, principalId: id, active: false });
 }
 
@@ -23,7 +29,12 @@ async function reactivatePrincipal(ctx: ApiCtx): Promise<void> {
   const id = ctx.params.id!;
   if (!id) return sendJson(res, 404, { error: "not_found" });
   await deps.identity.reactivate(id);
-  audit(deps, { principalId: id, action: "principal.reactivate", resource: "principal", scopeLabel: orgScope(deps) });
+  audit(deps, {
+    principalId: id,
+    action: "principal.reactivate",
+    resource: "principal",
+    scopeLabel: tenant().orgScope,
+  });
   return sendJson(res, 200, { ok: true, principalId: id, active: true });
 }
 

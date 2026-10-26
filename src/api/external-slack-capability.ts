@@ -1,10 +1,9 @@
 import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { orgId } from "../config.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
-import { scopeId } from "../types.ts";
 import type { ServerDeps } from "./deps.ts";
+import { tenant } from "../tenant.ts";
 
 export async function externalSlackCapabilityAllowed(
   claims: CapabilityClaims,
@@ -17,7 +16,7 @@ export async function externalSlackCapabilityAllowed(
     "service-cred",
     run.request.conversation.audience,
     claims.scopeId,
-    scopeId("org", orgId()),
+    tenant().orgScope,
     principalEntitledToScope,
   );
   const granted = new Set(grants.map((grant) => parseRef(grant.ref).id));

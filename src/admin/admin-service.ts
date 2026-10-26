@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { orgId as configOrgId } from "../config.ts";
 import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "./admin-grant-store.ts";
+import { tenant } from "../tenant.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -74,9 +74,8 @@ export interface AdminServiceOptions {
 }
 
 export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
-  const orgId = configOrgId();
   const grants: AdminGrantStore =
-    store ?? createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: defaultAdminGrants(orgId) });
+    store ?? createAdminGrantStore(createMemoryAdminGrantPersistence(), { seed: defaultAdminGrants(tenant().orgId) });
   const now = opts.now ?? (() => Date.now());
 
   async function isOrgAdmin(actor: Principal): Promise<boolean> {
@@ -90,7 +89,7 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
       if (at <= 0 || at === header.length - 1) return null;
       const id = header.slice(0, at);
       const org = header.slice(at + 1);
-      if (org !== orgId) return null;
+      if (org !== tenant().orgId) return null;
       return { id, type: "internal" };
     },
     async canAdminister(principal, _target) {
@@ -110,7 +109,7 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
       const grant: AdminGrant = {
         principalId,
         role: "org_admin",
-        scopeId: scopeId("org", orgId),
+        scopeId: tenant().orgScope,
         grantedBy: `trusted-oidc:${issuer}`,
         createdAt: now(),
       };
@@ -129,8 +128,8 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
         throw new AdminError(400, "role must be org_admin");
       }
       const parsed = parseScopeId(input.scopeId);
-      if (parsed.kind !== "org" || parsed.ref !== orgId) {
-        throw new AdminError(400, `org_admin scope must be org:${orgId}`);
+      if (parsed.kind !== "org" || parsed.ref !== tenant().orgId) {
+        throw new AdminError(400, `org_admin scope must be ${tenant().orgScope}`);
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
       await grants.add(grant);

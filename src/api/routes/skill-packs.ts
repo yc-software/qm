@@ -1,9 +1,10 @@
 import { sendJson } from "../http.ts";
 import { withAdmin, type ApiCtx, type Route } from "./route.ts";
-import { audit, authorizeAdmin, orgScope } from "./shared.ts";
+import { audit, authorizeAdmin } from "./shared.ts";
 import type { NewSkillPack, SkillPack } from "../../skills/skill-pack-store.ts";
 import type { PackConfig } from "../../skills/normalize.ts";
 import { parseScopeId, type ScopeId } from "../../types.ts";
+import { tenant } from "../../tenant.ts";
 
 function asSubset(v: unknown): "all" | string[] | undefined {
   if (v === "all" || v === undefined) return "all";
@@ -37,7 +38,7 @@ function asConfig(v: unknown): PackConfig | undefined {
 }
 
 async function listPacks(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const packs = await ctx.app.listSkillPacks();
   const importedByPack = new Map<string, Set<string>>();
@@ -53,13 +54,13 @@ async function listPacks(ctx: ApiCtx): Promise<void> {
     principalId: actor.id,
     action: "skill_packs.read",
     resource: "skill_packs",
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   sendJson(ctx.res, 200, { packs: decorated });
 }
 
 async function registerPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   if (typeof b.url !== "string" || !b.url.trim()) {
@@ -75,7 +76,7 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
 
     syncMode: "pinned",
     trustTier: b.trustTier === "internal" ? "internal" : "third-party",
-    targetScopeId: orgScope(ctx.deps),
+    targetScopeId: tenant().orgScope,
     subset,
     createdBy: actor.id,
     ...(asConfig(b.config) ? { config: asConfig(b.config) } : {}),
@@ -94,20 +95,20 @@ async function registerPack(ctx: ApiCtx): Promise<void> {
 }
 
 async function packCatalog(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const plan = await ctx.app.skillPackCatalog(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
     action: "skill_pack.catalog",
     resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   sendJson(ctx.res, 200, plan);
 }
 
 async function importPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const body = (ctx.body as Record<string, unknown> | null) ?? {};
   const subset = asSubset(body.selected);
@@ -124,26 +125,26 @@ async function importPack(ctx: ApiCtx): Promise<void> {
     principalId: actor.id,
     action: "skill_pack.import",
     resource: ctx.params.id!,
-    scopeLabel: scopeIds.length ? scopeIds.join(",") : orgScope(ctx.deps),
+    scopeLabel: scopeIds.length ? scopeIds.join(",") : tenant().orgScope,
   });
   sendJson(ctx.res, 200, result);
 }
 
 async function syncPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const result = await ctx.app.syncSkillPack(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
     action: "skill_pack.sync",
     resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   sendJson(ctx.res, 200, result);
 }
 
 async function patchPack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const b = (ctx.body ?? {}) as Record<string, unknown>;
   const patch: Partial<Omit<SkillPack, "id" | "createdAt">> = {};
@@ -169,14 +170,14 @@ async function patchPack(ctx: ApiCtx): Promise<void> {
 }
 
 async function removePack(ctx: ApiCtx): Promise<void> {
-  const actor = await authorizeAdmin(ctx, orgScope(ctx.deps));
+  const actor = await authorizeAdmin(ctx, tenant().orgScope);
   if (!actor) return;
   const result = await ctx.app.removeSkillPack(ctx.params.id!);
   audit(ctx.deps, {
     principalId: actor.id,
     action: "skill_pack.remove",
     resource: ctx.params.id!,
-    scopeLabel: orgScope(ctx.deps),
+    scopeLabel: tenant().orgScope,
   });
   sendJson(ctx.res, 200, result);
 }

@@ -11,8 +11,8 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
-import { orgId } from "../src/config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { tenant } from "../src/tenant.ts";
 
 function fixture() {
   const keychain = createKeychain({
@@ -91,7 +91,7 @@ function fixture() {
     await keychain.save({ ownerId, service, envKey: "COMPOSIO_API_KEY", secret: "private-key" });
   }
   async function shared(granted = true, enabled = true) {
-    const org = scopeId("org", orgId());
+    const org = tenant().orgScope;
     await keychain.setServiceCredential(org, {
       slug: "composio",
       name: "Composio",
@@ -182,7 +182,7 @@ test("authorization binds the session to the authenticated actor, ignoring suppl
     assert.equal(r.status, 200);
     assert.deepEqual(r.data, { url: link, accountId: "ca_test" });
     const payload = JSON.parse(String(f.calls[0]!.init?.body));
-    assert.equal(payload.user_id, composioUserId(orgId(), "alice"));
+    assert.equal(payload.user_id, composioUserId(tenant().orgId, "alice"));
     assert.deepEqual(payload.toolkits, { enable: ["gmail"] });
     assert.deepEqual(payload.manage_connections, { enable: false });
     assert.equal(f.calls[1]!.url.endsWith("/tool_router/session/trs_test/link"), true);
@@ -216,8 +216,8 @@ test("upstream errors are redacted and identity is stable per organization and p
   assert.notEqual(composioUserId("a", "alice"), composioUserId("b", "alice"));
   assert.notEqual(composioUserId("a", "alice"), composioUserId("a", "bob"));
   assert.deepEqual((await f.invoke("/v1/composio/identity")).data, {
-    userId: composioUserId(orgId(), "alice"),
-    userIds: [composioUserId(orgId(), "alice")],
+    userId: composioUserId(tenant().orgId, "alice"),
+    userIds: [composioUserId(tenant().orgId, "alice")],
   });
 });
 
@@ -243,7 +243,7 @@ test("connections return only this actor's active accounts and strip credentials
   await f.own();
   const owned = {
     id: "ca_gmail",
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
     status: "ACTIVE",
     toolkit: { slug: "gmail" },
     data: { token: "secret-token" },
@@ -251,7 +251,7 @@ test("connections return only this actor's active accounts and strip credentials
   f.replies.push({
     items: [
       owned,
-      { ...owned, id: "ca_other", user_id: composioUserId(orgId(), "bob") },
+      { ...owned, id: "ca_other", user_id: composioUserId(tenant().orgId, "bob") },
       { ...owned, status: "INITIATED" },
       { ...owned, is_disabled: true },
     ],
@@ -260,11 +260,11 @@ test("connections return only this actor's active accounts and strip credentials
   const r = await f.invoke("/v1/composio/connections?user_ids=bob&cursor=page-1");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, {
-    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(orgId(), "alice"), missingScopes: [] }],
+    items: [{ id: "ca_gmail", toolkit: "gmail", userId: composioUserId(tenant().orgId, "alice"), missingScopes: [] }],
     nextCursor: "next-page",
   });
   const q = new URL(f.calls[0]!.url).searchParams;
-  assert.equal(q.get("user_ids"), composioUserId(orgId(), "alice"));
+  assert.equal(q.get("user_ids"), composioUserId(tenant().orgId, "alice"));
   assert.equal(q.get("statuses"), "ACTIVE");
   assert.equal(q.get("cursor"), "page-1");
   assert.doesNotMatch(r.text, /secret-token|private-key|user_id/);
@@ -275,7 +275,7 @@ test("connections report scopes the app's configuration grants that an older con
   await f.own();
   const account = (id: string, scope: string | undefined, config = "ac_x") => ({
     id,
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
     status: "ACTIVE",
     toolkit: { slug: "twitter" },
     auth_config: { id: config },
@@ -330,7 +330,7 @@ test("scopes granted in URL form match their short configured names", async () =
       items: [
         {
           id: "ca_outlook",
-          user_id: composioUserId(orgId(), "alice"),
+          user_id: composioUserId(tenant().orgId, "alice"),
           status: "ACTIVE",
           toolkit: { slug: "outlook" },
           auth_config: { id: "ac_outlook" },
@@ -349,7 +349,7 @@ test("people can disconnect only their own connections, on a turn they started",
   await f.own();
   const mine = {
     id: "ca_mine",
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
     status: "EXPIRED",
     toolkit: { slug: "twitter" },
   };
@@ -372,7 +372,7 @@ test("people can disconnect only their own connections, on a turn they started",
   assert.equal((await f.invoke("/v1/composio/disconnect", { accountId: "ca_mine" }, null, privateCap)).status, 200);
 
   for (const account of [
-    { ...mine, user_id: composioUserId(orgId(), "bob") },
+    { ...mine, user_id: composioUserId(tenant().orgId, "bob") },
     { ...mine, id: "ca_other" },
     { ...mine, toolkit: { slug: "composio" } },
   ]) {
@@ -439,7 +439,7 @@ test("Slack connection links verified workspace identity to the web owner and pe
     assert.equal(started.status, 200);
     const account = {
       id: "ca_test",
-      user_id: composioUserId(orgId(), "alice"),
+      user_id: composioUserId(tenant().orgId, "alice"),
       toolkit: { slug: "slack" },
       status: "ACTIVE",
     };
@@ -491,7 +491,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
       {
         purpose: "slack-account-link",
         principal: "alice",
-        org: orgId(),
+        org: tenant().orgId,
         accountId: "ca_test",
         exp: Date.now() + (scenario === "expired" ? -1000 : 60000),
       },
@@ -500,7 +500,7 @@ test("Slack link rejects changed browser accounts, wrong owner, bots, other work
     f.replies.push(
       {
         id: "ca_test",
-        user_id: composioUserId(orgId(), scenario === "wrong-owner" ? "bob" : "alice"),
+        user_id: composioUserId(tenant().orgId, scenario === "wrong-owner" ? "bob" : "alice"),
         toolkit: { slug: "slack" },
         status: scenario === "pending" ? "INITIATED" : "ACTIVE",
       },
@@ -548,7 +548,7 @@ const execution = {
 };
 const aliceAccount = {
   id: "ca_alice",
-  user_id: composioUserId(orgId(), "alice"),
+  user_id: composioUserId(tenant().orgId, "alice"),
   status: "ACTIVE",
   toolkit: { slug: "gmail" },
 };
@@ -566,7 +566,7 @@ test("backend execution binds user and account, pins tool version, and withholds
   assert.equal(result.status, 200);
   assert.deepEqual(result.data, { data: { emails: [] }, successful: true, error: null });
   assert.deepEqual(JSON.parse(f.calls[2]!.init!.body as string), {
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
     connected_account_id: "ca_alice",
     version: execution.version,
     arguments: execution.arguments,
@@ -576,7 +576,7 @@ test("backend execution binds user and account, pins tool version, and withholds
 
 test("execution rejects other owners, inactive accounts, disabled accounts, and mismatched toolkits", async () => {
   for (const account of [
-    { ...aliceAccount, user_id: composioUserId(orgId(), "bob") },
+    { ...aliceAccount, user_id: composioUserId(tenant().orgId, "bob") },
     { ...aliceAccount, id: "ca_bob" },
     { ...aliceAccount, status: "EXPIRED" },
     { ...aliceAccount, is_disabled: true },
@@ -686,7 +686,7 @@ test("callback completion is browser-only and preserves the durable return URL",
   });
   assert.deepEqual(JSON.parse(f.calls[2]!.init!.body as string), {
     session_uri: "opaque",
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
   });
   assert.equal((await f.deps.composioReturns!.entries()).length, 0);
   assert.deepEqual(
@@ -773,7 +773,7 @@ test("ending the run during account lookup prevents disconnecting", async () => 
 test("shared org connections recheck grants for every audience member", async () => {
   const f = fixture();
   await f.shared(false);
-  const org = scopeId("org", orgId());
+  const org = tenant().orgScope;
   await f.deps.acl!.grant({
     ownerScopeId: org,
     ref: "service-cred:composio",
@@ -801,7 +801,7 @@ test("shared org connections recheck grants for every audience member", async ()
 test("expired callback returns are discarded after successful browser verification", async () => {
   const f = fixture();
   await f.own();
-  const key = `${composioUserId(orgId(), "alice")}:ca_test`;
+  const key = `${composioUserId(tenant().orgId, "alice")}:ca_test`;
   await f.deps.composioReturns!.put(key, {
     url: "https://qm.example/old",
     toolkit: "gmail",
@@ -820,7 +820,7 @@ test("linked aliases can execute their existing accounts until the identity link
   const links = createPrincipalLinkService();
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
-  const aliasUserId = composioUserId(orgId(), aliasId);
+  const aliasUserId = composioUserId(tenant().orgId, aliasId);
   const account = { ...aliceAccount, user_id: aliasUserId };
   try {
     await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
@@ -858,8 +858,8 @@ test("linked account discovery and Slack status preserve historical aliases with
   f.deps.slackAccounts = createMemoryMap();
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
-  const canonicalUserId = composioUserId(orgId(), "alice");
-  const aliasUserId = composioUserId(orgId(), aliasId);
+  const canonicalUserId = composioUserId(tenant().orgId, "alice");
+  const aliasUserId = composioUserId(tenant().orgId, aliasId);
   const account = { id: "ca_legacy", user_id: aliasUserId, status: "ACTIVE", toolkit: { slug: "slack" } };
   await f.deps.slackAccounts.put(aliasId, {
     principalId: aliasId,
@@ -876,7 +876,7 @@ test("linked account discovery and Slack status preserve historical aliases with
       items: [
         account,
         { ...account, id: "ca_current", user_id: canonicalUserId },
-        { ...account, id: "ca_other", user_id: composioUserId(orgId(), "bob") },
+        { ...account, id: "ca_other", user_id: composioUserId(tenant().orgId, "bob") },
         { ...account, id: "ca_other_org", user_id: composioUserId("other-org", aliasId) },
       ],
       next_cursor: "next",
@@ -884,8 +884,8 @@ test("linked account discovery and Slack status preserve historical aliases with
     const listed = await f.invoke("/v1/composio/connections?cursor=page");
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.data.items, [
-      { id: "ca_legacy", toolkit: "slack", userId: composioUserId(orgId(), aliasId), missingScopes: [] },
-      { id: "ca_current", toolkit: "slack", userId: composioUserId(orgId(), "alice"), missingScopes: [] },
+      { id: "ca_legacy", toolkit: "slack", userId: composioUserId(tenant().orgId, aliasId), missingScopes: [] },
+      { id: "ca_current", toolkit: "slack", userId: composioUserId(tenant().orgId, "alice"), missingScopes: [] },
     ]);
     assert.equal(listed.data.nextCursor, "next");
     const query = new URL(f.calls.at(-1)!.url).searchParams;
@@ -920,7 +920,7 @@ test("unlinking an account owner during tool lookup prevents provider execution"
       if (String(args[0]).includes(`/tools/${execution.tool}?`)) await links.unlink(aliasId);
       return response;
     };
-    f.replies.push({ ...aliceAccount, user_id: composioUserId(orgId(), aliasId) }, gmailTool);
+    f.replies.push({ ...aliceAccount, user_id: composioUserId(tenant().orgId, aliasId) }, gmailTool);
     const result = await f.invoke("/v1/composio/execute", execution, null, privateCap);
     assert.equal(result.status, 403);
     assert.equal(result.data.error, "connection_not_authorized");
@@ -939,7 +939,7 @@ test("consent and browser verification use the canonical identity when signed in
   const links = createPrincipalLinkService();
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
-  const userId = composioUserId(orgId(), "alice");
+  const userId = composioUserId(tenant().orgId, "alice");
   const callbackUrl = "https://qm.example/s/chat?composioReturn=linked";
   try {
     await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
@@ -969,8 +969,8 @@ test("linked identities retain provider accounts and Slack status until unlinked
   f.deps.principalLinks = createPrincipalLinkService();
   f.deps.slackAccounts = createMemoryMap();
   installPrincipalLinks(f.deps.principalLinks);
-  const canonical = composioUserId(orgId(), "alice");
-  const alias = composioUserId(orgId(), "oidc:alice");
+  const canonical = composioUserId(tenant().orgId, "alice");
+  const alias = composioUserId(tenant().orgId, "oidc:alice");
   const account = { id: "ca_old", user_id: alias, status: "ACTIVE", toolkit: { slug: "slack" } };
   await f.deps.slackAccounts.put("oidc:alice", {
     principalId: "oidc:alice",
@@ -998,7 +998,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
       items: [
         account,
         { ...account, id: "ca_new", user_id: canonical },
-        { ...account, user_id: composioUserId(orgId(), "bob") },
+        { ...account, user_id: composioUserId(tenant().orgId, "bob") },
         { ...account, user_id: composioUserId("other-org", "oidc:alice") },
       ],
       next_cursor: "next",
@@ -1077,7 +1077,7 @@ async function slackReplyFixture() {
   });
   const account = {
     id: "ca_alice",
-    user_id: composioUserId(orgId(), "alice"),
+    user_id: composioUserId(tenant().orgId, "alice"),
     toolkit: { slug: "slack" },
     status: "ACTIVE",
   };

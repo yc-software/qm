@@ -21,7 +21,7 @@ import {
   type ModelCatalogEntry,
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
-import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { activePrincipal, adminActorFrom, audit, authorizeAdmin } from "../shared.ts";
 import {
   ADMIN_RESOURCES,
   ADMIN_RESOURCE_BY_ID,
@@ -38,6 +38,7 @@ import {
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
 import { scopeActivity } from "./scope-activity.ts";
+import { tenant } from "../../../tenant.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
@@ -62,7 +63,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
       parsed?.policy ??
       deps.config.getCommandPolicy(targetScope) ??
       (targetKind === "org" ? defaultOrgPolicy() : { mode: "denylist" as const, rules: [] });
-    const orgPolicy = deps.config.getCommandPolicy(orgScope(deps)) ?? defaultOrgPolicy();
+    const orgPolicy = deps.config.getCommandPolicy(tenant().orgScope) ?? defaultOrgPolicy();
     const effective = targetKind === "org" ? target : composePolicy(orgPolicy, target);
     const result = evaluateCommand(command, effective);
     const effectiveRuleIndex = result.approvalKey
@@ -109,7 +110,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
 export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   await deps.refreshModels?.();
@@ -136,7 +137,7 @@ export async function whoami(ctx: ApiCtx): Promise<void> {
 
 export async function listAdminScopes(ctx: ApiCtx): Promise<void> {
   const { res, app, deps } = ctx;
-  const scope = orgScope(deps);
+  const scope = tenant().orgScope;
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(deps, { principalId: actor.id, action: "scopes.read", resource: "scopes", scopeLabel: scope });
@@ -311,7 +312,7 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config!.getEgress(orgScope(deps));
+  const orgEgress = deps.config!.getEgress(tenant().orgScope);
   const targetEgress = deps.config!.getEgress(targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
@@ -503,7 +504,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
 
 export async function retention(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
-  const scope = url.searchParams.get("scope") ?? orgScope(deps);
+  const scope = url.searchParams.get("scope") ?? tenant().orgScope;
   if (parseScopeId(scope).kind !== "org") {
     return sendJson(res, 400, { error: "bad_request", message: "retention is org-wide; request an org scope" });
   }

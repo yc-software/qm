@@ -1,6 +1,5 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import type { SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
@@ -14,6 +13,7 @@ import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import type { Principal } from "../types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { tenant } from "../tenant.ts";
 
 export async function skillVisibilityContext(
   deps: AppDeps,
@@ -34,12 +34,12 @@ export async function skillVisibilityContext(
   const member = sharedHomes.map((sid) => (accessibleScopes.has(sid) ? sid : null));
   const shared = member.filter((sid): sid is ScopeId => sid !== null);
   const teams = (actor.teamIds ?? []).map((t) => scopeId("team", t));
-  const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, scopeId("org", orgIdOf())])];
+  const ordered = [...new Set([scopeId("personal", principalId), ...shared, ...teams, tenant().orgScope])];
   const entitled = (p: Principal, label: ScopeId, sess: ScopeId, org: ScopeId) =>
     principalEntitledToScope(p, label, sess, org) || accessibleScopes.has(label);
   const granted = (
     await deps.acl
-      .sharedOfKindForAudience("skill", [actor], scopeId("personal", principalId), scopeId("org", orgIdOf()), entitled)
+      .sharedOfKindForAudience("skill", [actor], scopeId("personal", principalId), tenant().orgScope, entitled)
       .catch(() => [])
   ).map((g) => ({ id: parseRef(g.ref).id, ownerScopeId: g.ownerScopeId }));
   return { ordered, granted };
