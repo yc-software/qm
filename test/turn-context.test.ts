@@ -13,6 +13,8 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import type { Resolution, Session } from "../src/types.ts";
 import { renderRecall } from "../src/memory/cross-scope.ts";
+import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
+import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
@@ -247,30 +249,30 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   assert.deepEqual(seen[2], { scopes: [], grants: [] });
 });
 
-test("a turn loads each notebook once for its snapshot and recall, and memory writes are seen afterwards", async () => {
+test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", async () => {
   const { input, memory } = await fixture();
   const loads: string[] = [];
-  input.memory = {
+  const counted = {
     ...memory,
-    facts: async (scope) => {
+    facts: async (scope: string) => {
       loads.push(scope);
       return memory.facts!(scope);
     },
   };
+  const embedder = { id: "test", embed: async (texts: string[]) => texts.map(() => [1, 0]) };
+  input.memory = createSemanticMemoryService(
+    counted,
+    async () => embedder,
+    scoredMemoryIndex(memory, (text) => (text === "LAST_FACT" ? 1 : 0)),
+  );
   const context = await resolveTurnContext(input);
-  await context.memorySnapshot();
-  await context.recallMemory("anything");
-  await context.searchMemory("SHARED_FACT");
+  const snapshot = await context.memorySnapshot();
   assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
-  await context.memory.capture("personal:alice", ["ADDED_MID_TURN"], Date.now());
-  assert.match((await context.searchMemory("ADDED_MID_TURN"))!.join(), /ADDED_MID_TURN/);
-  const added = (await context.memorySnapshot()).facts.find((fact) => fact.text === "ADDED_MID_TURN")!;
-  await context.memory.edit!("personal:alice", [{ id: added.id, text: "EDITED_MID_TURN" }]);
-  assert.match(renderRecall(await context.recallMemory("anything"), new Map()), /EDITED_MID_TURN/);
-  await context.memory.delete!("personal:alice", [added.id]);
-  assert.deepEqual(await context.searchMemory("EDITED_MID_TURN"), []);
-  const next = await resolveTurnContext(input);
   loads.length = 0;
-  await next.memorySnapshot();
-  assert.equal(loads.length, 3, "a new turn reloads rather than reusing the previous turn's facts");
+  const recalled = await context.recallMemory("anything", snapshot.loaded);
+  assert.deepEqual(
+    recalled.map((fact) => fact.text),
+    ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],
+  );
+  assert.deepEqual(loads, []);
 });

@@ -83,18 +83,14 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
         return false;
       }
     },
-    async allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
-      try {
+    allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
+      const { sensitivity, sourceUnknown, sources } = record;
+      return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources])}`, async () => {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
-        if ((record.sourceUnknown || record.sensitivity === "unknown") && !(await homeAllowed())) return false;
-        if (!record.sources.length) return record.sourceUnknown && (await homeAllowed());
-        return (await Promise.all(record.sources.map((source) => sourceAllowed(source, record.sensitivity)))).every(
-          Boolean,
-        );
-      } catch (e) {
-        swallow("memory disclosure: allows", e);
-        return false;
-      }
+        if ((sourceUnknown || sensitivity === "unknown") && !(await homeAllowed())) return false;
+        if (!sources.length) return sourceUnknown && (await homeAllowed());
+        return (await Promise.all(sources.map((source) => sourceAllowed(source, sensitivity)))).every(Boolean);
+      });
     },
   };
 }
@@ -105,20 +101,10 @@ export class MemoryDisclosureDenied extends Error {
   }
 }
 
-const loaded = new WeakMap<MemoryDisclosure, WeakMap<MemoryService, Map<ScopeId, Promise<MemoryFact[]>>>>();
-
-async function afterWrite<T>(access: MemoryDisclosure, write: () => Promise<T>): Promise<T> {
-  try {
-    return await write();
-  } finally {
-    loaded.delete(access);
-  }
-}
-
 export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure): MemoryService {
   if (memory.withDisclosure) {
     const view = memory.withDisclosure(access);
-    return { ...view, capture: (...args) => afterWrite(access, () => memory.capture(...args)) };
+    return { ...view, capture: (...args) => memory.capture(...args) };
   }
   const listed = memory.facts?.bind(memory);
   if (!listed) {
@@ -131,29 +117,11 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
     };
   }
-  function listedOnce(scope: ScopeId): Promise<MemoryFact[]> {
-    const byMemory = loaded.get(access) ?? new WeakMap<MemoryService, Map<ScopeId, Promise<MemoryFact[]>>>();
-    loaded.set(access, byMemory);
-    const byScope = byMemory.get(memory) ?? new Map<ScopeId, Promise<MemoryFact[]>>();
-    byMemory.set(memory, byScope);
-    const cached = byScope.get(scope);
-    if (cached) return cached;
-    const pending = listed!(scope);
-    byScope.set(scope, pending);
-    pending.catch(() => {
-      if (byScope.get(scope) === pending) byScope.delete(scope);
-    });
-    return pending;
-  }
   async function visible(scope: ScopeId): Promise<MemoryFact[]> {
-    const facts = await listedOnce(scope);
+    const facts = await listed!(scope);
     const policy = memoryDisclosurePolicy(access);
-    const keys = facts.map((fact) => JSON.stringify([fact.sensitivity, fact.sourceUnknown, fact.sources]));
-    const kinds = new Map(keys.map((key, index) => [key, facts[index]!]));
-    const allowed = new Map(
-      await Promise.all([...kinds].map(async ([key, fact]) => [key, await policy.allows(scope, fact)] as const)),
-    );
-    return facts.filter((_, index) => allowed.get(keys[index]!));
+    const allowed = await Promise.all(facts.map((fact) => policy.allows(scope, fact)));
+    return facts.filter((_, index) => allowed[index]);
   }
   async function editable(scope: ScopeId, ids: readonly string[]): Promise<void> {
     if (!(await memoryDisclosurePolicy(access).narrow(scope))) throw new MemoryDisclosureDenied();
@@ -164,17 +132,16 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   return {
     ...memory,
     facts: visible,
-    capture: (...args) => afterWrite(access, () => memory.capture(...args)),
     async edit(scope, edits, author, context) {
       await editable(
         scope,
         edits.map((edit) => edit.id),
       );
-      await afterWrite(access, () => memory.edit!(scope, edits, author, context));
+      await memory.edit!(scope, edits, author, context);
     },
     async delete(scope, ids, author) {
       await editable(scope, ids);
-      await afterWrite(access, () => memory.delete!(scope, ids, author));
+      await memory.delete!(scope, ids, author);
     },
     read: async (scope) => renderFacts(await visible(scope)),
     async recall(scope, context) {
