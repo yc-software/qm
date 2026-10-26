@@ -1,30 +1,29 @@
 import { LRUCache } from "lru-cache";
-import { personalScope, type LoopItem } from "../types.ts";
+import { personalScope, type InboxItem } from "../types.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { errMessage } from "../util/errors.ts";
-import type { LoopItemLedger } from "./item-ledger.ts";
-import { conversationEvent, type IngressEntry } from "./ingress.ts";
-import { isResolved } from "./ledger-view.ts";
+import type { InboxEventSink, InboxLedger } from "./ledger.ts";
+import { isResolved } from "./view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
 import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 
 interface RefreshDeps {
-  items: LoopItemLedger;
+  items: InboxLedger;
   tokens: ConnectorTokenSource;
   directory: Pick<DirectoryStore, "getBySlackId">;
   featureFlags: Pick<FeatureFlagStore, "enabled">;
   errors?: ErrorLog;
-  enqueue: (loop: { id: string; owner: string }, entries: IngressEntry[]) => Promise<unknown>;
+  record: InboxEventSink;
   fetchImpl?: typeof fetch;
   slackApiUrl?: string;
   now?: () => number;
 }
 
-export type InboxSourceRefresh = (owner: string, items: LoopItem[], mode?: "avatars") => Promise<void>;
+export type InboxSourceRefresh = (owner: string, items: InboxItem[], mode?: "avatars") => Promise<void>;
 
 interface SlackParticipant {
   id: string;
@@ -164,7 +163,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     return { people, refreshAt: now() + (complete ? 86_400_000 : 60_000) };
   }
 
-  async function refreshAvatars(owner: string, item: LoopItem): Promise<void> {
+  async function refreshAvatars(owner: string, item: InboxItem): Promise<void> {
     if ((item.source ?? item.sourcePayload?.source) !== "slack") return;
     const payload = item.sourcePayload ?? {};
     if (typeof payload.slackAvatarsRefreshAt === "number" && now() < payload.slackAvatarsRefreshAt) return;
@@ -186,12 +185,12 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     );
   }
 
-  async function ownerReplied(owner: string, item: LoopItem, at: number, text: string): Promise<void> {
+  async function ownerReplied(owner: string, item: InboxItem, at: number, text: string): Promise<void> {
     if (!Number.isFinite(at) || at <= (item.sourceAt ?? 0)) return;
-    await deps.enqueue({ id: item.loopId, owner }, [conversationEvent(item, { author: "owner", at, text })]);
+    await deps.record(item, { author: "owner", at, text });
   }
 
-  async function refresh(owner: string, item: LoopItem): Promise<void> {
+  async function refresh(owner: string, item: InboxItem): Promise<void> {
     const source = item.source ?? item.sourcePayload?.source;
     if (source !== "gmail" && source !== "slack") return;
     if (source === "gmail" && isResolved(item)) return;
@@ -329,7 +328,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     }
   }
 
-  async function one(owner: string, item: LoopItem, mode?: "avatars"): Promise<void> {
+  async function one(owner: string, item: InboxItem, mode?: "avatars"): Promise<void> {
     const itemKey = `${owner}:${item.id}:${item.sourceAt ?? 0}`;
     const key = `${itemKey}:${mode ?? "source"}`;
     if (checked.has(key)) return;

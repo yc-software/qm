@@ -944,8 +944,8 @@ test("noteCron rejects empty, over-cap (counted in code points), and marker-forg
   assert.equal(kept.cron.lastFireNote?.text, "🚀".repeat(399));
 });
 
-test("noteCron refuses crons whose fires never read notes — archived, one-shot, loop-backed, bang tasks", async () => {
-  const { built, control } = setup();
+test("noteCron refuses crons whose fires never read notes — archived, one-shot, bang tasks", async () => {
+  const { control } = setup();
   const recurring = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "poll" }, claims("U1"));
   assert.ok(recurring.ok);
   await control.patchCron(recurring.cron.id, { archived: true }, claims("U1"));
@@ -968,18 +968,7 @@ test("noteCron refuses crons whose fires never read notes — archived, one-shot
   assert.equal(bangNote.ok, false);
   assert.match(bangNote.ok ? "" : bangNote.message, /don't read shift-change notes/);
 
-  const loop = await built.app.createCron({
-    schedule: { everyMs: 3_600_000 },
-    action: "ship",
-    loopId: "loop-1",
-    owner: "U1",
-    createdBy: "U1",
-    ownerScopeId: scopeId("personal", "U1"),
-  });
-  const loopNote = await control.noteCron(loop.id, "note", claims("U1"));
-  assert.equal(loopNote.ok, false);
-  assert.match(loopNote.ok ? "" : loopNote.message, /don't read shift-change notes/);
-  for (const result of [oneShotNote, bangNote, loopNote]) {
+  for (const result of [oneShotNote, bangNote]) {
     assert.ok(!result.ok);
     assert.match(result.message, /Files via the available Files API and verify success/);
     assert.match(result.message, /file ID in the consuming workflow/);

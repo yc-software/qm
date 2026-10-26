@@ -67,9 +67,9 @@ export function onExitCanvas(fn: () => void): void {
   exitCanvas = fn;
 }
 
-let inboxItemHandler: ((event: { loopId: string; itemId: string; op: string }) => void) | null = null;
+let inboxItemHandler: ((event: { cronId: string; itemId: string; op: string }) => void) | null = null;
 
-export function onInboxItemEvent(fn: (event: { loopId: string; itemId: string; op: string }) => void): void {
+export function onInboxItemEvent(fn: (event: { cronId: string; itemId: string; op: string }) => void): void {
   inboxItemHandler = fn;
 }
 

@@ -33,14 +33,12 @@ test("unset categories preserve legacy conversation, child, and cron behavior", 
   assert.deepEqual(turnModelOptions({ triggered: true }), { thinkingLevel: "xhigh", fastMode: false });
 });
 
-test("cron and loop entry points defer legacy injections until runtime resolution", () => {
-  for (const surface of ["cron", "loop"]) {
-    assert.deepEqual(turnModelOptions({ triggered: true, surface }), {});
-    assert.deepEqual(turnModelOptions({ triggered: true, surface, thinkingLevel: "low", fastMode: false }), {
-      thinkingLevel: "low",
-      fastMode: false,
-    });
-  }
+test("cron entry points defer legacy injections until runtime resolution", () => {
+  assert.deepEqual(turnModelOptions({ triggered: true, surface: "cron" }), {});
+  assert.deepEqual(turnModelOptions({ triggered: true, surface: "cron", thinkingLevel: "low", fastMode: false }), {
+    thinkingLevel: "low",
+    fastMode: false,
+  });
 });
 
 test("each purpose ignores conversation overrides and explicit fields including false win", async () => {

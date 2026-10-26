@@ -1,5 +1,5 @@
 import MailComposer from "nodemailer/lib/mail-composer";
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { InboxItem, InboxPayload } from "../../types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { GmailApiError, gmailApi } from "../../connectors/gmail-api.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -12,7 +12,7 @@ import {
   parseCommonFields,
   parseReplyDraft,
   tokenFor,
-  type LoopSourceAdapter,
+  type SourceAdapter,
   type ParsedEntry,
   type ReplyDraft,
   type SourceActionDeps,
@@ -54,15 +54,15 @@ function parseGmailMeta(v: unknown): GmailMeta | undefined {
   };
 }
 
-function metaOf(item: LoopItem): GmailMeta | undefined {
+function metaOf(item: InboxItem): GmailMeta | undefined {
   return parseGmailMeta(item.sourcePayload?.gmail);
 }
 
-function titleOf(item: LoopItem): string {
+function titleOf(item: InboxItem): string {
   return clip(item.sourcePayload?.title, 300) ?? "";
 }
 
-export function replySubject(item: LoopItem, draft: ReplyDraft): string {
+export function replySubject(item: InboxItem, draft: ReplyDraft): string {
   const explicit = draft.subject?.trim();
   if (explicit) return explicit;
   const original = metaOf(item)?.subject?.trim() ?? titleOf(item).trim();
@@ -70,7 +70,7 @@ export function replySubject(item: LoopItem, draft: ReplyDraft): string {
   return /^re:/i.test(original) ? original : `Re: ${original}`;
 }
 
-export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Promise<Buffer | null> {
+export async function buildGmailReplyMime(item: InboxItem, draft: ReplyDraft): Promise<Buffer | null> {
   const meta = metaOf(item);
   if (!meta) return null;
   const parsed = parseReplyDraft(draft);
@@ -90,7 +90,7 @@ export async function buildGmailReplyMime(item: LoopItem, draft: ReplyDraft): Pr
     .build();
 }
 
-async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
+async function sendGmail(deps: SourceActionDeps, item: InboxItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const meta = metaOf(item);
   if (!meta) return { ok: false, reason: "bad_item", message: "invalid Gmail metadata" };
@@ -117,7 +117,7 @@ async function sendGmail(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   return { ok: true, result: draft.body };
 }
 
-export const gmailAdapter: LoopSourceAdapter = {
+export const gmailAdapter: SourceAdapter = {
   id: "gmail",
   actions: ["send"],
   parse(raw) {
@@ -133,8 +133,8 @@ export const gmailAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "gmail", ...common, gmail } as LoopSourcePayload,
-      ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
+      sourcePayload: { source: "gmail", ...common, gmail } as InboxPayload,
+      ...(draft ? { proposal: { data: draft as unknown as InboxPayload } } : {}),
     };
     return entry;
   },
@@ -143,7 +143,7 @@ export const gmailAdapter: LoopSourceAdapter = {
   },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
-    return draft ? (draft as unknown as LoopSourcePayload) : null;
+    return draft ? (draft as unknown as InboxPayload) : null;
   },
   async act(deps, item, kind, args) {
     if (kind !== "send") return { ok: false, reason: "bad_item", message: `gmail items do not support "${kind}"` };

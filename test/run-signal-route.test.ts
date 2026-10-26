@@ -24,7 +24,7 @@ const core = createServer(built.app, {
   signingSecret: SECRET,
   webhookReceiver: built.webhookReceiver,
   featureFlags: built.featureFlags,
-  loops: built.loops,
+  inbox: built.inbox,
   uiState: built.uiState,
 });
 core.listen(0);

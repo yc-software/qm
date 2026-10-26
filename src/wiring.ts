@@ -28,8 +28,6 @@ import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
-import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
-import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
@@ -99,7 +97,7 @@ import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
-import { slackUserClientFactory } from "./loops/sources/slack.ts";
+import { slackUserClientFactory } from "./inbox/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
@@ -110,11 +108,8 @@ import {
 import type {
   CommandApprovalGrant,
   Cron,
-  Loop,
-  LoopItem,
-  LoopOutput,
+  InboxItem,
   Monitor,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,
@@ -130,23 +125,21 @@ import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts"
 import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
-import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
+import { createCronStore, DROP_RUN_AS_MIGRATION, LOOPS_TO_CRONS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
 import { LEGACY_HARNESS_MIGRATION } from "./model/legacy-harness-migration.ts";
 import { createMemoryCronFireStore, createPostgresCronFireStore } from "./cron/fire-store.ts";
-import { createLoopStore } from "./loops/loop-store.ts";
-import { createLoopItemLedger } from "./loops/item-ledger.ts";
+import { createInboxLedger, type InboxEventSink } from "./inbox/ledger.ts";
 import {
   createMemoryLedgerEventBus,
   createPostgresLedgerEventBus,
+  type LedgerEvent,
   type LedgerEventBus,
-} from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
-import { createInboxRealtime } from "./loops/inbox-realtime.ts";
-import { createLoopOutputStore } from "./loops/output-store.ts";
-import { createShipGrantStore } from "./loops/ship-grant-store.ts";
-import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
-import type { LoopServiceDeps } from "./api/routes/loops.ts";
+} from "./inbox/events.ts";
+import { createInboxSourceRefresh } from "./inbox/source-refresh.ts";
+import { createInboxRealtime } from "./inbox/realtime.ts";
+import { createInboxChat } from "./inbox/item-chat.ts";
+import type { InboxServiceDeps } from "./api/routes/cron-items.ts";
 import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
 import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
@@ -502,9 +495,8 @@ export interface BuiltApp {
   skillFetcher: SkillPackFetcher;
   auditLog: AuditLog;
   scheduler: Scheduler;
-  loops: LoopServiceDeps;
+  inbox: InboxServiceDeps;
   webhookReceiver: WebhookReceiver;
-  loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
   errors: ErrorLog;
@@ -1854,30 +1846,21 @@ export function buildApp(
     ? createPostgresEnvironmentStore(config.databaseUrl)
     : createMemoryEnvironmentStore();
   const monitors = createMonitorStore(artifactMap<Monitor>("monitors"));
-  const loopStore = createLoopStore(artifactMap<Loop>("loops"));
-  const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
-  const loopOwnerCache = new Map<string, string>();
-  const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
+  const cronOwnerCache = new Map<string, string>();
+  const publishInboxEvent = (event: LedgerEvent): void => {
     void (async () => {
-      let owner = loopOwnerCache.get(event.loopId);
+      let owner = cronOwnerCache.get(event.cronId);
       if (owner === undefined) {
-        owner = (await loopStore.get(event.loopId))?.owner ?? "";
-        loopOwnerCache.set(event.loopId, owner);
+        owner = (await crons.get(event.cronId))?.owner ?? "";
+        cronOwnerCache.set(event.cronId, owner);
       }
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
   };
-  const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
-    lock: advisoryLock,
-    accepts: async (id) => {
-      const loop = await loopStore.get(id);
-      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
-    },
-  });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
-    publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
-  );
-  const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
+  const inboxItems = createInboxLedger(artifactMap<InboxItem>("cron_items", ["cronId"]), publishInboxEvent);
+  const recordInboxEvent: InboxEventSink = async (item, event) => {
+    if (await inboxItems.recordEvent(item, event)) await scheduler.runNow(item.cronId);
+  };
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
   const cronsBase = createCronStore(artifactMap<Cron>("crons"), {
@@ -1900,8 +1883,13 @@ export function buildApp(
       await cronsBase.setEnabled(id, enabled);
       cronChanged.notify?.(id);
     },
+    async delete(id) {
+      await cronsBase.delete(id);
+      await inboxItems.deleteByCron(id);
+    },
   };
   pgArtifactMap?.pool.registerMigration(DROP_RUN_AS_MIGRATION);
+  pgArtifactMap?.pool.registerMigration(LOOPS_TO_CRONS_MIGRATION);
   pgArtifactMap?.pool.registerMigration(DROP_RECIPIENT_CONSENT_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
@@ -2317,9 +2305,9 @@ export function buildApp(
     runWaitMs: config.runWaitMs,
   });
   const inboxRealtime = createInboxRealtime({
-    loops: loopStore,
-    items: loopItems,
-    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
+    crons,
+    items: inboxItems,
+    record: recordInboxEvent,
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -2530,53 +2518,26 @@ export function buildApp(
           drop,
         )
     : undefined;
-  const loopFire: LoopFireService = createLoopFireService({
-    admittedWork,
-    crons,
-    samePerson: (a, b) => app.samePerson(a, b),
-    triageEnabledFor: (owner) => featureFlags.enabled("loop_triage", scopeId("personal", owner)),
+  const inbox: InboxServiceDeps = {
     lock: advisoryLock,
-    loops: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    grants: loopGrants,
-    trigger: {
-      deliveries,
-      idempotency,
-      identity,
-      run: (req) => app.turn(req),
-      directory,
-      currentScopeMembers,
-      sessions,
-      resolveRecipient,
-    },
-  });
-  const loopIngress = createLoopIngress({
-    enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
-    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
-    loops: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    fire: loopFire,
-    lock: advisoryLock,
-    ...(config.gmailPubSub && keychain
-      ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
-      : {}),
-  });
-  const loops: LoopServiceDeps = {
-    lock: advisoryLock,
-    store: loopStore,
-    items: loopItems,
-    outputs: loopOutputs,
-    grants: loopGrants,
-    fire: loopFire,
-    crons,
-    config: configStore,
+    items: inboxItems,
+    record: recordInboxEvent,
+    chat: createInboxChat({
+      items: inboxItems,
+      trigger: {
+        deliveries,
+        idempotency,
+        identity,
+        run: (req) => app.turn(req),
+        directory,
+        currentScopeMembers,
+        sessions,
+        resolveRecipient,
+      },
+    }),
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
@@ -2601,20 +2562,10 @@ export function buildApp(
     currentScopeMembers,
     sessions,
     resolveRecipient,
-    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
     ...(config.databaseUrl
       ? { jobQueue: createPgBossCronQueue(config.databaseUrl, undefined, config.cronFireConcurrency) }
       : {}),
-    sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
-    },
+    ...(sweepAsks ? { sweepAsks } : {}),
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
@@ -2998,9 +2949,8 @@ export function buildApp(
     skillFetcher,
     auditLog,
     scheduler,
-    loops,
+    inbox,
     webhookReceiver,
-    loopIngress,
     admin,
     rateLimiter,
     errors,
@@ -3138,7 +3088,7 @@ export function serverDeps(
     auditLog: built.auditLog,
     errors: built.errors,
     crons: built.crons,
-    loops: built.loops,
+    inbox: built.inbox,
     deploymentLayer: built.deploymentLayerStore,
     deployDialTimeoutMs: config.deployDialTimeoutMs,
     ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
@@ -3149,7 +3099,6 @@ export function serverDeps(
     ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
     scheduler: built.scheduler,
     webhookReceiver: built.webhookReceiver,
-    loopIngress: built.loopIngress,
     identity: built.identity,
     principalLinks: built.principalLinks,
     slackAccounts: built.slackAccounts,
@@ -3186,19 +3135,19 @@ export function serverDeps(
     uiState: built.uiState,
     ...(built.keychain
       ? {
-          loopSourceTokens: built.keychain,
+          inboxSourceTokens: built.keychain,
           inboxSourceRefresh: createInboxSourceRefresh({
             featureFlags: built.featureFlags,
-            items: built.loops.items,
+            items: built.inbox.items,
             errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
+            record: built.inbox.record,
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
           }),
         }
       : {}),
-    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+    inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
     sessionShares: built.sessionShares,
     sessionShareBytes: built.sessionShareBytes,
     environments: built.environments,

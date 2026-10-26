@@ -155,7 +155,7 @@ export function createMessagingMethods(
     return [...stored, ...viaEmail.filter((member) => !seen.has(personKey(member.principalId)))];
   };
 
-  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "loopId" | "action" | "message">) => {
+  const validateRuntime = async (cron: Pick<Cron, "runtime" | "ownerScopeId" | "action" | "message">) => {
     assertCronRuntime(cron);
     if (!cron.runtime) return;
     const error =

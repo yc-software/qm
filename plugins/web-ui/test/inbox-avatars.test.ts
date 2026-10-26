@@ -10,7 +10,7 @@ test("Slack feed avatars use stable identities and fall back to initials when a 
     const { render } = await f.vite.ssrLoadModule("lit");
     const item = toInboxItem({
       id: "slack-1",
-      loopId: "inbox",
+      cronId: "inbox",
       dedupeKey: "D1",
       source: "slack",
       state: "held",

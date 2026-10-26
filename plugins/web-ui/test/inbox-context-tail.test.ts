@@ -25,7 +25,7 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
     const item = (id: string, count: number) =>
       toInboxItem({
         id,
-        loopId: "loop-1",
+        cronId: "cron-1",
         dedupeKey: id,
         state: "held",
         source: "slack",

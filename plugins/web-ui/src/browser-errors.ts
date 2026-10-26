@@ -20,7 +20,6 @@ const API_RESOURCES = new Set([
   "files",
   "inbox",
   "keychain",
-  "loops",
   "memory",
   "playgrounds",
   "projects",

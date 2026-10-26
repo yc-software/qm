@@ -198,85 +198,36 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     guidance:
-      "A loop's ledger is its durable queue of work items. Each entry carries an opaque sourcePayload the loop's own frontend understands, a proposal held for human review, and a follow-up chat thread. States run pending -> processed -> held -> actioned|dismissed. Ingest only what the loop's playbook tells you to; proposals are prepared, never executed — the person actions them from their review surface.",
+      "A cron created with an inbox keeps a durable queue of work items. Each entry carries an opaque sourcePayload, a proposal held for human review, and a follow-up chat thread. States run pending -> held -> actioned|dismissed|failed. Ingest only what the cron task tells you to; proposals are prepared, never executed — the person actions them from their review surface.",
     routes: [
       {
         method: "GET",
-        path: "/v1/loops/:id/items",
+        path: "/v1/crons/:id/items",
         summary:
-          "the loop's ledger — items (dedupeKey, state, sourcePayload, proposal, thread, sourceAt, …) plus counts per state; read this first and skip any dedupeKey already tracked unless a newer source event arrived (compare sourceAt)",
+          "the cron's inbox — items (dedupeKey, state, sourcePayload, proposal, thread, sourceAt, …) plus counts per state; read this first and skip any dedupeKey already tracked unless a newer source event arrived (compare sourceAt)",
       },
       {
         method: "POST",
-        path: "/v1/loops/:id/items",
+        path: "/v1/crons/:id/items",
         summary:
-          'upsert ledger items — body {"items":[…]}. For a loop with a known source, each item is that source\'s own shape: {source:"gmail"|"slack", sourceKey, title, from, fromDetail?, snippet, context?:[{author,at?,text}], receivedAt(ms), externalUrl?, draft?:{to?,cc?,subject?,body}, gmail?:{threadId,messageId?,rfcMessageId?,to?,cc?,subject?}, slack?:{channelId,channelLabel?,ts,threadTs?}}. Otherwise: {dedupeKey, sourcePayload:{…}, sourceAt?, summary?, proposal?:{…}}. Dedupes by dedupeKey per loop, never resurrects items the person already handled unless a newer source event arrived, keeps a proposal the person edited, and stamps the drafting session automatically',
+          'upsert inbox items — body {"items":[…]}. For an inbox with a known source, each item is that source\'s own shape: {source:"gmail"|"slack", sourceKey, title, from, fromDetail?, snippet, context?:[{author,at?,text}], receivedAt(ms), externalUrl?, draft?:{to?,cc?,subject?,body}, gmail?:{threadId,messageId?,rfcMessageId?,to?,cc?,subject?}, slack?:{channelId,channelLabel?,ts,threadTs?}}. Otherwise: {dedupeKey, sourcePayload:{…}, sourceAt?, summary?, proposal?:{…}}. Dedupes by dedupeKey per cron, never resurrects items the person already handled unless a newer source event arrived, keeps a proposal the person edited, and stamps the drafting session automatically',
       },
       {
         method: "GET",
-        path: "/v1/loops/:id/items/:itemId",
-        summary: "one ledger item with its full sourcePayload, current proposal, and follow-up thread",
+        path: "/v1/crons/:id/items/:itemId",
+        summary: "one inbox item with its full sourcePayload, current proposal, and follow-up thread",
       },
       {
         method: "POST",
-        path: "/v1/loops/:id/items/:itemId/action",
+        path: "/v1/crons/:id/items/:itemId/action",
         summary:
-          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
+          'act on an item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "done" closes it as finished, "fail" parks it with {args:{reason}}, "dismiss", "replied" or "no_reply_needed" drop it (with an optional {args:{reason}}), "reopen" un-dismisses it, and any action the item\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
       },
       {
         method: "POST",
-        path: "/v1/loops/:id/items/:itemId/followup",
+        path: "/v1/crons/:id/items/:itemId/followup",
         summary:
-          "chat about one held item — body {message}; the reply lands on the item's thread and may revise its proposal",
-      },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/events",
-        summary:
-          'report new messages in conversations already on the ledger — body {events:[{sourceKey, author:"owner"|"other", at, text?, from?}]}; each event is judged by the loop\'s work stage, which may close or redraft the item',
-      },
-    ],
-  },
-  {
-    guidance:
-      'A loop is standing autonomous work: a trigger plus a playbook plus a durable work ledger, with finished outputs HELD for a person to ship. Prefer the define-loop skill to author one (it interviews, shadow-runs one item, then creates the loop). New loops should declare every externally-visible ship action at gate "hold"; "auto" is earned through grants after real approvals. Work turns run without surface tools or addressed delivery; final external actions happen in the fenced ship stage. Broader work-stage tool restriction is a known limitation pending turn-runner tool policy.',
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/loops",
-        summary:
-          'create a loop — body {name, icon?, playbook, successCondition, shipActions: [{action, gate: "hold"|"auto"}], schedule?, destinationKey?, caps?, governor?: {maxConsecutiveFailedFires?, maxReturnRate?, returnRateMinDecisions?, maxQueueAgeMs?, maxQueueDepth?, staleFireMs?}, successChecks?, purpose?}; a schedule creates a bound child cron that fires the loop; setting an escalation destination requires a live human',
-      },
-      {
-        method: "DELETE",
-        path: "/v1/loops/:id/grants/:grantId",
-        summary: "revoke a standing ship grant immediately while retaining its audit record",
-      },
-      { method: "GET", path: "/v1/loops", summary: "list loops you can administer" },
-      {
-        method: "GET|PATCH|DELETE",
-        path: "/v1/loops/:id",
-        summary:
-          "inspect a loop (items, held outputs, vitals), edit it (icon sets a named icon such as bug or slack, or an uploaded PNG data URL up to 64 KiB and 128×128 pixels; null restores the default; playbook edits are versioned; destinationKey sets escalation delivery and null clears it; state: enabled|paused clears or sets the pause; clearing quarantine or changing destination requires a live human), or delete it and its child cron",
-      },
-      { method: "POST", path: "/v1/loops/:id/fire", summary: "fire a loop now (intake → work → judge → hold/ship)" },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/outputs/:outputId/decide",
-        summary:
-          'decide a held output — body {decision: "ship"} executes the ship action, {decision: "return", note} sends the item back to work carrying the note',
-      },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/grants",
-        summary:
-          "graduate a ship action to auto — body {shipAction, label?}; scoped to this loop (and label slice) only, honours org approval-grant modes",
-      },
-      {
-        method: "POST",
-        path: "/v1/loops/:id/autopilot",
-        summary:
-          "toggle every ship action between review and auto — body {enabled}; enabling requires a live human and creates standing grants, while disabling is allowed for agents and revokes every active grant",
+          "chat about one item — body {message}; the reply lands on the item's thread and may revise its proposal",
       },
     ],
   },

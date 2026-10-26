@@ -3,14 +3,13 @@ import { deploymentLiveSmokeRoutes } from "./deployment-live-smoke.ts";
 import { backgroundWorkRoutes } from "./background-work.ts";
 import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
-import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
 import { blobRoutes } from "./blobs.ts";
 import { sessionStateRawRoutes } from "./session-state.ts";
-import { loopItemEventsRawRoutes } from "./loop-item-events.ts";
+import { cronItemEventsRawRoutes } from "./cron-item-events.ts";
 import { webhookRawRoutes, webhookRoutes } from "./webhooks.ts";
 import { runEventRoutes } from "./run-events.ts";
 import { turnRoutes } from "./turns.ts";
@@ -24,7 +23,6 @@ import { skillPackRoutes } from "./skill-packs.ts";
 import { fileUploadRoutes } from "./file-uploads.ts";
 import { surfaceRoutes } from "./surface.ts";
 import { cronRoutes } from "./crons.ts";
-import { loopRoutes } from "./loops.ts";
 import { reachRoutes } from "./reach.ts";
 import { directoryRoutes } from "./directory.ts";
 import { contextRoutes } from "./context.ts";
@@ -40,7 +38,7 @@ import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
 import { inboxRoutes } from "./inbox.ts";
-import { loopItemRoutes } from "./loop-items.ts";
+import { cronItemRoutes } from "./cron-items.ts";
 import { searchRoutes } from "./search.ts";
 import { userModelAuthRoutes } from "./user-model-auth.ts";
 import { swarmRoutes } from "./swarms.ts";
@@ -77,9 +75,8 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
   ...deploymentRawRoutes,
   ...blobRoutes,
   ...sessionStateRawRoutes,
-  ...loopItemEventsRawRoutes,
+  ...cronItemEventsRawRoutes,
   ...webhookRawRoutes,
-  ...loopIngressRawRoutes,
 ];
 
 export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
@@ -104,11 +101,9 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...cronRoutes,
-  ...loopItemRoutes,
-  ...loopRoutes,
+  ...cronItemRoutes,
   ...reachRoutes,
   ...webhookRoutes,
-  ...loopIngressRoutes,
   ...directoryRoutes,
   ...contextRoutes,
   ...pinRoutes,

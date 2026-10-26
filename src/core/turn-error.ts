@@ -37,22 +37,7 @@ export class ProviderTurnError extends Error {
   }
 }
 
-export class TransientTurnFailure extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "TransientTurnFailure";
-  }
-}
-
 export const TRANSIENT_ERROR_CODES: readonly ProviderErrorCode[] = ["rate_limit", "transient"];
-
-export function isTransientErrorCode(code: string | undefined): boolean {
-  return (TRANSIENT_ERROR_CODES as readonly (string | undefined)[]).includes(code);
-}
-
-export function isTransientFailure(err: unknown): boolean {
-  return err instanceof TransientTurnFailure || (err instanceof ProviderTurnError && isTransientErrorCode(err.code));
-}
 
 export class TitleRejected extends Error {
   readonly rule: string;

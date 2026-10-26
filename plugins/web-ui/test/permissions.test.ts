@@ -21,11 +21,11 @@ test("a user without the permission cannot — drives hiding the admin session-l
   assert.equal(can("admin"), false);
 });
 
-test("loops view requires the loops permission", () => {
+test("inbox view requires the inbox permission", () => {
   appState.me = { user: "alice", org: "acme", permissions: [] };
-  assert.equal(canView("loops"), false);
+  assert.equal(canView("inbox"), false);
   assert.equal(canView("chats"), true);
 
-  appState.me.permissions = ["loops"];
-  assert.equal(canView("loops"), true);
+  appState.me.permissions = ["inbox"];
+  assert.equal(canView("inbox"), true);
 });

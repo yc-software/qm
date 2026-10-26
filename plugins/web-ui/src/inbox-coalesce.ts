@@ -1,5 +1,5 @@
 export interface InboxItemRef {
-  loopId: string;
+  cronId: string;
   itemId: string;
 }
 
@@ -11,7 +11,7 @@ export function createInboxEventCoalescer(
   const pending = new Map<string, InboxItemRef>();
   let armed = false;
   return (ref) => {
-    pending.set(JSON.stringify([ref.loopId, ref.itemId]), ref);
+    pending.set(JSON.stringify([ref.cronId, ref.itemId]), ref);
     if (armed) return;
     armed = true;
     schedule(() => {

@@ -1217,7 +1217,7 @@ test("only a cron automation receives task-runtime authority and each fire start
   assert.equal(resumed, 2);
 });
 
-test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
+test("cron dispatch uses purpose defaults while task handoffs and later fires stay isolated", async () => {
   const base = createMockHarness();
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
@@ -1255,12 +1255,12 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     effortLevel: "high",
   });
   await built.config.setPurposeRuntime("cron", category);
-  for (const surface of ["cron", "loop"]) {
+  for (const runId of ["first-fire", "later-fire"]) {
     const result = await built.orch.handleTurn({
-      ...turn(surface),
-      surface,
+      ...turn("cron"),
+      surface: "cron",
       origin: { kind: "automation" },
-      runId: surface,
+      runId,
       surfaceTools: false,
     });
     assert.equal(result.status, "ok");

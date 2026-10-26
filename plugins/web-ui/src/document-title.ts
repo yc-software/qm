@@ -19,7 +19,6 @@ const VIEW_TITLES: Record<View, string> = {
   calendar: "Calendar",
   contexts: "Projects",
   crons: "Crons",
-  loops: "Loops",
   webhooks: "Webhooks",
   files: "Files",
   keychain: "Keychain",

@@ -1,4 +1,3 @@
-import { loopIcon } from "./loop-icon";
 import {
   ensureSentMail,
   openSentEmail,
@@ -24,6 +23,7 @@ import {
   ChevronDown,
   ChevronRight,
   Inbox as InboxGlyph,
+  Mail,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
@@ -45,12 +45,11 @@ import { renderSidebarTop, switchView } from "./shell";
 import { openSession, sessionsState } from "./sessions";
 import { splitMentions } from "./linkify";
 import { splitSlackWire } from "./slack-text";
-import { openLoop } from "./loops";
 import { listBackLink } from "./list-page";
 import { registerPaneKind } from "./pane-kinds";
 import { exitSplitIfActive, notifyPanesChanged } from "./split";
 import { tip } from "./tooltip";
-import { brandName, fieldSelect, menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
+import { brandName, menuSelect, avatarTpl, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { assistantSidebar, assistantMessage } from "./assistant-sidebar";
@@ -83,14 +82,11 @@ export interface LedgerThreadMessage {
   at: number;
 }
 
-type InboxPriority = "urgent" | "high" | "normal" | "low";
-
 export interface LedgerItem {
-  triage?: { priority?: InboxPriority; reason?: string; groupId?: string; pinned?: string[] };
   id: string;
-  loopId: string;
+  cronId: string;
   dedupeKey: string;
-  state: "pending" | "processed" | "held" | "actioned" | "dismissed" | "failed";
+  state: "pending" | "held" | "actioned" | "dismissed" | "failed";
   summary?: string;
   parkedReason?: string;
   source?: string;
@@ -105,19 +101,14 @@ export interface LedgerItem {
 }
 
 export interface InboxItem {
-  priority?: InboxPriority;
-  priorityReason?: string;
-  priorityPinned?: boolean;
-  groupId?: string;
   sentChat?: boolean;
   id: string;
-  loopId: string;
+  cronId: string;
   source: InboxSource;
   sourceKey: string;
   reviewState?: string;
   attention?: boolean;
   proposalData?: Record<string, unknown>;
-  outputs?: ReviewOutput[];
   detailLoaded?: boolean;
   status: "open" | "sent" | "dismissed" | "replied";
   title: string;
@@ -174,14 +165,14 @@ function isInboxViewId(value: string | null): value is string {
 }
 
 function inboxViewIdForSegment(segment: string | null): string | null {
-  if (segment?.startsWith("loop-")) return segment.slice(5);
+  if (segment?.startsWith("cron-")) return segment.slice(5);
   if (segment === "email") return "gmail";
   return isInboxViewId(segment) ? segment : null;
 }
 
 function inboxViewSegment(viewId: string): string {
   if (viewId === "gmail") return "email";
-  return DEFAULT_VIEWS.some((view) => view.id === viewId) ? viewId : `loop-${viewId}`;
+  return DEFAULT_VIEWS.some((view) => view.id === viewId) ? viewId : `cron-${viewId}`;
 }
 
 const INBOX_FILTERS = [
@@ -207,20 +198,14 @@ export const inboxState = {
   selected: [] as Array<{
     id: string;
     name: string;
-    icon?: string;
     sources?: string[];
     count: number;
     source?: string;
-    cronId?: string;
     syncCron?: InboxSyncCron | null;
-    ingestionActive?: boolean;
-    prioritize?: boolean;
-    consolidate?: boolean;
   }>,
   available: [] as Array<{
     id: string;
     name: string;
-    icon?: string;
     sources?: string[];
     source?: string;
     selected: boolean;
@@ -230,9 +215,6 @@ export const inboxState = {
   picker: false,
   menuId: null as string | null,
   selectionBusy: false,
-  migrationPending: false,
-  loopId: null as string | null,
-  syncCron: null as InboxSyncCron | null,
   loaded: false,
   loading: false,
   error: null as string | null,
@@ -334,8 +316,6 @@ export function resetInboxState(): void {
   inboxState.nextCursor = null;
   feedWindows.clear();
   inboxState.picker = false;
-  inboxState.loopId = null;
-  inboxState.syncCron = null;
   inboxState.loaded = false;
   inboxState.loading = false;
   inboxState.error = null;
@@ -351,7 +331,7 @@ export function resetInboxState(): void {
 export function inboxViews(): InboxView[] {
   return [
     { id: "all", name: "All", sources: ["gmail", "slack", "generic"] },
-    ...inboxState.selected.map((loop) => ({ id: loop.id, name: loop.name, sources: [] as InboxSource[] })),
+    ...inboxState.selected.map((cron) => ({ id: cron.id, name: cron.name, sources: [] as InboxSource[] })),
   ];
 }
 
@@ -362,7 +342,7 @@ export function inboxViewName(viewId: string): string {
 export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[] {
   return inboxState.items.filter((item) => {
     if (item.sentChat) return false;
-    if (viewId !== "all" && viewId !== "sent" && item.loopId !== viewId && item.source !== viewId) return false;
+    if (viewId !== "all" && viewId !== "sent" && item.cronId !== viewId && item.source !== viewId) return false;
     if (viewId === "sent") return item.status === "sent" && item.source !== "generic";
     if (status !== "open") return item.status !== "open";
     if (item.status !== "open") return false;
@@ -372,13 +352,13 @@ export function itemsFor(viewId: string, status: "open" | "handled"): InboxItem[
       if (inboxState.filter === "human") return true;
       if (item.probablyResolved) return false;
     }
-    return item.attention !== false || (item.groupId !== undefined && loopTriage(item).consolidate);
+    return item.attention !== false;
   });
 }
 
 export function inboxOpenCount(viewId = "all"): number {
   if (!inboxState.loaded) return 0;
-  return viewId === "all" ? inboxState.total : (inboxState.selected.find((loop) => loop.id === viewId)?.count ?? 0);
+  return viewId === "all" ? inboxState.total : (inboxState.selected.find((cron) => cron.id === viewId)?.count ?? 0);
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
@@ -409,7 +389,7 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
   const reactions = Array.isArray(payload.reactions) ? (payload.reactions as string[]) : undefined;
   return {
     id: entry.id,
-    loopId: entry.loopId,
+    cronId: entry.cronId,
     source,
     sourceKey: entry.dedupeKey,
     status: resolved,
@@ -426,10 +406,6 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     receivedAt: entry.sourceAt ?? (typeof payload.receivedAt === "number" ? payload.receivedAt : entry.updatedAt),
     thread: entry.thread,
     updatedAt: entry.updatedAt,
-    ...(entry.triage?.priority ? { priority: entry.triage.priority } : {}),
-    ...(entry.triage?.reason ? { priorityReason: entry.triage.reason } : {}),
-    ...(entry.triage?.pinned?.includes("priority") ? { priorityPinned: true } : {}),
-    ...(entry.triage?.groupId ? { groupId: entry.triage.groupId } : {}),
     ...(str(payload.fromDetail) ? { fromDetail: payload.fromDetail as string } : {}),
     sourceContextFetched: payload.sourceContextFetched === true,
     sourceContextPartial: payload.sourceContextPartial === true,
@@ -503,7 +479,6 @@ export async function refreshInbox(
   if (!opts.silent || inboxState.loaded) drawAll();
   try {
     type Feed = {
-      migrationPending: boolean;
       filter: InboxFilter;
       selected: typeof inboxState.selected;
       available: typeof inboxState.available;
@@ -535,8 +510,8 @@ export async function refreshInbox(
       else if (filterView === "sent") qs.set("view", "sent");
       if (filterView !== "all" && filterView !== "sent")
         qs.set(
-          "loopId",
-          (metadata?.selected ?? inboxState.selected).find((loop) => loop.source === filterView)?.id ?? filterView,
+          "cronId",
+          (metadata?.selected ?? inboxState.selected).find((cron) => cron.source === filterView)?.id ?? filterView,
         );
       let found = await fetchFeed(qs);
       while (found.nextCursor && found.items.length < limit) {
@@ -555,18 +530,17 @@ export async function refreshInbox(
     inboxState.available = metadata.available;
     inboxState.total = metadata.total;
     inboxState.filter = refreshFilter!;
-    inboxState.migrationPending = metadata.migrationPending;
     const next = [...combined.values()];
     const openId = fullSurface?.selectedId;
     const detail = openId ? inboxState.items.find((item) => item.id === openId && item.detailLoaded) : undefined;
     inboxState.items = next;
-    if (detail && inboxState.selected.some((loop) => loop.id === detail.loopId)) {
+    if (detail && inboxState.selected.some((cron) => cron.id === detail.cronId)) {
       upsertItem(detail);
-      void loadDetail(detail.id, detail.loopId);
+      void loadDetail(detail.id, detail.cronId);
     }
     if (openId && !detail) {
       const entry = inboxState.items.find((item) => item.id === openId);
-      if (entry) void loadDetail(entry.id, entry.loopId);
+      if (entry) void loadDetail(entry.id, entry.cronId);
     }
     const localItems = await fetchLocalInboxItems();
     if (localItems.length) inboxState.items = localItems;
@@ -585,23 +559,13 @@ export async function refreshInbox(
   }
 }
 
-interface ReviewOutput {
-  id: string;
-  title: string;
-  summary?: string;
-  shipAction: string;
-  externalRef?: string;
-  decisionNote?: string;
-  state: string;
-}
-
-async function loadDetail(itemId: string, loopId: string): Promise<void> {
+async function loadDetail(itemId: string, cronId: string): Promise<void> {
   try {
-    const result = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
-      `/api/loops/${encodeURIComponent(loopId)}/items/${encodeURIComponent(itemId)}`,
+    const result = await api<{ item: LedgerItem }>(
+      `/api/crons/${encodeURIComponent(cronId)}/items/${encodeURIComponent(itemId)}`,
     );
-    if (!inboxState.selected.some((loop) => loop.id === loopId)) return;
-    upsertItem({ ...toInboxItem(result.item), outputs: result.outputs, detailLoaded: true });
+    if (!inboxState.selected.some((cron) => cron.id === cronId)) return;
+    upsertItem({ ...toInboxItem(result.item), detailLoaded: true });
     drawAll();
   } catch (error) {
     inboxState.items = inboxState.items.filter((item) => item.id !== itemId);
@@ -632,11 +596,11 @@ async function toggleSelection(id: string): Promise<void> {
   if (inboxState.selectionBusy) return;
   inboxState.selectionBusy = true;
   drawAll();
-  const ids = inboxState.selected.map((loop) => loop.id);
+  const ids = inboxState.selected.map((cron) => cron.id);
   try {
     await api("/api/inbox/selection", {
       method: "POST",
-      body: JSON.stringify({ loopIds: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }),
+      body: JSON.stringify({ cronIds: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id] }),
     });
     if (fullViewId === id) fullViewId = "all";
     await refreshInbox();
@@ -648,138 +612,29 @@ async function toggleSelection(id: string): Promise<void> {
   }
 }
 
-async function decideReview(
-  item: InboxItem,
-  output: ReviewOutput,
-  decision: "ship" | "return",
-  note = "",
-): Promise<boolean> {
-  if (acting.has(item.id)) return false;
-  acting.add(item.id);
-  drawAll();
-  try {
-    const result = await api<{ output: ReviewOutput }>(
-      `/api/loops/${encodeURIComponent(item.loopId)}/outputs/${encodeURIComponent(output.id)}/decide`,
-      { method: "POST", body: JSON.stringify({ decision, note }) },
-    );
-    const messages: Record<string, string> = { shipped: "Action completed", returned: "Changes requested" };
-    notify(messages[result.output.state] ?? "Awaiting confirmation. Check the Loop before retrying.");
-    await loadDetail(item.id, item.loopId);
-    await refreshInbox({ silent: true });
-    return true;
-  } catch (error) {
-    notify(error instanceof Error ? error.message : "Could not confirm action");
-    return false;
-  } finally {
-    acting.delete(item.id);
-    drawAll();
-  }
+function isGenericItem(item: InboxItem): boolean {
+  return item.source === "generic";
 }
-
-function reviewActionLabel(action: string): string {
-  const labels: Record<string, string> = { open_draft_pr: "Open draft PR", open_pr: "Open PR", send: "Send" };
-  return labels[action] ?? `Approve ${action.replaceAll("_", " ")}`;
-}
-
-function reviewStateLabel(state: string): string {
-  const labels: Record<string, string> = {
-    unconfirmed: "Awaiting confirmation",
-    shipping: "Action in progress",
-    returned: "Changes requested",
-    superseded: "Superseded",
-  };
-  return labels[state] ?? state;
-}
-
-function usesOutputReview(item: InboxItem): boolean {
-  return (
-    item.source === "generic" ||
-    Boolean(item.outputs?.some((output) => ["ready", "shipping", "unconfirmed"].includes(output.state)))
-  );
-}
-
-const ARTIFACT_KINDS: Record<string, string> = {
-  open_draft_pr: "Draft pull request",
-  open_pr: "Pull request",
-  send: "Message",
-  reply: "Message",
-  send_email: "Email",
-  send_slack: "Slack message",
-};
 
 function subjectTpl(item: InboxItem): TemplateResult {
-  const members = groupOf(item);
-  const expanded = expandedSubjects.has(item.id);
-  const shown = expanded ? members : members.slice(0, 5);
-  return html`<section
-    class="inbox-subject"
-    aria-label=${members.length > 1 ? `${members.length} similar items` : "Item"}
-  >
-    ${members.length > 1 ? html`<div class="inbox-subject-label">${members.length} similar</div>` : nothing}
+  return html`<section class="inbox-subject" aria-label="Item">
     <ul>
-      ${shown.map(
-        (member) =>
-          html`<li>
-            <span class="inbox-subject-key">${member.source === "generic" ? member.sourceKey : member.from}</span>
-            <span class="inbox-subject-text">${member.snippet || member.title}</span>
-            <span class="inbox-subject-at" title=${fmtClock(member.receivedAt)}>${relTime(member.receivedAt)}</span>
-            ${member.externalUrl ? html`<a class="inbox-external-link" href=${member.externalUrl} target="_blank" rel="noopener noreferrer" aria-label="Open source">${icon(ArrowUpRight, 12)}</a>` : nothing}
-          </li>`,
-      )}
+      <li>
+        <span class="inbox-subject-key">${item.source === "generic" ? item.sourceKey : item.from}</span>
+        <span class="inbox-subject-text">${item.snippet || item.title}</span>
+        <span class="inbox-subject-at" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
+        ${item.externalUrl ? html`<a class="inbox-external-link" href=${item.externalUrl} target="_blank" rel="noopener noreferrer" aria-label="Open source">${icon(ArrowUpRight, 12)}</a>` : nothing}
+      </li>
     </ul>
-    ${
-      members.length > shown.length || expanded
-        ? html`<button
-            class="inbox-subject-more"
-            type="button"
-            @click=${() => {
-              if (expanded) expandedSubjects.delete(item.id);
-              else expandedSubjects.add(item.id);
-              drawAll();
-            }}
-          >
-            ${expanded ? "Show fewer" : `Show all ${members.length}`}
-          </button>`
-        : nothing
-    }
-  </section>`;
-}
-
-function artifactTpl(item: InboxItem, output: ReviewOutput, members: number): TemplateResult {
-  const link = output.externalRef && /^https?:\/\//i.test(output.externalRef) ? output.externalRef : undefined;
-  return html`<section class="inbox-artifact">
-    <div class="inbox-artifact-head">
-      <span>${ARTIFACT_KINDS[output.shipAction] ?? "Response"}</span>
-      ${link ? html`<a class="inbox-external-link" href=${link} target="_blank" rel="noopener noreferrer">View ${icon(ArrowUpRight, 12)}</a>` : nothing}
-    </div>
-    <h2>${output.title}</h2>
-    ${output.summary ? html`<div class="inbox-artifact-body">${output.summary}</div>` : nothing}
-    ${output.decisionNote ? html`<p class="inbox-review-note">Requested changes: ${output.decisionNote}</p>` : nothing}
-    ${
-      output.state === "ready"
-        ? html`<div class="inbox-artifact-actions">
-            <button
-              class="btn primary"
-              ?disabled=${acting.has(item.id)}
-              ${members > 1 ? tip(`Resolves all ${members}`) : nothing}
-              @click=${() => void decideReview(item, output, "ship")}
-            >
-              ${reviewActionLabel(output.shipAction)}
-            </button>
-          </div>`
-        : html`<p class="inbox-artifact-state" role="status">${reviewStateLabel(output.state)}</p>`
-    }
   </section>`;
 }
 
 function reviewTpl(item: InboxItem, withChat = true): TemplateResult {
   if (!item.detailLoaded) return html`<div class="empty compact">Loading review…</div>`;
-  const outputs = item.outputs ?? [];
-  const members = groupOf(item).length;
   return html`<div class="inbox-generic-review">
     ${subjectTpl(item)}
-    ${!outputs.length && item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
-    ${outputs.map((output) => artifactTpl(item, output, members))} ${withChat ? chatTpl(item) : nothing}
+    ${item.proposalData ? html`<pre class="inbox-proposal-data">${JSON.stringify(item.proposalData, null, 2)}</pre>` : nothing}
+    ${withChat ? chatTpl(item) : nothing}
   </div>`;
 }
 
@@ -829,8 +684,8 @@ function ensureRealtime(): void {
   realtimeWired = true;
   onInboxItemEvent((event) => {
     if (!can("inbox")) return;
-    if (inboxState.loaded && !inboxState.selected.some((loop) => loop.id === event.loopId)) return;
-    enqueueRealtimeEvent({ loopId: event.loopId, itemId: event.itemId });
+    if (inboxState.loaded && !inboxState.selected.some((cron) => cron.id === event.cronId)) return;
+    enqueueRealtimeEvent({ cronId: event.cronId, itemId: event.itemId });
   });
   onInboxResync(() => {
     if (!can("inbox")) return;
@@ -937,7 +792,7 @@ function addressHeaderList(raw: string): string[] {
 }
 
 function actionPath(item: InboxItem, leaf: "action" | "followup"): string {
-  return `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}/${leaf}`;
+  return `/api/crons/${encodeURIComponent(item.cronId)}/items/${encodeURIComponent(item.id)}/${leaf}`;
 }
 
 const sourceRefreshAt = new Map<string, number>();
@@ -951,7 +806,7 @@ function ensureItemSource(item: InboxItem): void {
 async function refetchItem(item: InboxItem, refreshSource = false): Promise<void> {
   try {
     const { item: fresh } = await api<{ item: LedgerItem }>(
-      `/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
+      `/api/crons/${encodeURIComponent(item.cronId)}/items/${encodeURIComponent(item.id)}${refreshSource ? "?refreshSource=1" : ""}`,
     );
     updateSentChat(fresh);
     replaceItem({ ...toInboxItem(fresh), detailLoaded: true });
@@ -1044,8 +899,6 @@ export async function askAgent(
 ): Promise<boolean> {
   const text = message.trim();
   if ((!text && !options?.attachments?.length) || chatting.has(item.id)) return false;
-  const ready = item.outputs?.find((output) => output.state === "ready");
-  if (ready && text && !options?.attachments?.length) return decideReview(item, ready, "return", text);
   const { draft, conflictRevision } = snapshot;
   chatting.add(item.id);
   drawAll();
@@ -1068,7 +921,7 @@ export async function askAgent(
         }),
       });
       updateSentChat(next);
-      replaceItem({ ...toInboxItem(next), outputs: item.outputs, detailLoaded: true });
+      replaceItem({ ...toInboxItem(next), detailLoaded: true });
     });
     return true;
   } catch (e) {
@@ -1081,17 +934,15 @@ export async function askAgent(
   }
 }
 
-async function setUpSync(loopId?: string): Promise<void> {
+async function setUpSync(cronId: string): Promise<void> {
   if (inboxState.syncBusy) return;
   inboxState.syncBusy = true;
   drawAll();
   try {
-    const out = await api<{ loop: { id: string } | null; syncCron: InboxSyncCron | null }>("/api/inbox/sync-cron", {
+    await api("/api/inbox/sync-cron", {
       method: "POST",
-      body: JSON.stringify({ enabled: true, loopId }),
+      body: JSON.stringify({ enabled: true, cronId }),
     });
-    inboxState.syncCron = out.syncCron;
-    inboxState.loopId = out.loop?.id ?? inboxState.loopId;
     notify("Sync is on. First pass runs within 15 minutes.");
     await refreshInbox({ silent: true });
   } catch (e) {
@@ -1103,7 +954,7 @@ async function setUpSync(loopId?: string): Promise<void> {
 }
 
 async function syncNow(viewId: string): Promise<void> {
-  const crons = syncLoops(viewId).flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
+  const crons = syncCrons(viewId).flatMap((cron) => (cron.syncCron ? [cron.syncCron] : []));
   if (!crons.length || inboxState.syncBusy) return;
   inboxState.syncBusy = true;
   drawAll();
@@ -1126,8 +977,16 @@ function openDraftSession(e: MouseEvent, sessionId: string): void {
   else window.location.assign(deepLinkPath(UI_BASE, "chats", sessionId));
 }
 
+function sourceIcon(entry: { source?: string; sources?: string[] }, size = 16): TemplateResult {
+  const source = entry.source ?? entry.sources?.[0];
+  let glyph: TemplateResult;
+  if (source === "slack") glyph = slackMark(size);
+  else glyph = icon(source === "gmail" ? Mail : InboxGlyph, size);
+  return html`<span class="inbox-source-icon" aria-hidden="true">${glyph}</span>`;
+}
+
 function sourceGlyph(item: InboxItem): TemplateResult {
-  return loopIcon(inboxState.selected.find((loop) => loop.id === item.loopId) ?? { source: item.source }, 14);
+  return sourceIcon(inboxState.selected.find((cron) => cron.id === item.cronId) ?? { source: item.source }, 14);
 }
 
 function fmtClock(ms: number): string {
@@ -1214,7 +1073,7 @@ export function slackTextTpl(item: InboxItem, text: string, opts: { links?: bool
 
 function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: number): TemplateResult | typeof nothing {
   if (!urls?.length) return nothing;
-  const base = `${UI_BASE}/api/loops/${encodeURIComponent(item.loopId)}/items/${encodeURIComponent(item.id)}/image`;
+  const base = `${UI_BASE}/api/crons/${encodeURIComponent(item.cronId)}/items/${encodeURIComponent(item.id)}/image`;
   return html`<div class="inbox-images">
     ${urls.map((_u, j) => {
       const src = `${base}?ctx=${ctxIndex}&i=${j}`;
@@ -1329,12 +1188,12 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
     status: busy ? html`<div class="inbox-chat-working">${workingWave()}<span>Thinking…</span></div>` : nothing,
     showPrompts: item.status === "open" && item.thread.length === 0,
     send:
-      item.status === "open" && !usesOutputReview(item) && (!item.sentChat || item.draft)
+      item.status === "open" && !isGenericItem(item) && (!item.sentChat || item.draft)
         ? { disabled: busy || acting.has(item.id), run: (event) => submit(event, "Send it") }
         : undefined,
     onPrompt: (prompt, event) => submit(event, prompt),
     composer: embeddedComposer(
-      `inbox:${appState.me?.user ?? "anon"}:${item.loopId}:${item.id}`,
+      `inbox:${appState.me?.user ?? "anon"}:${item.cronId}:${item.id}`,
       {
         placeholder: `Ask ${brandName()} for something`,
         prepareSubmit: () => {
@@ -1354,7 +1213,7 @@ export function chatTpl(item: InboxItem, compact = false): TemplateResult {
 }
 
 export function draftMessageTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (item.status !== "open" || usesOutputReview(item) || (item.sentChat && !item.draft)) return nothing;
+  if (item.status !== "open" || isGenericItem(item) || (item.sentChat && !item.draft)) return nothing;
   const busy = chatting.has(item.id);
   const draft = effectiveDraft(item);
   const gmail = item.source === "gmail";
@@ -1508,137 +1367,13 @@ function dismissItemTpl(item: InboxItem): TemplateResult | typeof nothing {
     class="inbox-dismiss"
     type="button"
     ?disabled=${chatting.has(item.id) || acting.has(item.id)}
-    @click=${() => void (groupOf(item).length > 1 ? archiveGroup(item) : setItemStatus(item, "dismissed"))}
+    @click=${() => void setItemStatus(item, "dismissed")}
   >
-    ${groupOf(item).length > 1 ? `Archive all ${groupOf(item).length}` : "Dismiss"}
+    Dismiss
   </button>`;
 }
 
-const PRIORITY_LABELS: Record<InboxPriority, string> = {
-  urgent: "Urgent",
-  high: "High",
-  normal: "Normal",
-  low: "Low",
-};
-
-async function overrideTriage(item: InboxItem, kind: "prioritize" | "ungroup", args?: Record<string, unknown>) {
-  if (acting.has(item.id)) return;
-  acting.add(item.id);
-  drawAll();
-  try {
-    upsertItem(await postAction(item, kind, args));
-    void refreshInbox({ silent: true });
-  } catch (e) {
-    notify(`Couldn't update the item: ${e instanceof Error ? e.message : e}`);
-  } finally {
-    acting.delete(item.id);
-    drawAll();
-  }
-}
-
-function loopTriage(item: InboxItem): { prioritize: boolean; consolidate: boolean } {
-  const loop = inboxState.selected.find((selected) => selected.id === item.loopId);
-  return { prioritize: loop?.prioritize === true, consolidate: loop?.consolidate === true };
-}
-
-function priorityMarkTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if ((item.priority !== "urgent" && item.priority !== "high") || item.status !== "open") return nothing;
-  const reason = item.priorityPinned ? "Set by you" : item.priorityReason;
-  return html`<span class="inbox-priority inbox-priority-${item.priority}" ${reason ? tip(reason) : nothing}
-    >${PRIORITY_LABELS[item.priority]}</span
-  >`;
-}
-
-function triageControlsTpl(item: InboxItem): TemplateResult | typeof nothing {
-  if (item.status !== "open") return nothing;
-  const { prioritize } = loopTriage(item);
-  if (!prioritize && !item.groupId) return nothing;
-  return html`<span class="inbox-triage-controls" ${prioritize ? tip("Priority") : nothing}>
-    ${
-      prioritize
-        ? fieldSelect({
-            className: "inbox-filter-control inbox-priority-control",
-            ariaLabel: "Priority",
-            value: item.priority ?? "normal",
-            disabled: acting.has(item.id),
-            onChange: (value) => void overrideTriage(item, "prioritize", { priority: value }),
-            options: (Object.keys(PRIORITY_LABELS) as InboxPriority[]).map(
-              (value) =>
-                html`<option value=${value} ?selected=${(item.priority ?? "normal") === value}>
-                  ${PRIORITY_LABELS[value]}
-                </option>`,
-            ),
-          })
-        : nothing
-    }
-    ${
-      item.groupId
-        ? html`<button
-            class="inbox-dismiss"
-            type="button"
-            ?disabled=${acting.has(item.id)}
-            @click=${() => void overrideTriage(item, "ungroup")}
-          >
-            Remove from group
-          </button>`
-        : nothing
-    }
-  </span>`;
-}
-
-const expandedSubjects = new Set<string>();
-
-function groupOf(item: InboxItem): InboxItem[] {
-  if (!item.groupId || !loopTriage(item).consolidate) return [item];
-  const members = inboxState.items.filter((other) => other.groupId === item.groupId && other.status === "open");
-  const head = members.find((member) => member.id === item.groupId);
-  return head ? [head, ...members.filter((member) => member !== head)] : [item];
-}
-
-async function archiveGroup(head: InboxItem): Promise<void> {
-  if (acting.has(head.id)) return;
-  acting.add(head.id);
-  drawAll();
-  try {
-    upsertItem(await postAction(head, "dismiss", { group: true }));
-    showArchiveToast(head);
-    await refreshInbox({ silent: true });
-  } catch (e) {
-    notify(`Couldn't archive the group: ${e instanceof Error ? e.message : e}`);
-  } finally {
-    acting.delete(head.id);
-    drawAll();
-  }
-}
-
-function groupedRowsTpl(surface: InboxSurface, items: InboxItem[]): TemplateResult[] {
-  const members = new Map<string, InboxItem[]>();
-  for (const item of items) {
-    if (!item.groupId || !loopTriage(item).consolidate) continue;
-    members.set(item.groupId, [...(members.get(item.groupId) ?? []), item]);
-  }
-  const rows: TemplateResult[] = [];
-  const drawn = new Set<string>();
-  for (const item of items) {
-    const group = item.groupId ? members.get(item.groupId) : undefined;
-    if (!group || group.length < 2 || !group.some((member) => member.id === item.groupId)) {
-      rows.push(itemRowTpl(surface, item));
-      continue;
-    }
-    if (drawn.has(item.groupId!)) continue;
-    drawn.add(item.groupId!);
-    rows.push(
-      itemRowTpl(
-        surface,
-        group.find((member) => member.id === item.groupId)!,
-        group.length,
-      ),
-    );
-  }
-  return rows;
-}
-
-function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): TemplateResult {
+function itemRowTpl(surface: InboxSurface, item: InboxItem): TemplateResult {
   const inlineDetail = surface.pane;
   const open = surface.selectedId === item.id;
   const expanded = inlineDetail && open;
@@ -1652,7 +1387,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
     name: participantName(item.from) || "Slack",
   };
   const heading = gmail ? item.from || item.title : (item.slack?.channelLabel ?? item.title);
-  const sub = gmail ? item.title : item.from || inboxViewName(item.loopId);
+  const sub = gmail ? item.title : item.from || inboxViewName(item.cronId);
   return html`
     <div class="inbox-item ${expanded ? "expanded" : ""} ${handled ? "handled" : ""} src-${item.source}">
       <div class="inbox-item-summary">
@@ -1667,7 +1402,7 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
               if (prevItem) void persistDraft(prevItem);
             }
             surface.selectedId = inlineDetail && open ? null : item.id;
-            if (surface.selectedId) void loadDetail(item.id, item.loopId);
+            if (surface.selectedId) void loadDetail(item.id, item.cronId);
             if (!inlineDetail) syncInboxUrl(surface.selectedId, true);
             drawAll();
           }}
@@ -1685,14 +1420,13 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
           </span>
           <span class="inbox-item-main">
             <span class="inbox-item-top">
-              ${groupSize > 1 ? html`<span class="inbox-group-count">${groupSize} similar ·</span>` : nothing}
               <span class="inbox-item-heading">${heading}</span>
               <span class="inbox-item-sub">${sub}</span>
             </span>
             <span class="inbox-item-snippet">${slackTextTpl(item, item.snippet, { links: false })}</span>
           </span>
           <span class="inbox-item-side">
-            ${slack ? nothing : participantsTpl(item)} ${priorityMarkTpl(item)} ${itemSideMark(item, handled)}
+            ${slack ? nothing : participantsTpl(item)} ${itemSideMark(item, handled)}
             <span class="inbox-item-time" title=${fmtClock(item.receivedAt)}>${relTime(item.receivedAt)}</span>
             ${icon(expanded ? ChevronDown : ChevronRight, 13)}
           </span>
@@ -1702,10 +1436,10 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
             ? html`<button
                 class="session-menu-btn inbox-item-dismiss"
                 type="button"
-                aria-label=${groupSize > 1 ? `Archive ${groupSize} similar` : `Archive ${item.title || heading}`}
-                ${tip(groupSize > 1 ? `Archive all ${groupSize}` : "Archive")}
+                aria-label=${`Archive ${item.title || heading}`}
+                ${tip("Archive")}
                 ?disabled=${acting.has(item.id)}
-                @click=${() => void (groupSize > 1 ? archiveGroup(item) : setItemStatus(item, "dismissed"))}
+                @click=${() => void setItemStatus(item, "dismissed")}
               >
                 ${icon(Archive, 13.5)}
               </button>`
@@ -1716,11 +1450,10 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
         expanded
           ? html`<div class="inbox-item-detail">
               ${
-                usesOutputReview(item)
-                  ? html`${triageControlsTpl(item) === nothing ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}</div>`}${reviewTpl(item)}`
-                  : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${triageControlsTpl(item)}${dismissItemTpl(item)}</div>`}
-                    ${groupOf(item).length > 1 ? subjectTpl(item) : nothing} ${contextTpl(item)}
-                    ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
+                isGenericItem(item)
+                  ? reviewTpl(item)
+                  : html`${handled ? nothing : html`<div class="inbox-item-detail-actions">${dismissItemTpl(item)}</div>`}
+                    ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : chatTpl(item, true)}`
               }
             </div>`
           : nothing
@@ -1728,9 +1461,6 @@ function itemRowTpl(surface: InboxSurface, item: InboxItem, groupSize = 1): Temp
     </div>
   `;
 }
-
-const MIGRATION_STATUS = "Moving your Inbox…";
-const MIGRATION_HINT = "Available once your existing Inbox finishes moving";
 
 function syncStatusLabel(cron: InboxSyncCron): string {
   if (!cron.enabled) return "Sync paused";
@@ -1756,9 +1486,9 @@ function syncActionTpl(opts: {
   </button>`;
 }
 
-function syncLoops(viewId: string) {
+function syncCrons(viewId: string) {
   return inboxState.selected.filter(
-    (loop) => loop.source && (viewId === "all" || loop.id === viewId || loop.source === viewId),
+    (cron) => cron.source && (viewId === "all" || cron.id === viewId || cron.source === viewId),
   );
 }
 
@@ -1804,10 +1534,8 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
       action: () => void loadSentMail(drawAll),
     });
   }
-  const loops = syncLoops(surface.viewId);
-  const crons = loops.flatMap((loop) => (loop.syncCron ? [loop.syncCron] : []));
-  const moving = inboxState.migrationPending;
-  if (!crons.length && !moving) return nothing;
+  const crons = syncCrons(surface.viewId).flatMap((cron) => (cron.syncCron ? [cron.syncCron] : []));
+  if (!crons.length) return nothing;
   const status =
     crons.length === 1 ? syncStatusLabel(crons[0]!) : `${crons.filter((cron) => cron.enabled).length} syncs on`;
   return html`<span class="inbox-sync-line">
@@ -1815,11 +1543,10 @@ function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
       label: "Sync",
       busyLabel: "Syncing…",
       busy: inboxState.syncBusy,
-      disabled: moving,
-      tooltip: moving ? MIGRATION_HINT : "Sync now",
+      tooltip: "Sync now",
       action: () => void syncNow(surface.viewId),
     })}
-    <span class="inbox-sync-status" role=${moving ? "status" : nothing}>${moving ? MIGRATION_STATUS : status}</span>
+    <span class="inbox-sync-status">${status}</span>
   </span>`;
 }
 
@@ -1829,21 +1556,25 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
   const allOpen = itemsFor(surface.viewId, "open");
   const resolvedItems = allOpen.filter((item) => item.source !== "gmail" && item.probablyResolved);
   const openItems = allOpen.filter((item) => item.source === "gmail" || !item.probablyResolved);
-  const selectedLoop = inboxState.selected.find((loop) => loop.id === surface.viewId);
+  const selectedCron = inboxState.selected.find((cron) => cron.id === surface.viewId);
   const showEmailFilter =
     surface.viewId === "all" ||
     surface.viewId === "gmail" ||
-    selectedLoop?.source === "gmail" ||
-    selectedLoop?.sources?.includes("gmail");
+    selectedCron?.source === "gmail" ||
+    selectedCron?.sources?.includes("gmail");
   let emptyMessage = "No messages in this view yet. Sync to check for new messages.";
   if (showEmailFilter && inboxState.filter === "triaged")
     emptyMessage = "Nothing is waiting on you. Choose Light filtering or All emails to see more emails.";
   if (surface.viewId === "sent") emptyMessage = "No sent messages yet. Sent Email and Slack replies will appear here.";
   const handledItems = itemsFor(surface.viewId, "handled");
   const hasMore = !!feedWindows.get(surface.viewId)?.nextCursor;
-  const setupLoops = inboxState.selected.filter(
-    (loop) =>
-      loop.source && !loop.cronId && !loop.ingestionActive && (surface.viewId === loop.id || surface.viewId === "all"),
+  const setupCrons = inboxState.selected.filter(
+    (cron) =>
+      cron.source &&
+      cron.syncCron &&
+      !cron.syncCron.enabled &&
+      cron.syncCron.lastFiredAt === undefined &&
+      (surface.viewId === cron.id || surface.viewId === "all"),
   );
   const chips = html`
     <div class="inbox-chips" role="tablist" aria-label="Inbox views">
@@ -1861,7 +1592,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
             drawAll();
           }}
         >
-          ${v.id === "all" ? nothing : loopIcon(inboxState.selected.find((loop) => loop.id === v.id) ?? {})}<span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
+          ${v.id === "all" ? nothing : sourceIcon(inboxState.selected.find((cron) => cron.id === v.id) ?? {})}<span>${v.name}</span>${count > 0 ? html`<span class="inbox-chip-count">${count}</span>` : nothing}
         </button>`;
       })}
       <button
@@ -1881,9 +1612,9 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
     </div>
     <div class="inbox-view-actions">
       <button
-        class="icon-btn subtle compact inbox-add-loop"
+        class="icon-btn subtle compact inbox-add"
         type="button"
-        aria-label="Add Loop"
+        aria-label="Add inbox"
         aria-expanded=${inboxState.picker}
         @click=${() => {
           inboxState.picker = !inboxState.picker;
@@ -1928,7 +1659,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
         ? html`<div class="empty compact inbox-zero">${emptyMessage}</div>`
         : nothing
     }
-    <div class="inbox-list">${groupedRowsTpl(surface, openItems)}</div>
+    <div class="inbox-list">${openItems.map((i) => itemRowTpl(surface, i))}</div>
     ${
       resolvedItems.length
         ? html`<div class="inbox-resolved-sect">
@@ -2000,24 +1731,21 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
           : nothing
       }
       ${
-        setupLoops.length
+        setupCrons.length
           ? html`<section class="inbox-setup" aria-label="Set up account sync">
-              ${setupLoops.map(
-                (loop) =>
+              ${setupCrons.map(
+                (cron) =>
                   html`<div class="inbox-setup-row">
-                    <span class="inbox-setup-icon" aria-hidden="true">${loopIcon(loop, 17)}</span>
+                    <span class="inbox-setup-icon" aria-hidden="true">${sourceIcon(cron, 17)}</span>
                     <div class="inbox-setup-copy">
-                      <span class="inbox-setup-title">${loop.name}</span
-                      ><span class="inbox-setup-description"
-                        >${inboxState.migrationPending ? MIGRATION_STATUS : "Sync not set up"}</span
-                      >
+                      <span class="inbox-setup-title">${cron.name}</span
+                      ><span class="inbox-setup-description">Sync not set up</span>
                     </div>
                     <button
                       class="inbox-setup-action"
-                      aria-label=${`Set up ${loop.name}`}
-                      ${inboxState.migrationPending ? tip(MIGRATION_HINT) : nothing}
-                      ?disabled=${inboxState.syncBusy || inboxState.migrationPending}
-                      @click=${() => void setUpSync(loop.id)}
+                      aria-label=${`Set up ${cron.name}`}
+                      ?disabled=${inboxState.syncBusy}
+                      @click=${() => void setUpSync(cron.id)}
                     >
                       <span>${inboxState.syncBusy ? "Setting up…" : "Set up"}</span>${icon(ChevronRight, 14)}
                     </button>
@@ -2028,20 +1756,7 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
       }
       ${
         inboxState.menuId
-          ? html`<div class="inbox-loop-menu" role="menu">
-              <button
-                class="btn"
-                role="menuitem"
-                ?disabled=${!can("loops")}
-                @click=${() => {
-                  const id = inboxState.menuId!;
-                  inboxState.menuId = null;
-                  switchView("loops");
-                  openLoop(id);
-                }}
-              >
-                Open Loop
-              </button>
+          ? html`<div class="inbox-view-menu" role="menu">
               <button
                 class="btn"
                 role="menuitem"
@@ -2058,9 +1773,9 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
       }
       ${
         inboxState.picker
-          ? html`<section class="inbox-loop-picker" aria-label="Add Loop">
+          ? html`<section class="inbox-picker" aria-label="Add inbox">
               <div class="inbox-draft-head">
-                <strong>Loops in your Inbox</strong
+                <strong>Inboxes</strong
                 ><button
                   class="icon-btn"
                   aria-label="Close picker"
@@ -2072,8 +1787,8 @@ function surfaceTpl(surface: InboxSurface): TemplateResult {
                   ${icon(X, 16)}
                 </button>
               </div>
-              <p>Choose the Loops you want to review here.</p>
-              ${inboxState.available.map((loop) => html`<label><input type="checkbox" .checked=${loop.selected} ?disabled=${inboxState.selectionBusy} @change=${() => void toggleSelection(loop.id)} />${loopIcon(loop)}<span>${loop.name}</span><span>${loop.selected ? "Included" : "Add"}</span></label>`)}
+              <p>Choose the inboxes you want to review here.</p>
+              ${inboxState.available.map((cron) => html`<label><input type="checkbox" .checked=${cron.selected} ?disabled=${inboxState.selectionBusy} @change=${() => void toggleSelection(cron.id)} />${sourceIcon(cron)}<span>${cron.name}</span><span>${cron.selected ? "Included" : "Add"}</span></label>`)}
             </section>`
           : nothing
       }
@@ -2104,14 +1819,12 @@ function itemPageTpl(item: InboxItem): TemplateResult {
   const gmail = item.source === "gmail";
   let heading = item.slack?.channelLabel ?? item.title;
   if (gmail) heading = item.from || item.title;
-  else if (item.source === "generic") heading = inboxViewName(item.loopId);
+  else if (item.source === "generic") heading = inboxViewName(item.cronId);
   const sub = gmail ? item.title : "";
-  const grouped = groupOf(item).length > 1 ? subjectTpl(item) : nothing;
   let detail: TemplateResult;
   if (!item.detailLoaded) detail = html`<div class="empty compact">Loading message…</div>`;
-  else if (usesOutputReview(item)) detail = reviewTpl(item, false);
-  else
-    detail = html`${grouped} ${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
+  else if (isGenericItem(item)) detail = reviewTpl(item, false);
+  else detail = html`${contextTpl(item)} ${draftMessageTpl(item)} ${handled ? handledNoteTpl(item) : nothing}`;
   return html`
     <div class="pane-head inbox-item-head src-${item.source}">
       <div class="inbox-item-head-copy">
@@ -2125,7 +1838,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
-      ${triageControlsTpl(item)} ${dismissItemTpl(item)} ${item.detailLoaded ? assistantToggleTpl() : nothing}
+      ${dismissItemTpl(item)} ${item.detailLoaded ? assistantToggleTpl() : nothing}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
@@ -2180,10 +1893,8 @@ let pendingItemId: string | null = null;
 let loadingDeepLink = false;
 async function loadDeepLink(id: string): Promise<void> {
   try {
-    const result = await api<{ item: LedgerItem; outputs: ReviewOutput[] }>(
-      `/api/inbox?itemId=${encodeURIComponent(id)}`,
-    );
-    upsertItem({ ...toInboxItem(result.item), outputs: result.outputs, detailLoaded: true });
+    const result = await api<{ item: LedgerItem }>(`/api/inbox?itemId=${encodeURIComponent(id)}`);
+    upsertItem({ ...toInboxItem(result.item), detailLoaded: true });
   } catch {
     if (fullSurface?.selectedId === id) fullSurface.selectedId = null;
     fullViewId = "sent";
@@ -2249,10 +1960,10 @@ function drawFull(): void {
             : inboxChat({
                 kind: "inbox",
                 hasEmail: inboxState.selected.some(
-                  (loop) => loop.sources?.includes("gmail") || loop.source === "gmail",
+                  (cron) => cron.sources?.includes("gmail") || cron.source === "gmail",
                 ),
                 hasSlack: inboxState.selected.some(
-                  (loop) => loop.sources?.includes("slack") || loop.source === "slack",
+                  (cron) => cron.sources?.includes("slack") || cron.source === "slack",
                 ),
                 hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
               })

@@ -1,4 +1,4 @@
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { InboxItem, InboxPayload } from "../../types.ts";
 
 export interface ConnectorTokenSource {
   connectorAccessToken(host: string, principalId: string, accountType?: string): Promise<string | null>;
@@ -20,7 +20,7 @@ export interface SourceActionDeps {
 }
 
 export type SourceActionResult =
-  | { ok: true; result: string; resolves?: boolean; payloadPatch?: LoopSourcePayload }
+  | { ok: true; result: string; resolves?: boolean; payloadPatch?: InboxPayload }
   | { ok: false; reason: "not_connected" | "bad_item" | "upstream"; message: string; partial?: boolean };
 
 export interface ConversationEvent {
@@ -36,19 +36,19 @@ export interface ConversationEvent {
 export interface ParsedEntry {
   dedupeKey: string;
   summary: string;
-  sourcePayload: LoopSourcePayload;
+  sourcePayload: InboxPayload;
   sourceAt: number;
-  proposal?: { data: LoopSourcePayload; summary?: string };
+  proposal?: { data: InboxPayload; summary?: string };
 }
 
-export interface LoopSourceAdapter {
+export interface SourceAdapter {
   id: string;
   actions: readonly string[];
   parse(raw: Record<string, unknown>): ParsedEntry | { error: string };
 
-  matchesEvent(item: LoopItem, conversationRef: string): boolean;
-  parseProposal(raw: unknown): LoopSourcePayload | null;
-  act(deps: SourceActionDeps, item: LoopItem, kind: string, args: LoopSourcePayload): Promise<SourceActionResult>;
+  matchesEvent(item: InboxItem, conversationRef: string): boolean;
+  parseProposal(raw: unknown): InboxPayload | null;
+  act(deps: SourceActionDeps, item: InboxItem, kind: string, args: InboxPayload): Promise<SourceActionResult>;
 }
 
 export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -148,7 +148,7 @@ export function parseReplyDraft(v: unknown): ReplyDraft | null {
   return { body, ...(to ? { to } : {}), ...(cc ? { cc } : {}), ...(subject ? { subject } : {}) };
 }
 
-export function draftOf(item: LoopItem): ReplyDraft | null {
+export function draftOf(item: InboxItem): ReplyDraft | null {
   return parseReplyDraft(item.proposal?.data);
 }
 

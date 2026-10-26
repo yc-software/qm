@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
-import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
-import type { IngressEntry } from "../src/loops/ingress.ts";
+import { createInboxSourceRefresh as createRefresh } from "../src/inbox/source-refresh.ts";
+import { createInboxLedger, type LatestEvent } from "../src/inbox/ledger.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
-  const items = createLoopItemLedger();
+  const items = createInboxLedger();
   await items.ingest([
     {
-      loopId: "inbox",
+      cronId: "inbox",
       dedupeKey: "ask",
       source,
       sourceAt: 1000,
@@ -16,20 +15,20 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
       proposal: { by: "human", data: { body: "Keep my edit" } },
     },
   ]);
-  return { items, item: (await items.byLoop("inbox"))[0]! };
+  return { items, item: (await items.byCron("inbox"))[0]! };
 }
 const featureFlags = { enabled: async () => true };
 const createInboxSourceRefresh = (
-  deps: Omit<Parameters<typeof createRefresh>[0], "enqueue"> & {
-    enqueue?: Parameters<typeof createRefresh>[0]["enqueue"];
+  deps: Omit<Parameters<typeof createRefresh>[0], "record"> & {
+    record?: Parameters<typeof createRefresh>[0]["record"];
   },
-) => createRefresh({ enqueue: async () => undefined, ...deps });
+) => createRefresh({ record: async () => undefined, ...deps });
 function recorder() {
   const events: unknown[] = [];
-  const enqueue = async (_loop: unknown, entries: IngressEntry[]) => {
-    events.push(...entries.map((entry) => entry.sourcePayload?.latestEvent));
+  const record = async (_item: unknown, event: LatestEvent) => {
+    events.push(event);
   };
-  return { events, enqueue };
+  return { events, record };
 }
 const tokens = { connectorAccessToken: async () => "synthetic-token" };
 const json = (body: unknown) => Response.json(body);
@@ -55,7 +54,7 @@ test("Gmail reply sent outside QM becomes an owner event, ignoring drafts and re
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: queue.enqueue,
+    record: queue.record,
     tokens,
     directory,
     fetchImpl: async (url) => {
@@ -91,7 +90,7 @@ test("an old sent message or a newer inbound message does not close a Gmail item
     await createInboxSourceRefresh({
       featureFlags,
       items,
-      enqueue: queue.enqueue,
+      record: queue.record,
       tokens,
       directory,
       fetchImpl: async () => json({ messages }),
@@ -127,7 +126,7 @@ test("a new inbound message during a provider read wins over the older own reply
     fetchImpl: async () => {
       await items.ingest([
         {
-          loopId: "inbox",
+          cronId: "inbox",
           dedupeKey: "ask",
           source: "gmail",
           sourceAt: 3000,
@@ -201,7 +200,7 @@ test("Slack detects group DMs by conversation metadata, including C-prefixed IDs
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: queue.enqueue,
+    record: queue.record,
     tokens,
     directory,
     fetchImpl: slackFetch(calls, { direct: true, own: true }),
@@ -216,7 +215,7 @@ test("a partial Slack thread is displayed as partial but cannot resolve an item"
   await createInboxSourceRefresh({
     featureFlags,
     items,
-    enqueue: queue.enqueue,
+    record: queue.record,
     tokens,
     directory,
     fetchImpl: slackFetch([], { partial: true, own: true }),
@@ -344,7 +343,7 @@ test("a newer message during an avatar lookup cannot acquire the previous sender
     directory: directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX } }, () =>
       items.ingest([
         {
-          loopId: "inbox",
+          cronId: "inbox",
           dedupeKey: "ask",
           source: "slack",
           sourceAt: 2000,

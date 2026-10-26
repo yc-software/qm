@@ -1,24 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { LoopItem, LoopSourcePayload } from "../src/types.ts";
-import type { ConnectorTokenSource, SlackUserClient } from "../src/loops/sources/adapter.ts";
-import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/loops/sources/gmail.ts";
-import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/loops/sources/slack.ts";
+import type { InboxItem, InboxPayload } from "../src/types.ts";
+import type { ConnectorTokenSource, SlackUserClient } from "../src/inbox/sources/adapter.ts";
+import { buildGmailReplyMime, gmailAdapter, replySubject } from "../src/inbox/sources/gmail.ts";
+import { renderSlackSendText, slackAdapter, slackReplyThreadTs } from "../src/inbox/sources/slack.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../src/slack/delivery.ts";
-import { adapterForItem } from "../src/loops/sources/index.ts";
+import { adapterForItem } from "../src/inbox/sources/index.ts";
 
-function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): LoopItem {
+function item(source: string, payload: Record<string, unknown>, proposal?: Record<string, unknown>): InboxItem {
   return {
     id: "i1",
-    loopId: "l1",
+    cronId: "l1",
     sourceKey: "t1",
     source,
     sourcePayload: { source, title: "Quarterly numbers", from: "Ada", snippet: "…", receivedAt: 1, ...payload },
     sourceAt: 1,
     status: proposal ? "ready" : "queued",
-    attempts: 0,
-    runIds: [],
-    outputIds: [],
     createdAt: 1,
     updatedAt: 1,
     ...(proposal ? { proposal: { data: proposal, by: "agent" as const, at: 1 } } : {}),
@@ -340,8 +337,8 @@ test("every agent draft the item ever had contributes to the disarm set, even af
   const held = item("slack", slackMeta, { body: "human words <!channel>" });
   held.proposal!.by = "human";
   held.agentDrafts = [
-    { data: { body: "first draft <!channel>" } as unknown as LoopSourcePayload, by: "agent", at: 0 },
-    { data: { body: "calmer second draft" } as unknown as LoopSourcePayload, by: "agent", at: 1 },
+    { data: { body: "first draft <!channel>" } as unknown as InboxPayload, by: "agent", at: 0 },
+    { data: { body: "calmer second draft" } as unknown as InboxPayload, by: "agent", at: 1 },
   ];
   assert.equal(renderSlackSendText(held, "human words <!channel>"), "human words @\u200bchannel");
   assert.equal(renderSlackSendText(held, "calmer second draft"), "calmer second draft");
@@ -366,7 +363,7 @@ test("a long send is posted as fence-safe parts and the record is what actually 
     { owner: "josh", tokens: tokens({ "slack.com": "xoxp" }), slackClient: spy.factory },
     item("slack", slackMeta),
     "send",
-    { body } as unknown as LoopSourcePayload,
+    { body } as unknown as InboxPayload,
   );
   assert.equal(out.ok, true);
   const texts = spy.calls.map((c) => c.args.text as string);
@@ -390,7 +387,7 @@ test("a part Slack refuses mid-way reports how much landed instead of pretending
     { owner: "josh", tokens: tokens({ "slack.com": "xoxp" }), slackClient: () => failing },
     item("slack", slackMeta),
     "send",
-    { body: "x".repeat(SLACK_POST_SPLIT_LIMIT * 2 + 10) } as unknown as LoopSourcePayload,
+    { body: "x".repeat(SLACK_POST_SPLIT_LIMIT * 2 + 10) } as unknown as InboxPayload,
   );
   assert.equal(out.ok, false);
   assert.equal(out.ok ? undefined : out.partial, true);
@@ -400,7 +397,7 @@ test("a part Slack refuses mid-way reports how much landed instead of pretending
 test("a mention that fell out of the bounded draft history is still disarmed through the kept identities", () => {
   const held = item("slack", slackMeta, { body: "human kept <!here>" });
   held.proposal!.by = "human";
-  held.agentDrafts = [{ data: { body: "calm v11" } as unknown as LoopSourcePayload, by: "agent", at: 11 }];
+  held.agentDrafts = [{ data: { body: "calm v11" } as unknown as InboxPayload, by: "agent", at: 11 }];
   held.agentMentionKeys = ["!here"];
   assert.equal(renderSlackSendText(held, "human kept <!here>"), "human kept @\u200bhere");
 });

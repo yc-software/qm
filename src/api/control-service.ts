@@ -45,6 +45,7 @@ export interface CronCreateRequest {
   unfurlLinks?: boolean;
   unattendedGrants?: string[];
   session?: boolean;
+  inbox?: boolean;
 }
 
 export type CronCreateResult =
@@ -355,6 +356,9 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
       }
+      if (req.inbox && req.action === undefined) {
+        return { ok: false, code: "bad_request", message: "an inbox cron needs a task, not exact text" };
+      }
       const hasParticipants = Array.isArray(req.participants);
       const wantsGroup = hasParticipants && req.participants!.length > 0;
       const wantsPersonal = req.scope === "personal";
@@ -484,6 +488,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         ...(typeof req.title === "string" ? { title: req.title } : {}),
         ...(destination ? { destination } : {}),
         ...(req.unattendedGrants !== undefined ? { unattendedGrants: req.unattendedGrants } : {}),
+        ...(req.inbox ? { inbox: {} } : {}),
       };
       const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
@@ -606,7 +611,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         return {
           ok: false,
           code: "bad_request",
-          message: `cron ${id}'s fires don't read shift-change notes (it is loop-backed, one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
+          message: `cron ${id}'s fires don't read shift-change notes (it is one-shot, or runs a raw !run/!scratch task) — publish durable handoff state to this conversation's Files via the available Files API and verify success. Keep the published file ID in the consuming workflow for GET /v1/files/:id/content; these fires cannot recover it from a note. If publication is unavailable, report it and retain needed local state on a scoped computer.`,
         };
       }
       const ownFire = capability.threadRef?.startsWith(`cron:${id}:fire:`) === true;

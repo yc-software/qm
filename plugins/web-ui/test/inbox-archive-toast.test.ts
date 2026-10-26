@@ -30,7 +30,7 @@ test("dismiss toast undoes the correct item and failed dismissals do not offer u
     const { setItemStatus, toInboxItem, inboxState, resetInboxState } = await vite.ssrLoadModule("/src/inbox.ts");
     const entry = {
       id: "item-1",
-      loopId: "loop-1",
+      cronId: "cron-1",
       state: "held",
       source: "gmail",
       sourcePayload: { title: "Example", from: "Sam", snippet: "Hello" },

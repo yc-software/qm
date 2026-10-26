@@ -2278,6 +2278,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "create/patch: read-only admin grants for unattended fires (org admins only; the cron must live in and deliver to their own DM); admin unattended_grants lists which read needs which. patch replaces; [] removes.",
         }),
       ),
+      inbox: Type.Optional(
+        Type.Boolean({
+          description:
+            "create: give the cron an inbox, a durable queue of work items each fire reads, adds to and closes at $AGENT_API_URL/v1/crons/<id>/items.",
+        }),
+      ),
       enabled: Type.Optional(Type.Boolean({ description: "patch: false pauses, true resumes." })),
       archived: Type.Optional(Type.Boolean({ description: "patch: true archives the cron." })),
       limit: Type.Optional(
@@ -2324,6 +2330,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             ...(params.unfurlLinks !== undefined ? { unfurlLinks: params.unfurlLinks } : {}),
             ...(params.session !== undefined ? { session: params.session } : {}),
             ...(params.unattendedGrants !== undefined ? { unattendedGrants: params.unattendedGrants } : {}),
+            ...(params.inbox === true ? { inbox: true } : {}),
           });
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) {

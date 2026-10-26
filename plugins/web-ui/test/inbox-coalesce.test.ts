@@ -15,7 +15,7 @@ function harness() {
 
 test("a burst inside one window flushes every distinct item it touched, not just the first", () => {
   const { flushed, enqueue, fire } = harness();
-  for (let i = 1; i <= 10; i++) enqueue({ loopId: "loop-1", itemId: `item-${i}` });
+  for (let i = 1; i <= 10; i++) enqueue({ cronId: "cron-1", itemId: `item-${i}` });
   assert.equal(flushed.length, 0, "nothing flushes before the window closes");
   fire();
   assert.equal(flushed.length, 1, "one burst becomes one flush");
@@ -27,22 +27,22 @@ test("a burst inside one window flushes every distinct item it touched, not just
 
 test("repeat events for the same item collapse into one entry", () => {
   const { flushed, enqueue, fire } = harness();
-  enqueue({ loopId: "loop-1", itemId: "item-1" });
-  enqueue({ loopId: "loop-1", itemId: "item-1" });
-  enqueue({ loopId: "loop-1", itemId: "item-2" });
+  enqueue({ cronId: "cron-1", itemId: "item-1" });
+  enqueue({ cronId: "cron-1", itemId: "item-1" });
+  enqueue({ cronId: "cron-1", itemId: "item-2" });
   fire();
   assert.deepEqual(flushed[0], [
-    { loopId: "loop-1", itemId: "item-1" },
-    { loopId: "loop-1", itemId: "item-2" },
+    { cronId: "cron-1", itemId: "item-1" },
+    { cronId: "cron-1", itemId: "item-2" },
   ]);
 });
 
 test("only one timer is armed per window, and the next window starts clean", () => {
   const { flushed, enqueue, fire } = harness();
-  enqueue({ loopId: "loop-1", itemId: "a" });
-  enqueue({ loopId: "loop-1", itemId: "b" });
+  enqueue({ cronId: "cron-1", itemId: "a" });
+  enqueue({ cronId: "cron-1", itemId: "b" });
   fire();
-  enqueue({ loopId: "loop-1", itemId: "c" });
+  enqueue({ cronId: "cron-1", itemId: "c" });
   fire();
   assert.equal(flushed.length, 2);
   assert.deepEqual(
@@ -52,13 +52,13 @@ test("only one timer is armed per window, and the next window starts clean", () 
   );
 });
 
-test("items from different loops keep their loop ids through the flush", () => {
+test("items from different crons keep their cron ids through the flush", () => {
   const { flushed, enqueue, fire } = harness();
-  enqueue({ loopId: "loop-1", itemId: "x" });
-  enqueue({ loopId: "loop-2", itemId: "x" });
+  enqueue({ cronId: "cron-1", itemId: "x" });
+  enqueue({ cronId: "cron-2", itemId: "x" });
   fire();
   assert.deepEqual(flushed[0], [
-    { loopId: "loop-1", itemId: "x" },
-    { loopId: "loop-2", itemId: "x" },
+    { cronId: "cron-1", itemId: "x" },
+    { cronId: "cron-2", itemId: "x" },
   ]);
 });

@@ -1,9 +1,9 @@
 import { WebClient } from "@slack/web-api";
-import type { LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { InboxItem, InboxPayload } from "../../types.ts";
 import { normalizeSlackApiUrl } from "../../slack/config.ts";
 import { SLACK_POST_SPLIT_LIMIT } from "../../slack/delivery.ts";
 import { neutralizeMentions, wireMentionKeys } from "../../slack/mrkdwn.ts";
-import { agentDraftsOf } from "../item-ledger.ts";
+import { agentDraftsOf } from "../ledger.ts";
 import { safeChunks } from "../../slack/safe-cut.ts";
 import { applyReactions, normalizeReaction } from "../../slack/reactions.ts";
 import { slackErrorCode } from "../../slack/payloads.ts";
@@ -16,7 +16,7 @@ import {
   parseCommonFields,
   parseReplyDraft,
   tokenFor,
-  type LoopSourceAdapter,
+  type SourceAdapter,
   type ParsedEntry,
   type ReplyDraft,
   type SlackUserClient,
@@ -53,7 +53,7 @@ function parseSlackMeta(v: unknown): SlackMeta | undefined {
   };
 }
 
-function metaOf(item: LoopItem): SlackMeta | undefined {
+function metaOf(item: InboxItem): SlackMeta | undefined {
   return parseSlackMeta(item.sourcePayload?.slack);
 }
 
@@ -66,13 +66,13 @@ export function slackConversationRef(
   return isDirectMessage && !threadTs ? channelId : `${channelId}:${threadTs ?? ts}`;
 }
 
-export function slackReplyThreadTs(item: LoopItem): string | undefined {
+export function slackReplyThreadTs(item: InboxItem): string | undefined {
   const slack = metaOf(item);
   if (!slack) return undefined;
   return slack.threadTs ?? (slack.isDirectMessage ? undefined : slack.ts);
 }
 
-function itemReactions(item: LoopItem): string[] {
+function itemReactions(item: InboxItem): string[] {
   const raw = item.sourcePayload?.reactions;
   return Array.isArray(raw) ? raw.filter((name): name is string => typeof name === "string") : [];
 }
@@ -99,18 +99,18 @@ const notConnected: SourceActionResult = {
   message: "Slack is not connected for this account",
 };
 
-function agentDraftBodies(item: LoopItem): string[] {
+function agentDraftBodies(item: InboxItem): string[] {
   return agentDraftsOf(item).flatMap((d) => {
     const body = parseReplyDraft(d.data)?.body;
     return body === undefined ? [] : [body.trim()];
   });
 }
 
-function provenanceUnknown(item: LoopItem): boolean {
+function provenanceUnknown(item: InboxItem): boolean {
   return item.agentDrafts === undefined && item.proposal?.by === "human";
 }
 
-export function renderSlackSendText(item: LoopItem, body: string, actor: "human" | "agent" = "human"): string {
+export function renderSlackSendText(item: InboxItem, body: string, actor: "human" | "agent" = "human"): string {
   const agentBodies = agentDraftBodies(item);
   if (actor === "agent" || provenanceUnknown(item) || agentBodies.includes(body.trim()))
     return neutralizeMentions(body);
@@ -121,7 +121,7 @@ export function renderSlackSendText(item: LoopItem, body: string, actor: "human"
   return everWritten.size ? neutralizeMentions(body, everWritten) : body;
 }
 
-async function sendSlack(deps: SourceActionDeps, item: LoopItem, draft: ReplyDraft): Promise<SourceActionResult> {
+async function sendSlack(deps: SourceActionDeps, item: InboxItem, draft: ReplyDraft): Promise<SourceActionResult> {
   const slack = metaOf(item);
   if (!slack?.channelId) return { ok: false, reason: "bad_item", message: "item carries no Slack channel" };
   const client = await clientAsUser(deps);
@@ -152,7 +152,7 @@ async function sendSlack(deps: SourceActionDeps, item: LoopItem, draft: ReplyDra
   return { ok: true, result: posted.join("\n") };
 }
 
-async function reactInSlack(deps: SourceActionDeps, item: LoopItem, raw: unknown): Promise<SourceActionResult> {
+async function reactInSlack(deps: SourceActionDeps, item: InboxItem, raw: unknown): Promise<SourceActionResult> {
   const slack = metaOf(item);
   if (!slack?.channelId) return { ok: false, reason: "bad_item", message: "item carries no Slack channel" };
   const name = typeof raw === "string" ? normalizeReaction(raw) : null;
@@ -167,11 +167,11 @@ async function reactInSlack(deps: SourceActionDeps, item: LoopItem, raw: unknown
     ok: true,
     result: `:${name}:`,
     resolves: false,
-    payloadPatch: { reactions: [...new Set([...itemReactions(item), name])] } as LoopSourcePayload,
+    payloadPatch: { reactions: [...new Set([...itemReactions(item), name])] } as InboxPayload,
   };
 }
 
-export const slackAdapter: LoopSourceAdapter = {
+export const slackAdapter: SourceAdapter = {
   id: "slack",
   actions: ["send", "react"],
   parse(raw) {
@@ -189,8 +189,8 @@ export const slackAdapter: LoopSourceAdapter = {
       dedupeKey,
       summary: common.snippet,
       sourceAt: common.receivedAt,
-      sourcePayload: { source: "slack", ...common, slack } as LoopSourcePayload,
-      ...(draft ? { proposal: { data: draft as unknown as LoopSourcePayload } } : {}),
+      sourcePayload: { source: "slack", ...common, slack } as InboxPayload,
+      ...(draft ? { proposal: { data: draft as unknown as InboxPayload } } : {}),
     };
     return entry;
   },
@@ -203,7 +203,7 @@ export const slackAdapter: LoopSourceAdapter = {
   },
   parseProposal(raw) {
     const draft = parseReplyDraft(raw);
-    return draft ? (draft as unknown as LoopSourcePayload) : null;
+    return draft ? (draft as unknown as InboxPayload) : null;
   },
   async act(deps, item, kind, args) {
     if (kind !== "send" && kind !== "react") {

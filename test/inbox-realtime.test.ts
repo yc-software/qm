@@ -1,18 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createLoopItemLedger, type IngestEntryInput } from "../src/loops/item-ledger.ts";
-import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
-import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
-import { slackConversationRef } from "../src/loops/sources/slack.ts";
-import type { LedgerEvent } from "../src/loops/ledger-events.ts";
-import type { Loop } from "../src/types.ts";
-import type { IngressEntry } from "../src/loops/ingress.ts";
+import { createInboxLedger, type IngestEntryInput, type LatestEvent } from "../src/inbox/ledger.ts";
+import { createInboxRealtime } from "../src/inbox/realtime.ts";
+import { slackConversationRef } from "../src/inbox/sources/slack.ts";
+import type { LedgerEvent } from "../src/inbox/events.ts";
+import type { Cron } from "../src/types.ts";
 
-const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
+const CRON = { id: "cron-inbox", owner: "owner@example.com", inbox: { source: "slack" } } as unknown as Cron;
 
 function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {
-    loopId: LOOP.id,
+    cronId: CRON.id,
     dedupeKey: "D123",
     source: "slack",
     summary: "any update?",
@@ -30,7 +28,7 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
 
 function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {
-    loopId: LOOP.id,
+    cronId: CRON.id,
     dedupeKey: "gmail:t-1",
     source: "gmail",
     summary: "contract question",
@@ -46,23 +44,21 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   };
 }
 
-function realtime(items: ReturnType<typeof createLoopItemLedger>) {
-  const calls: IngressEntry[][] = [];
+function realtime(items: ReturnType<typeof createInboxLedger>) {
+  const calls: Array<[string, LatestEvent]> = [];
   const rt = createInboxRealtime({
-    loops: { list: async () => [LOOP] },
+    crons: { list: async () => [CRON] },
     items,
-    enqueue: async (_loop, entries) => {
-      calls.push(entries);
+    record: async (item, event) => {
+      calls.push([item.sourceKey, event]);
+      await items.recordEvent(item, event);
     },
   });
   return Object.assign(rt, { calls });
 }
 
-const latest = (entries: IngressEntry[] | undefined) =>
-  entries?.map((entry) => [entry.dedupeKey, entry.sourcePayload?.latestEvent]);
-
 test("the owner's own reply is queued as an owner event for the card's conversation", async () => {
-  const items = createLoopItemLedger();
+  const items = createInboxLedger();
   await items.ingest([slackEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -72,13 +68,15 @@ test("the owner's own reply is queued as an owner event for the card's conversat
     text: "on it!",
     senderEmail: "Owner@Example.com",
   });
-  assert.deepEqual(latest(rt.calls[0]), [["D123", { author: "owner", at: 2_000_000, text: "on it!" }]]);
-  assert.equal(rt.calls[0]![0]!.merge, true);
-  assert.equal(rt.calls[0]![0]!.sourceAt, 2_000_000);
+  assert.deepEqual(rt.calls, [["D123", { author: "owner", at: 2_000_000, text: "on it!", from: "Owner@Example.com" }]]);
+  const [item] = await items.byCron(CRON.id);
+  assert.equal(item!.status, "queued");
+  assert.equal(item!.sourceAt, 2_000_000);
+  assert.deepEqual(item!.sourcePayload?.latestEvent, { author: "owner", at: 2_000_000, text: "on it!" });
 });
 
 test("someone else's messages are queued as other events with their sender", async () => {
-  const items = createLoopItemLedger();
+  const items = createInboxLedger();
   await items.ingest([slackEntry(), gmailEntry()]);
   const rt = realtime(items);
   await rt.onConversationEvent({
@@ -95,35 +93,32 @@ test("someone else's messages are queued as other events with their sender", asy
     text: "any word?",
     senderEmail: "ada@example.com",
   });
-  assert.deepEqual(
-    rt.calls.map((entries) => entries.map((entry) => [entry.dedupeKey, entry.sourcePayload])),
-    [
-      [
-        [
-          "D123",
-          {
-            latestEvent: { author: "other", at: 3_000_000, from: "sam@example.com" },
-            receivedAt: 3_000_000,
-            snippet: "ping",
-          },
-        ],
-      ],
-      [
-        [
-          "gmail:t-1",
-          {
-            latestEvent: { author: "other", at: 3_001_000, from: "ada@example.com" },
-            receivedAt: 3_001_000,
-            snippet: "any word?",
-          },
-        ],
-      ],
-    ],
+  const payloads = Object.fromEntries(
+    (await items.byCron(CRON.id)).map((item) => [
+      item.sourceKey,
+      {
+        latestEvent: item.sourcePayload?.latestEvent,
+        receivedAt: item.sourcePayload?.receivedAt,
+        snippet: item.sourcePayload?.snippet,
+      },
+    ]),
   );
+  assert.deepEqual(payloads, {
+    D123: {
+      latestEvent: { author: "other", at: 3_000_000, from: "sam@example.com" },
+      receivedAt: 3_000_000,
+      snippet: "ping",
+    },
+    "gmail:t-1": {
+      latestEvent: { author: "other", at: 3_001_000, from: "ada@example.com" },
+      receivedAt: 3_001_000,
+      snippet: "any word?",
+    },
+  });
 });
 
 test("events in unrelated conversations or other sources queue nothing", async () => {
-  const items = createLoopItemLedger();
+  const items = createInboxLedger();
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
@@ -153,13 +148,13 @@ test("events in unrelated conversations or other sources queue nothing", async (
       source: source!,
       conversationRef: conversationRef!,
       at: 2_000_000,
-      senderEmail: LOOP.owner,
+      senderEmail: CRON.owner,
     });
   assert.deepEqual(rt.calls, []);
 });
 
 test("a thread reply reaches a channel card anchored at the thread root", async () => {
-  const items = createLoopItemLedger();
+  const items = createInboxLedger();
   await items.ingest([
     slackEntry({
       dedupeKey: "C9:100.1",
@@ -178,9 +173,9 @@ test("a thread reply reaches a channel card anchored at the thread root", async 
     conversationRef: "C9:100.1",
     at: 2_000_000,
     text: "done",
-    senderEmail: LOOP.owner,
+    senderEmail: CRON.owner,
   });
-  assert.deepEqual(latest(rt.calls[0]), [["C9:100.1", { author: "owner", at: 2_000_000, text: "done" }]]);
+  assert.deepEqual(rt.calls, [["C9:100.1", { author: "owner", at: 2_000_000, text: "done", from: CRON.owner }]]);
 });
 
 test("slack conversation refs key DMs by channel and channel asks by thread root", () => {
@@ -193,24 +188,18 @@ test("slack conversation refs key DMs by channel and channel asks by thread root
 
 test("ledger mutations emit change events", async () => {
   const events: LedgerEvent[] = [];
-  const items = createLoopItemLedger(undefined, (e) => events.push(e));
+  const items = createInboxLedger(undefined, (e) => events.push(e));
   await items.ingest([slackEntry()]);
-  const [item] = await items.byLoop(LOOP.id);
+  const [item] = await items.byCron(CRON.id);
   await items.setProposal(item!.id, { data: { body: "draft" }, by: "agent" });
   await items.recordAction(item!.id, { kind: "replied", outcome: "dismissed" });
   assert.deepEqual(
     events.map((e) => e.op),
     ["ingest", "proposal", "action"],
   );
-  assert.ok(events.every((e) => e.loopId === LOOP.id && e.itemId === item!.id));
+  assert.ok(events.every((e) => e.cronId === CRON.id && e.itemId === item!.id));
 });
 
 test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
   assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
-});
-
-test("the inbox sync task asks for the full waiting message", () => {
-  const task = renderSourceInboxTask("loop-inbox", "gmail");
-  assert.match(task, /snippet \(the full text of the waiting message/);
-  assert.doesNotMatch(task, /snippet \(the waiting message, <=200 chars\)/);
 });

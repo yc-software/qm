@@ -62,7 +62,7 @@ function lastCallTo(pathname: string): Call | undefined {
   return [...calls].reverse().find((c) => corePath(c.url) === pathname);
 }
 
-test("GET /api/inbox resolves the signed-in person's inbox loop, never someone else's", async () => {
+test("GET /api/inbox resolves the signed-in person's inbox, never someone else's", async () => {
   await fetch(`${base}/api/inbox`, { headers });
   const call = lastCallTo("/v1/inbox");
   assert.ok(call, "expected a relayed core call");
@@ -89,7 +89,7 @@ test("POST /api/inbox/sync-cron carries the caller, not the body's claim", async
     headers,
     body: JSON.stringify({ everyMs: 900_000, principalId: "mallory" }),
   });
-  const call = lastCallTo("/v1/loops/inbox/sync-cron");
+  const call = lastCallTo("/v1/inbox/sync-cron");
   assert.ok(call);
   assert.equal(call.method, "POST");
   assert.equal(coreQuery(call.url, "principalId"), "alice");
@@ -97,8 +97,8 @@ test("POST /api/inbox/sync-cron carries the caller, not the body's claim", async
 });
 
 test("GET the ledger relays the state filter and the caller's identity", async () => {
-  await fetch(`${base}/api/loops/loop%201/items?state=held`, { headers });
-  const call = lastCallTo("/v1/loops/loop 1/items");
+  await fetch(`${base}/api/crons/cron%201/items?state=held`, { headers });
+  const call = lastCallTo("/v1/crons/cron 1/items");
   assert.ok(call);
   assert.equal(call.method, "GET");
   assert.equal(coreQuery(call.url, "principalId"), "alice");
@@ -106,19 +106,19 @@ test("GET the ledger relays the state filter and the caller's identity", async (
 });
 
 test("an absent state filter is not invented on the way through", async () => {
-  await fetch(`${base}/api/loops/l-2/items`, { headers });
-  const call = lastCallTo("/v1/loops/l-2/items");
+  await fetch(`${base}/api/crons/l-2/items`, { headers });
+  const call = lastCallTo("/v1/crons/l-2/items");
   assert.ok(call);
   assert.equal(coreQuery(call.url, "state"), null);
 });
 
 test("POST action forwards the intent under the caller's identity", async () => {
-  await fetch(`${base}/api/loops/l-2/items/i-9/action`, {
+  await fetch(`${base}/api/crons/l-2/items/i-9/action`, {
     method: "POST",
     headers,
     body: JSON.stringify({ kind: "send", args: { proposal: { body: "on it" } } }),
   });
-  const call = lastCallTo("/v1/loops/l-2/items/i-9/action");
+  const call = lastCallTo("/v1/crons/l-2/items/i-9/action");
   assert.ok(call);
   assert.equal(call.method, "POST");
   assert.equal(coreQuery(call.url, "principalId"), "alice");
@@ -126,43 +126,41 @@ test("POST action forwards the intent under the caller's identity", async () => 
 });
 
 test("POST followup forwards the message under the caller's identity", async () => {
-  await fetch(`${base}/api/loops/l-2/items/i-9/followup`, {
+  await fetch(`${base}/api/crons/l-2/items/i-9/followup`, {
     method: "POST",
     headers,
     body: JSON.stringify({ message: "make it shorter" }),
   });
-  const call = lastCallTo("/v1/loops/l-2/items/i-9/followup");
+  const call = lastCallTo("/v1/crons/l-2/items/i-9/followup");
   assert.ok(call);
   assert.equal(call.method, "POST");
   assert.equal(coreQuery(call.url, "principalId"), "alice");
   assert.deepEqual(call.body, { message: "make it shorter" });
 });
 
-test("an item id that would escape its loop is encoded, not obeyed", async () => {
-  await fetch(`${base}/api/loops/l-2/items/${encodeURIComponent("../../l-3/items/i-1")}/action`, {
+test("an item id that would escape its cron is encoded, not obeyed", async () => {
+  await fetch(`${base}/api/crons/l-2/items/${encodeURIComponent("../../l-3/items/i-1")}/action`, {
     method: "POST",
     headers,
     body: JSON.stringify({ kind: "dismiss" }),
   });
-  const escaped = lastCallTo("/v1/loops/l-3/items/i-1/action");
-  assert.equal(escaped, undefined, "a traversal in the item id must not reach another loop");
+  const escaped = lastCallTo("/v1/crons/l-3/items/i-1/action");
+  assert.equal(escaped, undefined, "a traversal in the item id must not reach another cron");
   const relayed = [...calls].reverse().find((c) => c.url.includes("l-3"))!;
   assert.match(
     new URL(relayed.url, "http://core").pathname,
-    /\/v1\/loops\/l-2\/items\/\.\.%2F\.\.%2Fl-3%2Fitems%2Fi-1\/action$/,
+    /\/v1\/crons\/l-2\/items\/\.\.%2F\.\.%2Fl-3%2Fitems%2Fi-1\/action$/,
     "the separators stay escaped so core reads one opaque item id",
   );
 });
 
-test("the ledger opens to inbox users; the rest of the loops surface still needs LOOPS_USERS", async () => {
-  const ledger = await fetch(`${base}/api/loops/l-2/items`, { headers });
+test("the ledger opens to inbox users", async () => {
+  const ledger = await fetch(`${base}/api/crons/l-2/items`, { headers });
   assert.equal(ledger.status, 200);
-  const admin = await fetch(`${base}/api/loops`, { headers });
-  assert.equal(admin.status, 403);
 });
 
 test("a signed-in user who is not an inbox user cannot read the ledger", async () => {
-  const r = await fetch(`${base}/api/loops/l-2/items`, { headers: headersFor("mallory") });
+  const r = await fetch(`${base}/api/crons/l-2/items`, { headers: headersFor("mallory") });
   assert.equal(r.status, 403);
 });
 
@@ -171,10 +169,10 @@ test("inbox routes refuse anonymous callers", async () => {
   assert.equal(r.status, 401);
 });
 
-test("feature flag denial blocks Inbox and Loop API access despite the environment allowlist", async () => {
+test("feature flag denial blocks Inbox and inbox item API access despite the environment allowlist", async () => {
   previewEnabled = false;
   try {
-    for (const path of ["/api/inbox", "/api/inbox/selection", "/api/loops/loop-1/ingestion"]) {
+    for (const path of ["/api/inbox", "/api/inbox/selection", "/api/crons/cron-1/items"]) {
       const response = await fetch(`${base}${path}`, {
         headers,
         ...(path.endsWith("selection") ? { method: "POST", body: "{}" } : {}),

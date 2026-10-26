@@ -4,7 +4,7 @@ import { verifyOrReject } from "../http.ts";
 
 const HEARTBEAT_MS = 25_000;
 
-async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
+async function streamInboxItemEvents(ctx: BaseCtx): Promise<void> {
   const { req, res, app, secret, auth, url, pathname, method } = ctx;
   if (
     !(await verifyOrReject(
@@ -29,9 +29,9 @@ async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
   res.write(": open\n\n");
   const unsubscribe = app.subscribeLedgerEvents(
     (event) => {
-      res.write(`event: loop_item\ndata: ${JSON.stringify(event)}\n\n`);
+      res.write(`event: inbox_item\ndata: ${JSON.stringify(event)}\n\n`);
     },
-    { onResync: () => res.write("event: loop_item_resync\ndata: {}\n\n") },
+    { onResync: () => res.write("event: inbox_item_resync\ndata: {}\n\n") },
   );
   const beat = setInterval(() => res.write(": ping\n\n"), HEARTBEAT_MS);
   beat.unref?.();
@@ -41,6 +41,6 @@ async function streamLoopItemEvents(ctx: BaseCtx): Promise<void> {
   });
 }
 
-export const loopItemEventsRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
-  { method: "GET", path: "/v1/loop-items/events", auth: "source", handle: streamLoopItemEvents },
+export const cronItemEventsRawRoutes: ReadonlyArray<Route<BaseCtx>> = [
+  { method: "GET", path: "/v1/cron-items/events", auth: "source", handle: streamInboxItemEvents },
 ];

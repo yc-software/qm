@@ -60,7 +60,7 @@ test("inbox filters persist, preserve Sent, and keep refreshes consistent", asyn
     { id: "resolved", state: "held", sourcePayload: { title: "Thanks, all set", probablyResolved: true } },
     { id: "automated", state: "pending", sourcePayload: { title: "Your receipt", automated: true } },
     { id: "pending", state: "pending", sourcePayload: { title: "Quick question" } },
-  ].map((item) => ({ loopId: "email", source: "gmail", thread: [], ...item }));
+  ].map((item) => ({ cronId: "email", source: "gmail", thread: [], ...item }));
   globalThis.fetch = async (input, options) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname.endsWith("/api/ui-state")) {
@@ -255,20 +255,20 @@ test("email filters appear only on email views and leave other sources unchanged
     { id: "mixed", name: "Mixed", sources: ["gmail", "slack"], count: 0 },
   ];
   inboxState.items = [
-    { id: "email-ready", loopId: "email", source: "gmail", state: "held", sourcePayload: {} },
+    { id: "email-ready", cronId: "email", source: "gmail", state: "held", sourcePayload: {} },
     {
       id: "email-resolved",
-      loopId: "email",
+      cronId: "email",
       source: "gmail",
       state: "held",
       sourcePayload: { probablyResolved: true },
     },
-    { id: "email-automated", loopId: "email", source: "gmail", state: "pending", sourcePayload: { automated: true } },
-    { id: "slack-ready", loopId: "chat", source: "slack", state: "held", sourcePayload: {} },
-    { id: "slack-bot", loopId: "chat", source: "slack", state: "held", sourcePayload: { automated: true } },
-    { id: "slack-resolved", loopId: "chat", source: "slack", state: "held", sourcePayload: { probablyResolved: true } },
-    { id: "slack-pending", loopId: "chat", source: "slack", state: "pending", sourcePayload: {} },
-    { id: "generic-pending", loopId: "custom", source: "generic", state: "pending", sourcePayload: {} },
+    { id: "email-automated", cronId: "email", source: "gmail", state: "pending", sourcePayload: { automated: true } },
+    { id: "slack-ready", cronId: "chat", source: "slack", state: "held", sourcePayload: {} },
+    { id: "slack-bot", cronId: "chat", source: "slack", state: "held", sourcePayload: { automated: true } },
+    { id: "slack-resolved", cronId: "chat", source: "slack", state: "held", sourcePayload: { probablyResolved: true } },
+    { id: "slack-pending", cronId: "chat", source: "slack", state: "pending", sourcePayload: {} },
+    { id: "generic-pending", cronId: "custom", source: "generic", state: "pending", sourcePayload: {} },
   ].map(toInboxItem);
   const ids = (view: string) => itemsFor(view, "open").map((item: { id: string }) => item.id);
   for (const [filter, emails] of [
@@ -312,7 +312,7 @@ test("email filters default to Light filtering when the feed omits a preference"
     { id: "pending", state: "pending", sourcePayload: { title: "Quick question" } },
     { id: "resolved", state: "held", sourcePayload: { title: "Thanks, all set", probablyResolved: true } },
     { id: "automated", state: "pending", sourcePayload: { title: "Your receipt", automated: true } },
-  ].map((item) => ({ loopId: "email", source: "gmail", thread: [], ...item }));
+  ].map((item) => ({ cronId: "email", source: "gmail", thread: [], ...item }));
   globalThis.fetch = async (input) => {
     const url = new URL(String(input), "http://localhost");
     if (!url.pathname.endsWith("/api/inbox")) return Response.json({});

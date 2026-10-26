@@ -19,11 +19,11 @@ export function isCronRuntime(value: unknown): value is RuntimeChoice | null | u
   );
 }
 
-export function assertCronRuntime(cron: Pick<Cron, "runtime" | "loopId" | "action" | "message">): void {
+export function assertCronRuntime(cron: Pick<Cron, "runtime" | "action" | "message">): void {
   if (!isCronRuntime(cron.runtime))
     throw new Error(
       "runtime requires harnessId, modelId and optional explicit effortLevel/fastMode; null inherits defaults",
     );
-  if (cron.runtime && (cron.loopId || !cron.action?.trim() || cron.message !== undefined))
-    throw new Error("runtime overrides require an agent cron task, not a loop or exact-message cron");
+  if (cron.runtime && (!cron.action?.trim() || cron.message !== undefined))
+    throw new Error("runtime overrides require an agent cron task, not an exact-message cron");
 }

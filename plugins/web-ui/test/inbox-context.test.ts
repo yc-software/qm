@@ -36,7 +36,7 @@ test("conversation details include the waiting message after prior context with 
       ]) {
         const item = toInboxItem({
           id: "item-1",
-          loopId: "loop-1",
+          cronId: "cron-1",
           dedupeKey: "conversation-1",
           state: "held",
           source,
@@ -64,19 +64,19 @@ test("conversation details include the waiting message after prior context with 
         assert.ok(latest.querySelector(".inbox-context-at"));
         assert.equal(
           latest.querySelector("img")?.getAttribute("src"),
-          "/api/loops/loop-1/items/item-1/image?ctx=-1&i=0",
+          "/api/crons/cron-1/items/item-1/image?ctx=-1&i=0",
         );
         if (context?.length)
           assert.equal(
             messages[0]!.querySelector("img")?.getAttribute("src"),
-            "/api/loops/loop-1/items/item-1/image?ctx=0&i=0",
+            "/api/crons/cron-1/items/item-1/image?ctx=0&i=0",
           );
         assert.equal(item.context, context);
       }
     }
     const slack = toInboxItem({
       id: "thread-item",
-      loopId: "loop-1",
+      cronId: "cron-1",
       dedupeKey: "GPRIVATE:1.0",
       state: "held",
       source: "slack",

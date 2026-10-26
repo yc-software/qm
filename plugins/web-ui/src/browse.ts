@@ -1,5 +1,5 @@
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Box, Brain, Clock, Files, Folder, KeyRound, Repeat, Rocket, ShieldUser, Webhook, type IconNode } from "lucide";
+import { Box, Brain, Clock, Files, Folder, KeyRound, Rocket, ShieldUser, Webhook, type IconNode } from "lucide";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
 import { nextGridIndex } from "./grid-nav";
 import { setScopedSession } from "./session-scope";
@@ -39,7 +39,6 @@ export function destinations(): Destination[] {
     to("memory", Brain, "Memory", "What QM remembers about your work"),
     to("skills", Box, "Skills", "Reusable procedures QM can follow"),
   ];
-  if (can("loops")) list.push(to("loops", Repeat, "Loops", "Standing work QM keeps pushing forward"));
   if (can("admin")) {
     list.push({
       view: null,

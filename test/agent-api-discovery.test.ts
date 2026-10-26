@@ -83,10 +83,6 @@ test("discovery for a regular user: base surface + whoami, no admin rows, no mem
       body.endpoints.find((endpoint: any) => endpoint.path === "/v1/connectors/oauth/consent/mint")?.summary ?? "",
       /stays private.*explicit credential grant/i,
     );
-    assert.match(
-      body.endpoints.find((endpoint: any) => endpoint.path === "/v1/loops")?.summary ?? "",
-      /governor.*staleFireMs/,
-    );
   } finally {
     await s.close();
   }

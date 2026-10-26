@@ -31,7 +31,7 @@ test("a submission freezes the edited draft before upload and never retries a co
       inbox.resetInboxState();
       const ledger = {
         id: `upload-${conflict}`,
-        loopId: "loop",
+        cronId: "cron",
         state: "held",
         source: "gmail",
         sourcePayload: {},

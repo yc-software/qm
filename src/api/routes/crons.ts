@@ -49,6 +49,7 @@ type CapabilityCronBody = {
   unfurlLinks?: unknown;
   unattendedGrants?: unknown;
   session?: unknown;
+  inbox?: unknown;
 };
 
 function taskText(b: CapabilityCronBody): string | undefined {
@@ -209,6 +210,7 @@ async function createCron(ctx: ApiCtx): Promise<void> {
         ...(typeof b.unfurlLinks === "boolean" ? { unfurlLinks: b.unfurlLinks } : {}),
         ...(Array.isArray(b.unattendedGrants) ? { unattendedGrants: b.unattendedGrants } : {}),
         ...(typeof b.session === "boolean" ? { session: b.session } : {}),
+        ...(b.inbox === true ? { inbox: true } : {}),
       },
       capability,
     );

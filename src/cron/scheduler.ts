@@ -85,11 +85,6 @@ export interface SchedulerDeps {
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
   deleteCron?: (id: string) => Promise<void>;
-  fireLoop?: (
-    loopId: string,
-    fireKey: string,
-    cronId: string,
-  ) => Promise<{ status?: TurnResult["status"]; note?: string }>;
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -113,9 +108,9 @@ function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
   return schedule.everyMs == null && schedule.cron == null;
 }
 
-export function cronFireReadsNotes(cron: Pick<Cron, "schedule" | "action" | "loopId">): boolean {
+export function cronFireReadsNotes(cron: Pick<Cron, "schedule" | "action">): boolean {
   const task = cron.action ?? "";
-  if (cron.loopId || !task.trim() || /^!(run|scratch)\s/.test(task.trimStart())) return false;
+  if (!task.trim() || /^!(run|scratch)\s/.test(task.trimStart())) return false;
   return !isOneShotSchedule(cron.schedule);
 }
 
@@ -165,6 +160,11 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
     "- The stored task below: the standing instructions every fire receives. Edit it (via the cron tool) only to change what future fires are told to do.",
     "Use a cron-specific filename. Never put credentials in published state. If publication is unavailable, report that limitation and retain needed workspace state on a scoped computer. Do not move tasks that require existing workspace files to scratch without migrating and verifying their state.",
     `The retained fire log (cron tool, action="runs", id="${cron.id}") shows how prior fires went — useful when this run hits errors or surprising state.`,
+    ...(cron.inbox
+      ? [
+          `This cron keeps an inbox of work items. GET $AGENT_API_URL/v1/crons/${cron.id}/items lists them. POST it with {"items":[{"dedupeKey","summary","sourcePayload":{...},"proposal":{...}}]} to add or refresh items; a repeated dedupeKey updates the same item. Close one with POST $AGENT_API_URL/v1/crons/${cron.id}/items/<item id>/action and {"kind":"done"|"fail"|"dismiss","args":{"reason":"<one line>"}}. Work every pending item before finishing.`,
+        ]
+      : []),
     ...(readsNotes ? fireNoteLine(cron.lastFireNote) : []),
     ...(readsNotes
       ? [
@@ -240,29 +240,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       ...(scheduledAt !== undefined ? { scheduledAt } : {}),
       status: "running",
     };
-    if (cron.loopId) {
-      await deps.crons.beginFire(cron.id, runningEntry);
-      let result: { status?: TurnResult["status"]; note?: string };
-      if (!deps.fireLoop) {
-        result = { status: "failed", note: "loop service unavailable" };
-      } else
-        try {
-          result = await deps.fireLoop(cron.loopId, fireKey, cron.id);
-        } catch (e) {
-          result = { status: "failed", note: errMessage(e) };
-        }
-      await deps.crons.recordFire(cron.id, {
-        fireKey,
-        threadRef,
-        firedAt: t,
-        endedAt: now(),
-        ...(scheduledAt !== undefined ? { scheduledAt } : {}),
-        status: result.status ?? "ok",
-        ...(result.note ? { note: truncate(result.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
-      });
-      if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
-      return { authzFailed: false };
-    }
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(

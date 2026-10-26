@@ -17,7 +17,7 @@ export function turnRuntimePurpose(
   subagent = false,
 ): RuntimePurpose | undefined {
   if (subagent) return "subagent";
-  if (input.triggered && (input.surface === "cron" || input.surface === "loop")) return "cron";
+  if (input.triggered && input.surface === "cron") return "cron";
   return undefined;
 }
 
@@ -39,7 +39,7 @@ export function turnModelOptions(input: {
   thinkingLevel?: string;
   fastMode?: boolean;
 } {
-  const legacyDefaults = input.triggered && input.surface !== "cron" && input.surface !== "loop";
+  const legacyDefaults = input.triggered && input.surface !== "cron";
   let thinkingLevel = input.thinkingLevel;
   if (!thinkingLevel && legacyDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;

@@ -33,7 +33,7 @@ const core = createServer((req: IncomingMessage, res) => {
           items: [
             {
               id: `item-${page}`,
-              loopId: "loop-1",
+              cronId: "cron-1",
               state: "held",
               sourcePayload: {
                 from: "Taylor",

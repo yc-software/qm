@@ -65,7 +65,7 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     };
     const ledger: LedgerItem = {
       id: "sent-ledger",
-      loopId: "loop-1",
+      cronId: "cron-1",
       dedupeKey: "sent-chat:thread-1",
       state: "held",
       source: "gmail",
@@ -93,8 +93,8 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
         ledger.state = "actioned";
         return Response.json({ item: ledger });
       }
-      if (url === "/api/inbox") return Response.json({ loop: { id: "loop-1" }, syncCron: null });
-      if (url === "/api/loops/loop-1/items") return Response.json({ items: [] });
+      if (url === "/api/inbox") return Response.json({ syncCron: null });
+      if (url === "/api/crons/cron-1/items") return Response.json({ items: [] });
       if (url.startsWith("/api/inbox/sent?"))
         return Response.json({ messages: [message], accountType: "default", accountEmail: "sam@example.com" });
       if (url.startsWith("/api/inbox/sent/"))
@@ -125,7 +125,6 @@ test("Sent opens from a split pane and retains drafts and queued sends after nav
     appState.currentView = "chats";
     splitState.active = true;
     inbox.inboxState.loaded = true;
-    inbox.inboxState.loopId = "loop-1";
     inbox.inboxState.fetchedAt = Date.now();
     const pane = document.getElementById("split")!;
     const mounted = inbox.mountInboxPane({ host: pane, viewId: "all", density: () => "full", onDensityChange() {} });

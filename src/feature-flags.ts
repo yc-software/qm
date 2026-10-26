@@ -14,13 +14,12 @@ export const FEATURES = {
     hint: "Persistent subagents are available for personal scopes only.",
   },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
-  inbox_loops: { label: "Inbox Loops" },
+  inbox_loops: { label: "Inbox" },
   slack_loading_indicator: {
     label: "Slack loading indicator (experimental)",
     hint: "Shows an activity card in Slack threads, including background work and monitors. After five minutes, the card links to the web conversation. Everyone in a shared thread can see it. Top-level DMs stay unchanged. Turning this off leaves existing cards.",
   },
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
-  loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   swarms: { label: "Swarms", personalOnly: true },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {

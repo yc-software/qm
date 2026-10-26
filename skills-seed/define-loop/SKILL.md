@@ -1,104 +1,71 @@
 ---
 name: define-loop
-description: Define a Loop — a durable scaffold that works a queue of recurring tasks autonomously (Sentry issues, Front tickets, small perf PRs) with its outputs held for human review. Use when someone wants an agent to keep doing a kind of work on a schedule, rather than one-off. Walks the interview, runs one real item live before arming anything, then writes the playbook and creates the loop.
+description: Set up standing work over a queue of items (Sentry issues, Front tickets, small perf PRs) as a cron with an inbox, with each item's result held for human review. Use when someone wants an agent to keep doing a kind of work on a schedule, rather than one-off. Walks the interview, works one real item live before arming anything, then writes the task and creates the cron.
 ---
 
-# define-loop — author a Loop
+# define-loop — standing work as a cron with an inbox
 
-A Loop is a cron with a memory and a gate: a trigger, a playbook, a ledger of work items
-that survives across fires, ship-ready outputs held for a person, and a governor watching
-its health. Reach for one when the ask is "keep doing this kind of work", not "do this".
+A cron with an inbox is a schedule, a task, and a durable queue of work items that
+survives across fires. Each fire reads the inbox, adds new items, works the pending
+ones, and closes what is finished. Reach for one when the ask is "keep doing this kind
+of work", not "do this".
 
-Intake, work, and judge turns use the loop's existing owner/scope authorization,
-credentials, command policy, and security posture. They run without surface tools or
-addressed delivery. Intake reads candidates; work prepares outputs; the judge inspects
-the work and executes the declared checks. Final external actions belong in the
-approved ship stage. The review gate controls loop output shipping; it is not a
-read-only sandbox for arbitrary shell commands or API calls in earlier stages.
+A plain cron is enough when each fire is independent and nothing needs tracking. Add the
+inbox only when work items persist, must not be worked twice, or produce results someone
+should see before they go out.
 
-A cron is enough when each fire is independent and nothing needs reviewing. Prefer the
-cron; a loop earns its complexity only when work items persist, must not be worked twice,
-and produce artifacts someone should see before they go out.
-
-**The one rule: never arm a loop you have not watched work.** Stage 2 is not optional.
+**The one rule: never arm a cron you have not watched work.** Stage 2 is not optional.
 
 ## Stage 1 — Interview
 
 Get these, in the user's own words. Ask about them one or two at a time, not as a form.
 
-| What                  | Why it matters                                                                                                                                                        |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Source of work**    | How to enumerate candidates each fire, and the stable id per item (Sentry issue id, Front conversation id). That id is the dedupe key — get it right or work repeats. |
-| **Trigger**           | A cadence (calendar cron in their timezone) or an event. Ask when output is actually useful, not just how often.                                                      |
-| **Success condition** | What "done" means for ONE item.                                                                                                                                       |
-| **Ship actions**      | Which externally-visible actions the loop may take (`open_pr`, `send_email`, `front_reply`). Anything not declared is a quarantine when it happens.                   |
-| **Caps**              | Optional. Propose defaults; record a decline without argument.                                                                                                        |
-| **Escalation**        | Who the governor pings, and where.                                                                                                                                    |
-
-### Writing the success condition
-
-Free text, and it's the most load-bearing sentence in the loop. A good one has:
-
-- **one measurable end state** — a test result, a linked PR, an empty queue
-- **a stated check** — how the agent proves it ("`npm test` exits 0", "the PR shows CI green")
-- **the constraints that matter** — what must not change on the way ("touches only the implicated module")
-- **a bound** — "or park with a diagnosis after 5 turns", so a hopeless item stops burning money
-
-> The Sentry issue has a linked PR whose tests pass and CI is green, the fix touches only
-> the implicated module, or park with a diagnosis after 5 turns.
-
-Add `successChecks` for anything a command can settle (`npm test`, `npm run lint`). The
-judge runs each check and reports its command and result. A missing or failed reported
-check prevents completion even when the judge claims success. Check results are
-model-reported, not an independent deterministic execution attestation.
+| What               | Why it matters                                                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Source of work** | How to enumerate candidates each fire, and the stable id per item (Sentry issue id, Front conversation id). That id is the dedupe key — get it right or work repeats. |
+| **Schedule**       | A calendar cron in their timezone. Ask when results are actually useful, not just how often.                                                                          |
+| **Done**           | What "done" means for ONE item: one measurable end state, how the agent proves it, and a bound ("or fail it with a diagnosis after 5 attempts").                      |
+| **Review**         | Which externally-visible actions need a person first (opening a PR, sending a reply). The task holds those as proposals on the item; a person approves in item chat.  |
 
 ## Stage 2 — Shadow run (never skip)
 
-Work **one real item end to end, in this conversation, with the user watching.** No loop
-record exists yet.
+Work **one real item end to end, in this conversation, with the user watching.** No cron
+exists yet.
 
 1. Pull one real candidate from the source.
-2. Do the whole job to the ship line — write the actual PR or the actual reply — and stop.
-3. Show the user the finished artifact. Ask directly: would you have sent this?
+2. Do the whole job up to the review line — write the actual PR or the actual reply — and stop.
+3. Show the user the finished result. Ask directly: would you have sent this?
 4. Fix what they flag. Repeat on a second item if the first needed real correction.
 
-Then write the playbook **from what you just did** — the steps that actually worked, the
-dead ends worth skipping, the exact success condition you'd have wanted. A playbook
-written before the shadow run is a guess; one written after is a procedure.
+Then write the task **from what you just did** — the steps that actually worked, the
+dead ends worth skipping, the exact definition of done. A task written before the shadow
+run is a guess; one written after is a procedure.
 
 ## Stage 3 — Emit
 
-Create the loop with the `loop` tool: name, purpose, playbook, success condition, checks,
-ship actions, caps, trigger. Every ship action starts at `hold` no matter what was asked
-for — `auto` is earned in stage 4, never granted at creation.
+Create it with the `cron` tool: `action: "create"`, `inbox: true`, the schedule, a title,
+and the task. Every fire is told how to use its inbox (`$AGENT_API_URL/v1/crons/<id>/items`):
+add items by dedupe key, put anything that needs review on the item as a proposal, close
+finished items as `done`, park hopeless ones with `fail` and a reason.
 
 State back to the user, in one message: what it will do, when it fires, what it will
-produce, what it will hold for them, and how to pause it.
+hold for them, and how to pause it.
 
 ## Stage 4 — Supervised fires
 
-Watch the first few fires with the user.
+Watch the first few fires with the user. Read the fire log and the inbox together. If
+proposals keep getting rejected, the task is wrong, not the reviewer: fix the task.
 
-- Review the held outputs together the first time.
-- When a slice of work has been shipped unchanged several times running, offer graduation:
-  "always ship `open_pr` labelled `lint-fix` from this loop". That writes a standing grant
-  and flips only that slice to `auto`. If the org disables always-grants, graduation is
-  unavailable — say so plainly instead of half-doing it.
-- If outputs keep coming back returned, the playbook is wrong, not the reviewer. Fix the
-  playbook; a high return rate is the loudest signal a loop isn't working.
+## Editing a live cron
 
-## Editing a live loop
-
-Playbook edits are versioned with provenance, from chat or the UI — same path, one
-history. "Skip payments-service tickets from now on" is a playbook edit, so make it one:
-propose the diff, get agreement, write it. Never let a loop carry behavior that isn't
-readable in its playbook.
+"Skip payments-service tickets from now on" is a task edit, so make it one: propose the
+change, get agreement, then patch the cron's task. Never let a cron carry behavior that
+isn't readable in its task.
 
 ## Refuse to arm
 
 Say no, and say why, when:
 
 - the user can't state a stable per-item id (work will repeat)
-- the success condition has no measurable end state (nothing can judge it)
-- `auto` is requested at creation on an externally-visible action (that's stage 4's job)
-- the shadow run never produced an artifact the user would actually send
+- "done" has no measurable end state
+- the shadow run never produced a result the user would actually send

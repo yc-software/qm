@@ -162,7 +162,7 @@ export async function destinationVisible(
   );
 }
 
-const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);
+const SCHEDULED_SURFACES = new Set(["cron", "keychain-ask"]);
 
 function homeRoster(
   kind: string | null,

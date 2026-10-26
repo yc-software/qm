@@ -17,7 +17,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         resetInboxState();
         const ledger = {
           id: `item-${source}-${instruction.length}`,
-          loopId: "loop-1",
+          cronId: "cron-1",
           state: "held",
           source,
           sourcePayload: { title: "Re: Update", from: "Sam", snippet: "Any news?" },
@@ -77,7 +77,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
         await requested;
         assert.deepEqual(
           calls.map((call) => call.path),
-          [`/api/loops/loop-1/items/${item.id}/action`, `/api/loops/loop-1/items/${item.id}/followup`],
+          [`/api/crons/cron-1/items/${item.id}/action`, `/api/crons/cron-1/items/${item.id}/followup`],
         );
         assert.equal((calls[0]!.body.args as { proposal: { body: string } }).proposal.body, "Edited draft");
         assert.deepEqual(calls[1]!.body, {
@@ -107,7 +107,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
     resetInboxState();
     const staleLedger = {
       id: "stale-save",
-      loopId: "loop-1",
+      cronId: "cron-1",
       state: "held",
       source: "gmail",
       sourcePayload: {},
@@ -242,7 +242,7 @@ test("draft stays outside AI chat and Send it submits the combined instruction",
       resetInboxState();
       const ledger = {
         id: `failure-${failure}`,
-        loopId: "loop-1",
+        cronId: "cron-1",
         state: "held",
         source: "gmail",
         sourcePayload: { title: "Update", from: "Sam", snippet: "Any news?" },

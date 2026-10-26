@@ -19,7 +19,7 @@ test("a failed inbox followup preserves edits made while the request was pending
     for (const edited of [undefined, "New instruction", ""]) {
       const item = toInboxItem({
         id: `item-${String(edited)}`,
-        loopId: "loop-1",
+        cronId: "cron-1",
         state: "held",
         source: "slack",
         sourcePayload: { title: "Conversation", from: "Sam", snippet: "Please send the update" },

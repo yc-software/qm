@@ -902,10 +902,6 @@ test("cron runtime rejects malformed settings and tasks that would ignore them",
     );
   }
   await assert.rejects(
-    store.create({ ...base, schedule: { everyMs: 60_000 }, loopId: "loop", runtime }),
-    /runtime overrides require/,
-  );
-  await assert.rejects(
     store.create({ ...base, schedule: { everyMs: 60_000 }, message: "hello", runtime }),
     /runtime overrides require/,
   );

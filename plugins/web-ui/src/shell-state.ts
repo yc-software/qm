@@ -27,7 +27,6 @@ const VIEWS = [
   "contexts",
   "webhooks",
   "crons",
-  "loops",
   "files",
   "keychain",
   "deploys",
@@ -55,7 +54,6 @@ export function can(key: string): boolean {
 }
 
 export function canView(view: View): boolean {
-  if (view === "loops") return can("loops");
   if (view === "inbox" || view === "calendar") return can("inbox");
   return true;
 }

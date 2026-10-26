@@ -64,16 +64,6 @@ export function isInboxUser(principalId: string, configuredUsers = process.env.I
   return principalInAllowlist(principalId, configuredUsers);
 }
 
-export function isLoopsUser(principalId: string, configuredUsers = process.env.LOOPS_USERS): boolean {
-  const normalizedPrincipalId = principalId.trim().toLowerCase();
-  if (!normalizedPrincipalId) return false;
-  return (configuredUsers ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean)
-    .includes(normalizedPrincipalId);
-}
-
 async function hasInboxLoopPreview(user: string): Promise<boolean> {
   try {
     const response = await coreFetch("GET", `/v1/inbox/access?principalId=${encodeURIComponent(user)}`, "", 2_000);
@@ -378,7 +368,7 @@ async function webTurnBase(
   if (threadRef === `web:${user}:inbox`) {
     type InboxPreview = {
       id: string;
-      loopId: string;
+      cronId: string;
       state: string;
       summary?: string;
       source?: string;
@@ -412,7 +402,7 @@ async function webTurnBase(
         hasMore: Boolean(cursor),
         items: items.map((item) => ({
           id: item.id,
-          loopId: item.loopId,
+          cronId: item.cronId,
           state: item.state,
           source: item.source,
           createdAt: item.createdAt,
@@ -660,9 +650,9 @@ function runStateFeed(): Promise<void> {
 
 function runInboxFeed(): Promise<void> {
   return consumeCoreFeed(
-    "/v1/loop-items/events",
-    "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
+    "/v1/cron-items/events",
+    "inbox_item",
+    (data) => void forwardInboxItem(data as { cronId?: string; itemId?: string; op?: string }),
     resyncInbox,
   );
 }
@@ -671,12 +661,12 @@ function resyncInbox(): void {
   for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
 }
 
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
+async function forwardInboxItem(ev: { cronId?: string; itemId?: string; op?: string }): Promise<void> {
+  if (!ev.cronId || !ev.itemId || !deliveryClients.size) return;
   const r = await coreFetch(
     "POST",
     "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
+    JSON.stringify({ cronId: ev.cronId, candidates: [...deliveryClients.keys()] }),
   ).catch(() => null);
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
@@ -686,7 +676,7 @@ async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: str
     viewers = undefined;
   }
   if (!viewers) return resyncInbox();
-  const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
+  const frame = { cronId: ev.cronId, itemId: ev.itemId, op: ev.op ?? "" };
   for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
 }
 
@@ -1134,7 +1124,7 @@ async function serveInboxItemImage(c: WebCtx): Promise<unknown> {
   if (ctxParam) qs.set("ctx", ctxParam);
   if (iParam) qs.set("i", iParam);
   const corePath = withSourceAuthNonce(
-    `/v1/loops/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
+    `/v1/crons/${encodeURIComponent(c.params.id!)}/items/${encodeURIComponent(c.params.itemId!)}/image?${qs.toString()}`,
     CORE_SIGNING_SECRET,
   );
   const portalTok = portalTokenStore.getStore();
@@ -1453,11 +1443,8 @@ const apiRoutes: readonly WebRoute[] = [
         account?: string;
         connections?: { provider: string }[];
       };
-      const permissions = allPermissions.filter((permission) => permission !== "loops" && permission !== "inbox");
-      if (await hasInboxLoopPreview(user)) {
-        if (isLoopsUser(user)) permissions.push("loops");
-        if (isInboxUser(user)) permissions.push("inbox");
-      }
+      const permissions = allPermissions.filter((permission) => permission !== "inbox");
+      if (isInboxUser(user) && (await hasInboxLoopPreview(user))) permissions.push("inbox");
       return json(res, 200, {
         user,
         org: ORG,
@@ -1797,7 +1784,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async (c) => {
       const { res, user } = c;
       const qs = new URLSearchParams({ principalId: user });
-      for (const key of ["cursor", "loopId", "view", "itemId", "filter"]) {
+      for (const key of ["cursor", "cronId", "view", "itemId", "filter"]) {
         const value = c.url.searchParams.get(key);
         if (value) qs.set(key, value);
       }
@@ -1810,7 +1797,7 @@ const apiRoutes: readonly WebRoute[] = [
     handle: async ({ req, res, user }) => {
       if (!isInboxUser(user)) return json(res, 403, { error: "forbidden" });
       res.setHeader("Cache-Control", "no-store");
-      return relayCore(res, "POST", "/v1/loops/inbox/sent-chat", await readBody(req));
+      return relayCore(res, "POST", "/v1/inbox/sent-chat", await readBody(req));
     },
   },
   {
@@ -1824,28 +1811,23 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/inbox/sync-cron",
     handle: async (c) => {
       const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/inbox/sync-cron?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
+      return relayCore(res, "POST", `/v1/inbox/sync-cron?principalId=${encodeURIComponent(user)}`, await readBody(req));
     },
   },
   {
     method: "GET",
-    path: "/api/loops/:id/items",
+    path: "/api/crons/:id/items",
     handle: async (c) => {
       const { res, user, url } = c;
       const qs = new URLSearchParams({ principalId: user });
       const state = url.searchParams.get("state");
       if (state) qs.set("state", state);
-      return relayCore(res, "GET", `/v1/loops/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
+      return relayCore(res, "GET", `/v1/crons/${encodeURIComponent(c.params.id!)}/items?${qs.toString()}`);
     },
   },
   {
     method: "GET",
-    path: "/api/loops/:id/items/:itemId",
+    path: "/api/crons/:id/items/:itemId",
     handle: async (c) => {
       const { res, user, params, url } = c;
       const qs = new URLSearchParams({ principalId: user });
@@ -1853,24 +1835,24 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
+        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}?${qs.toString()}`,
       );
     },
   },
   {
     method: "GET",
-    path: "/api/loops/:id/items/:itemId/image",
+    path: "/api/crons/:id/items/:itemId/image",
     handle: serveInboxItemImage,
   },
   ...(["action", "followup"] as const).map((leaf): WebRoute => ({
     method: "POST",
-    path: `/api/loops/:id/items/:itemId/${leaf}`,
+    path: `/api/crons/:id/items/:itemId/${leaf}`,
     handle: async (c) => {
       const { req, res, user, params } = c;
       return relayCore(
         res,
         "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
+        `/v1/crons/${encodeURIComponent(params.id!)}/items/${encodeURIComponent(params.itemId!)}/${leaf}?principalId=${encodeURIComponent(user)}`,
         await readBody(req),
       );
     },
@@ -2931,14 +2913,6 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/loops",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(res, "GET", `/v1/loops?principalId=${encodeURIComponent(user)}`);
-    },
-  },
-  {
-    method: "GET",
     path: "/api/webhooks",
     handle: async (c) => {
       const { res, user } = c;
@@ -2956,145 +2930,6 @@ const apiRoutes: readonly WebRoute[] = [
           `/v1/webhooks/${encodeURIComponent(params.id!)}/events?viewer=${encodeURIComponent(user)}`,
         ),
       ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(res, "POST", `/v1/loops?principalId=${encodeURIComponent(user)}`, await readBody(req));
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "GET",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "PATCH",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "PATCH",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "DELETE",
-    path: "/api/loops/:id",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "DELETE",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "GET",
-    path: "/api/loops/:id/ingestion",
-    handle: async ({ res, user, params }) =>
-      relayCore(
-        res,
-        "GET",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/ingestion",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "PATCH",
-    path: "/api/loops/:id/ingestion/:sourceId",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "PATCH",
-        `/v1/loops/${encodeURIComponent(params.id!)}/ingestion/${encodeURIComponent(params.sourceId!)}?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/fire",
-    handle: async (c) => {
-      const { res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/fire?principalId=${encodeURIComponent(user)}`,
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/triage/preview",
-    handle: async ({ req, res, user, params }) =>
-      relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(params.id!)}/triage/preview?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      ),
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/outputs/:outputId/decide",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/outputs/${encodeURIComponent(c.params.outputId!)}/decide?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/grants",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/grants?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
-  },
-  {
-    method: "POST",
-    path: "/api/loops/:id/autopilot",
-    handle: async (c) => {
-      const { req, res, user } = c;
-      return relayCore(
-        res,
-        "POST",
-        `/v1/loops/${encodeURIComponent(c.params.id!)}/autopilot?principalId=${encodeURIComponent(user)}`,
-        await readBody(req),
-      );
-    },
   },
   {
     method: "POST",
@@ -3460,15 +3295,10 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     }
 
     const inboxPath = path === "/api/inbox" || path.startsWith("/api/inbox/");
-    const loopsPath = path === "/api/loops" || path.startsWith("/api/loops/");
-    if ((inboxPath || loopsPath) && !(await hasInboxLoopPreview(user)))
+    const itemsPath = /^\/api\/crons\/[^/]+\/items(\/|$)/.test(path);
+    if ((inboxPath || itemsPath) && !(await hasInboxLoopPreview(user)))
       return json(res, 403, { error: "feature_disabled" });
-    if (inboxPath && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
-    const ledgerPath =
-      /^\/api\/loops\/[^/]+\/items(\/|$)/.test(path) || /^\/api\/loops\/[^/]+\/outputs\/[^/]+\/decide$/.test(path);
-    if (loopsPath && !isLoopsUser(user) && !(ledgerPath && isInboxUser(user))) {
-      return json(res, 403, { error: "forbidden" });
-    }
+    if ((inboxPath || itemsPath) && !isInboxUser(user)) return json(res, 403, { error: "forbidden" });
     const found = findRoute(apiRoutes, method, path);
     if (!found) return json(res, 404, { error: "not found" });
     return found.route.handle({ req, res, url, user, params: found.params });
