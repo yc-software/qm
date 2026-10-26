@@ -13,7 +13,7 @@ import {
   type KeychainGrant,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, pgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -293,12 +293,23 @@ test("pg map: original folded-index migration upgrades without changing its ledg
   const factory = createPostgresMapFactory(URL!);
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
   await unindexed.put("legacy", { owner: "short" });
-  const legacy = definePgMigration("durable-map/map_wide_widgets/select-owner", [
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
+  const legacy = pgMigration({
+    id: "durable-map/map_wide_widgets/select-owner",
+    concurrentIndexes: [
+      {
+        name: "map_wide_widgets_owner_fold",
+        table: "map_wide_widgets",
+        statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
            ON map_wide_widgets (lower(json->>'owner'))`,
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
+      },
+      {
+        name: "map_wide_widgets_owner_unicode",
+        table: "map_wide_widgets",
+        statement: `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
            ON map_wide_widgets (id) WHERE json->>'owner' ~ '[^\\x01-\\x7f]'`,
-  ]);
+      },
+    ],
+  });
   try {
     await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
     await factory.pool.q(
