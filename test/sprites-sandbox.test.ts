@@ -713,6 +713,16 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   assert.equal(typeof make().persistHomeSnapshot, "undefined");
 });
 
+test("destroying a scope without keeping its home leaves nothing in the snapshot store", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const s = make({ snapshots });
+  const h = await s.provision(layers);
+  await s.run(h, 'printf secret > "$HOME/notes.txt"');
+  await s.destroyScope!(scope, { keepHome: false });
+  assert.ok(!fake.names().includes(h.id), "the sprite is gone");
+  assert.equal(await snapshots.open(scope), null);
+});
+
 test("a failed export refuses to destroy the sprite", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
