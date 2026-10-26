@@ -4,17 +4,12 @@ import { createGoalRecord, type GoalRecord } from "../src/harness/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
 
-function goalTurn(
-  sessionId: string,
-  cancel: AbortSignal,
-  entries: Array<{ type: string; payload: unknown }>,
-): HarnessTurnInput {
+function goalTurn(sessionId: string, cancel: AbortSignal, entries: Item[]): HarnessTurnInput {
   let seq = 0;
   const goal = createGoalRecord({ objective: "keep researching until done" });
   return {
@@ -30,9 +25,10 @@ function goalTurn(
     tools: {} as HarnessTurnInput["tools"],
     scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
     orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
-    emit: async (entry: NewEntry) => {
-      entries.push({ type: entry.type, payload: entry.payload });
-      return { ...entry, seq: ++seq, createdAt: Date.now() } as unknown as SessionEntry;
+    emit: async (entry: NewItem) => {
+      const item = storedItem(entry, { sessionId, seq: ++seq, createdAt: Date.now() });
+      entries.push(item);
+      return item;
     },
     recordModelCall: () => {},
   };
@@ -41,7 +37,7 @@ function goalTurn(
 test("an active goal stops continuing once a model round fails at the provider", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const entries: Item[] = [];
   const realFetch = globalThis.fetch;
   let requests = 0;
   globalThis.fetch = (async () => {
@@ -107,7 +103,7 @@ function textStream(text: string, stopReason = "end_turn"): Response {
 test("a refused goal round falls back to another model and the goal keeps going", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const entries: Item[] = [];
   const realFetch = globalThis.fetch;
   const models: string[] = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -132,7 +128,7 @@ test("a refused goal round falls back to another model and the goal keeps going"
 test("a goal never falls back to a model that already refused in the same turn", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const controller = new AbortController();
-  const entries: Array<{ type: string; payload: unknown }> = [];
+  const entries: Item[] = [];
   const realFetch = globalThis.fetch;
   const models: string[] = [];
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {

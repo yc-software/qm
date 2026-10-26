@@ -5,7 +5,7 @@ import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 
 const active: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -90,22 +90,26 @@ test("account preflight failure cannot change a scope default", async () => {
 });
 
 test("runtime recovery uses only durable decisions belonging to the same run and actor", () => {
-  const entry = (runId: string, actorId: string, modelId: string): SessionEntry => ({
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "tool_result",
-    scopeLabel: claims.scopeId,
-    createdAt: 1,
-    payload: { tool: "runtime", runId, actorId, runtimeHandoff: { choice: { ...active, modelId }, lifetime: "task" } },
-  });
+  const run = "00000000-0000-4000-8000-000000000001";
+  const other = "00000000-0000-4000-8000-000000000002";
+  const entry = (turnId: string, actorId: string, modelId: string) =>
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "runtime",
+        callId: "c1",
+        turnId,
+        body: { actorId, runtimeHandoff: { choice: { ...active, modelId }, lifetime: "task" } },
+      },
+      { sessionId: "s", seq: 1, createdAt: 1 },
+    );
   const entries = [
-    entry("run", "alice", "gpt-6-astra"),
-    entry("other", "alice", "claude-sonnet-5"),
-    entry("run", "bob", "claude-opus-5"),
+    entry(run, "alice", "gpt-6-astra"),
+    entry(other, "alice", "claude-sonnet-5"),
+    entry(run, "bob", "claude-opus-5"),
   ];
-  assert.equal(recoveredRuntime(entries, "run", "alice")?.choice.modelId, "gpt-6-astra");
-  assert.equal(recoveredRuntime(entries, "new", "alice"), undefined);
+  assert.equal(recoveredRuntime(entries, run, "alice")?.choice.modelId, "gpt-6-astra");
+  assert.equal(recoveredRuntime(entries, "00000000-0000-4000-8000-000000000003", "alice"), undefined);
 });
 
 test("individual-account availability does not depend on organization provider keys", async () => {

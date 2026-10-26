@@ -73,7 +73,7 @@ export function composeCronEditNotice(args: {
 }
 
 export interface CronEditNoticeSink {
-  enqueueDelivery(input: { destination: Destination; text: string; idempotencyKey: string }): Promise<unknown>;
+  postToSurface(input: { destination: Destination; text: string; idempotencyKey: string }): Promise<unknown>;
   directoryMember(
     principalId: string,
   ): Promise<{ displayName?: string; principalId?: string; slackId?: string } | null>;
@@ -105,7 +105,7 @@ export async function notifyOwnerOfCronEdit(
       kind === "channel" && scopeRef && sink.channelName
         ? await sink.channelName(scopeRef).catch(reportFailureAs("cron edit notice: channel name lookup", undefined))
         : undefined;
-    await sink.enqueueDelivery({
+    await sink.postToSurface({
       destination: principalDestination(cron.owner, args.editorId),
       text: composeCronEditNotice({
         editorName: editor?.displayName ?? args.editorId,

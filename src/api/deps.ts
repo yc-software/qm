@@ -62,7 +62,7 @@ import type {
 import type { SecretDropStore } from "../credentials/secret-drop.ts";
 import type { DropResolution } from "../triggers/keychain-ask.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type { ControlService } from "./control-service.ts";
 import type { LoopServiceDeps } from "./routes/loops.ts";
 import type { CronStore } from "../cron/cron-store.ts";
@@ -204,7 +204,7 @@ export interface ServerDeps {
   principalLinks?: PrincipalLinkService;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
-  deliveries?: DeliveryStore;
+  outbound?: Outbound;
   keychainApprovals?: KeychainApprovals;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   secretDrops?: SecretDropStore;

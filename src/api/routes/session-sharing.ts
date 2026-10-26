@@ -23,25 +23,23 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   if (!deps.sessionShares || !deps.sessionShareBytes) return sendJson(res, 503, { error: "sharing_unavailable" });
   const source = await app.getSessionForViewer(params.id!, viewer);
   if (!source) return sendJson(res, 404, { error: "not_found" });
-  const deliveries =
-    (await deps.deliveries?.listBySourceSession(source.session.id, source.session.threadRef, { limit: 10_000 })) ?? [];
-  if (deliveries.length >= 10_000) return sendJson(res, 413, { error: "share_too_large" });
+  const runs = (await deps.runs?.list({ threadRef: source.session.threadRef, limit: 10_000 })) ?? [];
+  if (runs.length >= 10_000) return sendJson(res, 413, { error: "share_too_large" });
   const deliveredAttachments = new Map<number, string[]>();
-  for (const delivery of deliveries) {
-    const seq = delivery.provenance?.sourceAssistantEntrySeq;
+  for (const run of runs) {
+    const seq = run.result?.sourceAssistantEntrySeq;
     if (
-      delivery.deliveredAt === null ||
-      delivery.shadow ||
-      delivery.destination.type !== "web" ||
-      delivery.destination.target !== source.session.threadRef ||
-      delivery.provenance?.sourceSessionId !== source.session.id ||
+      run.status !== "done" ||
+      run.request.surface !== "web" ||
+      run.request.deliveryTarget !== source.session.threadRef ||
+      run.result?.sessionId !== source.session.id ||
       seq === undefined
     )
       continue;
-    const ids = (delivery.attachments ?? []).flatMap((file) => (file.artifactId ? [file.artifactId] : []));
+    const ids = (run.result?.attachments ?? []).flatMap((file) => (file.artifactId ? [file.artifactId] : []));
     deliveredAttachments.set(seq, [...(deliveredAttachments.get(seq) ?? []), ...ids]);
   }
-  const projected = sharedMessages(source.entries, deliveredAttachments);
+  const projected = sharedMessages(source.items, deliveredAttachments);
   if (!projected.length) return sendJson(res, 400, { error: "empty_conversation" });
   const ids = [...new Set(projected.flatMap((m) => m.attachmentIds ?? []))];
   if (ids.length > 100 || Buffer.byteLength(JSON.stringify(projected)) > 2_000_000)
@@ -88,7 +86,7 @@ async function createShare(ctx: ApiCtx): Promise<void> {
     audience,
     createdBy: viewer,
     createdAt: Date.now(),
-    visibility: source.entries.reduce(
+    visibility: source.items.reduce(
       (bounds, entry) => ({
         minSeq: Math.min(bounds.minSeq, entry.seq),
         maxSeq: Math.max(bounds.maxSeq, entry.seq),

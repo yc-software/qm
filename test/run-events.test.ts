@@ -7,7 +7,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { App } from "../src/api/app.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { emitRunReasoning, emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item } from "../src/sessions/items.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -36,10 +36,10 @@ test("run events push deltas without snapshot polling and recover a separate wor
       syncCalls++;
       if (!holdSync) emitRunText(bus, runId, workerText.slice(offset), offset, 0);
     },
-    async getRunToolEntries() {
+    async getRunToolItems() {
       return [];
     },
-  } as Pick<App, "getRun" | "getRunToolEntries" | "subscribeRun" | "syncRunStream">;
+  } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
     void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });
@@ -111,7 +111,16 @@ test("run events deliver a pending activity snapshot before subsequent text and 
         finishedAt: null,
         result: status === "done" ? { status: "ok", reply: workerText } : null,
         activity:
-          reads >= 3 ? [{ seq: 1, parentSeq: null, type: "text", payload: { text: "working" }, createdAt: 0 }] : [],
+          reads >= 3
+            ? [
+                {
+                  item: storedItem(
+                    { kind: "AgentMessage", variant: "narration", text: "working" },
+                    { sessionId: "session", seq: 1, createdAt: 0 },
+                  ),
+                },
+              ]
+            : [],
       };
     },
     subscribeRun(_runId, listener, onResync) {
@@ -120,10 +129,10 @@ test("run events deliver a pending activity snapshot before subsequent text and 
     syncRunStream(runId, offset) {
       emitRunText(bus, runId, workerText.slice(offset), offset, 0);
     },
-    async getRunToolEntries() {
+    async getRunToolItems() {
       return [];
     },
-  } as Pick<App, "getRun" | "getRunToolEntries" | "subscribeRun" | "syncRunStream">;
+  } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
     void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });
@@ -167,16 +176,24 @@ test("run events deliver a pending activity snapshot before subsequent text and 
   }
 });
 
-function toolEntry(seq: number, type: "tool_call" | "tool_result", payload: Record<string, unknown>): SessionEntry {
-  return {
-    sessionId: "session",
-    seq,
-    parentSeq: null,
-    type,
-    payload,
-    scopeLabel: "dm:U1",
-    createdAt: seq,
-  } as SessionEntry;
+function toolEntry(seq: number, kind: "ToolCall" | "ToolResult", fields: Record<string, unknown>): Item {
+  const { tool, callId, isError, result, ...body } = fields as {
+    tool: string;
+    callId: string;
+    isError?: boolean;
+    result?: string;
+  };
+  return storedItem(
+    {
+      kind,
+      tool,
+      callId,
+      ...(isError === undefined ? {} : { isError }),
+      ...(result === undefined ? {} : { text: result }),
+      body,
+    },
+    { sessionId: "session", seq, createdAt: seq },
+  );
 }
 
 function frames(wire: string): Array<{ id?: string; data: { type: string; name?: string } & Record<string, unknown> }> {
@@ -195,7 +212,7 @@ function toolFrames(wire: string) {
   return frames(wire).filter((frame) => frame.data.type.startsWith("TOOL_CALL_"));
 }
 
-async function streamToolRun(entries: SessionEntry[], state: { status: "running" | "done" }) {
+async function streamToolRun(entries: Item[], state: { status: "running" | "done" }) {
   const bus = createMemoryEventBus<RunStreamEvent>("tool-test");
   const viewers: Array<string | undefined> = [];
   const reads: Array<{ afterSeq: number | undefined; rows: number }> = [];
@@ -213,13 +230,13 @@ async function streamToolRun(entries: SessionEntry[], state: { status: "running"
       return bus.subscribe(listener, { onResync });
     },
     syncRunStream() {},
-    async getRunToolEntries(_runId, viewer, afterSeq) {
+    async getRunToolItems(_runId, viewer, afterSeq) {
       viewers.push(viewer);
       const rows = entries.filter((entry) => afterSeq === undefined || entry.seq > afterSeq);
       reads.push({ afterSeq, rows: rows.length });
       return rows;
     },
-  } as Pick<App, "getRun" | "getRunToolEntries" | "subscribeRun" | "syncRunStream">;
+  } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
     void runEventRoutes[0]!.handle({
       app,
@@ -258,13 +275,13 @@ async function streamToolRun(entries: SessionEntry[], state: { status: "running"
   };
 }
 
-const lookup = toolEntry(1, "tool_call", {
+const lookup = toolEntry(1, "ToolCall", {
   tool: "salesforce_query",
   mcpServer: "salesforce",
   args: { q: "acme" },
   callId: "c1",
 });
-const lookupResult = toolEntry(2, "tool_result", {
+const lookupResult = toolEntry(2, "ToolResult", {
   tool: "salesforce_query",
   mcpServer: "salesforce",
   callId: "c1",
@@ -306,13 +323,13 @@ test("run events forward tool entries recorded after connect on refresh, exactly
       toolFrames(stream.wire()).map((frame) => frame.id),
       ["tool:c1:start"],
     );
-    entries.push(lookupResult, toolEntry(3, "tool_call", { tool: "execute", command: "ls", callId: "c2" }));
+    entries.push(lookupResult, toolEntry(3, "ToolCall", { tool: "execute", command: "ls", callId: "c2" }));
     stream.bus.emit({ runId: "run", kind: "refresh" });
     await sleep(50);
     stream.bus.emit({ runId: "run", kind: "refresh" });
     stream.bus.emit({ runId: "run", kind: "refresh" });
     await sleep(50);
-    entries.push(toolEntry(4, "tool_result", { tool: "execute", callId: "c2", isError: true, result: "denied" }));
+    entries.push(toolEntry(4, "ToolResult", { tool: "execute", callId: "c2", isError: true, result: "denied" }));
     stream.bus.emit({ runId: "run", kind: "refresh" });
     await sleep(50);
     assert.deepEqual(
@@ -352,8 +369,8 @@ test(
   async () => {
     const bulky = "x".repeat(100_000);
     const entries = Array.from({ length: 30 }, (_, i) => [
-      toolEntry(i * 2 + 1, "tool_call", { tool: "execute", command: `step ${i}`, callId: `c${i}` }),
-      toolEntry(i * 2 + 2, "tool_result", { tool: "execute", callId: `c${i}`, isError: false, result: bulky }),
+      toolEntry(i * 2 + 1, "ToolCall", { tool: "execute", command: `step ${i}`, callId: `c${i}` }),
+      toolEntry(i * 2 + 2, "ToolResult", { tool: "execute", callId: `c${i}`, isError: false, result: bulky }),
     ]).flat();
     const stream = await streamToolRun(entries, { status: "done" });
     try {
@@ -371,7 +388,7 @@ test("refreshes read only tool entries recorded after the last one sent", async 
   const stream = await streamToolRun(entries, { status: "running" });
   try {
     await sleep(50);
-    entries.push(toolEntry(3, "tool_call", { tool: "execute", command: "ls", callId: "c2" }));
+    entries.push(toolEntry(3, "ToolCall", { tool: "execute", command: "ls", callId: "c2" }));
     stream.bus.emit({ runId: "run", kind: "refresh" });
     await sleep(50);
     stream.bus.emit({ runId: "run", kind: "refresh" });
@@ -394,7 +411,7 @@ test(
     const stream = await streamToolRun(
       [
         lookup,
-        toolEntry(2, "tool_result", {
+        toolEntry(2, "ToolResult", {
           tool: "salesforce_query",
           callId: "c1",
           isError: false,
@@ -431,10 +448,10 @@ test("run events forward reasoning per block, dedupe overlap, and catch up gaps 
       const sent = reasoning?.["s1:0"] ?? 0;
       if (worker.text.length > sent) emitRunReasoning(bus, runId, worker, worker.text.slice(sent), sent);
     },
-    async getRunToolEntries() {
+    async getRunToolItems() {
       return [];
     },
-  } as Pick<App, "getRun" | "getRunToolEntries" | "subscribeRun" | "syncRunStream">;
+  } as Pick<App, "getRun" | "getRunToolItems" | "subscribeRun" | "syncRunStream">;
   const server = createServer((req, res) => {
     void runEventRoutes[0]!.handle({ app, req, res, params: { id: "run" } } as unknown as ApiCtx);
   });

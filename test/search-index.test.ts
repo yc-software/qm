@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { Lease, SessionStore } from "../src/sessions/session-store.ts";
-import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
+import type { ScopeId, Session } from "../src/types.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 
 const scope = "personal:viewer@example.com" as ScopeId;
 const VIEWER = "viewer";
@@ -28,15 +29,14 @@ async function simTurn(
   sim: Sim,
   turn: { input: string; author?: string; reply: string; toolResult?: string; thinking?: string },
 ): Promise<void> {
-  const emit = (type: SessionEntry["type"], payload: unknown) =>
-    sim.store.append(sim.lease, { type, payload, scopeLabel: scope });
-  await emit("user", { text: turn.input, ...(turn.author ? { name: turn.author } : {}) });
-  if (turn.thinking) await emit("thinking", { thinking: turn.thinking });
+  const emit = (item: NewItem) => sim.store.append(sim.lease, item);
+  await emit({ kind: "UserMessage", text: turn.input, body: turn.author ? { name: turn.author } : {} });
+  if (turn.thinking) await emit({ kind: "Reasoning", text: turn.thinking });
   if (turn.toolResult) {
-    await emit("tool_call", { command: "fetch", tool: "execute", callId: "call_1" });
-    await emit("tool_result", { tool: "execute", callId: "call_1", isError: false, result: turn.toolResult });
+    await emit({ kind: "ToolCall", tool: "execute", callId: "call_1", body: { command: "fetch" } });
+    await emit({ kind: "ToolResult", tool: "execute", callId: "call_1", isError: false, text: turn.toolResult });
   }
-  await emit("assistant", { text: turn.reply });
+  await emit({ kind: "AgentMessage", text: turn.reply });
 }
 
 async function secretTurn(sim: Sim): Promise<void> {
@@ -64,7 +64,7 @@ test("message writes index only conversational text — tool results and thinkin
 
 test("messages are searchable as soon as they are appended", async () => {
   const sim = await simSession();
-  await sim.store.append(sim.lease, { type: "user", payload: { text: "legacy document" }, scopeLabel: scope });
+  await sim.store.append(sim.lease, { kind: "UserMessage", text: "legacy document" });
   assert.equal((await sim.store.searchEntries(VIEWER, "legacy document")).length, 1);
 });
 

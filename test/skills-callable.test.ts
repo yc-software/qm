@@ -165,22 +165,23 @@ test("skills index order uses visible history, resets with compaction, and leave
   const { lease } = await built.sessions.acquireLease(sessionId, "turn");
   assert.ok(lease);
   await built.sessions.append(lease, {
-    type: "tool_call",
-    payload: { tool: "skills", callId: "skills-1", action: "read", name: "helper-19" },
-    scopeLabel: "personal:U1",
+    kind: "ToolCall",
+    tool: "skills",
+    callId: "skills-1",
+    body: { action: "read", name: "helper-19" },
   });
   await built.sessions.releaseLease(lease);
   const second = await built.app.turn(request);
   assert.ok(promoted(second.reply ?? ""));
   const unchanged = await built.app.turn(request);
   assert.doesNotMatch(unchanged.reply ?? "", /\*\*helper-00\*\*/);
-  const entries = await built.sessions.getEntries(sessionId);
+  const items = await built.sessions.getItems(sessionId);
   const reset = await built.sessions.acquireLease(sessionId, "compaction");
   assert.ok(reset.lease);
   await built.sessions.append(reset.lease, {
-    type: "system",
-    payload: { kind: "context_summary", text: "Earlier work complete", throughSeq: entries.at(-1)!.seq },
-    scopeLabel: "personal:U1",
+    kind: "ContextCompaction",
+    text: "Earlier work complete",
+    throughSeq: items.at(-1)!.seq,
   });
   await built.sessions.releaseLease(reset.lease);
   const third = await built.app.turn(request);
@@ -226,6 +227,6 @@ test("Open sharing keeps private skill metadata out of the persisted channel sho
     text: "!skill make-digest",
   });
   assert.match(read.reply ?? "", /Step 1: gather/);
-  const entries = await built.sessions.getEntries(result.sessionId!);
-  assert.doesNotMatch(JSON.stringify(entries.filter((e) => e.type === "user")), /assemble a morning digest/);
+  const items = await built.sessions.getItems(result.sessionId!);
+  assert.doesNotMatch(JSON.stringify(items.filter((i) => i.kind === "UserMessage")), /assemble a morning digest/);
 });

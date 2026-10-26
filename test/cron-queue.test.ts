@@ -4,7 +4,7 @@ import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
 import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -44,7 +44,7 @@ function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { sc
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
     identity: createIdentityService(),
     run,

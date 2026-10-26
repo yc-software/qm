@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
 import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
@@ -90,12 +90,12 @@ interface EnvironmentSnapshot {
 
 export function environmentDelta(
   blocks: Record<string, string>,
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   sessionId: string,
 ): { text: string; record: EnvironmentSnapshot } {
   const { previous, anchorSeq } = retainedSnapshot(
     history,
-    (entry) => (entry.payload as { environmentSnapshot?: EnvironmentSnapshot } | null)?.environmentSnapshot,
+    (item) => item.body.environmentSnapshot as EnvironmentSnapshot | undefined,
   );
   const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
   const hashes = Object.fromEntries(

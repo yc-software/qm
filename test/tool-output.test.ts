@@ -7,7 +7,7 @@ import {
   inlineTokensFrom,
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item } from "../src/sessions/items.ts";
 
 test("the inline cap setting: unset means 4096 tokens, 0 means off, junk falls back", () => {
   assert.equal(inlineTokensFrom(undefined), DEFAULT_INLINE_TOKENS);
@@ -42,24 +42,28 @@ test("tool-output paths name one call", () => {
 });
 
 test("a parked result reads back only through its own session's tool result", async () => {
-  const entries: SessionEntry[] = [];
-  const store = createMemoryToolOutputStore({ sessions: { getEntries: async (id) => (id === "s1" ? entries : []) } });
+  const items: Item[] = [];
+  const store = createMemoryToolOutputStore({ sessions: { getItems: async (id) => (id === "s1" ? items : []) } });
   const blob = await store.save("the whole thing");
-  entries.push({
-    sessionId: "s1",
-    seq: 0,
-    parentSeq: null,
-    type: "tool_result",
-    payload: { tool: "execute", callId: "c1", result: "the…", output: { blob, chars: 15, shownChars: 4 } },
-    scopeLabel: "personal:u",
-    createdAt: 1,
-  });
+  items.push(
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "execute",
+        callId: "c1",
+        text: "the…",
+        blobSha: blob,
+        body: { output: { chars: 15, shownChars: 4 } },
+      },
+      { sessionId: "s1", seq: 0, createdAt: 1 },
+    ),
+  );
   const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput("x".repeat(100), 1, "c1")!.text)![0];
   for (const path of ["tool-output/c1", markerPath]) {
     assert.deepEqual(await store.read("s1", parkedOutputKey(path)!), { text: "the whole thing" });
     assert.equal(await store.read("s2", parkedOutputKey(path)!), null);
   }
   assert.equal(await store.read("s1", parkedOutputKey("tool-output/c2")!), null);
-  entries.push({ ...entries[0]!, seq: 1 });
+  items.push({ ...items[0]!, seq: 1 });
   await assert.rejects(store.read("s1", parkedOutputKey(markerPath)!), /more than one call matches/);
 });

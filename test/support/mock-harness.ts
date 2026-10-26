@@ -12,6 +12,7 @@ import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
+import { isReply, isUserMessage } from "../../src/sessions/items.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
@@ -67,33 +68,28 @@ function streamChunks(text: string): string[] {
   return chunks;
 }
 
-function textPayload(payload: unknown): string {
-  const text = (payload as { text?: unknown } | null)?.text;
-  return typeof text === "string" ? text : "";
-}
-
 function mockProviderMessages(
   history: HarnessTurnInput["history"],
 ): Array<{ role: "user" | "assistant"; content: string }> {
-  return history.flatMap((e) => {
-    if (e.type !== "user" && e.type !== "assistant") return [];
-    const content = textPayload(e.payload);
-    return content.trim() ? [{ role: e.type, content }] : [];
+  return history.flatMap((e): Array<{ role: "user" | "assistant"; content: string }> => {
+    const content = e.text ?? "";
+    if (!content.trim()) return [];
+    if (isUserMessage(e)) return [{ role: "user", content }];
+    return isReply(e) ? [{ role: "assistant", content }] : [];
   });
 }
 
 function withCallIds(emit: HarnessTurnInput["emit"]): HarnessTurnInput["emit"] {
   const open: string[] = [];
-  return (entry) => {
-    if (entry.type !== "tool_call" && entry.type !== "tool_result") return emit(entry);
-    const payload = { ...(entry.payload as Record<string, unknown>) };
-    if (typeof payload.callId !== "string") {
-      payload.callId =
-        entry.type === "tool_call" ? `mock-call-${randomUUID()}` : (open.shift() ?? `mock-call-${randomUUID()}`);
-      if (entry.type === "tool_call") open.push(payload.callId as string);
-    } else if (entry.type === "tool_call") open.push(payload.callId);
-    else open.splice(open.indexOf(payload.callId), open.includes(payload.callId) ? 1 : 0);
-    return emit({ ...entry, payload });
+  return (item) => {
+    if (item.kind !== "ToolCall" && item.kind !== "ToolResult") return emit(item);
+    let callId = item.callId;
+    if (!callId) {
+      callId = item.kind === "ToolCall" ? `mock-call-${randomUUID()}` : (open.shift() ?? `mock-call-${randomUUID()}`);
+      if (item.kind === "ToolCall") open.push(callId);
+    } else if (item.kind === "ToolCall") open.push(callId);
+    else open.splice(open.indexOf(callId), open.includes(callId) ? 1 : 0);
+    return emit({ ...item, callId });
   };
 }
 
@@ -119,14 +115,11 @@ export function createMockHarness(): Harness {
         const userEntry =
           continued ??
           (await turn.emit({
-            type: "user",
-            payload: {
-              text: turn.input,
-              ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-              ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-            },
-            scopeLabel: turn.scopeLabel,
-            ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
+            kind: "UserMessage",
+            text: turn.input,
+            externalId: turn.triggerTs ?? turn.entryTs ?? null,
+            author: turn.runtimeActorId ?? null,
+            body: turn.attachments?.length ? { attachments: turn.attachments } : {},
           }));
         const modelPrompt = [turn.input, turn.environment].filter((s) => s && s.trim()).join("\n\n");
 
@@ -209,15 +202,15 @@ export function createMockHarness(): Harness {
           const msg = resumePostSessions.get(turn.session.id)!;
           resumePostSessions.delete(turn.session.id);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "slack",
+            body: { action: "post", bytes: msg.length },
           });
           const r = await turn.tools.post(msg);
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(posted after resume)" : `[not sent] ${r.message ?? "failed"}`;
@@ -225,16 +218,8 @@ export function createMockHarness(): Harness {
           shutdownResumeSessions.delete(turn.session.id);
           reply = "finished after resume";
         } else if (command0 === "!work-until-shutdown") {
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", callId: "build", command: "make build" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "execute", callId: "build", ok: true },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "execute", callId: "build", body: { command: "make build" } });
+          await turn.emit({ kind: "ToolResult", tool: "execute", callId: "build", body: { ok: true } });
           shutdownResumeSessions.add(turn.session.id);
           await new Promise<void>((resolve) => {
             if (!turn.cancel || turn.cancel.aborted) resolve();
@@ -244,11 +229,7 @@ export function createMockHarness(): Harness {
           return { reply: "(stopped)", stopped: true, modelCalls: 1 };
         } else if (command0.startsWith("!post-lost-result ")) {
           const msg = cmd.slice(cmd.indexOf("!post-lost-result ") + "!post-lost-result ".length);
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "slack", body: { action: "post", bytes: msg.length } });
           await turn.tools.post(msg);
           resumePostSessions.set(turn.session.id, `${msg} (repost)`);
           throw new Error("boom: simulated fault before the post's tool result landed");
@@ -265,25 +246,25 @@ export function createMockHarness(): Harness {
           const first = bar === -1 ? rest : rest.slice(0, bar);
           const second = bar === -1 ? rest : rest.slice(bar + 1);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: first.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "slack",
+            body: { action: "post", bytes: first.length },
           });
           const r = await turn.tools.post(first);
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           resumePostSessions.set(turn.session.id, second);
           throw new Error("boom: simulated fault after a completed post");
         } else if (command0 === "!work-then-boom") {
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command: "make build" },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "execute",
+            body: { command: "make build" },
           });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "ToolResult", tool: "execute", body: { ok: true } });
           throw new Error("boom: simulated mid-turn fault");
         } else if (command0 === "!refuse") {
           throw new NonRetryableTurnError(
@@ -295,13 +276,9 @@ export function createMockHarness(): Harness {
           if (shedSessions.has(turn.session.id)) {
             reply = "worklog: did the thing but never posted";
           } else {
-            await turn.emit({
-              type: "tool_call",
-              payload: { tool: "slack", action: "post" },
-              scopeLabel: turn.scopeLabel,
-            });
+            await turn.emit({ kind: "ToolCall", tool: "slack", body: { action: "post" } });
             const r = await turn.tools.post("nudged reply");
-            await turn.emit({ type: "tool_result", payload: { tool: "post", ok: r.ok }, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolResult", tool: "post", body: { ok: r.ok } });
             usedTool = true;
             reply = r.ok ? "(posted after nudge)" : `[not sent] ${r.message ?? "failed"}`;
           }
@@ -317,13 +294,9 @@ export function createMockHarness(): Harness {
             cmd.slice(cmd.indexOf("!preamble-then-quiet") + "!preamble-then-quiet".length).trim() ||
             "Still queued — silent.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
-          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command: "check" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "AgentMessage", variant: "narration", text: preamble });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command: "check" } });
+          await turn.emit({ kind: "ToolResult", tool: "execute", body: { ok: true } });
           usedTool = true;
           silent = turn.pollFire === true;
           reply = turn.pollFire ? "" : preamble;
@@ -331,35 +304,28 @@ export function createMockHarness(): Harness {
           await turn.onTextBlockStart?.("commentary");
           turn.onDelta?.("Checking.");
           await turn.emit({
-            type: "text",
-            payload: { text: "Checking.", phase: "commentary" },
-            scopeLabel: turn.scopeLabel,
+            kind: "AgentMessage",
+            variant: "narration",
+            text: "Checking.",
+            body: { phase: "commentary" },
           });
           await turn.onTextBlockStart?.("final_answer");
           reply = "All clear.";
         } else if (command0.startsWith("!preamble")) {
           const preamble = cmd.slice(cmd.indexOf("!preamble") + "!preamble".length).trim() || "On it — checking.";
           if (turn.onDelta) for (const chunk of streamChunks(preamble)) turn.onDelta(chunk);
-          await turn.emit({ type: "text", payload: { text: preamble }, scopeLabel: turn.scopeLabel });
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command: "check" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({ type: "tool_result", payload: { tool: "execute", ok: true }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "AgentMessage", variant: "narration", text: preamble });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command: "check" } });
+          await turn.emit({ kind: "ToolResult", tool: "execute", body: { ok: true } });
           usedTool = true;
           turn.onTextBlockStart?.();
           reply = `${preamble}\n\nAll clear — nothing broke.`;
         } else if (command0.startsWith("!speakpost ")) {
           const msg = cmd.slice(cmd.indexOf("!speakpost ") + "!speakpost ".length);
           if (turn.onDelta) for (const chunk of streamChunks("Answering directly.")) turn.onDelta(chunk);
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "slack", body: { action: "post", bytes: msg.length } });
           const r = await turn.tools.post(msg);
-          await turn.emit({ type: "tool_result", payload: { tool: "post", ok: r.ok }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "ToolResult", tool: "post", body: { ok: r.ok } });
           usedTool = true;
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
         } else if (command0 === "!finish-silent") {
@@ -367,12 +333,8 @@ export function createMockHarness(): Harness {
           silent = turn.pollFire === true || turn.surfaceTools === true;
           reply = silent ? "" : "Nothing to report; ending silently.";
           if (silent) {
-            await turn.emit({ type: "tool_call", payload: { tool: "finish_silently" }, scopeLabel: turn.scopeLabel });
-            await turn.emit({
-              type: "tool_result",
-              payload: { tool: "finish_silently", silent: true },
-              scopeLabel: turn.scopeLabel,
-            });
+            await turn.emit({ kind: "ToolCall", tool: "finish_silently" });
+            await turn.emit({ kind: "ToolResult", tool: "finish_silently", body: { silent: true } });
           }
         } else if (command0 === "!finish-silent-approval") {
           usedTool = true;
@@ -394,9 +356,10 @@ export function createMockHarness(): Harness {
           const step = { id: randomUUID(), index: 0 };
           for (const chunk of streamChunks(thinking)) turn.onReasoningDelta?.(step.id, step.index, chunk);
           await turn.emit({
-            type: "thinking",
-            payload: { thinking, thinkingSignature: "OPAQUE-SIG-BYTES", step },
-            scopeLabel: turn.scopeLabel,
+            kind: "Reasoning",
+            text: thinking,
+            step: step.index,
+            body: { thinkingSignature: "OPAQUE-SIG-BYTES", wire: { message: { id: step.id } } },
           });
           reply = "thought about it";
         } else if (command0.startsWith("!execute ")) {
@@ -411,7 +374,7 @@ export function createMockHarness(): Harness {
             ownerAuth: params.ownerAuth,
             sandboxId: params.sandboxId,
           });
-          await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "ToolResult", body: { ...result } });
           turn.onProgress?.({ toolCalls: 1 });
           usedTool = true;
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
@@ -422,27 +385,23 @@ export function createMockHarness(): Harness {
           const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
           if (gateTool("execute")) {
-            await turn.emit({
-              type: "tool_call",
-              payload: { tool: "execute", command, blocked: "needs_approval" },
-              scopeLabel: turn.scopeLabel,
-            });
+            await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
             usedTool = true;
             reply = "";
           } else {
-            await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
             let opts: { scratch?: boolean; ownerAuth?: boolean } | undefined;
             if (tag === "!scratch ") opts = { scratch: true };
             else if (tag === "!owner ") opts = { ownerAuth: true };
             const result = await turn.tools.execute(command, opts);
-            await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolResult", body: { ...result } });
             turn.onProgress?.({ toolCalls: 1 });
             usedTool = true;
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           }
         } else if (command0.startsWith("!screened-run ")) {
           const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
-          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
           const result = await turn.tools.execute(command);
           const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           const screen = turn.screenToolResult
@@ -458,19 +417,15 @@ export function createMockHarness(): Harness {
           if (screen.outcome === "quarantine") {
             const stub = "[tool output quarantined by the security screen]";
             await turn.emit({
-              type: "tool_result",
-              payload: {
-                tool: "execute",
-                quarantined: true,
-                quarantineReason: "screen_verdict",
-                result: stub,
-                isError: true,
-              },
-              scopeLabel: turn.scopeLabel,
+              kind: "ToolResult",
+              tool: "execute",
+              text: stub,
+              isError: true,
+              body: { quarantined: true, quarantineReason: "screen_verdict" },
             });
             reply = stub;
           } else {
-            await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolResult", body: { ...result } });
             reply = output;
           }
           turn.onProgress?.({ toolCalls: 1 });
@@ -480,14 +435,10 @@ export function createMockHarness(): Harness {
           const sp = rest.indexOf(" ");
           const room = sp === -1 ? rest : rest.slice(0, sp);
           const command = sp === -1 ? "" : rest.slice(sp + 1);
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command, scope: room },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, scope: room } });
           try {
             const result = await turn.tools.execute(command, { reachTarget: room });
-            await turn.emit({ type: "tool_result", payload: { ...result }, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolResult", body: { ...result } });
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           } catch (e) {
             reply = `[reach error] ${e instanceof Error ? e.message : String(e)}`;
@@ -496,11 +447,7 @@ export function createMockHarness(): Harness {
           usedTool = true;
         } else if (command0.startsWith("!paused-approval ")) {
           const command = command0.slice("!paused-approval ".length);
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command, blocked: "needs_approval" },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
           collected.push({ command, reason: "requires approval" });
           pausedOnApproval = true;
           usedTool = true;
@@ -513,17 +460,13 @@ export function createMockHarness(): Harness {
           reply = "";
         } else if (command0.startsWith("!collect-approval ")) {
           const command = command0.slice("!collect-approval ".length);
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", command, blocked: "needs_approval" },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command, blocked: "needs_approval" } });
           collected.push({ command, reason: "requires approval" });
           usedTool = true;
           reply = `worked around it; done`;
         } else if (command0.startsWith("!collect-exec ")) {
           const command = command0.slice("!collect-exec ".length);
-          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
           try {
             const result = await turn.tools.execute(command);
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
@@ -544,10 +487,10 @@ export function createMockHarness(): Harness {
           const command = command0.slice("!double-exec ".length);
           let ran = 0;
           for (let i = 0; i < 2; i++) {
-            await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+            await turn.emit({ kind: "ToolCall", tool: "execute", body: { command } });
             try {
               const result = await turn.tools.execute(command);
-              await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+              await turn.emit({ kind: "ToolResult", body: { ...result } });
               ran++;
             } catch (e) {
               if (!(e instanceof NeedsApproval)) throw e;
@@ -586,11 +529,7 @@ export function createMockHarness(): Harness {
         } else if (command0.startsWith("!read ")) {
           const path = command0.slice(6).trim();
           const { content } = await turn.tools.read(path);
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "read", path, found: content != null },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "read", body: { path, found: content != null } });
           usedTool = true;
           reply = content ?? `(no file: ${path})`;
         } else if (command0.startsWith("!memorysearch ")) {
@@ -626,9 +565,9 @@ export function createMockHarness(): Harness {
           const [name, path] = command0.slice(7).trim().split(/\s+/);
           const r = await turn.tools.skill(name!, path ? { path } : undefined);
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "skill", name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "skill",
+            body: { name, found: r.content != null, ...(r.dir ? { dir: r.dir } : {}) },
           });
           usedTool = true;
           reply =
@@ -664,16 +603,12 @@ export function createMockHarness(): Harness {
               await turn.tools.execute(`printf %s ${JSON.stringify(data)} > ${JSON.stringify(path)}`);
             }
           }
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "attach", files: paths },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "attach", body: { files: paths } });
           const r = await turn.tools.attach(paths);
           await turn.emit({
-            type: "tool_result",
-            payload: r.ok ? { tool: "attach", ok: true, files: r.files } : { tool: "attach", ok: false },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "attach",
+            body: r.ok ? { ok: true, files: r.files } : { ok: false },
           });
           usedTool = true;
           if (tag === "!attachsilent ") silent = turn.pollFire === true;
@@ -684,15 +619,15 @@ export function createMockHarness(): Harness {
           const channel = sp === -1 ? rest : rest.slice(0, sp);
           const msg = sp === -1 ? "" : rest.slice(sp + 1);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "reach", channel, bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "reach",
+            body: { channel, bytes: msg.length },
           });
           const r = await turn.tools.reach(msg, { channel });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "reach", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "reach",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? `(reached ${r.matched ?? channel})` : `[not sent] ${r.message ?? "failed"}`;
@@ -702,30 +637,30 @@ export function createMockHarness(): Harness {
           const threadTs = sp === -1 ? rest : rest.slice(0, sp);
           const msg = sp === -1 ? "" : rest.slice(sp + 1);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", ts: threadTs, bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "slack",
+            body: { action: "post", ts: threadTs, bytes: msg.length },
           });
           const r = await turn.tools.post(msg, { ts: threadTs });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(posted in thread)" : `[not sent] ${r.message ?? "failed"}`;
         } else if (command0.startsWith("!broadcast ")) {
           const msg = cmd.slice(cmd.indexOf("!broadcast ") + "!broadcast ".length);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", broadcast: true, bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "slack",
+            body: { action: "post", broadcast: true, bytes: msg.length },
           });
           const r = await turn.tools.post(msg, { broadcast: true });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(broadcast to channel)" : `[not sent] ${r.message ?? "failed"}`;
@@ -736,15 +671,15 @@ export function createMockHarness(): Harness {
           let sent = 0;
           for (const msg of msgs) {
             await turn.emit({
-              type: "tool_call",
-              payload: { tool: "slack", action: "post", bytes: msg.length },
-              scopeLabel: turn.scopeLabel,
+              kind: "ToolCall",
+              tool: "slack",
+              body: { action: "post", bytes: msg.length },
             });
             const r = await turn.tools.post(msg);
             await turn.emit({
-              type: "tool_result",
-              payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-              scopeLabel: turn.scopeLabel,
+              kind: "ToolResult",
+              tool: "post",
+              body: { ok: r.ok },
             });
             if (r.ok) sent++;
           }
@@ -753,15 +688,15 @@ export function createMockHarness(): Harness {
         } else if (command0.startsWith("!post ")) {
           const msg = cmd.slice(cmd.indexOf("!post ") + "!post ".length);
           await turn.emit({
-            type: "tool_call",
-            payload: { tool: "slack", action: "post", bytes: msg.length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolCall",
+            tool: "slack",
+            body: { action: "post", bytes: msg.length },
           });
           const r = await turn.tools.post(msg);
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(posted)" : `[not sent] ${r.message ?? "failed"}`;
@@ -773,9 +708,9 @@ export function createMockHarness(): Harness {
           const msg = sp === -1 ? "" : rest.slice(sp + 1);
           const r = await turn.tools.post(msg, undefined, paths);
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "post", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "post",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(posted files)" : `[not sent] ${r.message ?? "failed"}`;
@@ -783,9 +718,9 @@ export function createMockHarness(): Harness {
           const [, ts, emoji] = command0.split(/\s+/);
           const r = await turn.tools.react({ ts: ts ?? "", emoji: emoji ?? "" });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "react", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "react",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(reacted)" : `[not reacted] ${r.message ?? "failed"}`;
@@ -796,9 +731,9 @@ export function createMockHarness(): Harness {
           const newText = sp === -1 ? "" : rest.slice(sp + 1);
           const r = await turn.tools.edit({ ref: editRef, text: newText });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "edit", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "edit",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(edited)" : `[not edited] ${r.message ?? "failed"}`;
@@ -806,18 +741,18 @@ export function createMockHarness(): Harness {
           const [, delRef] = command0.split(/\s+/);
           const r = await turn.tools.delete({ ref: delRef ?? "" });
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "delete", ok: r.ok, ...(r.deliveryId ? { deliveryId: r.deliveryId } : {}) },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "delete",
+            body: { ok: r.ok },
           });
           usedTool = true;
           reply = r.ok ? "(deleted)" : `[not deleted] ${r.message ?? "failed"}`;
         } else if (command0 === "!read_thread" || command0.startsWith("!read_thread ")) {
           const r = await turn.tools.readThread();
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "read_thread", ok: r.ok, count: (r.messages ?? []).length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "read_thread",
+            body: { ok: r.ok, count: (r.messages ?? []).length },
           });
           usedTool = true;
           reply = r.ok
@@ -825,11 +760,7 @@ export function createMockHarness(): Harness {
             : `[couldn't read] ${r.message ?? "unavailable"}`;
         } else if (command0 === "!whats_new") {
           const r = await turn.tools.whatsNew();
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "whats_new", ok: r.ok },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "whats_new", body: { ok: r.ok } });
           usedTool = true;
           reply = r.ok
             ? `whats_new here=${r.hereNew ?? 0} others=${r.activeSubConversations ?? 0}${r.coverageSince ? ` coverage=${r.coverageSince}` : ""}`
@@ -843,11 +774,7 @@ export function createMockHarness(): Harness {
             q = q.slice(sourceMatch[0].length);
           }
           const r = await turn.tools.search(q, source ? { source } : undefined);
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "search", ok: r.ok, count: (r.hits ?? []).length },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "search", body: { ok: r.ok, count: (r.hits ?? []).length } });
           usedTool = true;
           const first = (r.hits ?? [])[0];
           reply = r.ok
@@ -856,9 +783,9 @@ export function createMockHarness(): Harness {
         } else if (command0 === "!read_members") {
           const r = await turn.tools.readMembers();
           await turn.emit({
-            type: "tool_result",
-            payload: { tool: "read_members", ok: r.ok, count: (r.members ?? []).length },
-            scopeLabel: turn.scopeLabel,
+            kind: "ToolResult",
+            tool: "read_members",
+            body: { ok: r.ok, count: (r.members ?? []).length },
           });
           usedTool = true;
           reply = r.ok
@@ -867,11 +794,7 @@ export function createMockHarness(): Harness {
         } else if (command0.startsWith("!read_file ")) {
           const refArg = cmd.slice(cmd.indexOf("!read_file ") + "!read_file ".length).trim();
           const r = await turn.tools.readFile(refArg);
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "read_file", ok: r.ok },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "read_file", body: { ok: r.ok } });
           usedTool = true;
           if (!r.ok) {
             reply = `[couldn't read file] ${r.message ?? "unavailable"}`;
@@ -883,20 +806,12 @@ export function createMockHarness(): Harness {
         } else if (command0.startsWith("!set_standing_order ")) {
           const orders = cmd.slice(cmd.indexOf("!set_standing_order ") + "!set_standing_order ".length).trim();
           const r = await turn.tools.setStandingOrder(orders);
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "set_standing_order", ok: r.ok },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "set_standing_order", body: { ok: r.ok } });
           usedTool = true;
           reply = r.ok ? "standing order set" : `[couldn't set standing order] ${r.message ?? "unavailable"}`;
         } else if (command0 === "!get_standing_order") {
           const r = await turn.tools.getStandingOrder();
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "get_standing_order", ok: r.ok },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolResult", tool: "get_standing_order", body: { ok: r.ok } });
           usedTool = true;
           reply = r.ok
             ? `standing order: ${r.orders || "(none)"}`
@@ -943,7 +858,7 @@ export function createMockHarness(): Harness {
 
         if (turn.onDelta) for (const chunk of streamChunks(reply)) turn.onDelta(chunk);
 
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         const modelCalls = usedTool ? 2 : 1;
         const steps = Array.from({ length: modelCalls }, (_, step) => callUsage(step));
         const cacheUsage = steps.reduce(

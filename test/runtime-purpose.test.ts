@@ -7,7 +7,7 @@ import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem } from "../src/sessions/items.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
@@ -145,19 +145,26 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     explicit,
   );
   assert.ok(handoff.ok && handoff.handoff);
+  const run = "00000000-0000-4000-8000-000000000001";
   const entries = [
-    {
-      type: "tool_result",
-      payload: { tool: "runtime", runId: "run", actorId: "alice", runtimeHandoff: handoff.handoff },
-    },
-  ] as SessionEntry[];
-  const restored = recoveredRuntime(entries, "run", "alice");
+    storedItem(
+      {
+        kind: "ToolResult",
+        tool: "runtime",
+        callId: "c1",
+        turnId: run,
+        body: { actorId: "alice", runtimeHandoff: handoff.handoff },
+      },
+      { sessionId: "s", seq: 1, createdAt: 1 },
+    ),
+  ];
+  const restored = recoveredRuntime(entries, run, "alice");
   assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",
   });
-  assert.equal(recoveredRuntime(entries, "another-run", "alice"), undefined);
+  assert.equal(recoveredRuntime(entries, "00000000-0000-4000-8000-000000000002", "alice"), undefined);
   assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"), category);
 });
 

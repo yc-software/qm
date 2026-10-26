@@ -112,7 +112,7 @@ test("a static asset falls back to the raw file when the client cannot accept gz
 test("the delivery event stream still streams incrementally instead of buffering behind a compressor", async () => {
   const first = await new Promise<{ headers: IncomingMessage["headers"]; chunk: string }>((resolve, reject) => {
     const req = httpRequest(
-      `${base}/api/deliveries/events`,
+      `${base}/api/session-events`,
       { headers: { ...identityHeaders(), "accept-encoding": "gzip" } },
       (res) => {
         res.setEncoding("utf8");

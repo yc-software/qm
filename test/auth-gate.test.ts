@@ -104,7 +104,7 @@ test("a correctly-signed turn is accepted", async () => {
 test("a signature for one route can't be replayed against another (method+path bound)", async () => {
   const srv = start(SECRET);
   try {
-    const headers = sign("GET", "/v1/deliveries?type=slack", "");
+    const headers = sign("GET", "/v1/surface-context/pending?source=slack", "");
     const res = await fetch(`${srv.base}/v1/sessions?principalId=U-victim`, { headers });
     assert.equal(res.status, 401);
   } finally {
@@ -129,10 +129,10 @@ test("a replayed signature is rejected (dedup) on a mutating route", async () =>
 test("an identical signed GET re-sent in the same second is accepted (reads are not replay-deduped)", async () => {
   const srv = start(SECRET);
   try {
-    const headers = sign("GET", "/v1/deliveries?type=slack", "");
-    const first = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
+    const headers = sign("GET", "/v1/surface-context/pending?source=slack", "");
+    const first = await fetch(`${srv.base}/v1/surface-context/pending?source=slack`, { headers });
     assert.equal(first.status, 200);
-    const second = await fetch(`${srv.base}/v1/deliveries?type=slack`, { headers });
+    const second = await fetch(`${srv.base}/v1/surface-context/pending?source=slack`, { headers });
     assert.equal(second.status, 200);
   } finally {
     await srv.close();

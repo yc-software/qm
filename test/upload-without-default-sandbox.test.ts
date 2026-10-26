@@ -31,8 +31,8 @@ test("an upload in a scope without a default sandbox still reaches the agent", a
   assert.equal(upload.status, "ok", upload.status === "ok" ? undefined : upload.reason);
   assert.ok((await built.sessions.listLlmRequests(sessionId)).length > before);
   assert.equal(await built.sandboxResources.resolve("channel:C1"), null);
-  const entries = await built.sessions.getEntries(sessionId);
-  const text = JSON.stringify(entries.filter((e) => e.type === "user"));
+  const items = await built.sessions.getItems(sessionId);
+  const text = JSON.stringify(items.filter((e) => e.kind === "UserMessage"));
   assert.match(text, /sample\.txt/);
   assert.match(text, /not yet on a computer/);
   assert.match(text, /\/v1\/files\/[^/]+\/content/);

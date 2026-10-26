@@ -1,30 +1,21 @@
 import type { App } from "../../app.ts";
 import type { ServerDeps } from "../../deps.ts";
-import {
-  parseScopeId,
-  type Delivery,
-  type DeliveryProvenance,
-  type Session,
-  type SessionEntry,
-} from "../../../types.ts";
-import {
-  sessionCategory,
-  type LlmRequestRecord,
-  type SessionCategory,
-  type SessionSummary,
-} from "../../../sessions/session-store.ts";
+import { parseScopeId, type Session } from "../../../types.ts";
+import { sessionCategory, type SessionCategory, type SessionSummary } from "../../../sessions/session-store.ts";
 import { createTranscriptSource } from "../../../sessions/transcript-source.ts";
+import { isUserMessage, type Item } from "../../../sessions/items.ts";
 import { sendJson } from "../../http.ts";
 import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { requireScopedResource } from "./common.ts";
 import { activityCounts, scopeActivity } from "./scope-activity.ts";
-import { deliveryOrigin, parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
+import { parseSessionWakeRef, sessionKind, sessionOrigin, type AdminSessionOrigin } from "./origins.ts";
 
 const SESSIONS_PAGE_LIMIT_MAX = 200;
 const SESSIONS_PAGE_LIMIT_DEFAULT = 50;
 const TRANSCRIPT_LIMIT_MAX = 50000;
 const TRANSCRIPT_LIMIT_DEFAULT = 500;
+
 async function displayNameForPrincipal(app: App, deps: ServerDeps, principalId: string): Promise<string> {
   return (await app.directoryMember(principalId))?.displayName?.trim() || principalId;
 }
@@ -35,92 +26,16 @@ async function inferSingleParticipantName(app: App, deps: ServerDeps, sessionId:
   return displayNameForPrincipal(app, deps, [...participantIds][0]!);
 }
 
-function withEntryName(entry: SessionEntry, name: string): SessionEntry {
-  if (entry.type !== "user" || !name.trim() || typeof entry.payload !== "object" || entry.payload === null)
-    return entry;
-  const payload = entry.payload as Record<string, unknown>;
-  if (typeof payload.name === "string" && payload.name.trim()) return entry;
-  return { ...entry, payload: { ...payload, name } };
+function withAuthorName(item: Item, name: string): Item {
+  if (!isUserMessage(item) || !name.trim()) return item;
+  if (typeof item.body.name === "string" && item.body.name.trim()) return item;
+  return { ...item, body: { ...item.body, name } };
 }
 
-async function labelTranscriptEntries(
-  app: App,
-  deps: ServerDeps,
-  session: Session,
-  entries: SessionEntry[],
-): Promise<SessionEntry[]> {
+async function labelTranscriptItems(app: App, deps: ServerDeps, session: Session, items: Item[]): Promise<Item[]> {
   const fallbackName = await inferSingleParticipantName(app, deps, session.id);
-  if (!fallbackName) return entries;
-  return entries.map((entry) => withEntryName(entry, fallbackName));
-}
-
-type ProvenanceSidecar = {
-  provenance: DeliveryProvenance;
-  sourceSession?: Session;
-  llmRequests?: LlmRequestRecord[];
-};
-
-async function deliveryProvenanceSidecars(
-  deps: ServerDeps,
-  deliveries: readonly Delivery[],
-  requestedScope: string,
-): Promise<Map<string, ProvenanceSidecar>> {
-  const out = new Map<string, ProvenanceSidecar>();
-  const orgWide = parseScopeId(requestedScope).kind === "org";
-  const bySource = new Map<string, Delivery[]>();
-  for (const d of deliveries) {
-    if (!d.provenance) continue;
-    const key = d.provenance.sourceSessionId ?? `thread:${d.provenance.sourceThreadRef}`;
-    const group = bySource.get(key);
-    if (group) group.push(d);
-    else bySource.set(key, [d]);
-  }
-  await Promise.all(
-    [...bySource.values()].map(async (group) => {
-      const provenance = group[0]!.provenance!;
-      const sourceSession = provenance.sourceSessionId
-        ? await deps.sessions?.get(provenance.sourceSessionId)
-        : await deps.sessions?.getByThread(provenance.sourceThreadRef);
-      if (!sourceSession || (!orgWide && sourceSession.scopeId !== requestedScope)) {
-        for (const d of group) out.set(d.id, { provenance: d.provenance! });
-        return;
-      }
-      const seqBounds = group.map((d) => d.provenance!.sourceUserSeq).filter((s): s is number => s !== undefined);
-      const sourceEntries =
-        seqBounds.length && deps.sessions
-          ? (
-              await createTranscriptSource(deps.sessions).forRender(sourceSession.id, {
-                sinceSeq: Math.min(...seqBounds),
-              })
-            ).entries
-          : [];
-      const turnSeqsFor = (p: DeliveryProvenance): Set<number> => {
-        const seqs = new Set<number>();
-        if (p.sourceUserSeq === undefined) return seqs;
-        for (const e of sourceEntries) {
-          if (e.seq < p.sourceUserSeq) continue;
-          if (p.sourceAssistantEntrySeq !== undefined && e.seq > p.sourceAssistantEntrySeq) continue;
-          if (e.type === "user") seqs.add(e.seq);
-        }
-        seqs.add(p.sourceUserSeq);
-        return seqs;
-      };
-      const perDelivery = group.map((d) => ({ d, turnSeqs: turnSeqsFor(d.provenance!) }));
-      const allTurnSeqs = new Set(perDelivery.flatMap(({ turnSeqs }) => [...turnSeqs]));
-      const requests = allTurnSeqs.size
-        ? ((await deps.sessions?.listLlmRequests(sourceSession.id, { turnSeqs: [...allTurnSeqs] })) ?? [])
-        : [];
-      for (const { d, turnSeqs } of perDelivery) {
-        const own = requests.filter((r) => r.turnSeq !== null && turnSeqs.has(r.turnSeq));
-        out.set(d.id, {
-          provenance: d.provenance!,
-          sourceSession,
-          ...(own.length ? { llmRequests: own } : {}),
-        });
-      }
-    }),
-  );
-  return out;
+  if (!fallbackName) return items;
+  return items.map((item) => withAuthorName(item, fallbackName));
 }
 
 function requireAdminSession(ctx: ApiCtx, id: string) {
@@ -261,89 +176,15 @@ export async function getAdminSession(ctx: ApiCtx): Promise<void> {
   const all = want >= TRANSCRIPT_LIMIT_MAX;
   const limit = Math.min(want, TRANSCRIPT_LIMIT_MAX);
   const raw = deps.sessions
-    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).entries
+    ? (await createTranscriptSource(deps.sessions).forRender(id, all ? undefined : { limit: limit + 1 })).items
     : [];
   const hasMore = !all && raw.length > limit;
-  const entries = await labelTranscriptEntries(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
-  const recipientDeliveries = deps.deliveries
-    ? await deps.deliveries.listByRecipientThread(session.threadRef, { limit: 100 })
-    : [];
-  const sourceDeliveries = deps.deliveries
-    ? await deps.deliveries.listBySourceSession(session.id, session.threadRef, { limit: 100 })
-    : [];
-  const sidecars = await deliveryProvenanceSidecars(deps, recipientDeliveries, scope);
-  const recipientDeliveryEvents = await Promise.all(
-    recipientDeliveries.map(async (d) => {
-      const provenance = sidecars.get(d.id) ?? null;
-      return {
-        type: "principal_delivery",
-        deliveryId: d.id,
-        text: d.text,
-        attachments: d.attachments ?? [],
-        destination: d.destination,
-        createdAt: d.deliveredAt ?? d.createdAt,
-        idempotencyKey: d.idempotencyKey,
-        provenance: d.provenance ?? null,
-        origin: await deliveryOrigin(app, d, scope),
-        ...(provenance?.sourceSession ? { sourceSession: provenance.sourceSession } : {}),
-        ...(provenance?.llmRequests ? { llmRequests: provenance.llmRequests } : {}),
-      };
-    }),
-  );
-  const sourceDeliveryEvents = await Promise.all(
-    sourceDeliveries.map(async (d) => ({
-      type: "outbound_delivery",
-      deliveryId: d.id,
-      text: d.text,
-      attachments: d.attachments ?? [],
-      destination: d.destination,
-      createdAt: d.deliveredAt ?? d.createdAt,
-      idempotencyKey: d.idempotencyKey,
-      provenance: d.provenance ?? null,
-      origin: await deliveryOrigin(app, d, scope),
-      ...(d.recipientThreadRef ? { recipientThreadRef: d.recipientThreadRef } : {}),
-      ...(d.deliveredAt !== null ? { deliveredAt: d.deliveredAt } : {}),
-      ...(d.expiredAt !== undefined ? { expiredAt: d.expiredAt } : {}),
-      ...(d.shadow ? { shadow: true } : {}),
-    })),
-  );
-  const deliveryEvents = [...recipientDeliveryEvents, ...sourceDeliveryEvents];
+  const items = await labelTranscriptItems(app, deps, session, hasMore ? raw.slice(raw.length - limit) : raw);
   return sendJson(res, 200, {
     session,
-    entries,
-    deliveryEvents,
+    items,
     hasMore,
     limit,
     origin: await sessionOrigin(app, session, scope),
   });
-}
-
-export async function listAdminShadowDeliveries(ctx: ApiCtx): Promise<void> {
-  const { res, app, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, {
-    principalId: actor.id,
-    action: "deliveries.shadow.read",
-    resource: "deliveries/shadow",
-    scopeLabel: scope,
-  });
-  const orgWide = parseScopeId(scope).kind === "org";
-  const rows = (await deps.deliveries?.listShadow({ limit: 200 })) ?? [];
-  const shadow = await Promise.all(
-    rows
-      .filter((d) => orgWide || d.provenance?.sourceScopeId === scope)
-      .map(async (d) => ({
-        deliveryId: d.id,
-        text: d.text,
-        destination: d.destination,
-        createdAt: d.createdAt,
-        idempotencyKey: d.idempotencyKey,
-        provenance: d.provenance ?? null,
-        shadow: true as const,
-        origin: await deliveryOrigin(app, d, scope),
-      })),
-  );
-  return sendJson(res, 200, { scopeId: scope, shadow });
 }

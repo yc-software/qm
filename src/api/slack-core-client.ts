@@ -22,7 +22,6 @@ import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type {
-  Delivery,
   PendingApproval,
   ScopeId,
   SurfaceContextRequest,
@@ -37,7 +36,7 @@ import type { AckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts
 import type { OrgBranding, ScopedConfigStore } from "../resolution/config-store.ts";
 import type { BlobTransferStore } from "../persistence/blob-transfer.ts";
 import { MAX_BLOB_BYTES } from "../persistence/blob-transfer.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
@@ -108,16 +107,10 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
-  claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
-  ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
-  reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
-  reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
-
-  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
+  registerSender: Outbound["register"];
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   stagedEnvelopes?: DurableMap<StagedEnvelope>;
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
-  onDeliveryEnqueued(listener: () => void): () => void;
   pendingContextRequests(): Promise<SurfaceContextRequest[]>;
   onContextRequest(listener: (request: SurfaceContextRequest) => void): () => void;
   fulfillContextRequest(id: string, outcome: { result?: SurfaceContextResult; error?: string }): Promise<void>;
@@ -157,7 +150,7 @@ export interface SlackCoreClientDeps {
   config: ScopedConfigStore;
   runtimeFallback: RuntimeChoice;
   blobTransfer: BlobTransferStore;
-  deliveries: DeliveryStore;
+  outbound: Pick<Outbound, "register">;
   errors?: ErrorLog;
   runs: RunStore;
   turnStream: TurnStream;
@@ -394,11 +387,11 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
     },
 
     async ackRunDelivery(runId) {
-      await deps.app.ackDeliveryByKey(`run:${runId}`);
+      await deps.runs.setDeliveryState(runId, null, { postedAt: Date.now() });
     },
 
     async reportRunEditRef(runId, editRef) {
-      const found = await deps.app.setRunDeliveryState(runId, { editRef });
+      const found = await deps.runs.setDeliveryState(runId, null, { editRef });
       if (!found) throw new Error(`run ${runId} not found`);
     },
 
@@ -443,11 +436,8 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return applied;
     },
 
-    claimDeliveries(type, claimMs) {
-      return deps.app.pendingDeliveries(type, claimMs);
-    },
-    holdDeliveryDispatch(fn) {
-      return lease.hold("slack:delivery-dispatch", fn);
+    registerSender(types, sender) {
+      return deps.outbound.register(types, sender);
     },
     holdDirectorySync(fn) {
       return lease.hold("slack:directory-sync", fn);
@@ -456,33 +446,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       return lease.hold(`slack:envelope-replay:${account}`, fn);
     },
     stagedEnvelopes: deps.stagedEnvelopes,
-
-    async ackDelivery(id, body) {
-      if (body?.recipientThreadRef) await deps.app.recordPrincipalDelivery(id, body.recipientThreadRef);
-      await deps.app.ackDelivery(id, body?.slackApiMs);
-    },
-
-    async reportDeliveryUndeliverable(id, reason) {
-      deps.errors?.record({
-        category: "delivery",
-        code: "delivery_undeliverable",
-        message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
-        scopeLabel: "slack:deliveries" as ScopeId,
-      });
-    },
-
-    async reportSlowDeliveryDrain(info) {
-      deps.errors?.record({
-        category: "delivery",
-        code: "delivery_drain_slow",
-        message: `drain cycle took ${Math.round(info.durationMs / 1000)}s for ${info.rows} rows`,
-        scopeLabel: "slack:deliveries" as ScopeId,
-      });
-    },
-
-    onDeliveryEnqueued(listener) {
-      return deps.deliveries.onEnqueue(listener);
-    },
 
     pendingContextRequests() {
       return deps.app.pendingContextRequests("slack");

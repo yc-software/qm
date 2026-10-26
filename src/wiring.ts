@@ -147,11 +147,10 @@ import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
 import type { LoopServiceDeps } from "./api/routes/loops.ts";
-import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
-import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
-import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
+import { createOutbound, createWebSender, type Outbound, type QueuedPost } from "./surfaces/outbound.ts";
+import { rememberDmPost, type RecentDmPosts } from "./surfaces/recent-dm-posts.ts";
+import { wireRunResultPosts } from "./runs/run-results.ts";
 import { adminSessionUrl } from "./util/admin-links.ts";
-import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
 import { createDirectoryStore, type DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
 import {
@@ -323,9 +322,13 @@ import {
 import { createControlService } from "./api/control-service.ts";
 import { createMemoryRunStore } from "./runs/memory-run-store.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
+import { registerAbsurdSchema } from "./turns/absurd-schema.ts";
 import { createMemoryRunSignalStore, type RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
 import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
+import { createTurnLedger, TURN_CANCEL_CHANNEL, TURN_READY_CHANNEL } from "./turns/turn-ledger.ts";
+import { createTurnRunner, type TurnRunner } from "./turns/turn-runner.ts";
+import { repairStaleTurns, routeTurns } from "./turns/turn-engine.ts";
 import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
 import {
   createNoopInstanceRegistry,
@@ -517,7 +520,7 @@ export interface BuiltApp {
   composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
-  deliveries: DeliveryStore;
+  outbound: Outbound;
   keychainApprovals?: KeychainApprovals;
   fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
   fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
@@ -609,6 +612,7 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
+  if (config.databaseUrl) registerAbsurdSchema(config.databaseUrl);
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
   setProviderBaseUrls(config.providerBaseUrls);
@@ -812,9 +816,9 @@ export function buildApp(
     createConfiguredMemoryService({
       defaultMemory: semanticMemory.memory,
       config: config.memoryProviderConfig,
-      sessionEntries: (sessionId) => {
+      sessionItems: (sessionId) => {
         if (!memorySessions.store) throw new Error("session store is not ready");
-        return memorySessions.store.getEntries(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
+        return memorySessions.store.getItems(sessionId, { limit: MEMORY_CAPTURE_ENTRY_WINDOW });
       },
     }),
     (scope) => memoryTidy.ensure(scope),
@@ -1531,6 +1535,12 @@ export function buildApp(
     runStoreKind === "postgres"
       ? createPostgresRunStore(requireDbUrl("RUN_STORE"), { maxClaims: config.maxClaims })
       : createMemoryRunStore({ maxClaims: config.maxClaims });
+  const turnLedger =
+    runStoreKind === "postgres" && config.sessionStore === "postgres"
+      ? createTurnLedger(requireDbUrl("RUN_STORE"), { onTerminal: (run) => runStore.runs.emitTerminal?.(run) })
+      : undefined;
+  const turnRouting = routeTurns(runStore.runs, turnLedger, featureFlags);
+
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
     if (!sessionIds.length) return new Set();
     const wanted = new Set(sessionIds);
@@ -1555,6 +1565,9 @@ export function buildApp(
   };
   const runs: RunStore = {
     ...runStore.runs,
+    cancelTurn: turnRouting.cancelTurn,
+    withdraw: turnRouting.withdraw,
+    leaseHeld: turnRouting.leaseHeld,
     async enqueue(input) {
       const enqueue = async () => {
         const known = await sessions.getByThread(input.sessionId);
@@ -1568,7 +1581,7 @@ export function buildApp(
           throw new Error(`all ${SUBAGENT_TREE_RUN_CAP} session run slots are in use`);
         const participants = known ? await sessions.participantsOf(known.id) : [];
         const ancestors = known?.parentSessionId ? await workingAncestors(known) : [];
-        const result = await runStore.runs.enqueue(input);
+        const result = (await turnRouting.admit(input)) ?? (await runStore.runs.enqueue(input));
         if (result.deduped) return result;
         sessionStateBus.emit({
           threadRef: input.sessionId,
@@ -1789,12 +1802,42 @@ export function buildApp(
   membership.managesArtifactHome = managesArtifactHome;
   const deployGitSecret = config.signingSecret;
   const deployGitBase = config.apiBaseUrl;
-  const deliveries = withWebTranscriptDeliveries(
-    config.databaseUrl ? createPostgresDeliveryStore(config.databaseUrl) : createDeliveryStore(),
-    sessions,
-  );
+  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const transcripts = { sessions, sessionStates: sessionStateBus };
+  const recentDmPosts = artifactMap<RecentDmPosts>("recent_dm_posts");
+  const outbound = createOutbound({
+    idempotency,
+    retries: artifactMap<QueuedPost>("queued_posts"),
+    afterSend: (post, receipt) => {
+      const recipientId = post.destination.target;
+      const threadRef = receipt.recipientThreadRef;
+      if (post.destination.type !== "principal" || !threadRef) return;
+      void (async () => {
+        const session = await sessions.getOrCreateByThread(
+          threadRef,
+          "dm",
+          scopeId("personal", recipientId),
+          undefined,
+          "slack",
+        );
+        await sessions.addParticipant(session.id, recipientId);
+        await rememberDmPost(recentDmPosts, threadRef, {
+          key: post.idempotencyKey,
+          text: post.text,
+          at: Date.now(),
+          ...(post.destination.onBehalfOf ? { onBehalfOf: post.destination.onBehalfOf } : {}),
+          ...(post.provenance?.trigger ? { trigger: post.provenance.trigger } : {}),
+        });
+      })().catch(swallowAs("outbound: remember DM post", undefined));
+    },
+  });
+  outbound.register(["web"], createWebSender(transcripts));
+  pgArtifactMap?.pool.registerMigration({
+    id: "delivery/store/0007-drop",
+    statements: ["DROP TABLE IF EXISTS deliveries"],
+  });
   const deployService = createDeployService({
-    deliveries,
+    outbound,
     deployAppsDomain: config.awsDeploy.appsDomain,
     publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
     publicWebUrl: config.publicWebUrl,
@@ -1942,7 +1985,7 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), outbound);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2111,7 +2154,8 @@ export function buildApp(
     resolveConnectorClient: resolveClient,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
-    deliveries,
+    outbound,
+    recentDmPosts,
     approvals,
     approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants"),
     ...(processes ? { processes } : {}),
@@ -2141,8 +2185,10 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const runResultRecovery = wireRunResultPosts(runs, outbound, {
+    ...(recoveryAdminUrlFor ? { adminUrlFor: recoveryAdminUrlFor } : {}),
+    sessions,
+  });
   const skillFetcher = createGitFetcher(
     keychain
       ? {
@@ -2278,7 +2324,7 @@ export function buildApp(
     config: configStore,
     crons,
     webhooks,
-    deliveries,
+    outbound,
     directory,
     ...(config.emailAuthPrincipals?.length
       ? {
@@ -2332,7 +2378,7 @@ export function buildApp(
         identity,
         sessions,
         audit: auditLog,
-        deliveries,
+        outbound,
         resume: (ask, grant) => askResolution!(ask, grant),
       })
     : undefined;
@@ -2352,7 +2398,7 @@ export function buildApp(
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
-    deliveries,
+    outbound,
     errors,
     runs,
     turnStream,
@@ -2411,7 +2457,7 @@ export function buildApp(
             mailbox: sessionMailbox,
             prepareRequest: prepareSessionRequest,
             delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
-            deliveries,
+            outbound,
             signals: runSignals,
           },
           run,
@@ -2450,6 +2496,14 @@ export function buildApp(
         : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
     1_000,
     { label: "session-returns", immediate: true },
+  );
+  const queuedPostSweeper = createSweeper(
+    () =>
+      advisoryLock.tryWithLock
+        ? advisoryLock.tryWithLock("queued-post-retry", () => outbound.retryQueued())
+        : advisoryLock.withLock("queued-post-retry", () => outbound.retryQueued()),
+    30_000,
+    { label: "queued-posts" },
   );
   const runResultSweeper = createSweeper(
     () =>
@@ -2512,7 +2566,7 @@ export function buildApp(
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
           {
-            deliveries,
+            outbound,
             idempotency,
             identity,
             run: (req) => app.turn(req),
@@ -2531,7 +2585,7 @@ export function buildApp(
   const dropResolution = keychain
     ? (drop: DropResolution) =>
         fireDropResolution(
-          { deliveries, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
+          { outbound, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
           drop,
         )
     : undefined;
@@ -2546,7 +2600,7 @@ export function buildApp(
     outputs: loopOutputs,
     grants: loopGrants,
     trigger: {
-      deliveries,
+      outbound,
       idempotency,
       identity,
       run: (req) => app.turn(req),
@@ -2597,7 +2651,7 @@ export function buildApp(
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
     crons,
-    deliveries,
+    outbound,
     idempotency,
     identity,
     run: (req) => app.turn(req),
@@ -2671,7 +2725,7 @@ export function buildApp(
           monitors,
           processes,
           sandbox,
-          deliveries,
+          outbound,
           idempotency,
           identity,
           run: (req) => app.turn(req),
@@ -2692,7 +2746,7 @@ export function buildApp(
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
-    deliveries,
+    outbound,
     idempotency,
     identity,
     run: (req) => app.turn(req),
@@ -2718,6 +2772,27 @@ export function buildApp(
       : createNoopInstanceRegistry();
   const drain: DrainController = createDrainController({ registry: instanceRegistry });
   const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
+  const turnReady = turnLedger
+    ? createPostgresNotifyBus<string>(requireDbUrl("RUN_STORE"), TURN_READY_CHANNEL, "turn readiness")
+    : undefined;
+  const turnCancels = turnLedger
+    ? createPostgresNotifyBus<string>(requireDbUrl("RUN_STORE"), TURN_CANCEL_CHANNEL, "turn cancels")
+    : undefined;
+  const turnRunner: TurnRunner | undefined = turnLedger
+    ? createTurnRunner({
+        ledger: turnLedger,
+        orchestrator,
+        queue: "turns_people",
+        slots: Math.max(1, config.workers),
+        ...(turnReady ? { ready: turnReady } : {}),
+        ...(turnCancels ? { cancels: turnCancels } : {}),
+        canClaim: () => canClaimRunSlot(),
+        errors,
+        maxClaims: config.maxClaims,
+      })
+    : undefined;
+  const busyRuns = () => workers.filter((worker) => worker.held()).length + (turnRunner?.held().length ?? 0);
+  const canClaimRunSlot = () => canClaimRuns() && busyRuns() < Math.max(1, config.workers);
   const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
     createWorker({
       admittedWork,
@@ -2727,9 +2802,22 @@ export function buildApp(
       heartbeatIntervalMs: config.heartbeatIntervalMs,
       errors,
       pollMs: 250,
-      canClaim: canClaimRuns,
+      canClaim: canClaimRunSlot,
     }),
   );
+  const turnPointerRepair = turnLedger
+    ? createSweeper(
+        () =>
+          leaderLease.hold("turns:pointer-repair", () => repairStaleTurns({ ledger: turnLedger, sessions, errors })),
+        60_000,
+        { label: "turn-pointer-repair" },
+      )
+    : null;
+  const turnCleanup = turnLedger
+    ? createSweeper(() => leaderLease.hold("turns:cleanup", () => turnLedger.cleanup()), 60 * 60_000, {
+        label: "turn-cleanup",
+      })
+    : null;
   const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
   const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
   const processReaper: ProcessReaper | null = processes
@@ -2830,6 +2918,7 @@ export function buildApp(
         .catch(swallowAs("wiring: worker resume failed", undefined));
     }
     preemptionSweeper.start();
+    turnRunner?.start();
     const startPeriodic = () => {
       if (!backgroundRunning || generation !== backgroundGeneration) return;
       reaper.start();
@@ -2856,7 +2945,10 @@ export function buildApp(
       orphanedSignalSweeper.start();
       sessionReturnSweeper.start();
       runResultSweeper.start();
+      queuedPostSweeper.start();
       approvalDeliverySweeper.start();
+      turnPointerRepair?.start();
+      turnCleanup?.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -2888,8 +2980,12 @@ export function buildApp(
       orphanedSignalSweeper.stop(),
       sessionReturnSweeper.stop(),
       runResultSweeper.stop(),
+      queuedPostSweeper.stop(),
       approvalDeliverySweeper.stop(),
       preemptionSweeper.stop(),
+      turnPointerRepair?.stop(),
+      turnCleanup?.stop(),
+      turnRunner?.stopClaims(),
       ...workers.map((worker) => worker.stopClaims()),
     ];
     backgroundClaimsStopping = Promise.all(stopping).then(() => {});
@@ -2908,6 +3004,7 @@ export function buildApp(
         swallowAs("wiring: inline turn handback failed", undefined),
       ),
       ...workers.map((w) => w.releaseInFlight()),
+      turnRunner?.releaseInFlight(),
     ]);
   }
   const runtime: Runtime = {
@@ -2933,6 +3030,7 @@ export function buildApp(
     },
     releaseInFlightRuns,
     async stop() {
+      await turnRunner?.releaseInFlight();
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
@@ -2947,6 +3045,9 @@ export function buildApp(
         [
           runs.close?.(),
           runSignals.close?.(),
+          turnLedger?.close(),
+          turnReady?.close?.(),
+          turnCancels?.close?.(),
           sessionStateBus.close?.(),
           ledgerEventBus.close?.(),
           runActivity.close?.(),
@@ -3020,7 +3121,7 @@ export function buildApp(
     memory,
     ...(keychain ? { keychain } : {}),
     serviceCreds,
-    deliveries,
+    outbound,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
@@ -3161,7 +3262,7 @@ export function serverDeps(
     composioReturns: built.composioReturns,
     ...(built.keychain ? { keychain: built.keychain } : {}),
     serviceCreds: built.serviceCreds,
-    deliveries: built.deliveries,
+    outbound: built.outbound,
     ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
     ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
     runs: built.runs,

@@ -70,7 +70,7 @@ function renderEvent(
 
 export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceiver {
   const triggerDeps: TriggerDeps = {
-    deliveries: deps.deliveries,
+    outbound: deps.outbound,
     idempotency: deps.idempotency,
     identity: deps.identity,
     run: deps.run,

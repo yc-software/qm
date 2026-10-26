@@ -303,8 +303,11 @@ const cases: Case[] = [
       const r = await getJson(
         `/v1/sessions/${encodeURIComponent(t.json.sessionId)}?viewer=${encodeURIComponent(U1.externalId)}`,
       );
-      const types = (r.json.entries ?? []).map((e: any) => e.type);
-      return { ok: types.includes("user") && types.includes("assistant"), detail: `entries: ${types.join(",")}` };
+      const types = (r.json.items ?? []).map((e: any) => e.kind);
+      return {
+        ok: types.includes("UserMessage") && types.includes("AgentMessage"),
+        detail: `items: ${types.join(",")}`,
+      };
     },
   },
 ];

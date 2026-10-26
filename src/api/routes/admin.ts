@@ -11,7 +11,7 @@ import {
 } from "./admin/scope-config.ts";
 import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
-import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
+import { getAdminSession, getAdminSessionLlm, listAdminSessions } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
 import {
   archiveAdminSkill,
@@ -205,13 +205,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.sessions.read", summary: "read queued, in-flight, and recent runs" },
       },
       handle: listAdminRuns,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/deliveries/shadow",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listAdminShadowDeliveries,
     },
     {
       method: "GET",

@@ -10,7 +10,7 @@ import type {
 } from "../../types.ts";
 import {
   openGroupViaSurface,
-  reachEnqueue,
+  reachPost,
   resolveReachTarget,
   withReact,
   withEdit,
@@ -97,8 +97,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
     postKeys,
     spine,
   } = ctx;
-  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.deliveries)) return undefined;
-  const deliveries = deps.deliveries;
+  if (strictReadOnly || !(input.surfaceTools && defaultDestination && deps.outbound)) return undefined;
+  const outbound = deps.outbound;
   const currentDestination = defaultDestination;
   const rateLimitRecipient =
     input.origin?.kind === "human" &&
@@ -167,8 +167,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   ): Promise<SurfacePostResult> => {
     try {
       const idempotencyKey = postKeys.key(destination, seq);
-      const delivery = await reachEnqueue({
-        deliveries,
+      await reachPost({
+        outbound,
         destination,
         text: postText,
         ...(attachments?.length ? { attachments } : {}),
@@ -177,7 +177,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       spine.surfaceOutboundCount += 1;
       if (input.runId) deps.turnStream?.markSurfacePosted(input.runId);
-      return { ok: true, deliveryId: delivery.id };
+      return { ok: true };
     } catch (e) {
       return { ok: false, message: errMessage(e) };
     }

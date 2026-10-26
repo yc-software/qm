@@ -108,7 +108,7 @@ test("explicit read tools notify only for human Slack turns, using their origina
     const queries: any[] = [];
     const tools = createSurfaceToolDeps({
       deps: {
-        deliveries: {},
+        outbound: {},
         surfaceContext: {
           pull: async (_source: string, query: any) => {
             queries.push(query);

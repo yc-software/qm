@@ -13,7 +13,7 @@ import { boundLoopCron } from "./authority.ts";
 import { samePerson } from "../directory/person.ts";
 import type { Loop, LoopItem, LoopOutput, TurnRequest, TurnResult } from "../types.ts";
 import { destinationVisible, runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
-import { reachEnqueue } from "../reach/reach.ts";
+import { reachPost } from "../reach/reach.ts";
 import { hashId } from "../util/crypto.ts";
 import { fencedCodeBlocks, type FencedCodeBlock } from "../util/markdown.ts";
 import { errMessage } from "../util/errors.ts";
@@ -677,8 +677,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           (action) => `- ${action.type}: ${action.reason}${action.recommendation ? ` — ${action.recommendation}` : ""}`,
         ),
       ];
-      await reachEnqueue({
-        deliveries: deps.trigger.deliveries,
+      await reachPost({
+        outbound: deps.trigger.outbound,
         destination,
         text: lines.join("\n"),
         idempotencyKey: `loop:${loop.id}:health:${verdict.health}:${evaluatedAt}`,

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { runTrigger, type TriggerDeps } from "../triggers/run-trigger.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -66,7 +66,7 @@ export interface SchedulerDeps {
   admittedWork?: AdmittedWork;
   advisoryLock: import("../persistence/advisory-lock.ts").AdvisoryLock;
   crons: CronStore;
-  deliveries: DeliveryStore;
+  outbound: Outbound;
   idempotency: IdempotencyStore;
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
@@ -267,7 +267,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     try {
       outcome = await runTrigger(
         {
-          deliveries: deps.deliveries,
+          outbound: deps.outbound,
           idempotency: deps.idempotency,
           identity: deps.identity,
           run: deps.run,
