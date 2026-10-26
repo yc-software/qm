@@ -218,6 +218,17 @@ test("the personal-account picker preserves composer choices and saves context d
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
     assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const readsBeforeWake = runtimeReads;
+    failNextGet = true;
+    document.dispatchEvent(new dom.window.Event("visibilitychange"));
+    await tick();
+    assert.equal(runtimeReads, readsBeforeWake + 1, "waking revalidates runtime settings");
+    assert.equal(composer!.state.error, "", "a failed wake revalidation keeps the cached settings quietly");
+    assert.equal(composer!.state.effortLevel, "high", "a failed wake revalidation keeps the selection");
+    window.dispatchEvent(new dom.window.Event("online"));
+    await tick();
+    assert.equal(runtimeReads, readsBeforeWake + 2, "coming back online retries the revalidation");
+    assert.equal(composer!.state.error, "");
     const readsBeforeAccountChange = runtimeReads;
     appState.me.individualModelAuth = false;
     window.dispatchEvent(new dom.window.CustomEvent("model-account-changed"));

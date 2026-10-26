@@ -18,6 +18,7 @@ import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
 import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
@@ -714,6 +715,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     signal?: AbortSignal,
   ) => {
     const commandEnv: Record<string, string> = {};
+    const addCommandEnv = (key: string, value: string) => {
+      if (DROPPED_PROXY_ENV.has(key) || Object.hasOwn(handle.env ?? {}, key))
+        throw new Error(`requested credentials may not override the computer's environment key: ${key}`);
+      if (Object.hasOwn(commandEnv, key) && commandEnv[key] !== value)
+        throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+      commandEnv[key] = value;
+    };
     const prepared: Array<{
       commit?: () => Promise<void>;
       singleUse?: boolean;
@@ -723,11 +731,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     for (const credential of new Set(requested)) {
       const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
       prepared.push(materialized);
-      for (const { key, value } of materialized.env) {
-        if (key in commandEnv && commandEnv[key] !== value)
-          throw new Error(`requested credentials provide conflicting environment key: ${key}`);
-        commandEnv[key] = value;
-      }
+      for (const { key, value } of materialized.env) addCommandEnv(key, value);
       deps.auditLog?.record({
         at: Date.now(),
         principalId: deps.createdBy,
@@ -747,11 +751,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       ? await prepareExecutionFiles(deps.sandbox, handle, fileCredentials)
       : undefined;
     for (const [key, value] of Object.entries(fileExecution?.env ?? {})) {
-      if (key in commandEnv && commandEnv[key] !== value) {
-        await fileExecution!.finish();
-        throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+      try {
+        addCommandEnv(key, value);
+      } catch (error) {
+        return withCleanup(
+          () => Promise.reject(error),
+          () => fileExecution!.finish(),
+        );
       }
-      commandEnv[key] = value;
     }
     return {
       commandEnv: withProviderBaseUrls(commandEnv, handle.env),

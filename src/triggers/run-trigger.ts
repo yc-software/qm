@@ -62,6 +62,7 @@ export interface TriggerOutcome {
   ran: boolean;
   deferred?: boolean;
   status?: TurnResult["status"];
+  errorCode?: string;
   note?: string;
   userNote?: string;
   reply?: string;
@@ -246,6 +247,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
+  let errorCode: string | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
   let reply: string | undefined;
@@ -305,6 +307,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
+      errorCode = res.errorCode;
       reply = res.reply;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
@@ -349,6 +352,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ran,
     ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
+    ...(errorCode ? { errorCode } : {}),
     ...(note ? { note } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),

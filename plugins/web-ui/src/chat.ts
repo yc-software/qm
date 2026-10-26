@@ -390,8 +390,6 @@ export function createChatSurface(
     </div>`;
   }
   let transcriptRefreshGeneration = 0;
-  // Bumped whenever approval state is replaced or a decision starts, so a late
-  // approvals result can tell it has been superseded.
   let approvalsEpoch = 0;
   const forkOriginController = createForkOriginController({
     state: chatState,
@@ -607,9 +605,6 @@ export function createChatSurface(
     let titlePollStarted = false;
     agent.subscribe((e) => {
       if (!titlePollStarted && agent.state.isStreaming) {
-        // The server generates a title at the START of the first turn; poll for
-        // it right away instead of waiting for the turn to end, so long
-        // tool-heavy first turns don't leave the chat unnamed in the sidebar.
         titlePollStarted = true;
         const row = sessionsState.list.find((r) => r.threadRef === threadRef);
         if (!row?.title?.trim()) void settleNewSessionTitle(agent, threadRef);
@@ -896,9 +891,6 @@ export function createChatSurface(
     return true;
   }
 
-  // A chat's first draw doesn't wait for its approvals. They attach when the
-  // request settles, unless a fresher approvals sync, a decision, a run, or a
-  // pending send got there first (each of those re-syncs approvals itself).
   function attachApprovalsWhenLoaded(
     sessionId: string,
     pending: Promise<{ approvals: PendingApproval[] } | null>,
@@ -911,8 +903,6 @@ export function createChatSurface(
       !agent.state.isStreaming &&
       chatState.pendingSend === null &&
       chatState.resolvingApprovals.size === 0;
-    // Wait out any refresh in flight: one that succeeds re-syncs approvals itself (and
-    // moves the epoch), and attaching mid-refresh would make it discard its transcript.
     const nonEmpty = pending.then(async (r) => {
       await transcriptRefreshesSettled();
       return r?.approvals.length ? r : null;
@@ -930,7 +920,6 @@ export function createChatSurface(
     return refresh;
   }
 
-  // Resolves once no transcript refresh is in flight, including ones that start while waiting.
   async function transcriptRefreshesSettled(): Promise<void> {
     let current: Promise<void>;
     do {

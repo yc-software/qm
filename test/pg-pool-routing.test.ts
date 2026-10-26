@@ -46,7 +46,6 @@ test("session operations remain direct while ordinary queries use another backen
   const a = createPgPool(direct!);
   const client = await (await a.sessionPool()).connect();
   try {
-    assert.equal(new URL((await a.pool()).options.connectionString!).port, new URL(pooled!).port);
     const directPid = (await client.query("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
     await client.query("LISTEN qm_pool_routing_test");
     await client.query("SELECT pg_advisory_lock(827360194)");

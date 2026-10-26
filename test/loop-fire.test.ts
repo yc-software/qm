@@ -15,6 +15,7 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
 function fakeIdentity() {
@@ -44,6 +45,7 @@ function service(
   overrides?: {
     admittedWork?: ReturnType<typeof createAdmittedWork>;
     turnResult?: TurnResult;
+    dynamicResult?: () => TurnResult | undefined;
     grants?: ReturnType<typeof createShipGrantStore>;
     samePerson?: (a: string, b: string) => Promise<boolean>;
     triageEnabledFor?: (owner: string) => Promise<boolean>;
@@ -78,6 +80,8 @@ function service(
         const run = async (): Promise<TurnResult> => {
           turns.push(req);
           if (overrides?.turnResult) return overrides.turnResult;
+          const dynamic = overrides?.dynamicResult?.();
+          if (dynamic) return dynamic;
           return { status: "ok", reply: await respond(req), sessionId: `s${turns.length}` };
         };
         return overrides?.admittedWork ? overrides.admittedWork.run(run) : run();
@@ -335,7 +339,7 @@ test("the scheduler sweep pings a stale loop without waiting for another fire", 
     governor: { staleFireMs: 1_000 },
     destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
   });
-  await s.loops.recordFireOutcome(loop.id, false);
+  await s.loops.recordFireOutcome(loop.id, "ok");
   const firedAt = (await s.loops.get(loop.id))!.lastFiredAt!;
   await s.fire.sweepStale(firedAt + 1_001);
   assert.equal(s.deliveries.sent.length, 1);
@@ -880,9 +884,78 @@ test("inbox sync exceptions count once and recover on a successful retry", async
   fail = false;
   assert.equal((await s.fire.fire(loop.id, "recovery")).status, "silent");
   assert.equal((await s.loops.get(loop.id))?.consecutiveFailedFires, 0);
-  await s.loops.setState(loop.id, "quarantined");
-  assert.equal((await s.fire.fire(loop.id, "quarantined")).status, "silent");
+  await s.loops.setState(loop.id, "paused");
+  assert.equal((await s.fire.fire(loop.id, "paused")).status, "silent");
   assert.equal(s.turns.length, 2);
+});
+
+const RATE_LIMITED = new ProviderTurnError("Model provider API error (rate_limit_error): slow down", {
+  code: "rate_limit",
+  retryable: true,
+  status: 429,
+  raw: "429",
+});
+
+for (const [label, failure] of [
+  ["a thrown provider rate limit", { throws: RATE_LIMITED }],
+  [
+    "a failed run whose provider was rate limited",
+    { result: { status: "failed", reason: "slow down", errorCode: "rate_limit" } },
+  ],
+  ["a fire interrupted by shutdown", { result: { status: "queued" } }],
+] as const) {
+  test(`inbox fires do not quarantine on ${label}`, async () => {
+    let fail = true;
+    const s = service(
+      () => {
+        if (fail && "throws" in failure) throw failure.throws;
+        return "Synced";
+      },
+      { dynamicResult: () => (fail && "result" in failure ? (failure.result as TurnResult) : undefined) },
+    );
+    const loop = await makeLoop(s.loops, { surface: "inbox" });
+    for (let i = 0; i < 5; i++) assert.equal((await s.fire.fire(loop.id, `limited-${i}`)).status, "failed");
+    const limited = await s.loops.get(loop.id);
+    assert.equal(limited?.state, "enabled");
+    assert.equal(limited?.health, "degraded");
+    assert.equal(limited?.consecutiveFailedFires ?? 0, 0);
+    fail = false;
+    assert.equal((await s.fire.fire(loop.id, "recovered")).status, "silent");
+    assert.equal((await s.loops.get(loop.id))?.health, "healthy");
+  });
+}
+
+test("persistent inbox failures still quarantine and alert the owner when no destination is set", async () => {
+  const s = service(() => {
+    throw new Error("playbook asked for a tool that does not exist");
+  });
+  const loop = await makeLoop(s.loops, { surface: "inbox" });
+  for (let i = 0; i < 3; i++) await s.fire.fire(loop.id, `broken-${i}`);
+  const after = await s.loops.get(loop.id);
+  assert.equal(after?.state, "quarantined");
+  assert.equal(s.deliveries.sent.length, 1);
+  const alert = s.deliveries.sent[0] as { text: string; destination?: { type: string; target: string } };
+  assert.match(alert.text, /quarantined: 3 consecutive failed fires/);
+  assert.deepEqual(
+    { type: alert.destination?.type, target: alert.destination?.target },
+    { type: "principal", target: "josh" },
+  );
+  const next = await s.fire.fire(loop.id, "after-quarantine");
+  assert.equal(next.status, "failed");
+  assert.match(next.note ?? "", /quarantined: 3 consecutive failed fires/);
+  assert.equal(s.deliveries.sent.length, 1);
+});
+
+test("a rate-limited intake on a generic loop degrades it without quarantine", async () => {
+  const s = service(() => {
+    throw RATE_LIMITED;
+  });
+  const loop = await makeLoop(s.loops);
+  for (let i = 0; i < 4; i++) assert.equal((await s.fire.fire(loop.id, `generic-${i}`)).status, "failed");
+  const after = await s.loops.get(loop.id);
+  assert.equal(after?.state, "enabled");
+  assert.equal(after?.health, "degraded");
+  assert.equal(after?.consecutiveFailedFires ?? 0, 0);
 });
 
 test("event-only Email work skips scanning and holds its draft instead of marking it shipped", async () => {

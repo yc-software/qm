@@ -1444,7 +1444,6 @@ async function commitRename(s: CoreSession): Promise<void> {
   await persistSessionPatch(s.id, { title: desired });
 }
 
-/** Archive a session by id — closes any surface showing it and updates the Recents list immediately. */
 export function archiveSessionById(sessionId: string): void {
   const s = sessionsState.list.find((x) => x.id === sessionId);
   if (s && !s.archived) {
@@ -1929,8 +1928,6 @@ export async function openSessionInto(
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
-  // Approvals load alongside the transcript but never hold up the first draw:
-  // the chat mounts as soon as entries arrive, and cards attach when this settles.
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;

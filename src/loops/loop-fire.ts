@@ -30,7 +30,10 @@ import {
   type FireSummary,
   type IntakeCandidate,
   fireNeedsAttention,
+  fireOutcome,
 } from "./runner.ts";
+import { isTransientErrorCode, isTransientFailure, TransientTurnFailure } from "../core/turn-error.ts";
+import { principalDestination } from "../reach/reach.ts";
 import { collectVitals, evaluateGovernor, healthWorsened } from "./governor.ts";
 import { unresolvedOutput } from "./output-store.ts";
 import { decideShip, outputCandidate } from "./ship-gate.ts";
@@ -332,6 +335,17 @@ function excerptReply(s: string): string {
   return s.length <= THREAD_MESSAGE_MAX ? s : `${s.slice(0, THREAD_MESSAGE_MAX - 3)}...`;
 }
 
+function transientOutcome(outcome: TriggerOutcome): boolean {
+  if (outcome.authzFailed || !outcome.ran) return false;
+  return outcome.status === "queued" || (outcome.status === "failed" && isTransientErrorCode(outcome.errorCode));
+}
+
+function notRunnable(loop: Loop): LoopFireResult {
+  if (loop.state !== "quarantined") return { status: "silent", note: "loop is not runnable" };
+  const reason = loop.healthReason ? `: ${loop.healthReason}` : "";
+  return { status: "failed", note: `loop is quarantined${reason}; a person must clear the quarantine to resume it` };
+}
+
 function excerpt(s: string | undefined): string {
   if (!s) return "";
   return s.length <= REPLY_EXCERPT_MAX ? s : `${s.slice(0, REPLY_EXCERPT_MAX - 3)}...`;
@@ -618,18 +632,26 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         error: new Error(`${stage}: turn did not run${outcome.note ? ` — ${outcome.note}` : ""}`),
         userMessage: outcome.note ?? "the turn did not run",
       };
-    if (outcome.status !== "ok" && outcome.status !== "silent")
+    if (outcome.status !== "ok" && outcome.status !== "silent") {
+      const message = `${stage}: turn ${outcome.status ?? "failed"}${outcome.note ? ` — ${outcome.note}` : ""}`;
       return {
-        error: new Error(`${stage}: turn ${outcome.status ?? "failed"}${outcome.note ? ` — ${outcome.note}` : ""}`),
+        error: transientOutcome(outcome) ? new TransientTurnFailure(message) : new Error(message),
         userMessage: outcome.userNote ?? userFacingFailureClause({ status: outcome.status }),
       };
+    }
     return null;
   }
 
-  async function applyGovernor(loopId: string, summary?: FireSummary, evaluatedAt = Date.now()): Promise<void> {
+  async function applyGovernor(
+    loopId: string,
+    fired?: { summary?: FireSummary; transientFailure?: string },
+    evaluatedAt = Date.now(),
+  ): Promise<void> {
+    const summary = fired?.summary;
     const loop = await deps.loops.get(loopId);
     if (!loop) return;
     const vitals = await collectVitals(loop, { items: deps.items, outputs: deps.outputs }, evaluatedAt);
+    if (fired?.transientFailure !== undefined) vitals.transientFailure = excerpt(fired.transientFailure);
     if (summary?.undeclaredShipActions.length) {
       vitals.undeclaredShipActions = [
         ...new Set([...(vitals.undeclaredShipActions ?? []), ...summary.undeclaredShipActions]),
@@ -637,15 +659,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
     const verdict = evaluateGovernor(loop, vitals, evaluatedAt);
     const previous = loop.health;
-    if (verdict.actions.some((action) => action.type === "quarantine")) {
+    const quarantine = verdict.actions.some((action) => action.type === "quarantine");
+    if (quarantine) {
       await deps.loops.setState(loop.id, "quarantined");
     }
     await deps.loops.setHealth(loop.id, verdict.health, verdict.reason, verdict.throttle);
+    const destination = loop.destination ?? (quarantine ? principalDestination(loop.owner, loop.owner) : undefined);
     if (
       verdict.escalate &&
       healthWorsened(previous, verdict.health) &&
-      loop.destination &&
-      (await destinationVisible(deps.trigger, loop.owner, loop.destination))
+      destination &&
+      (await destinationVisible(deps.trigger, loop.owner, destination))
     ) {
       const lines = [
         `Loop "${loop.name}" is ${verdict.health}${verdict.reason ? `: ${verdict.reason}` : ""}.`,
@@ -655,7 +679,7 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       ];
       await reachEnqueue({
         deliveries: deps.trigger.deliveries,
-        destination: loop.destination,
+        destination,
         text: lines.join("\n"),
         idempotencyKey: `loop:${loop.id}:health:${verdict.health}:${evaluatedAt}`,
         provenance: {
@@ -667,6 +691,13 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
         },
       }).catch((e: unknown) => console.error("%s", `[loops] governor ping for ${loop.id} failed:`, errMessage(e)));
     }
+  }
+
+  async function recordFailedFire(loopId: string, failure: unknown): Promise<LoopFireResult> {
+    const transient = isTransientFailure(failure);
+    await deps.loops.recordFireOutcome(loopId, transient ? "transient" : "failed");
+    await applyGovernor(loopId, transient ? { transientFailure: errMessage(failure) } : undefined);
+    return { status: "failed", note: errMessage(failure) };
   }
 
   async function fire(
@@ -702,8 +733,8 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
     }
     const threadRef = loopFireThreadRef(loopId, fireKey);
     if ((loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && options?.enumerate !== false) {
-      if (!isRunnable(loop)) return { status: "silent", note: "loop is not runnable" };
-      let failure: string | undefined;
+      if (!isRunnable(loop)) return notRunnable(loop);
+      let failure: unknown;
       try {
         const outcome = await stageTurn(
           loop,
@@ -712,14 +743,17 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
           loop.surface === "inbox" ? renderInboxSyncTask(loop.id) : renderSourceInboxTask(loop.id, loop.sources![0]!),
         );
         if (!outcome.ran && !outcome.authzFailed) return { status: "silent", note: "duplicate fire key" };
-        failure = stageFailure("inbox sync", outcome)?.error.message;
+        failure = stageFailure("inbox sync", outcome)?.error;
         if (failure === undefined) await triage(loop, fireKey, threadRef);
       } catch (error) {
-        failure = errMessage(error);
+        failure = error;
       }
-      await deps.loops.recordFireOutcome(loopId, failure !== undefined);
-      await applyGovernor(loopId);
-      return failure !== undefined ? { status: "failed", note: failure } : { status: "silent" };
+      if (failure === undefined) {
+        await deps.loops.recordFireOutcome(loopId, "ok");
+        await applyGovernor(loopId);
+        return { status: "silent" };
+      }
+      return recordFailedFire(loopId, failure);
     }
     const maxAttempts = loop.caps?.maxItemAttempts ?? DEFAULT_MAX_ATTEMPTS;
     const grants = await deps.grants.byLoop(loopId);
@@ -803,14 +837,15 @@ export function createLoopFireService(deps: LoopFireDeps): LoopFireService {
       );
     } catch (e) {
       if (e instanceof DuplicateLoopFireError) return { status: "silent", note: "duplicate fire key" };
-      await deps.loops.recordFireOutcome(loopId, true);
-      await applyGovernor(loopId);
-      return { status: "failed", note: errMessage(e) };
+      return recordFailedFire(loopId, e);
     }
 
-    if (!summary.ran) return { status: "silent", note: "loop is not runnable" };
+    if (!summary.ran) return notRunnable(loop);
     const failed = summary.failures.length > 0;
-    await applyGovernor(loopId, summary);
+    await applyGovernor(loopId, {
+      summary,
+      ...(fireOutcome(summary) === "transient" ? { transientFailure: summary.failures[0]! } : {}),
+    });
     const note = [
       `enqueued ${summary.enqueued}, worked ${summary.worked}`,
       ...(summary.ready.length ? [`${summary.ready.length} held for review`] : []),

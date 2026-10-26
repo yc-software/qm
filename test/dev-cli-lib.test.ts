@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } 
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
-import { spawnCommand } from "../scripts/dev/lib/proc.ts";
+import { run, spawnCommand } from "../scripts/dev/lib/proc.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { envSha, errMessage, formatAge } from "../scripts/dev/lib/util.ts";
@@ -619,4 +619,9 @@ test("spawnCommand routes Windows batch shims through cmd.exe with quoted argume
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("run reports the exit code of a child that exits before it reads its input", async () => {
+  const result = await run(process.execPath, ["-e", "process.exit(3)"], { input: "x".repeat(8 * 1024 * 1024) });
+  assert.equal(result.code, 3);
 });

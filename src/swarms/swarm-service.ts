@@ -205,6 +205,7 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     cancel: true,
     shutdown: true,
     runStartedAt: true,
+    resumeCause: true,
   };
   return (
     Object.keys(input).every((key) => Object.hasOwn(contract, key) || Object.hasOwn(execution, key)) &&
@@ -350,7 +351,7 @@ export function createSwarmService(deps: {
       ...(source.unattendedGrants ? { unattendedGrants: source.unattendedGrants } : {}),
       ...(source.readOnly ? { readOnly: true } : {}),
       ...(source.skipMemory ? { skipMemory: true } : {}),
-      turnWallClockMs: settings.turnMs,
+      ...(settings.turnMs === undefined ? {} : { turnWallClockMs: settings.turnMs }),
     };
     const createdAt = Date.now();
     return {

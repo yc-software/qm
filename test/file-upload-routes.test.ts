@@ -70,7 +70,7 @@ before(async () => {
   const built = buildApp(testConfig({ signingSecret: secret }));
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
-  server = createServer(built.app, { signingSecret: secret, fileUploads: fake, filesDirectUploadsEnabled: true });
+  server = createServer(built.app, { signingSecret: secret, fileUploads: fake });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
 });
@@ -122,39 +122,6 @@ test("owner can retrieve status and executable publisher with no credentials emb
   assert.ok(!text.includes(cap));
 });
 
-test("disabled initiation preserves existing session recovery", async () => {
-  const built = buildApp(testConfig({ signingSecret: secret }));
-  built.app.belongsToScope = async () => true;
-  built.app.authorizesCapabilityScope = async () => true;
-  const recovery = createServer(built.app, {
-    signingSecret: secret,
-    fileUploads: {
-      ...fake,
-      async complete() {
-        return { id: upload.id, path: upload.name } as never;
-      },
-    },
-  });
-  await new Promise<void>((resolve) => recovery.listen(0, resolve));
-  const origin = `http://localhost:${(recovery.address() as AddressInfo).port}`;
-  const cap = await token("U1");
-  try {
-    for (const [method, path, expected] of [
-      ["GET", "/v1/files/upload-client", 200],
-      ["POST", "/v1/files/uploads", 503],
-      ["GET", `/v1/files/uploads/${upload.id}`, 200],
-      ["POST", `/v1/files/uploads/${upload.id}/parts/1`, 200],
-      ["POST", `/v1/files/uploads/${upload.id}/complete`, 200],
-      ["DELETE", `/v1/files/uploads/${upload.id}`, 200],
-    ] as const) {
-      const response = await fetch(origin + path, { method, headers: { "x-agent-capability": cap } });
-      assert.equal(response.status, expected, `${method} ${path}`);
-    }
-  } finally {
-    await new Promise<void>((resolve) => recovery.close(() => resolve()));
-  }
-});
-
 test("listing shows only the caller's unfinished uploads in the token scope and counts the rest", async () => {
   type Listing = { uploads: FileUpload[]; elsewhere: number };
   const body = async (cap: string) => (await (await call("/v1/files/uploads", cap)).json()) as Listing;
@@ -185,7 +152,6 @@ test("a quota refusal tells the caller which of its uploads hold the quota", asy
   built.app.authorizesCapabilityScope = async () => true;
   const full = createServer(built.app, {
     signingSecret: secret,
-    filesDirectUploadsEnabled: true,
     fileUploads: {
       ...fake,
       async begin() {

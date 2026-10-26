@@ -19,7 +19,7 @@ import type { TurnRequest } from "../src/types.ts";
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
 
-const fake = installFakeModal({ native: true });
+const fake = installFakeModal();
 mock.module("../src/sandbox/modal-client.ts", {
   namedExports: { ...modalClient, createSdkModalClient: () => fake.client },
 });
@@ -123,7 +123,7 @@ for (const kind of ["command", "security-screen"] as const) {
 test("wired swarm outbox drives the real orchestrator, durable runs, and authenticated session viewer", async () => {
   const built = buildApp(
     testConfig({
-      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret", nativeSnapshotsEnabled: true },
+      modalSandbox: { tokenId: "test-id", tokenSecret: "test-secret" },
     }),
   );
   try {
@@ -640,6 +640,51 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
     );
     const goals = await built.sessions.goals([completed.result!.sessionId!]);
     assert.equal(goals.get(completed.result!.sessionId!)?.objective, "Exhaust the lane");
+  } finally {
+    exerciseTurn = undefined;
+    await built.runtime.stop();
+  }
+});
+
+test("a worker with an open goal answers messages as a goal turn without the swarm turnMs deadline", async () => {
+  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  try {
+    const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
+    await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);
+    const rootTurn = await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "swarm-goal-deadline-root" },
+      origin: { kind: "human" },
+      text: "Coordinate work",
+    });
+    assert.equal(rootTurn.status, "ok");
+    const root = (await built.sessions.get(rootTurn.sessionId!))!;
+    const rootRun = (await built.runs.list()).find((run) => run.request.conversation.threadRef === root.threadRef)!;
+    const caller = { kind: "human" as const, actorId: "U1", sessionId: root.id, runId: rootRun.id };
+    const [worker] = await built.app.swarms!.spawn(caller, {
+      requestId: "goal-worker",
+      text: "Work the lane",
+      settings: { turnMs: 600_000 },
+      goal: { objective: "Exhaust the lane" },
+    });
+    await built.app.swarms!.sweep();
+    const first = (await built.runs.list()).find((run) => run.request.swarm)!;
+    const seen: Array<{ deadline?: number; inbox: boolean }> = [];
+    exerciseTurn = async (turn) => {
+      if (turn.goalContinuation) return { stopped: true };
+      if (turn.input.startsWith("Swarm ")) seen.push({ deadline: turn.turnWallClockMs, inbox: !!turn.goalInbox });
+    };
+    built.runtime.start();
+    assert.equal((await built.runs.waitFor(first.id, 15_000)).status, "done");
+    const message = await built.app.swarms!.send(caller, { requestId: "ping", audience: [worker!.id], text: "ping" });
+    await built.app.swarms!.sweep();
+    const answer = (await built.runs.list()).find((run) => run.request.swarm?.messageId === message.id)!;
+    assert.equal((await built.runs.waitFor(answer.id, 15_000)).status, "done");
+    assert.deepEqual(seen, [
+      { deadline: 0, inbox: true },
+      { deadline: 0, inbox: true },
+    ]);
   } finally {
     exerciseTurn = undefined;
     await built.runtime.stop();

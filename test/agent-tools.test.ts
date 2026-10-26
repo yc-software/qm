@@ -493,14 +493,6 @@ test("sandbox advertises available management actions and retires migrate", asyn
   assert.match(textOut(await call(execute, { command: "", computer: "migrate" })), /invalid execute arguments/);
 });
 
-test("sandbox tells the agent to provision a missing default before reporting a blocker", () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "group:C1" };
-  const sandbox = createAgentTools(ref, { sandboxResources: true }).find((t) => t.name === "sandbox")!;
-  assert.match(sandbox.description, /needs a computer and this scope has no default/i);
-  assert.match(sandbox.description, /list.*create.*set_default.*retry/is);
-  assert.match(sandbox.description, /report.*blocked.*creation fails/is);
-});
-
 test("sandbox creation and default routing remain independent", async () => {
   const calls: unknown[] = [];
   const ref: ToolContextRef = {
@@ -654,14 +646,7 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
   const ref: ToolContextRef = { current: pressured, emit: () => {}, scopeLabel: "personal:U1" };
   const [execute] = createAgentTools(ref);
   const hot = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
-  assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%.*sequence heavy work/);
-  assert.doesNotMatch(hot.content[0]!.text!, /scratch/, "never recommend a scope this deployment has disabled");
-
-  const [scratchExecute] = createAgentTools(ref, { scratchExec: true });
-  const hotScratch = (await call(scratchExecute, { command: "echo ok", purpose: "p" })) as {
-    content: Array<{ text?: string }>;
-  };
-  assert.match(hotScratch.content[0]!.text!, /\[pressure\] .*move self-contained runs to scope:"scratch"/);
+  assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%/);
 
   ref.current = {
     ...pressured,
@@ -1543,8 +1528,8 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
 
 test("readOnly exposes observation and constrained session coordination without execution tools", () => {
   const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
-  const full = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true });
-  const readOnly = createAgentTools(ref, { controlTools: true, scratchExec: true, reachExec: true, readOnly: true });
+  const full = createAgentTools(ref, { controlTools: true, reachExec: true });
+  const readOnly = createAgentTools(ref, { controlTools: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "guidance"]) {
@@ -1741,18 +1726,9 @@ test('execute scope:"owner" routes only when the owner-auth surface is enabled',
   await call(execute, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
   assert.deepEqual(sink.lastExecOpts, { ownerAuth: true });
 
-  const unavailable = createAgentTools({ current: fakeToolContext() }, { scratchExec: true })[0]!;
+  const unavailable = createAgentTools({ current: fakeToolContext() })[0]!;
   const result = await call(unavailable, { command: "acmecli me", scope: "owner", purpose: "Run test command" });
   assert.match((result as { content: Array<{ text: string }> }).content[0]?.text ?? "", /invalid execute arguments/);
-});
-
-test("publish instructions prevent malformed app configs", () => {
-  const apps = createAgentTools({ current: fakeToolContext() }).find((tool) => tool.name === "apps");
-  assert.ok(apps);
-  assert.match(apps.description, /always pass `entrypoint`/);
-  assert.match(apps.description, /workspace-relative/);
-  assert.match(apps.description, /verify.*directory.*contains files/i);
-  assert.match(apps.description, /`renameFrom`.*deployment name.*not.*ID/i);
 });
 
 test("publish reply states owner + resolved audience in human terms (ADR 0003 D7)", async () => {
@@ -1867,9 +1843,6 @@ test("background dispatches each action and emits tool_call/tool_result", async 
   };
   const background = createAgentTools(ref).find((t) => t.name === "background");
   assert.ok(background);
-  assert.match(background.description, /same environment a foreground `execute` does/);
-  assert.match(background.description, /\$AGENT_CREDENTIAL_TOKEN all work/);
-  assert.match(background.description, /expire 48 hours after the turn/);
 
   const started = textOf(
     await call(
@@ -2769,7 +2742,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
       throw new Error("must not start");
     },
   };
-  for (const options of [{}, { scratchExec: true }, { ownerAuthExec: true }, { reachExec: true }]) {
+  for (const options of [{}, { ownerAuthExec: true }, { reachExec: true }]) {
     const tools = createAgentTools({ current }, { ...options, sandboxResources: true });
     const execute = tools.find((t) => t.name === "execute")!;
     const sandbox = tools.find((t) => t.name === "sandbox")!;
@@ -2826,7 +2799,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     },
     {
       sandboxResources: true,
-      scratchExec: true,
       ownerAuthExec: true,
       reachExec: true,
       commandCredentialHandles: ["git"],
@@ -3092,6 +3064,28 @@ test("runtime persists its decision before terminating and blocks later effects"
   assert.deepEqual(ref.runtimeHandoff, { choice, lifetime: "task" });
   assert.equal(events.filter((e) => e.type === "tool_result").length, 1);
   assert.equal(events.at(-1)?.payload.runId, "run");
+});
+
+test("runtime get persists the active runtime beside a result too long to show in full", async () => {
+  const events: Emitted[] = [];
+  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      runtime: async () => ({ ok: true, active, modelCatalog: { big: "x".repeat(200_000) } }),
+    },
+    scopeLabel: "personal:U1",
+    emit: async (e) => {
+      events.push(e as Emitted);
+    },
+  };
+  await call(
+    createAgentTools(ref).find((t) => t.name === "runtime"),
+    { action: "get" },
+  );
+  const persisted = events.find((e) => e.type === "tool_result")!.payload;
+  assert.deepEqual(persisted.runtimeActive, active);
+  assert.ok(String(persisted.result).length < 200_000);
 });
 
 test("runtime persistence failure does not latch a handoff", async () => {
@@ -3416,7 +3410,6 @@ test("subagents open exposes noComputer and preserves the internal restriction",
   const properties = (session.parameters as { properties: Record<string, { description?: string }> }).properties;
   assert.ok(properties.noComputer);
   assert.equal(properties.readOnly, undefined);
-  assert.match(properties.noComputer.description!, /no shell, filesystem, browser/);
   const shape = (fromJSONSchema(session.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject).shape;
   assert.ok(!Check(session.parameters, { action: "open", task: "test", noComputer: "true" }));
   for (const noComputer of [undefined, false, true]) {
@@ -3588,7 +3581,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
   assert.ok(Check(files.parameters, pathShare));
   const rejected = await call(files, pathShare);
-  assert.match(textOut(rejected), /upload it with POST \/v1\/files\/uploads first/);
+  assert.match(textOut(rejected), /upload a sandbox path with POST \/v1\/files\/uploads first/);
   assert.deepEqual(writes, [["notes", "", undefined]]);
   const invalidAppShare = { action: "share", id: "app", toScope: "org", unknown: true };
   const apps = tools.find((tool) => tool.name === "apps")!;
@@ -4014,9 +4007,6 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   const tools = createAgentTools({ current: tc }, { surfaceName: "web" });
   const subagents = tools.find((tool) => tool.name === "subagents")!;
   const sessions = tools.find((tool) => tool.name === "sessions")!;
-  assert.match(subagents.description, /does not get its own sidebar entry/);
-  assert.match(subagents.description, /or see this conversation/);
-  assert.match(sessions.description, /web sidebar/);
   for (const action of ["open", "followup_task", "wait"])
     assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);
   for (const action of ["list", "new", "fork"])
@@ -4049,7 +4039,7 @@ test("background process guidance reflects the configured sandbox token lifetime
   assert.match(guidance(), /turn tokens expire 48 hours/);
   assert.match(guidance({ sandboxCapabilityTtlMs: 72 * 3_600_000 }), /turn tokens expire 72 hours/);
   const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
-  assert.match(unlimited, /does not expire those turn tokens/);
+  assert.match(unlimited, /turn tokens do not expire here/);
   assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
 });
 

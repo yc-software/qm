@@ -10,7 +10,14 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import type { RunPriority } from "./run-store.ts";
-import { countedClaims, isTerminal, releasesDedupKey, runPriority, withTraceCarrier } from "./run-store.ts";
+import {
+  countedClaims,
+  isTerminal,
+  releasesDedupKey,
+  runPriority,
+  stopErrorCode,
+  withTraceCarrier,
+} from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
@@ -271,7 +278,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       !countsAsError && overClaimed && retry && errorAttemptsAfter < run.maxAttempts
         ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
         : error;
-    const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason };
+    const result: TurnResult = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
     const { rowCount } = await q(
       `UPDATE runs SET status='failed', result=$4, lease_token=NULL, lease_expires_at=NULL, worker_id=NULL, finished_at=$5,
          error_attempts=error_attempts+$6

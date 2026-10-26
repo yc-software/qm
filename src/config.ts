@@ -37,13 +37,7 @@ import {
   type SecurityScreenMode,
 } from "./security/security-posture.ts";
 import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
-import {
-  parseSlackContextSource,
-  type SlackContextSource,
-  slackPluginConfigFromEnv,
-  slackAccountConfigsFromEnv,
-  type SlackPluginConfig,
-} from "./slack/config.ts";
+import { slackPluginConfigFromEnv, slackAccountConfigsFromEnv, type SlackPluginConfig } from "./slack/config.ts";
 import {
   DEFAULT_CODEX_MODEL_ID,
   MODEL_PROVIDERS,
@@ -58,7 +52,6 @@ import { resolveSwarmSettings, type SwarmSettings } from "./swarms/swarm-setting
 
 export interface Config {
   productAnalytics?: { apiKey: string; host?: string };
-  slackContextSource?: SlackContextSource;
   suggestedActivitiesEnabled?: boolean;
   suggestedActivitiesContext?: string;
   swarmsEnabled?: boolean;
@@ -105,7 +98,6 @@ export interface Config {
   modelGateway?: ModelGatewayTransportConfig;
   brokerCredentials?: DeploymentBrokerCredential[];
   piCaptureRequests: boolean;
-  piSystemCacheSplit: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
   emailAuthPrincipals?: string[];
@@ -157,7 +149,6 @@ export interface Config {
   pluginSkillDirs: string[];
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
-  filesDirectUploadsEnabled: boolean;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
   s3Bucket?: string;
@@ -196,10 +187,8 @@ export interface Config {
     endpoint: string;
     token: string;
   };
-  scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
-  eagerProvisionEnabled: boolean;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
@@ -471,7 +460,6 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
 }
 
 interface ModalSandboxEnv {
-  nativeSnapshotsEnabled?: boolean;
   nativeSnapshotIntervalSec?: number;
   snapshotRetentionSec?: number;
   tokenId?: string;
@@ -488,15 +476,12 @@ interface ModalSandboxEnv {
   reapIdleSec?: number;
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
-  snapshotIntervalSec?: number;
   defaultTimeoutSec?: number;
 }
 
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
   const num = (name: string): number | undefined => numEnvStrict(name, env[name]);
   return {
-    nativeSnapshotsEnabled:
-      boolEnvStrict("MODAL_NATIVE_SNAPSHOTS_ENABLED", env.MODAL_NATIVE_SNAPSHOTS_ENABLED) ?? false,
     ...(num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") !== undefined
       ? { nativeSnapshotIntervalSec: num("MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC") }
       : {}),
@@ -523,9 +508,6 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
     ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
     ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
-    ...(num("MODAL_SNAPSHOT_INTERVAL_SEC") !== undefined
-      ? { snapshotIntervalSec: num("MODAL_SNAPSHOT_INTERVAL_SEC") }
-      : {}),
     ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
   };
 }
@@ -1122,7 +1104,7 @@ function csvPaths(value: string | undefined): string[] | undefined {
     .map((p) => resolve(p));
 }
 
-function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
+export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
   const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
   if (!names.some((name) => env[name]?.trim())) return undefined;
   for (const name of names.filter((name) => name !== "MODEL_GATEWAY_MODELS")) {
@@ -1257,7 +1239,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_SNAPSHOT_S3_BUCKET) {
     console.warn(
-      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — there are no home snapshots, so unless native home checkpoints are enabled (limited retention) the home is lost at Modal's 24h sandbox lifetime. Set MODAL_SNAPSHOT_S3_BUCKET for durable portable recovery and configure DATABASE_URL for durable checkpoint references.",
+      "[config] modal sandbox backend enabled without MODAL_SNAPSHOT_S3_BUCKET — homes are kept only as native Modal checkpoints (limited retention), and homes saved before native checkpoints cannot be restored. Configure DATABASE_URL for durable checkpoint references.",
     );
   }
   if (env.SMOLMACHINES_TOKEN && !env.SMOLMACHINES_SNAPSHOT_S3_BUCKET) {
@@ -1550,7 +1532,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
     piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
-    piSystemCacheSplit: boolEnvStrict("PI_SYSTEM_CACHE_SPLIT", env.PI_SYSTEM_CACHE_SPLIT) ?? false,
     rateLimitPerWindow:
       numEnvStrict("RATE_LIMIT_PER_WINDOW", env.RATE_LIMIT_PER_WINDOW) ?? CONFIG_DEFAULTS.rateLimitPerWindow,
     rateLimitWindowMs:
@@ -1623,7 +1604,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
-    slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),
     seedSkills: boolEnvStrict("SEED_SKILLS", env.SEED_SKILLS) ?? true,
@@ -1639,7 +1619,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
       ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
       : {}),
-    filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
@@ -1674,10 +1653,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
     securityScreenTimeoutMs,
-    scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
-    eagerProvisionEnabled: boolEnvStrict("EAGER_PROVISION", env.EAGER_PROVISION) ?? true,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),

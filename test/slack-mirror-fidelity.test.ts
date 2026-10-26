@@ -84,12 +84,13 @@ test("mirror and live render the same allowed message subtypes", async () => {
   const core = { readSurfaceMessages: cache.readMessages } as SlackCoreClient;
   const client = { conversations: { history: async () => ({ messages: raw.slice().reverse(), has_more: false }) } };
   const views = [];
-  for (const source of ["live", "mirror"] as const) {
+  const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+  for (const reader of [emptyCore, core]) {
     const serializer = createConversationSerializer({
       ids,
       directory,
       externalParticipantsEnabled: async () => false,
-      readHistory: createSlackHistoryReader({ core, ids, source }),
+      readHistory: createSlackHistoryReader({ core: reader, ids }),
     });
     const result = await serializer.serializeSlackConversation(
       client,
@@ -111,7 +112,7 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
       await cache.ingest(events.map((e) => toEvent(e)!));
     },
   } as SlackCoreClient;
-  const read = createSlackHistoryReader({ core, ids, source: "mirror" });
+  const read = createSlackHistoryReader({ core, ids });
   const page = await read(
     {
       conversations: {
@@ -131,25 +132,6 @@ test("fallback prefers fresh live duplicates and replaces removed files", async 
   assert.equal(stored.authorName, "Author");
   assert.equal(stored.bot, true);
   assert.equal(stored.files?.length ?? 0, 0);
-});
-
-test("live and shadow do not repair their own comparison source", async () => {
-  for (const source of ["live", "shadow"] as const) {
-    let writes = 0;
-    const read = createSlackHistoryReader({
-      ids,
-      source,
-      core: {
-        readSurfaceMessages: async () => [],
-        rememberSurfaceHistory: async () => {
-          writes++;
-        },
-      } as unknown as SlackCoreClient,
-    });
-    await read({ conversations: { history: async () => ({ messages: [{ ts: "1", text: "live" }] }) } }, "C");
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(writes, 0);
-  }
 });
 
 test("event mirroring preserves mention IDs for current-context rendering", async () => {
@@ -181,8 +163,9 @@ test("event mirroring preserves mention IDs for current-context rendering", asyn
   assert.equal(stored.text, "Hi <@U1> and <@U2> & welcome");
   assert.deepEqual(stored.mentions, { U1: "Old name", U2: "Old name" });
   const shaped = [];
-  for (const source of ["live", "mirror"] as const) {
-    const readHistory = createSlackHistoryReader({ core, ids, source });
+  const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+  for (const reader of [emptyCore, core]) {
+    const readHistory = createSlackHistoryReader({ core: reader, ids });
     const serializer = createConversationSerializer({
       ids,
       directory: mentionDirectory,
@@ -245,12 +228,13 @@ for (const postgres of [false, true]) {
           },
         };
         const views = [];
-        for (const source of ["live", "mirror"] as const) {
+        const emptyCore = { readSurfaceMessages: createMemorySurfaceCache().readMessages } as SlackCoreClient;
+        for (const reader of [emptyCore, core]) {
           const serializer = createConversationSerializer({
             ids,
             directory,
             externalParticipantsEnabled: async () => true,
-            readHistory: createSlackHistoryReader({ core, ids, source }),
+            readHistory: createSlackHistoryReader({ core: reader, ids }),
           });
           const result = await serializer.serializeSlackConversation(
             client,

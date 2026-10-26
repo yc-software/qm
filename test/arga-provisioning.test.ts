@@ -2,6 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { provisionSlackTwin, teardownTwin } from "./live-slack/arga.ts";
 
+const READY_TWIN = {
+  status: "ready",
+  proxy_token: "proxy",
+  twins: {
+    slack: {
+      base_url: "https://slack.test",
+      admin_url: "https://admin.test",
+      env_vars: { SLACK_BOT_TOKEN: "bot", SLACK_SIGNING_SECRET: "signing" },
+    },
+  },
+};
+
 test("failed Arga provisions are torn down before one fresh retry", async (t) => {
   const requests: Array<{ method: string; path: string }> = [];
   let provisions = 0;
@@ -23,19 +35,7 @@ test("failed Arga provisions are torn down before one fresh retry", async (t) =>
       teardownRequested = true;
       return Response.json({ status: "tearing_down" });
     }
-    if (path === "/validate/twins/provision/run-2/status") {
-      return Response.json({
-        status: "ready",
-        proxy_token: "proxy",
-        twins: {
-          slack: {
-            base_url: "https://slack.test",
-            admin_url: "https://admin.test",
-            env_vars: { SLACK_BOT_TOKEN: "bot", SLACK_SIGNING_SECRET: "signing" },
-          },
-        },
-      });
-    }
+    if (path === "/validate/twins/provision/run-2/status") return Response.json(READY_TWIN);
     if (String(input) === "https://admin.test/admin/config") {
       return Response.json({});
     }
@@ -106,4 +106,24 @@ test("Arga cleanup does not interpret missing or unauthorized status as successf
     await assert.rejects(teardownTwin("key", "old-run"), new RegExp(String(status)));
     fetchMock.mock.restore();
   }
+});
+
+test("a twin that takes longer than two minutes to become ready is accepted", async (t) => {
+  let now = 0;
+  const posts: string[] = [];
+  t.mock.method(Date, "now", () => now);
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "https://admin.test/admin/config") return Response.json({});
+    if (init?.method === "POST") {
+      posts.push(new URL(String(input)).pathname);
+      return Response.json({ run_id: "run-1" });
+    }
+    now += 30_000;
+    return Response.json(now < 4 * 60_000 ? { status: "provisioning" } : READY_TWIN);
+  });
+
+  const session = await provisionSlackTwin("key", 60, { pollMs: 0 });
+
+  assert.equal(session.runId, "run-1");
+  assert.deepEqual(posts, ["/validate/twins/provision"]);
 });

@@ -44,6 +44,10 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
+  return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
+}
+
 export function handbackStop(shutdown: AbortSignal): RunStop {
   return shutdown.reason === PARKED ? PARKED : { kind: "shutdown" };
 }

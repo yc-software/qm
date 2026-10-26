@@ -343,6 +343,22 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
     },
   },
   {
+    id: "gpt-6.1-terra",
+    buttonLabel: "6.1 Terra",
+    name: "GPT-6.1 Terra",
+    fastMode: true,
+    webui: true,
+    base: true,
+    clone: {
+      ...GPT_56_CLONE,
+      input: 1,
+      output: 5,
+      cacheRead: 0.05,
+      cacheWrite: 1.25,
+      tiers: [{ inputTokensAbove: 272_000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5 }],
+    },
+  },
+  {
     id: "gpt-6-sol",
     buttonLabel: "6 Sol",
     name: "GPT-6 Sol",

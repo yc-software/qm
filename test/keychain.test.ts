@@ -822,6 +822,16 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
     (e: KeychainError) => e.status === 400,
     "a bad single envKey is rejected too",
   );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a single envKey in the harness namespace is rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a field envKey in the harness namespace is rejected",
+  );
 });
 
 test("back-compat: a legacy record carrying a plaintext username still materializes the paired env var", async () => {

@@ -3746,15 +3746,10 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
 });
 
-test("a conversational turn never provisions a sandbox (lazy); execute/write/read do", async () => {
-  const built = freshApp({ eagerProvisionEnabled: false });
+test("execute and write provision a sandbox that is released after the turn", async () => {
+  const built = freshApp();
   const { app } = built;
   const boxes = spyProvisioning(built.sandbox);
-
-  const chat = await app.turn(dm("hello there"));
-  assert.equal(chat.status, "ok");
-  assert.equal(boxes.provisioned, 0, "chat turn must not provision");
-  assert.equal(boxes.live, 0);
 
   const run = await app.turn(dm("!run echo sandbox-works"));
   assert.equal(run.status, "ok");
@@ -3763,9 +3758,6 @@ test("a conversational turn never provisions a sandbox (lazy); execute/write/rea
 
   await app.turn(dm("!write notes.md hi"));
   assert.equal(boxes.provisioned, 2, "write must provision");
-
-  await app.turn(dm("just chatting"));
-  assert.equal(boxes.provisioned, 2, "second chat turn must not provision");
 });
 
 test("thinking always reaches the run activity feed, with the model-bound signature stripped", async () => {
@@ -3834,8 +3826,8 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(rwScope, env.id, "the attachment redirects the rw layer (machine/volume/backup) to the environment id");
 });
 
-test("EAGER_PROVISION warms the box on a tool-using session's next turn and still reclaims it", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning warms the box on a tool-using session's next turn and still reclaims it", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3847,16 +3839,16 @@ test("EAGER_PROVISION warms the box on a tool-using session's next turn and stil
   assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
 });
 
-test("EAGER_PROVISION never grows a computer for a chat-only session", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning never grows a computer for a chat-only session", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const res = await built.app.turn(dm("hello there"));
   assert.equal(res.status, "ok");
   assert.equal(boxes.provisioned, 0, "a session with no tool history must stay lazy");
 });
 
-test("EAGER_PROVISION single-flights with the first tool call — one provision per turn, not two", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning single-flights with the first tool call — one provision per turn, not two", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3866,7 +3858,7 @@ test("EAGER_PROVISION single-flights with the first tool call — one provision 
 });
 
 test("a failed eager provision clears the slot — the tool call retries instead of inheriting the error", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3902,14 +3894,6 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
   };
   await built.app.turn(dm("!run echo hi")).catch(() => null);
   assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
-});
-
-test("eager provisioning stays off by default — a toolless turn provisions nothing", async () => {
-  const built = freshApp();
-  const boxes = spyProvisioning(built.sandbox);
-  const res = await built.app.turn(dm("hello there"));
-  assert.equal(res.status, "ok");
-  assert.equal(boxes.provisioned, 0);
 });
 
 test("Door 2: an envelopeWrapped request on its own skips the overheard seed (replay preserves topic-scope)", async () => {
@@ -4188,7 +4172,7 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
 });
 
 test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+  const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");

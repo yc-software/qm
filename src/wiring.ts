@@ -119,6 +119,8 @@ import type {
   ScopeId,
   Session,
   SurfaceContextRequest,
+  TurnRequest,
+  TurnResult,
   Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
@@ -982,8 +984,6 @@ export function buildApp(
       }),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
-      ...(modal.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: modal.snapshotIntervalSec * 1000 } : {}),
-      nativeSnapshotsEnabled: modal.nativeSnapshotsEnabled ?? false,
       ...(modal.nativeSnapshotIntervalSec !== undefined
         ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
         : {}),
@@ -2121,7 +2121,6 @@ export function buildApp(
     crons,
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
@@ -2129,7 +2128,6 @@ export function buildApp(
     projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -2508,8 +2506,14 @@ export function buildApp(
   );
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
-  orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
+  const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
+    const slackSource =
+      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
+        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
+        : undefined;
+    return app.turn(slackSource ? { ...req, slackSource } : req);
+  };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
@@ -2517,7 +2521,7 @@ export function buildApp(
             deliveries,
             idempotency,
             identity,
-            run: (req) => app.turn(req),
+            run: runTriggered,
             directory,
             currentScopeMembers,
             sessions,
@@ -2532,10 +2536,7 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution(
-          { deliveries, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
-          drop,
-        )
+        fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
@@ -2551,7 +2552,7 @@ export function buildApp(
       deliveries,
       idempotency,
       identity,
-      run: (req) => app.turn(req),
+      run: runTriggered,
       directory,
       currentScopeMembers,
       sessions,
@@ -2602,7 +2603,7 @@ export function buildApp(
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: runTriggered,
     leaderLease,
     directory,
     currentScopeMembers,
@@ -2676,7 +2677,7 @@ export function buildApp(
           deliveries,
           idempotency,
           identity,
-          run: (req) => app.turn(req),
+          run: runTriggered,
           directory,
           currentScopeMembers,
           sessions,
@@ -2697,7 +2698,7 @@ export function buildApp(
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: runTriggered,
     directory,
     currentScopeMembers,
     resolveRecipient,
@@ -3174,7 +3175,6 @@ export function serverDeps(
     workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,
