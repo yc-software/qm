@@ -410,7 +410,7 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const needsConfig = view !== "credentials" && view !== "connectors";
   await Promise.all([
     needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
-    needsModels ? read("modelRegistry", () => deps.refreshModels?.()) : undefined,
+    needsModels ? read("models", () => deps.refreshModels?.()) : undefined,
   ]);
   audit(deps, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
   const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];

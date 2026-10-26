@@ -1,5 +1,4 @@
-import type { EmbeddingModel } from "./model-overlay.ts";
-import { isEmbeddingModel } from "./model-overlay.ts";
+import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 
 export const GATEWAY_PROVIDER = "qm:gateway";

@@ -500,8 +500,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const { modelId } = ctx.body as { modelId?: unknown };
       if (modelId !== null && (typeof modelId !== "string" || !modelId.trim()))
         return { error: "Provide an embedding modelId, or null to disable semantic recall" };
-      if (modelId !== null && !resolveEmbeddingModel(modelId))
-        return { error: "Unknown or unverified embedding model" };
+      if (modelId !== null && !resolveEmbeddingModel(modelId)) return { error: "Unknown embedding model" };
       await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
       return { ok: true };
     },

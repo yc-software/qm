@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { EmbeddingModel } from "./model-overlay.ts";
+import type { EmbeddingModel } from "./embedding-model.ts";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { providerTurnError } from "../harness/provider-error.ts";
 import { httpFailure } from "../util/errors.ts";

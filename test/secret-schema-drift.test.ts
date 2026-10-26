@@ -91,10 +91,6 @@ test("an OpenAI base model needs an API key unless a company ChatGPT login serve
     validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
     [],
   );
-  assert.deepEqual(
-    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_FILE: "/tmp/auth.json" } as NodeJS.ProcessEnv),
-    [],
-  );
 });
 
 test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {

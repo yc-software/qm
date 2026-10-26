@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   companySubscriptionAuth,
   baseModelProviders,
@@ -766,18 +764,12 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("a company Claude subscription token is Pi's Anthropic key unless an API key is set", () => {
-  const subscription = loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company" });
+test("a Claude subscription token in ANTHROPIC_API_KEY is company subscription auth", () => {
+  const subscription = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" });
   assert.equal(subscription.anthropicApiKey, "sk-ant-oat01-company");
   assert.equal(providerKeysPresent(subscription).anthropic, true);
   assert.equal(companySubscriptionAuth(subscription), "anthropic");
-  assert.equal(loadConfig({ ANTHROPIC_AUTH_TOKEN: "sk-ant-oat01-auth" }).anthropicApiKey, "sk-ant-oat01-auth");
-  const both = loadConfig({
-    ANTHROPIC_API_KEY: "sk-ant-api",
-    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company",
-  });
-  assert.equal(both.anthropicApiKey, "sk-ant-api");
-  assert.equal(companySubscriptionAuth(both), undefined);
+  assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-api" })), undefined);
   const keychainHeld = loadConfig({ CLAUDE_AUTH_CREDENTIAL: "cred-1" });
   assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
   assert.equal(companySubscriptionAuth(keychainHeld), "anthropic");
@@ -786,32 +778,9 @@ test("a company Claude subscription token is Pi's Anthropic key unless an API ke
 test("company ChatGPT auth satisfies model onboarding without an API key", () => {
   const config = loadConfig({});
   assert.equal(companySubscriptionAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
-  assert.equal(companySubscriptionAuth({ ...config, codexAuthFile: "/local/auth.json" }), "openai");
   assert.equal(companySubscriptionAuth(config), undefined);
   assert.equal(providerKeysPresent({ ...config, codexAuthCredential: "cred-1" }).codexOAuth, true);
   assert.equal(loadConfig({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential, "cred-1");
-});
-
-test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-config-chatgpt-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
-  const token = `e30.${claims.toString("base64url")}.sig`;
-  writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
-  chmodSync(path, 0o600);
-  assert.equal(loadConfig({ CODEX_AUTH_FILE: path }).codexAuthFile, path);
-  assert.throws(
-    () => loadConfig({ CODEX_AUTH_FILE: join(dir, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
-  );
-  assert.equal(loadConfig({ CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile, undefined);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, CODEX_AUTH_FILE: path }),
-    /CODEX_AUTH_FILE is supported for local development only/,
-  );
-  chmodSync(path, 0o644);
-  assert.throws(() => loadConfig({ CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
 });
 
 test("retired brain environment does not configure a runtime integration and warns once", () => {

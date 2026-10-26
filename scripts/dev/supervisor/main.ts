@@ -317,9 +317,7 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
-  let modelDetail = `live turns (anthropic key from ${assembled.anthropicKeySource})`;
-  if (assembled.codexAuthSource) modelDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
-  phase("env", "ok", modelDetail);
+  phase("env", "ok", `live turns (anthropic key from ${assembled.anthropicKeySource})`);
 
   phase("deps", "start");
   await ensureDeps(

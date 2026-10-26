@@ -5,13 +5,11 @@ import { liveEnvPath } from "./pool.ts";
 import { readEnvFile } from "../../../cli/src/util.ts";
 import { bestEffort, sha256Hex } from "./util.ts";
 import { run } from "./proc.ts";
-import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../../../src/model/chatgpt-auth-file.ts";
 
 export interface AssembledEnv {
   env: Record<string, string>;
   anthropicKeySource: string;
   openaiKeySource: string;
-  codexAuthSource: string;
   liveEnvFile: string;
   warnings: string[];
 }
@@ -126,21 +124,12 @@ export async function assembleEnv(opts: {
     openaiKeySource = "the worktree .env";
   }
 
-  if (!env.CODEX_AUTH_FILE && wtEnv.CODEX_AUTH_FILE) env.CODEX_AUTH_FILE = wtEnv.CODEX_AUTH_FILE;
-  let codexAuthSource = "";
-  const codexAuthCandidate = codexAuthFileForEnv({ ...env, ...opts.callerEnv });
-  const codexOAuthConfigured = Boolean(codexAuthCandidate && readCodexOAuthAuthFile(codexAuthCandidate));
-  if (codexOAuthConfigured && codexAuthCandidate) {
-    env.CODEX_AUTH_FILE = codexAuthCandidate;
-    codexAuthSource = codexAuthCandidate;
-  }
-
-  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
+  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY) {
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else {
     throw new Error(
-      `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
+      `ANTHROPIC_API_KEY or OPENAI_API_KEY is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
     );
   }
 
@@ -151,7 +140,7 @@ export async function assembleEnv(opts: {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
-  return { env, anthropicKeySource, openaiKeySource, codexAuthSource, liveEnvFile, warnings };
+  return { env, anthropicKeySource, openaiKeySource, liveEnvFile, warnings };
 }
 
 export function envFileGet(path: string, key: string): string {

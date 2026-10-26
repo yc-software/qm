@@ -24,6 +24,12 @@ const listen = async (server: Server) => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 };
+const OPENAI_BASE = "https://api.openai.com/v1";
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const redirectOpenAI =
+  (providerUrl: string): typeof fetch =>
+  (input, init) =>
+    fetch(String(input).replace(OPENAI_BASE, providerUrl), init);
 const close = async (server: Server) => {
   server.closeAllConnections();
   await new Promise<void>((r) => server.close(() => r()));
@@ -52,13 +58,15 @@ async function seedVectors(
   memory: MemoryService,
   databaseUrl: string,
   model: string,
-  baseUrl: string,
+  providerUrl: string,
   scopes: string[],
 ) {
   const index = createPostgresVectorStore(databaseUrl);
   const embedder = createMemoryEmbedder(
-    { kind: "embedding", id: model, name: model, provider: "openai", baseUrl },
+    { kind: "embedding", id: model, name: model, provider: "openai", baseUrl: OPENAI_BASE },
     "test-key",
+    undefined,
+    redirectOpenAI(providerUrl),
   );
   try {
     for (const scope of scopes) {
@@ -104,9 +112,9 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
     testConfig({
       memoryStrategy: "agent-only",
       databaseUrl,
-      providerBaseUrls: { openai: providerUrl },
       openaiApiKey: "test-key",
     }),
+    { modelCredentialFetch: redirectOpenAI(providerUrl) },
   );
   databaseFixture.stop = () => built.runtime.stop();
   await migrateRegisteredPgSchemas(databaseUrl);
@@ -123,11 +131,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   } finally {
     await inspector.end();
   }
-  const embeddingId = "test-model";
-  await built.modelRegistry.upsert(
-    { kind: "embedding", id: embeddingId, name: "Embeddings", provider: "openai" },
-    "admin",
-  );
+  const embeddingId = EMBEDDING_MODEL;
   await built.config.setEmbeddingModel(embeddingId);
   const orgFact = "Browser regression tests should also cover Firefox.";
   await built.memory.capture("org:default-org", [orgFact], Date.now());
@@ -232,13 +236,12 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
       sharingPosture: "open",
       memoryStrategy: "agent-only",
       databaseUrl,
-      providerBaseUrls: { openai: providerUrl },
       openaiApiKey: "test",
     }),
+    { modelCredentialFetch: redirectOpenAI(providerUrl) },
   );
   databaseFixture.stop = () => built.runtime.stop();
-  await built.modelRegistry.upsert({ kind: "embedding", id: "test", name: "Embeddings", provider: "openai" }, "admin");
-  await built.config.setEmbeddingModel("test");
+  await built.config.setEmbeddingModel(EMBEDDING_MODEL);
   const personal = "personal:U1",
     room = "channel:C1",
     denied = "channel:C2";
@@ -264,7 +267,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
   );
   await built.memory.capture(room, ["0.99 REMOTE_BEST", "0.72 REMOTE_NEAR"], Date.now());
   await built.memory.capture(denied, ["1 DENIED_NOTEBOOK"], Date.now());
-  await seedVectors(built.memory, databaseUrl, "test", providerUrl, [personal, room]);
+  await seedVectors(built.memory, databaseUrl, EMBEDDING_MODEL, providerUrl, [personal, room]);
   const server = createInsecureTestServer(built.app);
   const base = await listen(server);
   t.after(() => close(server));

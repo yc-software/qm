@@ -11,8 +11,8 @@ dialogue; otherwise the newest facts come first. Later turns add only newly sele
 
 Choose the model with the org setting `memory-embedding-model`
 (`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
-Gateway models with `mode=embedding` are listed automatically; a direct OpenAI-compatible
-model is registered in the model registry with `"kind": "embedding"`. The provider
+Gateway models with `mode=embedding` are listed automatically, alongside OpenAI's
+`text-embedding-3-small` and `text-embedding-3-large`, which use the organization OpenAI key. The provider
 receives fact text during background indexing and the query during recall. PostgreSQL
 stores typed vectors in `memory_fact_vectors`; recall ranks live, disclosed facts once per
 scope in SQL and returns compact ranked matches. No approximate vector index is used.

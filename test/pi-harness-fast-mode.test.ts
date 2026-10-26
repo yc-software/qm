@@ -103,12 +103,12 @@ test("auto resets a reused Anthropic session to its interactive default", () => 
   assert.equal(session.state.thinkingLevel, "low");
 });
 
-const ASTRA = getRequiredModel("gpt-6-astra", false) as Model<Api>;
-const SOL_61 = getRequiredModel("gpt-6.1-sol", false) as Model<Api>;
-const OPUS_55 = getRequiredModel("claude-opus-5-5", false);
-const SONNET_55 = getRequiredModel("claude-sonnet-5-5", false);
-const HAIKU_55 = getRequiredModel("claude-haiku-5-5", false);
-const OPUS = getRequiredModel("claude-opus-5", false) as Model<Api>;
+const ASTRA = getRequiredModel("gpt-6-astra") as Model<Api>;
+const SOL_61 = getRequiredModel("gpt-6.1-sol") as Model<Api>;
+const OPUS_55 = getRequiredModel("claude-opus-5-5");
+const SONNET_55 = getRequiredModel("claude-sonnet-5-5");
+const HAIKU_55 = getRequiredModel("claude-haiku-5-5");
+const OPUS = getRequiredModel("claude-opus-5") as Model<Api>;
 const ASTRA_TOKENS = { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000, totalTokens: 66_000 };
 
 function assertUsd(actual: number, expected: number): void {
@@ -186,7 +186,7 @@ test("normalization ignores provider pricing, preserves tokens and never mutates
   assert.deepEqual(ASTRA.cost, card);
 });
 
-const HAIKU = getRequiredModel("claude-haiku-4-5", false) as Model<Api>;
+const HAIKU = getRequiredModel("claude-haiku-4-5") as Model<Api>;
 const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
 test("request headers preserve rates and existing beta headers", () => {

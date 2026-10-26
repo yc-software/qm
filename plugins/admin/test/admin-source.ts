@@ -16,7 +16,6 @@ export function readAdminSource(): string {
           const selectors: Record<string, string> = {
             steps: ".setup-grid",
             provider: "#onboarding-model-save",
-            registry: "#model-registry-save",
           };
           const element = dom.window.document.querySelector(selectors[kind])!;
           return (kind === "steps" ? element : element.closest("section")!).outerHTML;

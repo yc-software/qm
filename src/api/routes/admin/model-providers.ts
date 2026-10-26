@@ -1,5 +1,4 @@
 import { isModelProvider, type ModelProvider } from "../../../model/model-credential-store.ts";
-import { providerBaseUrl } from "../../../model/provider-endpoints.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
@@ -28,7 +27,7 @@ const VALIDATION_REQUESTS: Record<
 
 function validationUrl(provider: ModelProvider): string {
   const request = VALIDATION_REQUESTS[provider];
-  return `${providerBaseUrl(provider) ?? request.baseUrl}${request.path}`;
+  return `${request.baseUrl}${request.path}`;
 }
 
 async function actor(ctx: ApiCtx) {

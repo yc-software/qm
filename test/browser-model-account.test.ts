@@ -1,7 +1,4 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { hashId } from "../src/util/crypto.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -161,72 +158,37 @@ test("Claude subscription browser requests fail without deriving or sending cred
   );
 });
 
-test("personal API keys bypass organization provider endpoint overrides", async (t) => {
-  const built = buildApp(testConfig());
-  setProviderBaseUrls({ openai: "https://organization.invalid/v1", anthropic: "https://organization.invalid" });
-  t.after(() => setProviderBaseUrls({}));
-  for (const provider of ["openai", "anthropic"] as const) {
-    await built.userModelCredentials.setApiKey("U1", provider, `personal-${provider}`);
-    await built.config.setPersonalModelAuth("U1", true, provider);
-    const selection = await resolveBrowserModel({
-      actorId: "U1",
-      config: built.config,
-      credentials: built.userModelCredentials,
-      companyModel: "gateway/unavailable-company-model",
-    });
-    assert.equal(selection.routing?.provider, provider);
-    const result = await nativeBrowserCompletion(
-      {
-        selection,
-        actorId: "U1",
-        credentials: built.userModelCredentials,
-        body: { messages: [{ role: "user", content: "browser test" }] },
-        signal: new AbortController().signal,
-      },
-      async (keys) => {
-        assert.deepEqual(keys, { [provider]: `personal-${provider}` });
-        return {
-          completeSimple: async (model) => {
-            assert.ok(!model.baseUrl.includes("organization.invalid"));
-            return {
-              role: "assistant",
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              content: [{ type: "text", text: "done" }],
-              usage: zeroUsage(),
-              timestamp: Date.now(),
-              stopReason: "stop",
-            };
-          },
-        };
-      },
-    );
-    assert.equal(result.choices[0]?.message.content, "done");
-  }
-});
-
-test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const authFile = join(dir, "auth.json");
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async () => {
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    }),
-    { mode: 0o600 },
-  );
+  const credentialId = hashId(["company-admin", "codex", "file"]);
   const built = buildApp(
     testConfig({
-      codexAuthFile: authFile,
+      codexAuthCredential: credentialId,
       openaiApiKey: "must-not-fallback",
     }),
   );
+  const saved = await built.keychain!.save({
+    ownerId: "company-admin",
+    service: "codex",
+    files: [
+      {
+        path: ".codex/auth.json",
+        contentBase64: Buffer.from(
+          JSON.stringify({
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "company-access",
+              refresh_token: "company-refresh",
+              id_token: `header.${claims}.sig`,
+            },
+          }),
+        ).toString("base64"),
+      },
+    ],
+  });
+  assert.equal(saved.id, credentialId);
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

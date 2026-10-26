@@ -1,7 +1,7 @@
-import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
+import { isEmbeddingModel, type EmbeddingModel } from "./embedding-model.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
-import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import { selectableBaseModels } from "./pi-models.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
@@ -192,11 +192,7 @@ export function createGatewayCatalog(
         expiresAt = now() + TTL_MS;
         retryAt = expiresAt;
         lastSuccessAt = now();
-        const offeredAliases = new Set(
-          selectableBaseModels()
-            .filter(({ id }) => modelOfferedInWebui(id))
-            .map(({ id }) => id),
-        );
+        const offeredAliases = new Set(selectableBaseModels().map(({ id }) => id));
         setGatewayModels(
           models,
           Object.entries(config.models).flatMap(([id, target]) =>

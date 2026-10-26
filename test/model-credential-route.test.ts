@@ -506,7 +506,7 @@ test("surface-config respects an admin-disabled environment provider", async () 
 });
 
 test("surface-config reports company ChatGPT OAuth without making it a Pi API credential", async () => {
-  const srv = start({ codexAuthFile: "/tmp/codex-auth.json" });
+  const srv = start({ codexAuthCredential: "company-chatgpt" });
   try {
     const surface = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(surface.status, 200);

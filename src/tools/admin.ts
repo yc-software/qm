@@ -201,29 +201,6 @@ export const adminOperations = {
   model_providers: operation("Read model-provider metadata.", "GET", "/model-providers"),
   custom_providers: operation("Read custom model-provider metadata.", "GET", "/custom-providers"),
   mcp_servers: operation("Read MCP-server metadata.", "GET", "/mcp-servers"),
-  model_registry: operation("Read model definitions.", "GET", "/model-registry"),
-  model_lookup: operation("Look up a provider's model definition.", "POST", "/model-registry/lookup", {
-    value: Type.Object(
-      { provider: Type.Union([Type.Literal("openai"), Type.Literal("anthropic")]), id: string },
-      { additionalProperties: false },
-    ),
-  }),
-  model_enable: operation(
-    "Verify and enable a model, including a small billable request. Confirm first.",
-    "POST",
-    "/model-registry/:id/enable",
-    {
-      id: string,
-      value: Type.Object(
-        { provider: Type.Union([Type.Literal("openai"), Type.Literal("anthropic")]), verify: Type.Literal(true) },
-        { additionalProperties: false },
-      ),
-    },
-  ),
-  model_delete: operation("Remove an administrator model definition. Confirm first.", "DELETE", "/model-registry/:id", {
-    id: string,
-  }),
-
   slack_delete: operation("Remove Slack installation. Confirm first.", "DELETE", "/slack-installation"),
 
   model_provider_delete: operation("Remove a provider API key. Confirm first.", "DELETE", "/model-providers/:id", {
@@ -235,12 +212,6 @@ export const adminOperations = {
   }),
 
   mcp_delete: operation("Remove an MCP server. Confirm first.", "DELETE", "/mcp-servers/:id", { id: string }),
-  model_save: operation(
-    "Save a model definition using the existing model spec validator. Requires verify:true and confirmation for the billable verification request.",
-    "PUT",
-    "/model-registry/:id",
-    { id: string, value: object },
-  ),
   auto_flagger_test: operation(
     "Test a candidate security screener on recent samples using the existing draft validator. Confirm the billable test first.",
     "POST",

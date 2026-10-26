@@ -12,7 +12,6 @@ import {
   ALL_PROVIDERS_AVAILABLE,
   fastModeModelIds,
   modelCatalogFor,
-  modelOfferedInWebui,
   modelUnavailableReason,
   thinkingLevelsFor,
   codexProviderModelId,
@@ -110,9 +109,7 @@ export async function runtimeConfigBody(
   const offered =
     allowlist != null
       ? allowlist.filter((id) => modelSupported(id))
-      : selectableCatalog(catalog)
-          .filter((model) => modelOfferedInWebui(model.id))
-          .map((model) => model.id);
+      : selectableCatalog(catalog).map((model) => model.id);
   for (const choice of selected) {
     if (
       allowlist?.length !== 0 &&

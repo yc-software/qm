@@ -1,8 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { hashId } from "../src/util/crypto.ts";
 import { mock, test } from "node:test";
 import * as piHarness from "../src/harness/pi-harness.ts";
 import * as mockHarness from "./support/mock-harness.ts";
@@ -240,19 +238,25 @@ test("a personal Claude subscription login runs on Pi with its OAuth token as th
   }
 });
 
-test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-company-chatgpt-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async () => {
   const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
   const companyToken = `e30.${claims.toString("base64url")}.sig`;
-  const authFile = join(dir, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: companyToken, refresh_token: "r" } }),
-  );
-  chmodSync(authFile, 0o600);
   turns.length = 0;
-  const built = buildApp(testConfig({ codexAuthFile: authFile }));
+  const credentialId = hashId(["company-admin", "codex", "file"]);
+  const built = buildApp(testConfig({ codexAuthCredential: credentialId }));
+  const saved = await built.keychain!.save({
+    ownerId: "company-admin",
+    service: "codex",
+    files: [
+      {
+        path: ".codex/auth.json",
+        contentBase64: Buffer.from(
+          JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: companyToken, refresh_token: "r" } }),
+        ).toString("base64"),
+      },
+    ],
+  });
+  assert.equal(saved.id, credentialId);
   assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
   assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
   assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");

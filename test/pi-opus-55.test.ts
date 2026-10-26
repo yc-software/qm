@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { buildModelRuntime, probeModel } from "../src/harness/pi-harness.ts";
-import { getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
+import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { getRequiredModel } from "../src/model/pi-models.ts";
 
 const bindingBeta = "thinking-binding-controls-2026-08-01";
 const context = { messages: [{ role: "user" as const, content: "Reply OK.", timestamp: 0 }] };
@@ -10,7 +10,7 @@ for (const modelId of ["claude-opus-5-5", "claude-sonnet-5-5"])
   test(`${modelId} wire requests keep mandatory thinking, caller hooks and beta headers across Pi entry points`, (t) =>
     assertMandatoryThinkingWire(t, modelId));
 
-test("claude-haiku-5-5 wire requests bind adaptive thinking at every effort and turn thinking off only without one", async (t) => {
+test("claude-haiku-5-5 wire requests bind adaptive thinking at every effort", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -20,7 +20,7 @@ test("claude-haiku-5-5 wire requests bind adaptive thinking at every effort and 
     requests.push({ headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     return okStream("claude-haiku-5-5");
   }) as typeof fetch;
-  const model = getRequiredModel("claude-haiku-5-5", false);
+  const model = getRequiredModel("claude-haiku-5-5");
   const runtime = await buildModelRuntime({ anthropic: "sk-offline-test-key" });
   for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
     const response = await runtime.streamSimple(model, context, { reasoning: effort, maxRetries: 0 }).result();
@@ -35,13 +35,6 @@ test("claude-haiku-5-5 wire requests bind adaptive thinking at every effort and 
     assert.deepEqual(request.body.output_config, { effort });
     assert.equal(request.body.temperature, undefined);
   }
-  // Without an effort the API default (medium) applies, where Haiku 5.5 accepts thinking off.
-  await probeModel(model, { anthropic: "sk-offline-test-key" }, AbortSignal.timeout(10_000), false);
-  const probe = requests.at(-1)!;
-  assert.deepEqual(probe.body.thinking, { type: "disabled" });
-  assert.equal(probe.body.output_config, undefined);
-  assert.equal(probe.body.speed, undefined);
-  assert.ok(!probe.headers.get("anthropic-beta")?.includes("fast-mode-2026-02-01"));
 });
 
 function okStream(modelId: string): Response {
@@ -78,7 +71,7 @@ async function assertMandatoryThinkingWire(t: TestContext, modelId: string): Pro
     requests.push({ headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     return okStream(modelId);
   }) as typeof fetch;
-  const model = { ...getRequiredModel(modelId, false), headers: { "anthropic-beta": "prior-beta" } };
+  const model = { ...getRequiredModel(modelId), headers: { "anthropic-beta": "prior-beta" } };
   const runtime = await buildModelRuntime({ anthropic: "sk-offline-test-key" });
   for (const effort of [undefined, "low", "xhigh", "max"] as const) {
     const response = await runtime
@@ -107,12 +100,6 @@ async function assertMandatoryThinkingWire(t: TestContext, modelId: string): Pro
     display: "summarized",
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   });
-  const fast = modelSupportsFastMode(modelId);
-  await probeModel(model, { anthropic: "sk-offline-test-key" }, AbortSignal.timeout(10_000), fast);
-  assert.equal(requests.at(-1)!.body.speed, fast ? "fast" : undefined);
-  const betas = requests.at(-1)!.headers.get("anthropic-beta")!.split(",");
-  assert.equal(betas.filter((beta) => beta === bindingBeta).length, 1);
-  assert.equal(betas.includes("fast-mode-2026-02-01"), fast);
   assert.deepEqual(model.headers, { "anthropic-beta": "prior-beta" });
 
   const gateway = await buildModelRuntime(
@@ -132,7 +119,7 @@ async function assertMandatoryThinkingWire(t: TestContext, modelId: string): Pro
   assert.deepEqual(routed.body.thinking, { type: "adaptive", display: "summarized" });
 
   await runtime
-    .streamSimple(getRequiredModel("claude-haiku-4-5", false), context, { reasoning: "low", maxRetries: 0 })
+    .streamSimple(getRequiredModel("claude-haiku-4-5"), context, { reasoning: "low", maxRetries: 0 })
     .result();
   const haiku = requests.at(-1)!;
   assert.ok(!haiku.headers.get("anthropic-beta")?.includes(bindingBeta));

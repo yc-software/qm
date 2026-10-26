@@ -9,13 +9,9 @@ import { afterEach, test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
-import { createModelVerifier } from "../src/model/model-verification.ts";
-import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import {
-  setModelOverlays,
   resolveModel,
   resolveEmbeddingModel,
   embeddingModelCatalog,
@@ -25,60 +21,32 @@ import {
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
 
-const definition = {
-  kind: "embedding",
-  id: "embed-small",
-  name: "Small embeddings",
-  provider: "openai",
-};
+const OPENAI_EMBEDDING = "text-embedding-3-small";
 afterEach(() => {
-  setModelOverlays([]);
   setGatewayModels([]);
 });
 
-test("verified embedding definitions survive registry reload but never become chat models", async () => {
-  const credentials = createModelCredentialStore({
-    backing: createMemoryMap(),
-    keyMaterial: "test-key",
-    fallback: { openai: "test-key" },
-  });
-  const requests: unknown[] = [];
-  const verifier = createModelVerifier({
-    credentials,
-    keyMaterial: "test-key",
-    fetchImpl: async (_url, init) => {
-      requests.push(JSON.parse(String(init?.body)));
+test("built-in OpenAI embeddings use the organization key and never become chat models", async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const embedder = createMemoryEmbedder(
+    resolveEmbeddingModel(OPENAI_EMBEDDING)!,
+    "org-openai-key",
+    undefined,
+    async (url, init) => {
+      requests.push({ url: String(url), init });
       return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
     },
-  });
-  const backing = createMemoryMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
-  const writer = createModelOverlayStore(backing, undefined, verifier);
-  await writer.upsert(definition, "admin");
-  await assert.rejects(
-    writer.upsert(
-      {
-        id: definition.id,
-        name: "Accidental chat edit",
-        provider: "openai",
-        template: "gpt-5.5",
-        contextWindow: 200000,
-        maxTokens: 16000,
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-      },
-      "admin",
-    ),
-    /kind cannot change/,
   );
-
-  await createModelOverlayStore(backing, undefined, verifier).refresh();
-  assert.deepEqual(requests, [{ model: "embed-small", input: ["verification"], encoding_format: "float" }]);
-  assert.equal(resolveModel("embed-small"), undefined);
-  assert.ok(!selectableBaseModels().some((m) => m.id === "embed-small"));
-  assert.ok(!defaultWebuiModelIds().includes("embed-small"));
-  assert.equal(modelSupported("embed-small"), false);
-  await writer.delete("embed-small", "admin");
-  await writer.refresh();
-  assert.equal(resolveEmbeddingModel("embed-small"), undefined);
+  assert.deepEqual(await embedder.embed(["query"], AbortSignal.timeout(1000)), [[0.6, 0.8]]);
+  assert.equal(requests[0]!.url, "https://api.openai.com/v1/embeddings");
+  assert.deepEqual(requests[0]!.init?.headers, {
+    "content-type": "application/json",
+    authorization: "Bearer org-openai-key",
+  });
+  assert.equal(resolveModel(OPENAI_EMBEDDING), undefined);
+  assert.ok(!selectableBaseModels().some((m) => m.id === OPENAI_EMBEDDING));
+  assert.ok(!defaultWebuiModelIds().includes(OPENAI_EMBEDDING));
+  assert.equal(modelSupported(OPENAI_EMBEDDING), false);
 });
 
 test("key-scoped gateway embeddings need no chat capabilities and use gateway credentials only", async () => {
@@ -104,7 +72,9 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
   );
   await catalog.refresh();
   assert.deepEqual(
-    embeddingModelCatalog().map((m) => m.id),
+    embeddingModelCatalog()
+      .filter((m) => m.provider === "qm:gateway")
+      .map((m) => m.id),
     ["gateway/embed"],
   );
   assert.equal(resolveModel("gateway/embed"), undefined);
@@ -145,8 +115,6 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [{ index: 0, embedding: [1, 0] }] }),
   });
-  await built.modelRegistry.upsert(definition, "admin");
-  await built.refreshModels();
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -157,14 +125,14 @@ test("HTTP embedding selection accepts only known embedding models and survives 
       headers: { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" },
       body: JSON.stringify(body),
     });
-  assert.equal((await put({ modelId: definition.id })).status, 200);
-  assert.equal(await built.config.getEmbeddingModelDurable(), definition.id);
+  assert.equal((await put({ modelId: OPENAI_EMBEDDING })).status, 200);
+  assert.equal(await built.config.getEmbeddingModelDurable(), OPENAI_EMBEDDING);
   const models = await fetch(url.replace(/\/memory-embedding-model$/, "?view=models"), {
     headers: { "x-admin-actor": "admin-alice@default-org" },
   });
   const view = (await models.json()) as { memoryEmbeddingModel: string; memoryEmbeddingOptions: { id: string }[] };
-  assert.equal(view.memoryEmbeddingModel, definition.id);
-  assert.ok(view.memoryEmbeddingOptions.some((model) => model.id === definition.id));
+  assert.equal(view.memoryEmbeddingModel, OPENAI_EMBEDDING);
+  assert.ok(view.memoryEmbeddingOptions.some((model) => model.id === OPENAI_EMBEDDING));
   await built.memory.capture("personal:test", ["first fact"], Date.now());
   assert.match(recallText(await built.memory.recall("personal:test", { query: "first" })), /first fact/);
   assert.equal((await put({ modelId: "gpt-5.5" })).status, 400);

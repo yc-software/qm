@@ -1,9 +1,7 @@
-import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
 } from "./credentials/deployment-credentials.ts";
-import { errMessage } from "./util/errors.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
@@ -11,12 +9,7 @@ import { parseScopeId } from "./types.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { existsSync, readdirSync } from "node:fs";
-import {
-  parseProviderBaseUrl,
-  providerBaseUrlsFromEnv,
-  type ModelGatewayTransportConfig,
-  type ProviderBaseUrls,
-} from "./model/provider-endpoints.ts";
+import { parseProviderBaseUrl, type ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
 import {
   parseMemoryCaptureMode,
@@ -85,7 +78,6 @@ export interface Config {
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
-  codexAuthFile?: string;
   /** Keychain credential id holding the Codex ChatGPT OAuth auth.json (production path). */
   codexAuthCredential?: string;
   /** Keychain credential id holding a Claude Code subscription token (production path). */
@@ -97,7 +89,6 @@ export interface Config {
   openaiApiKey?: string;
   openrouterApiKey?: string;
   modelProvider?: ModelProvider;
-  providerBaseUrls: ProviderBaseUrls;
   modelGateway?: ModelGatewayTransportConfig;
   brokerCredentials?: DeploymentBrokerCredential[];
   piCaptureRequests: boolean;
@@ -228,7 +219,7 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
     anthropic: Boolean(config.anthropicApiKey || config.claudeAuthCredential),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
-    ...(config.codexAuthCredential || config.codexAuthFile ? { codexOAuth: true } : {}),
+    ...(config.codexAuthCredential ? { codexOAuth: true } : {}),
   };
 }
 
@@ -239,7 +230,7 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
 export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
   if (config.anthropicApiKey ? config.anthropicApiKey.includes("sk-ant-oat") : config.claudeAuthCredential)
     return "anthropic";
-  if (config.codexAuthCredential || config.codexAuthFile) return "openai";
+  if (config.codexAuthCredential) return "openai";
   return undefined;
 }
 
@@ -1205,20 +1196,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
-  const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
-  const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
-  if (env.NODE_ENV === "production" && codexAuthFile) {
-    throw new Error(
-      "CODEX_AUTH_FILE is supported for local development only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
-    );
-  }
-  if (codexAuthFile) {
-    try {
-      loadCodexAuthFile(codexAuthFile);
-    } catch (error) {
-      throw new Error(`CODEX_AUTH_FILE is unusable: ${errMessage(error)}`, { cause: error });
-    }
-  }
+  const anthropicApiKey = env.ANTHROPIC_API_KEY;
   const deployAppsDomain = deployAppsDomainEnv(env, env.DEPLOY_PROVIDER ?? "docker");
   const missingSecrets = validateCoreSecretEnv(env);
   if (missingSecrets.length) {
@@ -1410,7 +1388,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, porter, or e2b)`,
     );
   }
-  const providerBaseUrls = providerBaseUrlsFromEnv(env);
   const modelGateway = modelGatewayFromEnv(env);
   const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
   const turnWallClockMs =
@@ -1475,7 +1452,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
-    ...(codexAuthFile ? { codexAuthFile } : {}),
     ...(codexAuthCredential ? { codexAuthCredential } : {}),
     ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
@@ -1485,7 +1461,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),
-    providerBaseUrls,
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),

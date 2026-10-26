@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { chatgptAuthFromValue } from "../src/model/chatgpt-auth-file.ts";
-import { fileCompanyChatGPTAuth, keychainCompanyChatGPTAuth } from "../src/model/company-chatgpt-auth.ts";
+import { keychainCompanyChatGPTAuth } from "../src/model/company-chatgpt-auth.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../src/credentials/keychain.ts";
 import type { UserOAuthTokens } from "../src/model/user-model-credential-store.ts";
 
@@ -162,23 +159,4 @@ test("keychain auth is unavailable when the credential is missing", async () => 
   const state = keychainState(authJson("acct", FRESH_EXP));
   const auth = keychainCompanyChatGPTAuth({ keychain: fakeKeychain(state), credentialId: "other", now: () => NOW });
   assert.equal(await auth.accessToken(), undefined);
-});
-
-test("file auth serves the local login as-is and never refreshes or rewrites it", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-chatgpt-file-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  const stored = JSON.stringify(authJson("acct", STALE_EXP, "refresh-1"));
-  writeFileSync(path, stored);
-  chmodSync(path, 0o600);
-  const fetches = t.mock.method(globalThis, "fetch", async () => new Response("{}", { status: 500 }));
-  const auth = fileCompanyChatGPTAuth(path);
-  assert.equal(await auth.accessToken(), accessToken("acct", STALE_EXP));
-  assert.equal(fetches.mock.callCount(), 0);
-  assert.equal(readFileSync(path, "utf8"), stored);
-  chmodSync(path, 0o644);
-  await assert.rejects(auth.accessToken(), /must not be readable by group or others/);
-  writeFileSync(path, JSON.stringify(authJson("acct", 1_000_000_000)));
-  chmodSync(path, 0o600);
-  await assert.rejects(auth.accessToken(), /has expired; run the Codex CLI to refresh it/);
 });

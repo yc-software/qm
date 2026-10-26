@@ -54,11 +54,8 @@ import {
   type SandboxDefault,
   type SandboxResources,
 } from "./sandbox/sandbox-resources.ts";
-import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
-import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
-import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -291,18 +288,14 @@ import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts"
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
-import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
+import type { ModelGatewayTransportConfig } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
 import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
 import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
-import {
-  fileCompanyChatGPTAuth,
-  keychainCompanyChatGPTAuth,
-  type CompanyChatGPTAuth,
-} from "./model/company-chatgpt-auth.ts";
+import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./model/company-chatgpt-auth.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
 import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
@@ -381,7 +374,6 @@ import {
   auxiliaryModelFor,
   CODEX_SUBSCRIPTION_PROVIDER,
   codexSubscriptionModelId,
-  isOverlayModel,
   modelRequestOverrides,
   auxiliaryModelForProvider,
   defaultModel,
@@ -485,8 +477,6 @@ export interface BuiltApp {
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
-  modelRegistry: ModelOverlayStore;
-  modelVerifier: ModelVerifier;
   refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
   refreshCustomProviders: () => Promise<void>;
@@ -557,7 +547,6 @@ export function buildApp(
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
-    modelVerificationProbe?: typeof probeModel;
     harness?: Harness;
   } = {},
 ): BuiltApp {
@@ -607,7 +596,6 @@ export function buildApp(
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
-  setProviderBaseUrls(config.providerBaseUrls);
   const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
@@ -1330,21 +1318,12 @@ export function buildApp(
     backing: artifactMap("custom_model_providers"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
   });
-  const modelVerifier = createModelVerifier({
-    credentials: modelCredentials,
-    keyMaterial: config.connectorSecretKey ?? randomBytes(32),
-    modelGateway: gatewayTransport,
-    probe: overrides.modelVerificationProbe,
-    fetchImpl: overrides.modelCredentialFetch,
-  });
-  const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
   const refreshModels = async () => {
     await gatewayCatalog?.refresh();
     await refreshCustomProviders();
-    await modelRegistry.refresh();
   };
   const resolveMemoryEmbedder = async (id: string): Promise<MemoryEmbedder> => {
     const model = resolveEmbeddingModel(id);
@@ -1383,10 +1362,10 @@ export function buildApp(
       ...customKeys,
     };
   };
-  let companyChatGPTAuth: CompanyChatGPTAuth | undefined;
-  if (config.codexAuthCredential && keychain)
-    companyChatGPTAuth = keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential });
-  else if (config.codexAuthFile) companyChatGPTAuth = fileCompanyChatGPTAuth(config.codexAuthFile);
+  const companyChatGPTAuth: CompanyChatGPTAuth | undefined =
+    config.codexAuthCredential && keychain
+      ? keychainCompanyChatGPTAuth({ keychain, credentialId: config.codexAuthCredential })
+      : undefined;
   const resolveCompanySubscriptionKeys = async (): Promise<ProviderKeys> => {
     if (!companyChatGPTAuth) return {};
     try {
@@ -1422,7 +1401,7 @@ export function buildApp(
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
     includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
   const companyModelId = (id: string): string => {
-    if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
+    if (resolveModel(id)?.provider !== "openai" || modelRequestOverrides(id)) return id;
     const subscription = codexSubscriptionModelId(id);
     return resolveModel(subscription) ? subscription : id;
   };
@@ -1908,6 +1887,13 @@ export function buildApp(
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });
   pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/model_registry/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS model_registry",
+      "DELETE FROM durable_map_versions WHERE tbl = 'model_registry'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
     id: "durable-map/internal_member_overrides/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS internal_member_overrides",
@@ -2258,7 +2244,6 @@ export function buildApp(
     modelGateway,
     modelCredentials,
     userModelCredentials,
-    modelRegistry,
     refreshModels,
     customProviders,
     refreshCustomProviders,
@@ -2985,8 +2970,6 @@ export function buildApp(
     modelGateway,
     modelCredentials,
     userModelCredentials,
-    modelRegistry,
-    modelVerifier,
     refreshModels,
     customProviders,
     refreshCustomProviders,
@@ -3097,8 +3080,6 @@ export function serverDeps(
     providerKeys: providerKeysPresent(config),
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
-    modelRegistry: built.modelRegistry,
-    modelVerifier: built.modelVerifier,
     refreshModels: built.refreshModels,
     customProviders: built.customProviders,
     refreshCustomProviders: built.refreshCustomProviders,

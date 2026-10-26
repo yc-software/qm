@@ -16,13 +16,7 @@ import type { SessionStateEvent } from "../runs/session-state-bus.ts";
 import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
-import {
-  defaultModel,
-  modelServiceable,
-  modelOfferedInWebui,
-  modelUnavailableReason,
-  resolveModel,
-} from "../model/pi-models.ts";
+import { defaultModel, modelServiceable, modelUnavailableReason, resolveModel } from "../model/pi-models.ts";
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
@@ -308,9 +302,7 @@ export function createTurnMethods(
           } else if (providers?.openrouter) {
             enabledWebuiModels = [
               ...new Set([
-                ...selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch))
-                  .filter((model) => modelOfferedInWebui(model.id))
-                  .map((model) => model.id),
+                ...selectableCatalog(await selectableModelCatalog(deps.modelCredentialFetch)).map((model) => model.id),
                 orgRuntime.modelId,
               ]),
             ];

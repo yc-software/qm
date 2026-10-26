@@ -2,6 +2,8 @@
 
 Pi can route model calls through an authenticated gateway instead of holding provider keys. Set `MODEL_GATEWAY_URL`, `MODEL_GATEWAY_API_KEY`, and `MODEL_GATEWAY_API_KEY_HEADER`. The key stays server-side. No model list is required.
 
+Any other endpoint, such as a proxy that speaks the OpenAI or Anthropic API, is a custom provider: an administrator registers its base URL, API key, protocol and models in admin settings.
+
 QM discovers models using authenticated `GET /v1/models` and `GET /model_group/info`, the end-user metadata endpoint implemented by LiteLLM. A base URL ending in `/v1` is supported; both endpoints retain any preceding path prefix. Discovery uses the same key as inference, rejects redirects, and ignores upstream credential and endpoint fields.
 
 Only models listed by both endpoints, marked as chat models with tool support, and carrying valid context, output and pricing metadata are offered. Discovered IDs are namespaced as `gateway/<upstream-id>`. Groups whose metadata identifies only Anthropic providers use native Messages, preserving signed thinking blocks across tool calls. Groups whose providers are exclusively OpenAI or Azure use Responses, including native file inputs. Other groups use OpenAI-compatible streaming chat completions. Reasoning controls are enabled for native Anthropic and OpenAI/Azure groups; other provider combinations use standard chat without requesting reasoning effort. The gateway owns provider translation and group capabilities. QM selects the protocol from provider metadata, never model names. Gateways must expose `/v1/messages` for Anthropic groups and `/v1/responses` for OpenAI/Azure groups. PDF inputs on chat-completion routes require vision capability and a provider set consisting only of Anthropic, OpenAI, Azure, Gemini or Vertex. Unknown or mixed unsupported provider groups use bounded text extraction.
@@ -31,10 +33,10 @@ model and conversation scope. The sandbox sends OpenAI-compatible, non-streaming
 chat completions to `/v1/browser-model/chat/completions`; core reloads the saved
 selection and credentials for each request. Changing the account or model requires
 a fresh turn. Credentials stay on core. Without a gateway, company inference reloads the same provider credentials as normal
-agent inference, including administrator changes and configured provider endpoints.
+agent inference, including administrator changes.
 No separate browser model key is needed. Missing credentials fail closed.
 Personal inference uses native provider
-transports, bypassing organization endpoint overrides, and converts structured
+transports and converts structured
 browser responses and screenshots through the existing model runtime.
 
 Company browser inference uses the same gateway key permissions and budgets as

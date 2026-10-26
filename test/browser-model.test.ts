@@ -196,7 +196,7 @@ test("gateway browsing never selects a direct provider when callback signing or 
   }
 });
 
-test("company browsing without a gateway uses current deployment credentials and endpoints", async (t) => {
+test("company browsing without a gateway uses current deployment credentials", async (t) => {
   const calls: Array<{ key: string | undefined; model: string }> = [];
   const upstream = httpServer(async (req, res) => {
     let raw = "";
@@ -228,11 +228,19 @@ test("company browsing without a gateway uses current deployment credentials and
   });
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => upstream.close(() => resolve())));
+  const anthropicOrigin = "https://api.anthropic.com";
+  const upstreamOrigin = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const realFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (input: string | URL | Request, init?: RequestInit) =>
+    realFetch(
+      String(input).startsWith(anthropicOrigin) ? upstreamOrigin + String(input).slice(anthropicOrigin.length) : input,
+      init,
+    ),
+  );
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test",
     anthropicApiKey: "deployment-key",
-    providerBaseUrls: { anthropic: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}` },
   });
   const built = buildApp(config);
   const server = createServer(built.app, serverDeps(config, built));

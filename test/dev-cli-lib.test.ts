@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
@@ -37,20 +37,12 @@ import {
 } from "../scripts/dev/lib/lease.ts";
 import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import { loadConfig, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
   const store = mkdtempSync(join(tmpdir(), "qm-dev-test-"));
   ensureStore(store);
   return store;
-}
-
-function oauthIdToken(accountId: string): string {
-  const payload = Buffer.from(
-    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-  ).toString("base64url");
-  return `header.${payload}.signature`;
 }
 
 function addSlot(store: string, n: number, extra = ""): void {
@@ -314,39 +306,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
 
-  const defaultCodexHome = join(worktree, "default-codex");
-  mkdirSync(defaultCodexHome, { recursive: true });
-  const oauthAuth = JSON.stringify({
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: "access",
-      refresh_token: "refresh",
-      account_id: "account",
-      id_token: oauthIdToken("account"),
-    },
-  });
-  writeFileSync(join(defaultCodexHome, "auth.json"), oauthAuth);
-  chmodSync(join(defaultCodexHome, "auth.json"), 0o600);
-  const implicit = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_HOME: defaultCodexHome },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(implicit.codexAuthSource, "");
-  assert.equal(implicit.env.CODEX_AUTH_FILE, undefined);
-  const oauthAuthFile = join(worktree, "codex-auth.json");
-  writeFileSync(oauthAuthFile, oauthAuth);
-  chmodSync(oauthAuthFile, 0o600);
-  const companyChatGPT = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_AUTH_FILE: oauthAuthFile },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(companyChatGPT.env.CODEX_AUTH_FILE, oauthAuthFile);
-  assert.equal(companyChatGPT.codexAuthSource, oauthAuthFile);
-
   const fromLiveEnv = await assembleEnv({
     worktree,
     callerEnv: {},
@@ -384,7 +343,7 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env", 
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login/,
+    /ANTHROPIC_API_KEY or OPENAI_API_KEY is required/,
   );
   const openaiOnly = await assembleEnv({
     worktree,
@@ -411,30 +370,6 @@ test("dev security secrets are stable, complete, and distinct", () => {
   );
 });
 
-test("a ChatGPT auth file feeds the company subscription", () => {
-  const source = mkdtempSync(join(tmpdir(), "qm-codex-config-"));
-  const authFile = join(source, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "access",
-        refresh_token: "refresh",
-        account_id: "account",
-        id_token: oauthIdToken("account"),
-      },
-    }),
-  );
-  chmodSync(authFile, 0o600);
-  const oauthConfig = loadConfig({ CODEX_AUTH_FILE: authFile });
-  assert.equal(oauthConfig.codexAuthFile, authFile);
-  assert.equal(providerKeysPresent(oauthConfig).openai, false);
-  assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
-  assert.throws(() => loadConfig({ CODEX_AUTH_FILE: join(source, "missing.json") }), /CODEX_AUTH_FILE is unusable/);
-  rmSync(source, { recursive: true, force: true });
-});
-
 test("envSha is order-independent and value-sensitive", () => {
   assert.equal(envSha({ A: "1", B: "2" }), envSha({ B: "2", A: "1" }));
   assert.notEqual(envSha({ A: "1" }), envSha({ A: "2" }));
@@ -459,7 +394,6 @@ test("supervised children share the selected dev org", () => {
     ports: slotPorts("pool1"),
     baseEnv: {
       DEV_INSTANCE_ORG_ID: "beta",
-      CODEX_AUTH_FILE: "/tmp/codex-auth.json",
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
     },
@@ -477,9 +411,7 @@ test("supervised children share the selected dev org", () => {
   };
   const specs = buildChildSpecs(inputs);
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
-    assert.equal(spec.env.CODEX_AUTH_FILE, "");
     assert.equal(spec.env.HOME, undefined);
     assert.equal(spec.env.CODEX_HOME, undefined);
   }

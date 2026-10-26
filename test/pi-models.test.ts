@@ -1,4 +1,3 @@
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -250,21 +249,6 @@ test("context token budget is half of each model's real input room", () => {
     const budget = contextTokenBudgetForModel(m.id);
     assert.ok(budget !== undefined && budget >= 60_000, `${m.id} budget ${budget} suspiciously small`);
     assert.ok(budget <= 150_000, `${m.id} budget ${budget} exceeds the cap`);
-  }
-});
-
-test("personal models retain canonical endpoints when org endpoints are overridden", () => {
-  const ids = ["claude-opus-5", "gpt-5.6-sol", "gpt-6-astra"];
-  const canonical = new Map(ids.map((id) => [id, getRequiredModel(id).baseUrl]));
-  setProviderBaseUrls({ anthropic: "https://org.invalid/anthropic", openai: "https://org.invalid/openai" });
-  try {
-    for (const id of ids) {
-      assert.match(getRequiredModel(id).baseUrl, /^https:\/\/org\.invalid\//);
-      assert.equal(getRequiredModel(id, false).baseUrl, canonical.get(id));
-      assert.equal(resolveModel(id, false)?.baseUrl, canonical.get(id));
-    }
-  } finally {
-    setProviderBaseUrls({});
   }
 });
 

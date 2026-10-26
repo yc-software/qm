@@ -41,7 +41,7 @@ const bundle = buildSync({
 }).outputFiles[0].text;
 function fixture() {
   const dom = new JSDOM(
-    '<template data-onboarding-ui="steps"></template><template data-onboarding-ui="provider"></template><template data-onboarding-ui="registry"></template>',
+    '<template data-onboarding-ui="steps"></template><template data-onboarding-ui="provider"></template>',
     { runScripts: "outside-only", url: "http://localhost/admin/onboarding" },
   );
   dom.window.eval(bundle + ";window.Onboarding = onboarding.Onboarding;");
@@ -142,73 +142,6 @@ test("unknown views still fall back to the default view", () => {
   assert.equal(resolveView("/admin/no-such-view", ""), "history");
 });
 
-test("model registry verification makes charges and credential scope explicit", async () => {
-  const { dom, controller } = fixture();
-  const button = dom.window.document.querySelector<HTMLButtonElement>("#model-registry-save")!;
-  assert.equal(button.disabled, true);
-  const notice = dom.window.document.querySelector("#model-registry-verification-notice")!.textContent!;
-  assert.match(notice, /provider charge/);
-  assert.match(notice, /personal-key access/);
-  controller.registryId = "known";
-  controller.showLookup({
-    kind: "builtin",
-    spec: { name: "Known", id: "known", contextWindow: 1000, maxTokens: 100, cost: { input: 1, output: 2 } },
-    source: "catalog",
-    missing: [],
-  });
-  let complete: (response: unknown) => void = () => {};
-  const calls: any[] = [];
-  controller.context.api = (...args: any[]) => {
-    calls.push(args);
-    return new Promise((resolve) => {
-      complete = resolve;
-    });
-  };
-  controller.draw();
-  const saving = controller.verify();
-  assert.equal(button.disabled, true);
-  assert.match(button.textContent!, /Verifying/);
-  assert.equal(calls[0][0], "POST");
-  assert.equal(calls[0][1], "/api/model-registry/known/enable");
-  assert.equal(calls[0][2].verify, true);
-  complete({ ok: false, data: { message: "Access denied" } });
-  await saving;
-  assert.equal(button.disabled, false);
-  assert.match(dom.window.document.querySelector("#st-model-registry")!.textContent!, /Access denied/);
-  dom.window.close();
-});
-
-test("model setup separates missing fields and discards stale lookups", async () => {
-  const { dom, controller } = fixture();
-  assert.equal(dom.window.document.querySelector<HTMLDivElement>("#model-registry-result")!.hidden, true);
-  controller.registryId = "first";
-  let complete: (response: unknown) => void = () => {};
-  controller.context.api = () =>
-    new Promise((resolve) => {
-      complete = resolve;
-    });
-  const pending = controller.lookupModel();
-  const input = dom.window.document.querySelector<HTMLInputElement>("#model-registry-id")!;
-  input.value = "second";
-  input.dispatchEvent(new dom.window.Event("input"));
-  complete({ ok: true, data: { spec: { id: "first" }, source: "catalog" } });
-  await pending;
-  assert.equal(controller.lookup, null);
-  controller.showLookup({
-    kind: "custom",
-    spec: { id: "second", name: "Second", cost: {} },
-    source: "provider",
-    missing: ["template", "contextWindow"],
-  });
-  controller.draw();
-  assert.ok(dom.window.document.querySelector("#model-registry-missing-fields #model-registry-template"));
-  assert.ok(dom.window.document.querySelector("#model-registry-advanced-fields #model-registry-name"));
-  assert.equal(dom.window.document.querySelector<HTMLInputElement>("#model-registry-name")!.value, "Second");
-  controller.registryId = "third";
-  assert.throws(() => controller.collect(), /current model/);
-  dom.window.close();
-});
-
 test("cold catalog preserves the configured dynamic model and its provider", async () => {
   const model = { id: "future/configured-model", name: "Configured model", provider: "openrouter" };
   const elements = await runLoadOnboarding(
@@ -255,46 +188,6 @@ test("pending onboarding reads preserve the provider associated with a newly ent
   assert.equal(controller.model, "gpt-test");
   assert.equal(select.value, "openai");
   assert.equal(key.value, "test-only-key");
-  dom.window.close();
-});
-
-test("embedding models register through the model registry without a chat lookup", async () => {
-  const { dom, controller } = fixture();
-  const calls: any[] = [];
-  controller.context.api = async (...args: any[]) => {
-    calls.push(args);
-    if (args[1] === "/api/model-registry")
-      return {
-        ok: true,
-        data: {
-          models: [
-            {
-              spec: { ...args[2], kind: "embedding", id: "text-embedding-3-small", name: "Small", provider: "openai" },
-              verifiedAt: 1,
-            },
-          ],
-        },
-      };
-    return { ok: true, data: {} };
-  };
-  const $ = (id: string) => dom.window.document.getElementById(id) as HTMLInputElement;
-  $("model-registry-kind").value = "embedding";
-  $("model-registry-kind").dispatchEvent(new dom.window.Event("change"));
-  assert.equal(($("model-registry-provider") as unknown as HTMLSelectElement).disabled, true);
-  assert.equal($("model-registry-lookup").closest(".foot")!.hasAttribute("hidden"), true);
-  $("model-registry-id").value = "text-embedding-3-small";
-  $("model-registry-id").dispatchEvent(new dom.window.Event("input"));
-  $("model-registry-name").value = "Small";
-  $("model-registry-name").dispatchEvent(new dom.window.Event("input"));
-  await controller.verify();
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), [
-    "PUT",
-    "/api/model-registry/text-embedding-3-small",
-    { kind: "embedding", name: "Small", provider: "openai", verify: true },
-  ]);
-  assert.match($("st-model-registry").textContent!, /Recall runtime/);
-  await controller.loadRegistry();
-  assert.match($("model-registry-rows").textContent!, /Small \(text-embedding-3-small\)[\s\S]*Embedding/);
   dom.window.close();
 });
 

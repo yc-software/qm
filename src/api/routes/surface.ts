@@ -9,13 +9,7 @@ import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
-import {
-  defaultModel,
-  modelSupported,
-  modelOfferedInWebui,
-  thinkingLevelsFor,
-  fastModeModelIds,
-} from "../../model/pi-models.ts";
+import { defaultModel, modelSupported, thinkingLevelsFor, fastModeModelIds } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
@@ -1178,9 +1172,7 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
-  const allowed = selectableCatalog(catalog)
-    .filter((model) => modelOfferedInWebui(model.id))
-    .map((model) => model.id);
+  const allowed = selectableCatalog(catalog).map((model) => model.id);
   const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
   const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
   const resolvedBranding = {

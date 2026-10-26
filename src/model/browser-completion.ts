@@ -42,14 +42,14 @@ export async function nativeBrowserCompletion(
 ) {
   const { selection, body } = input;
   const routing = selection.routing;
-  let model = selection.model ? resolveModel(selection.model, selection.account === "company") : undefined;
+  let model = selection.model ? resolveModel(selection.model) : undefined;
   if ((!routing && selection.account !== "company") || !model)
     throw new BrowserCompletionError("Selected browser model is unavailable", 409);
   if (selection.account === "company" && input.companySubscriptionProvider === model.provider) {
     if (model.provider === "anthropic")
       throw new BrowserCompletionError("Claude subscription access does not support browser inference", 422);
     if (model.provider === "openai") {
-      model = resolveModel(codexSubscriptionModelId(selection.model!), false);
+      model = resolveModel(codexSubscriptionModelId(selection.model!));
       if (!model) throw new BrowserCompletionError("Selected browser model is unavailable", 409);
     }
   }

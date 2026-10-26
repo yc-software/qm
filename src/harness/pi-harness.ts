@@ -10,7 +10,6 @@ import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { documentStub } from "../core/document-kinds.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
-import { Type } from "typebox";
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1338,45 +1337,6 @@ export async function oneShot(
   }
 }
 
-export async function probeModel(
-  model: Model<Api>,
-  keys: ProviderKeys,
-  signal: AbortSignal,
-  fastMode = false,
-  modelGateway?: ModelGatewayTransportConfig,
-): Promise<void> {
-  const runtime = await buildModelRuntime(keys, modelGateway);
-  signal.throwIfAborted();
-  const candidate = withRequestHeaders(model, !modelGateway?.models[model.id], fastMode);
-  const response = await runtime
-    .streamSimple(
-      candidate,
-      {
-        systemPrompt: "This is a connection check. Reply OK. Do not call tools.",
-        messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
-        tools: [
-          {
-            name: "connection_check",
-            description: "A synthetic tool for verifying request compatibility. Do not call it.",
-            parameters: Type.Object({}),
-          },
-        ],
-      },
-      {
-        maxTokens: Math.min(128, model.maxTokens),
-        signal,
-        maxRetryDelayMs: 1,
-        onPayload: (payload) => applyFastSpeed(payload, fastMode, model.api),
-      },
-    )
-    .result();
-  signal.throwIfAborted();
-  if (response.stopReason === "aborted") throw new DOMException("Model verification was aborted", "AbortError");
-  if (response.stopReason === "error") throw providerTurnError(response);
-  if (response.stopReason !== "stop" || !response.content.some((part) => part.type === "text" && part.text.trim()))
-    throw new Error("Model verification did not produce a completed text response");
-}
-
 const FAST_MODE_BETA = "fast-mode-2026-02-01";
 const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 const THINKING_BINDING = { prefix_mismatch_behavior: "drop_block" } as const;
@@ -1585,7 +1545,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
   });
   const modelGateway = opts?.modelGateway;
   const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
-  const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id, company);
+  const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id);
   const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
     modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
   const captureRequests = opts?.captureRequests ?? true;
@@ -2132,13 +2092,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const configured = opts?.resolveFallbackRuntime?.();
           const servedModelId = (id: string) => (turn.providerKeys ? id : companyServedId(id));
           const fallbackId = fromId
-            ? refusalFallbackModelId(
-                fromId,
-                configured?.modelId,
-                (id) => !!resolveModel(servedModelId(id), !turn.providerKeys),
-              )
+            ? refusalFallbackModelId(fromId, configured?.modelId, (id) => !!resolveModel(servedModelId(id)))
             : undefined;
-          const fallback = fallbackId ? resolveModel(servedModelId(fallbackId), !turn.providerKeys) : undefined;
+          const fallback = fallbackId ? resolveModel(servedModelId(fallbackId)) : undefined;
           if (
             !fallbackId ||
             !fallback ||

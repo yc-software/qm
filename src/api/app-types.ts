@@ -6,7 +6,6 @@ import type { AdmittedWork } from "../util/admitted-work.ts";
 import type { EventBus } from "../util/event-bus.ts";
 import type { RunStreamEvent } from "../runs/run-stream-events.ts";
 import type { ResourceSearchStore, ResourceSearchHit } from "../search/resource-search.ts";
-import type { ModelOverlayStore } from "../model/model-overlay-store.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
 import type {
   DeliveryProvenance,
@@ -659,7 +658,6 @@ export interface AppDeps {
   mcpServers?: McpServerStore;
   mcpToolService?: McpToolService;
   modelCredentialFetch?: typeof fetch;
-  modelRegistry?: ModelOverlayStore;
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
   refreshCustomProviders?: () => Promise<void>;

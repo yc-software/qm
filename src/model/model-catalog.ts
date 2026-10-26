@@ -1,12 +1,5 @@
-import { gatewayModelCatalog } from "./gateway-models.ts";
-import {
-  modelSupported,
-  registerOpenRouterCatalogModel,
-  resolveModel,
-  selectableBaseModels,
-  modelOverlayVersion,
-  overlayModelCatalog,
-} from "./pi-models.ts";
+import { gatewayModelCatalog, gatewayModelsVersion } from "./gateway-models.ts";
+import { modelSupported, registerOpenRouterCatalogModel, resolveModel, selectableBaseModels } from "./pi-models.ts";
 import { customModelCatalog, customProvidersVersion } from "./custom-providers.ts";
 
 export interface ModelCatalogEntry {
@@ -26,7 +19,7 @@ const FAILURE_TTL_MS = 30_000;
 
 interface CacheEntry {
   customVersion?: number;
-  overlayVersion?: number;
+  gatewayVersion?: number;
   dynamic?: ModelCatalogEntry[];
   expiresAt: number;
   models: ModelCatalogEntry[];
@@ -43,12 +36,7 @@ export function builtInModelCatalog(): ModelCatalogEntry[] {
       : [];
   });
   const known = new Set(builtIns.map((model) => model.id));
-  return [
-    ...builtIns,
-    ...[...overlayModelCatalog(), ...customModelCatalog(), ...gatewayModelCatalog()].filter(
-      (model) => !known.has(model.id),
-    ),
-  ];
+  return [...builtIns, ...[...customModelCatalog(), ...gatewayModelCatalog()].filter((model) => !known.has(model.id))];
 }
 
 async function boundedJson(response: Response): Promise<unknown> {
@@ -166,7 +154,7 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
     existing &&
     existing.expiresAt > now &&
     existing.customVersion === customProvidersVersion() &&
-    existing.overlayVersion === modelOverlayVersion()
+    existing.gatewayVersion === gatewayModelsVersion()
   )
     return existing.models;
   if (existing?.inFlight) return existing.inFlight;
@@ -179,7 +167,7 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
       entry.models = [...models, ...dynamic.filter((model) => !known.has(model.id))];
       entry.expiresAt = Date.now() + CACHE_TTL_MS;
       entry.customVersion = customProvidersVersion();
-      entry.overlayVersion = modelOverlayVersion();
+      entry.gatewayVersion = gatewayModelsVersion();
       return entry.models;
     })
     .catch(() => {
@@ -188,7 +176,7 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
       entry.models = [...models, ...(entry.dynamic ?? []).filter((model) => !known.has(model.id))];
       entry.expiresAt = Date.now() + FAILURE_TTL_MS;
       entry.customVersion = customProvidersVersion();
-      entry.overlayVersion = modelOverlayVersion();
+      entry.gatewayVersion = gatewayModelsVersion();
       return entry.models;
     })
     .finally(() => {

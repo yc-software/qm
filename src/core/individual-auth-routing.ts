@@ -6,7 +6,6 @@ import {
   defaultModel,
   defaultModelForProvider,
   resolveModel,
-  isOverlayModel,
   modelUnavailableReason,
   modelRequestOverrides,
   type ModelProvider,
@@ -38,12 +37,6 @@ export function resolveIndividualAuthRouting(
     requestedModel &&
     modelRequestOverrides(requestedModel) &&
     (pick.provider !== requestedProvider || pick.cred.kind !== "apikey")
-  )
-    return null;
-  if (
-    requestedModel &&
-    isOverlayModel(requestedModel) &&
-    (pick.cred.kind !== "apikey" || requestedProvider !== pick.provider)
   )
     return null;
   if (pick.cred.kind === "apikey" && rawProvider === CODEX_SUBSCRIPTION_PROVIDER) return null;

@@ -1,4 +1,3 @@
-import { modelRegistry, lookupRegistryModel, enableBuiltinModel } from "./admin/model-registry.ts";
 import { withAdmin, type ApiCtx, type Route } from "./route.ts";
 import {
   getAdminResources,
@@ -104,11 +103,6 @@ const routes: Route<ApiCtx>[] = [
     },
     { method: "DELETE", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: deleteMcpServer },
     { method: "DELETE", path: "/v1/admin/model-providers/:provider", auth: "either", handle: deleteModelProvider },
-    { method: "POST", path: "/v1/admin/model-registry/lookup", auth: "either", handle: lookupRegistryModel },
-    { method: "POST", path: "/v1/admin/model-registry/:model/enable", auth: "either", handle: enableBuiltinModel },
-    { method: "GET", path: "/v1/admin/model-registry", auth: "either", handle: modelRegistry },
-    { method: "PUT", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
-    { method: "DELETE", path: "/v1/admin/model-registry/:model", auth: "either", handle: modelRegistry },
     { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
     { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
     { method: "DELETE", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: deleteCustomProvider },
