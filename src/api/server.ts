@@ -20,12 +20,7 @@ import {
   SOURCE_AUTH_REPLAY_WINDOW_MS,
   type SourceAuth,
 } from "../auth/source-auth.ts";
-import {
-  verifyCapabilityToken,
-  CONTROL_PLANE_AUD,
-  SANDBOX_MODEL_AUD,
-  type CapabilityClaims,
-} from "../auth/capability-token.ts";
+import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -83,7 +78,7 @@ function capabilityFromHeaders(req: IncomingMessage): string | null {
   return typeof h === "string" && h ? h : null;
 }
 
-function sdkApiKeyFromHeaders(req: IncomingMessage): string | null {
+function bearerFromHeaders(req: IncomingMessage): string | null {
   const apiKey = req.headers["x-api-key"];
   if (typeof apiKey === "string" && apiKey) return apiKey;
   const bearer = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? "");
@@ -122,9 +117,10 @@ async function verifyCapability(
   { app, deps, secret }: Wiring,
   method: string,
   pathname: string,
-  requiredAud: string | null,
+  required: { aud: string; bearer?: true } | null,
 ): Promise<CapabilityClaims | null> {
-  const capToken = capabilityFromHeaders(req) ?? (requiredAud === SANDBOX_MODEL_AUD ? sdkApiKeyFromHeaders(req) : null);
+  const requiredAud = required?.aud ?? null;
+  const capToken = capabilityFromHeaders(req) ?? (required?.bearer ? bearerFromHeaders(req) : null);
   if (!capToken) {
     sendJson(res, 401, { error: "unauthorized", message: `${requiredAud} capability token required` });
     return null;
@@ -207,13 +203,14 @@ async function gate(
   const routeAuth = route?.auth;
   const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
-  const requiredAud = typeof routeAuth === "object" ? routeAuth.aud : null;
+  const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
+  const requiredAud = requiredAuth?.aud ?? null;
   let capability: CapabilityClaims | null = null;
   const capToken = capabilityFromHeaders(req);
   if (isPublicRoute) {
     void isPublicRoute;
   } else if (requiredAud || capToken) {
-    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAud);
+    capability = await verifyCapability(req, res, wiring, method, pathname, requiredAuth);
     if (!capability) return null;
     if (routeAuth === "either") {
       if (capability.aud !== undefined && capability.aud !== CONTROL_PLANE_AUD) {
@@ -525,7 +522,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       if ("path" in raw.route) nameRequest(base.method, raw.route.path);
       const routeAuth = raw.route.auth;
       if (typeof routeAuth === "object") {
-        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth.aud);
+        base.capability = await verifyCapability(req, res, wiring, base.method, base.pathname, routeAuth);
         if (!base.capability) return void req.resume();
       }
       await run(raw.route, raw.params, base);

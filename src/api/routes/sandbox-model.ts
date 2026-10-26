@@ -3,17 +3,17 @@ import { Readable } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { SANDBOX_MODEL_AUD } from "../../auth/capability-token.ts";
 import { gatewayRoot } from "../../model/provider-endpoints.ts";
+import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
+import { reportFailure } from "../../util/errors.ts";
 import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];
-const MAX_ERROR_BYTES = 64 * 1024;
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
-function redact(text: string, secret: string): string {
-  const bare = secret.replace(/^\S+\s+/, "");
-  return [secret, bare].filter((value) => value.length >= 8).reduce((out, value) => out.split(value).join("***"), text);
+function redactGatewayKey(apiKey: string): (text: string) => string {
+  return createExactSecretValueMasker([apiKey, apiKey.slice(apiKey.lastIndexOf(" ") + 1)]);
 }
 
 function endUser(actorId: string, secret: string): string {
@@ -21,7 +21,9 @@ function endUser(actorId: string, secret: string): string {
 }
 
 function attributed(path: string, input: Record<string, unknown>, user: string): Record<string, unknown> {
-  return path === "/v1/messages" ? { ...input, metadata: { user_id: user } } : { ...input, user };
+  if (!path.startsWith("/v1/messages")) return { ...input, user };
+  const metadata = input.metadata && typeof input.metadata === "object" ? input.metadata : {};
+  return { ...input, metadata: { ...metadata, user_id: user } };
 }
 
 async function denied(ctx: ApiCtx): Promise<boolean> {
@@ -30,15 +32,19 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
     sendJson(res, 403, { error: { message: "sandbox model grant required" } });
     return true;
   }
-  if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict") {
-    sendJson(res, 403, { error: { message: "model requests are disabled in strict posture" } });
-    return true;
-  }
   if (!deps.modelGatewayTransport) {
     sendJson(res, 503, { error: { message: "no model gateway is configured" } });
     return true;
   }
-  if (deps.budget && !(await deps.budget.check(capability.actorId)).allowed) {
+  const [posture, budget] = await Promise.all([
+    deps.config?.getSecurityPostureDurable(capability.scopeId),
+    deps.budget?.check(capability.actorId),
+  ]);
+  if (posture === "strict") {
+    sendJson(res, 403, { error: { message: "model requests are disabled in strict posture" } });
+    return true;
+  }
+  if (budget && !budget.allowed) {
     sendJson(res, 429, { error: { message: "your model budget for this window is spent" } });
     return true;
   }
@@ -93,11 +99,15 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     });
     const contentType = response.headers.get("content-type") ?? "application/json";
     if (!response.ok || !response.body) {
-      const text = redact(await response.text(), gateway.apiKey).slice(0, MAX_ERROR_BYTES);
+      const text = redactGatewayKey(gateway.apiKey)(await response.text());
       const retryAfter = response.headers.get("retry-after");
-      const status =
-        response.status >= 500 || response.status === 401 || response.status === 403 ? 502 : response.status;
-      res.writeHead(status, { "content-type": contentType, ...(retryAfter ? { "retry-after": retryAfter } : {}) });
+      const operatorFault = response.status >= 500 || response.status === 401 || response.status === 403;
+      if (operatorFault)
+        reportFailure("sandbox model: gateway refused", new Error(`${response.status} ${path}`), text.slice(0, 1024));
+      res.writeHead(operatorFault ? 502 : response.status, {
+        "content-type": contentType,
+        ...(retryAfter ? { "retry-after": retryAfter } : {}),
+      });
       return void res.end(text);
     }
     res.writeHead(response.status, { "content-type": contentType, "cache-control": "no-store" });
@@ -114,7 +124,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
 export const sandboxModelRoutes: Route[] = [
   {
     match: (_method, pathname) => pathname.startsWith(`${SANDBOX_MODEL_PREFIX}/`),
-    auth: { aud: SANDBOX_MODEL_AUD },
+    auth: { aud: SANDBOX_MODEL_AUD, bearer: true },
     maxBodyBytes: MAX_BODY_BYTES,
     handle: proxy,
   },

@@ -90,7 +90,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
       max_tokens: 10,
       stream: true,
       messages: [],
-      metadata: { user_id: "spoofed" },
+      metadata: { user_id: "spoofed", trace: "t1" },
     }),
   });
   assert.equal(messages.status, 200);
@@ -100,7 +100,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   assert.equal(calls[1]!.headers["anthropic-version"], "2023-06-01");
   assert.equal(calls[1]!.headers["x-api-key"], undefined);
   assert.equal(calls[1]!.body.model, "router/claude-haiku-latest");
-  assert.deepEqual(calls[1]!.body.metadata, { user_id: endUser });
+  assert.deepEqual(calls[1]!.body.metadata, { user_id: endUser, trace: "t1" });
 
   const models = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${token}` } });
   assert.deepEqual(
@@ -212,7 +212,7 @@ test("gateway deployments hand the sandbox a gateway URL and turn token, never t
   );
 
   await built.config.setSecurityPosture("personal:U1", "strict");
-  assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /Model access/);
+  assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /MODEL_GATEWAY/);
 });
 
 test("deployments without a gateway leave the sandbox gateway variables unset", async () => {

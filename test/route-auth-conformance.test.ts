@@ -23,7 +23,11 @@ test("every pinned dedicated-audience route actually resolves in the table", () 
     const [method, pathname] = key.split(" ") as [string, string];
     const found = findRoute(apiRoutes, method, pathname);
     assert.ok(found, `${key} is pinned but no route serves it`);
-    assert.deepEqual(found.route.auth, { aud: AUD_ROUTES.get(key) }, `${key} resolves with unexpected auth`);
+    assert.equal(
+      typeof found.route.auth === "object" ? found.route.auth.aud : found.route.auth,
+      AUD_ROUTES.get(key),
+      `${key} resolves with unexpected auth`,
+    );
   }
 });
 
