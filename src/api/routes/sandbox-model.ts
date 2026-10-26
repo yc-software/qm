@@ -110,7 +110,11 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       return void res.end(text);
     }
     res.writeHead(response.status, { "content-type": contentType, "cache-control": "no-store" });
-    pipeToResponse(res, Readable.fromWeb(response.body as WebReadableStream), "model stream failed");
+    const upstream = Readable.fromWeb(response.body as WebReadableStream);
+    upstream.on("error", (error) => {
+      if (!controller.signal.aborted) reportFailure("sandbox model: gateway stream", error, path);
+    });
+    pipeToResponse(res, upstream, "model stream failed");
   } catch (error) {
     if (!controller.signal.aborted) reportFailure("sandbox model: gateway request", error, path);
     if (!res.headersSent)
