@@ -1,49 +1,46 @@
-import type { SessionEntry } from "../types.ts";
-import type { GetEntriesOptions, SessionStore } from "./session-store.ts";
+import type { Item } from "./items.ts";
+import type { GetItemsOptions, SessionStore } from "./session-store.ts";
 
-type TranscriptStore = Pick<SessionStore, "getEntries" | "visibleEntries" | "countEntriesBefore">;
+type TranscriptStore = Pick<SessionStore, "getItems" | "visibleItems" | "countItemsBefore">;
 
 interface TranscriptRead {
-  entries: SessionEntry[];
+  items: Item[];
   earlier: number;
 }
 
 export interface TranscriptSource {
-  forRender(sessionId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
-  forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
+  forRender(sessionId: string, opts?: GetItemsOptions): Promise<TranscriptRead>;
+  forViewer(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<TranscriptRead>;
 }
 
-export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntry[] {
+export function transcriptItems(items: readonly Item[]): Item[] {
+  const receipt = (item: Item): boolean => item.kind === "UserMessage" && item.body.slackReplyReceipt === true;
   const received = new Set(
-    entries.flatMap((entry) => {
-      const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
-      return entry.type === "user" && payload?.ts && !payload.slackReplyReceipt ? [payload.ts] : [];
-    }),
+    items.flatMap((item) =>
+      item.kind === "UserMessage" && item.externalId && !receipt(item) ? [item.externalId] : [],
+    ),
   );
-  return entries.filter((entry) => {
-    const payload = entry.payload as { ts?: string; slackReplyReceipt?: boolean } | null;
-    return !(payload?.slackReplyReceipt && payload.ts && received.has(payload.ts));
-  });
+  return items.filter((item) => !(receipt(item) && item.externalId && received.has(item.externalId)));
 }
 
-const emptyWindowStart = (opts?: GetEntriesOptions): number =>
+const emptyWindowStart = (opts?: GetItemsOptions): number =>
   Math.min(opts?.sinceSeq ?? Infinity, opts?.beforeSeq ?? Infinity, Number.MAX_SAFE_INTEGER);
 
 export function createTranscriptSource(sessions: TranscriptStore): TranscriptSource {
   const read = async (
     sessionId: string,
-    opts: GetEntriesOptions | undefined,
+    opts: GetItemsOptions | undefined,
     principalId?: string,
   ): Promise<TranscriptRead> => {
-    const entries =
+    const items =
       principalId === undefined
-        ? await sessions.getEntries(sessionId, { ...opts, transcript: true })
-        : await sessions.visibleEntries(sessionId, principalId, { ...opts, transcript: true });
-    const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && entries.length >= opts.limit);
+        ? await sessions.getItems(sessionId, { ...opts, transcript: true })
+        : await sessions.visibleItems(sessionId, principalId, { ...opts, transcript: true });
+    const windowed = opts?.sinceSeq !== undefined || (opts?.limit !== undefined && items.length >= opts.limit);
     const earlier = windowed
-      ? await sessions.countEntriesBefore(sessionId, entries[0]?.seq ?? emptyWindowStart(opts), principalId)
+      ? await sessions.countItemsBefore(sessionId, items[0]?.seq ?? emptyWindowStart(opts), principalId)
       : 0;
-    return { entries, earlier };
+    return { items, earlier };
   };
   return {
     forRender: (sessionId, opts) => read(sessionId, opts),

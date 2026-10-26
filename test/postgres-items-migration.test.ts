@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { scopeId, type EntryType, type SessionEntry } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the items upgrade test";
@@ -25,7 +25,7 @@ test(
       const scope = scopeId("personal", "alice");
       const runId = randomUUID();
       const longCallId = `call__thought__${"x".repeat(1100)}`;
-      const legacy: [EntryType, Record<string, unknown>][] = [
+      const legacy: [string, Record<string, unknown>][] = [
         ["user", { text: "hello", name: "Alice", principalId: "alice", runId }],
         ["thinking", { text: "hmm", thinkingSignature: "sig" }],
         ["text", { text: "narrating" }],
@@ -38,8 +38,8 @@ test(
         ["user", { text: "steer", steered: true }],
         ["system", { kind: "turn_failure", message: "boom", runId }],
         ["system", { kind: "wake", cause: "cron", text: "cron fired" }],
-        ["soul" as EntryType, { text: "you are" }],
-        ["text_start" as EntryType, { phase: "final_answer" }],
+        ["soul", { text: "you are" }],
+        ["text_start", { phase: "final_answer" }],
         ["system", { kind: "goal_cancelled", objective: "Example goal", cancelledBy: "alice" }],
         ["tool_call", { tool: "execute", callId: longCallId, input: { command: "pwd" } }],
         ["tool_call", { tool: "execute", callId: "c1", input: { command: "ls" } }],
@@ -52,51 +52,49 @@ test(
         "INSERT INTO participants(session_id, principal_id, valid_from, valid_from_seq) VALUES ($1, 'alice', 0, 0)",
         [sessionId],
       );
-      const legacyEntries: SessionEntry[] = [];
       for (const [seq, [type, payload]] of legacy.entries()) {
         await raw.query(
           `INSERT INTO session_entries(session_id, seq, parent_seq, type, payload, scope_label, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [sessionId, seq, seq ? seq - 1 : null, type, JSON.stringify(payload), scope, 1_000 + seq],
         );
-        legacyEntries.push({
-          sessionId,
-          seq,
-          parentSeq: seq ? seq - 1 : null,
-          type,
-          payload,
-          scopeLabel: scope,
-          createdAt: 1_000 + seq,
-        });
       }
 
       await applyPgMigrations(raw, migrations);
       await applyPgMigrations(raw, migrations);
 
       const store = createPostgresSessionStore(URL!);
-      const copied = await store.getEntries(sessionId);
-      assert.deepEqual(copied.at(-3)?.payload, {
-        kind: "goal_cancelled",
-        cause: "system",
-        objective: "Example goal",
-        cancelledBy: "alice",
-      });
-      assert.equal((copied[0]!.payload as { text: string }).text, "hello");
-      assert.equal((copied.find((entry) => entry.seq === 5)!.payload as { text: string }).text, "final answer");
-      assert.equal((copied.find((entry) => entry.seq === 4)!.payload as { result: string }).result, "out\n");
+      const copied = await store.getItems(sessionId);
+      const goalCancelled = copied.at(-3)!;
+      assert.equal(goalCancelled.kind, "Wake");
+      assert.equal(goalCancelled.wakeCause, "system");
+      assert.deepEqual(goalCancelled.body, { kind: "goal_cancelled", objective: "Example goal", cancelledBy: "alice" });
+      assert.equal(copied[0]!.text, "hello");
+      assert.equal(copied.find((item) => item.seq === 5)!.text, "final answer");
+      assert.equal(copied.find((item) => item.seq === 4)!.text, "out\n");
       assert.deepEqual(
-        copied
-          .filter((entry) => entry.type === "tool_call")
-          .map((entry) => (entry.payload as { callId: string }).callId),
+        copied.filter((item) => item.kind === "ToolCall").map((item) => item.callId),
         ["c1", longCallId, "c1"],
         "call ids too long or repeated for the call_id column stay in the copied body",
       );
       assert.deepEqual(
-        copied.map((entry) => [entry.seq, entry.type, entry.createdAt]),
-        legacyEntries
-          .filter((entry) => !["soul", "text_start"].includes(entry.type))
-          .filter((entry) => (entry.payload as { kind?: string }).kind !== "goal")
-          .map((entry) => [entry.seq, entry.type, entry.createdAt]),
+        copied.map((item) => [item.seq, item.kind, item.variant, item.createdAt]),
+        [
+          [0, "UserMessage", null, 1_000],
+          [1, "Reasoning", null, 1_001],
+          [2, "AgentMessage", "narration", 1_002],
+          [3, "ToolCall", null, 1_003],
+          [4, "ToolResult", null, 1_004],
+          [5, "AgentMessage", null, 1_005],
+          [7, "AgentMessage", null, 1_007],
+          [8, "AgentMessage", "files_delivered", 1_008],
+          [9, "SteeringMessage", null, 1_009],
+          [10, "Error", null, 1_010],
+          [11, "Wake", null, 1_011],
+          [14, "Wake", null, 1_014],
+          [15, "ToolCall", null, 1_015],
+          [16, "ToolCall", null, 1_016],
+        ],
       );
       assert.deepEqual(
         (await raw.query("SELECT seq, turn_id::text FROM items WHERE turn_id IS NOT NULL ORDER BY seq")).rows,
@@ -121,11 +119,7 @@ test(
 
       const { lease } = await store.acquireLease(sessionId);
       assert.ok(lease);
-      const next = await store.append(lease, {
-        type: "assistant",
-        payload: { text: "first answer after cutover zebracorn" },
-        scopeLabel: scope,
-      });
+      const next = await store.append(lease, { kind: "AgentMessage", text: "first answer after cutover zebracorn" });
       await store.releaseLease(lease);
       assert.equal(next.seq, legacy.length);
       assert.deepEqual(

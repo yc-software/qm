@@ -144,7 +144,7 @@ test("a missing secretEnv value is warned, not invented", async () => {
 });
 
 test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
-  const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
+  const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui"] });
   try {
     const out = await plan(dir);
     assert.match(out, /PI_MODEL/);

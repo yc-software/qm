@@ -130,7 +130,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     quiet(() => runInit({ dir, org: "acme", target: "fly" }));
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "fly");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
+    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
     assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
     assert.equal(config.flyOrg, "personal");
     assert.ok(config.region, "region is scaffolded");
@@ -227,7 +227,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "aws");
     assert.equal(config.publicUrl, "https://acme.example.com");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
+    assert.deepEqual(config.services, ["core", "slack", "web-ui", "portal", "auth"]);
     assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.env.core?.AWS_DEPLOY_IMAGE, "acme-qm-sandbox");
     assert.equal(config.env.core?.AWS_PUBLIC_ORIGIN_URL, "http://replace-with-alb-hostname");

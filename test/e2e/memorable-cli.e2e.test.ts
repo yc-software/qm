@@ -9,7 +9,8 @@ import { createMemoryService } from "../../src/memory/memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
-import { scopeId, type SessionEntry } from "../../src/types.ts";
+import { scopeId } from "../../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
 
@@ -24,19 +25,25 @@ function skipReason(): string | false {
   return false;
 }
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s-e2e", seq, parentSeq: null, type, payload, scopeLabel: "personal:U1", createdAt: seq };
+function entry(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s-e2e", seq, createdAt: seq });
 }
 
 // A coding session as QM records it: prompt, failing check, fix, passing check.
-const trace: SessionEntry[] = [
-  entry("user", { text: "Fix the failing order tests in osprey" }, 1),
-  entry("tool_call", { tool: "execute", callId: "a", command: "TOKEN=sk-e2e-secret-value-123456 ./test.sh" }, 2),
-  entry("tool_result", { tool: "execute", callId: "a", isError: true, code: 1 }, 3),
-  entry("tool_call", { tool: "files", action: "write", callId: "b", path: "osprey/orders/validate.js" }, 4),
-  entry("tool_result", { tool: "files", action: "write", callId: "b" }, 5),
-  entry("tool_call", { tool: "execute", callId: "c", command: "./test.sh" }, 6),
-  entry("tool_result", { tool: "execute", callId: "c", code: 0 }, 7),
+const trace: Item[] = [
+  entry({ kind: "UserMessage", text: "Fix the failing order tests in osprey" }, 1),
+  entry(
+    { kind: "ToolCall", tool: "execute", callId: "a", body: { command: "TOKEN=sk-e2e-secret-value-123456 ./test.sh" } },
+    2,
+  ),
+  entry({ kind: "ToolResult", tool: "execute", callId: "a", isError: true, body: { code: 1 } }, 3),
+  entry(
+    { kind: "ToolCall", tool: "files", callId: "b", body: { action: "write", path: "osprey/orders/validate.js" } },
+    4,
+  ),
+  entry({ kind: "ToolResult", tool: "files", callId: "b", body: { action: "write" } }, 5),
+  entry({ kind: "ToolCall", tool: "execute", callId: "c", body: { command: "./test.sh" } }, 6),
+  entry({ kind: "ToolResult", tool: "execute", callId: "c", body: { code: 0 } }, 7),
 ];
 
 describe(
@@ -79,7 +86,7 @@ describe(
       memory = createConfiguredMemoryService({
         defaultMemory: createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memorable-ws-")))),
         config,
-        sessionEntries: async (id) => (id === "s-e2e" ? trace : []),
+        sessionItems: async (id) => (id === "s-e2e" ? trace : []),
       });
     });
 

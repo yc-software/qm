@@ -2,7 +2,7 @@
 {{- $svcKey := .Values.ingress.service }}
 {{- $svc := index .Values.services $svcKey }}
 {{- if or (not $svc) (not (has $svcKey (list "portal" "core" "web-ui"))) }}
-{{- fail "ingress.service must name an enabled HTTP service: portal, core, or web-ui (auth and admin are embedded)" }}
+{{- fail "ingress.service must name an enabled HTTP service: portal, core, or web-ui (auth is embedded)" }}
 {{- end }}
 {{- if not $svc.enabled }}
 {{- fail (printf "ingress.service %s is disabled" $svcKey) }}

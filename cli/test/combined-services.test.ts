@@ -3,12 +3,8 @@ import { test } from "node:test";
 import { brokerWiring, hostedServiceEnv, runnableServices } from "../src/services.ts";
 import { secretDestinations } from "../src/secrets.ts";
 
-test("five logical components deploy as three services without losing core-only deployments", () => {
-  assert.deepEqual(runnableServices(["core", "slack", "web-ui", "admin", "portal", "auth"]), [
-    "core",
-    "web-ui",
-    "portal",
-  ]);
+test("four logical components deploy as three services without losing core-only deployments", () => {
+  assert.deepEqual(runnableServices(["core", "slack", "web-ui", "portal", "auth"]), ["core", "web-ui", "portal"]);
   assert.deepEqual(runnableServices(["core"]), ["core"]);
 });
 

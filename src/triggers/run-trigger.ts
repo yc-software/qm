@@ -1,11 +1,11 @@
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
 import { turnModelOptions } from "../core/turn-options.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
-import { reachEnqueue } from "../reach/reach.ts";
+import { reachPost } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
@@ -19,7 +19,7 @@ const UNKNOWN_HOME_SKIP_NOTE =
   "this trigger's home scope is missing from the directory snapshot (roster sync gap) and the acting person has no session there — run skipped";
 
 export interface TriggerDeps {
-  deliveries: DeliveryStore;
+  outbound: Outbound;
   idempotency: IdempotencyStore;
   identity: IdentityService;
   run: (req: TurnRequest) => Promise<TurnResult>;
@@ -265,8 +265,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           return;
         }
         const attributeAs = await relayAttribution(deps, spec);
-        await reachEnqueue({
-          deliveries: deps.deliveries,
+        await reachPost({
+          outbound: deps.outbound,
           destination: spec.destination,
           text: spec.message,
           idempotencyKey: spec.fireKey,
@@ -324,8 +324,8 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           note = notVisibleNote;
           return;
         }
-        await reachEnqueue({
-          deliveries: deps.deliveries,
+        await reachPost({
+          outbound: deps.outbound,
           destination: spec.destination,
           text: res.reply ?? "",
           ...(res.attachments?.length ? { attachments: res.attachments } : {}),
@@ -360,7 +360,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   };
 
   if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
-    await deps.deliveries.enqueue({
+    await deps.outbound.send({
       destination: spec.destination,
       text: spec.errorNotice(userNote ?? note ?? status!),
       idempotencyKey: `${spec.fireKey}:err`,

@@ -353,16 +353,13 @@ export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record
   const out: Record<string, string> = {
     [def.docker.portEnv]: String(def.docker.internalPort),
     CORE_API_URL: "http://core:8080",
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
   };
   if (service === "core" && localSandboxActive(config)) {
     out.DOCKER_HOST = "unix:///var/run/docker.sock";
     out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;
   }
-  if (service === "portal") {
-    if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
-    if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://web-ui:8080/admin";
-  }
+  if (service === "portal" && config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
   if (config.services.includes("auth")) {
     Object.assign(
       out,
@@ -383,10 +380,7 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
   const out: Record<string, string> = {};
   if (ctx.signingSecret) out.CORE_SIGNING_SECRET = ctx.signingSecret;
   if (service === "core") {
-    Object.assign(
-      out,
-      orgEnv("core", config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-    );
+    Object.assign(out, orgEnv("core", config.orgId, config.publicUrl, brandEnvOf(config)));
     out.PORT = "8080";
     out.DATA_DIR = "/data";
     out.SESSION_STORE = "postgres";
@@ -713,7 +707,7 @@ export async function dockerUp(
     ];
     const wiring = {
       ...(p.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
-      ...orgEnv(p.name, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      ...orgEnv(p.name, config.orgId, config.publicUrl, brandEnvOf(config)),
       PORT: "8080",
     };
     const env = {
@@ -746,7 +740,6 @@ function printUrls(ctx: DockerCtx): void {
   if (has("auth"))
     note(`   auth   : ${url("portal")}/idp/authorize  (sign-in broker, published only through the portal)`);
   if (has("web-ui")) note(`   web-ui : ${url("web-ui")}`);
-  if (has("admin")) note(`   admin  : ${url("admin")}/admin`);
   note(`   core   : ${url("core")}`);
   note(`   status : qm status   ·   logs: qm logs core   ·   stop: qm down`);
 }

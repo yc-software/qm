@@ -12,9 +12,13 @@ import {
   withBase,
 } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, LogOut, Monitor, Moon, Sun, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
+import { appState, can, signOut } from "./shell";
+import { isPlainLeftClick, UI_BASE } from "./deep-link";
+import { brandName } from "./ui";
+import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./admin/sections";
+import type { AdminController } from "./admin/controller.js";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -510,20 +514,6 @@ function aiAccountsRow(): TemplateResult {
   `;
 }
 
-function adminRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Admin</div>
-        <div class="settings-row-note">Org settings, people, and policy.</div>
-      </div>
-      <a class="btn settings-row-action" href=${ADMIN_HOME_URL}>
-        ${icon(ShieldUser, 15)}<span>Open admin</span>${icon(ExternalLink, 14)}
-      </a>
-    </div>
-  `;
-}
-
 function desktopRow(): TemplateResult {
   return html`
     <div class="settings-row">
@@ -555,14 +545,97 @@ function accountRow(): TemplateResult {
   `;
 }
 
-function settingsPane(): TemplateResult {
+const SETTINGS_BASE = `${UI_BASE}/settings`;
+
+let section = "general";
+let adminHost: HTMLElement | null = null;
+let admin: AdminController | null = null;
+let adminLoad: Promise<AdminController> | null = null;
+
+function sectionFromUrl(): string {
+  const rel = location.pathname.startsWith(SETTINGS_BASE) ? location.pathname.slice(SETTINGS_BASE.length) : "";
+  const params = new URLSearchParams(location.search);
+  const slackStep = ["setup", "install", "connected"].includes(params.get("slack") ?? "");
+  if (params.get("setup") === "slack" || slackStep) return "slack-settings";
+  const first = decodeURIComponent(rel.replace(/^\/+/, "").split("/")[0] ?? "");
+  const view = first === "skill-packs" ? "skills" : first;
+  return ADMIN_VIEWS.has(view) ? view : "general";
+}
+
+function loadAdmin(): Promise<AdminController> {
+  adminLoad ??= import("./admin/entry").then(({ startAdmin }) => {
+    const host = document.createElement("div");
+    host.id = "app-view";
+    host.className = "admin-app";
+    adminHost = host;
+    drawSettings();
+    admin = startAdmin(host, {
+      org: appState.me?.org ?? "",
+      productName: brandName(),
+      apiBase: withBase("/api/admin"),
+      pageBase: SETTINGS_BASE,
+      onView: (view) => {
+        section = view;
+        drawSettings();
+      },
+    });
+    return admin;
+  });
+  return adminLoad;
+}
+
+function showSection(view: string): void {
+  if (admin) return admin.show(view);
+  if (view !== "general" && can("admin")) {
+    history.pushState(null, "", `${SETTINGS_BASE}/${encodeURIComponent(view)}`);
+    void loadAdmin();
+    return;
+  }
+  section = "general";
+  history.pushState(null, "", SETTINGS_BASE);
+  drawSettings();
+}
+
+function navItem(view: string): TemplateResult {
+  const active =
+    view === section ||
+    (view === "judgments" && section === "ackemoji") ||
+    (view === "users" && (section === "user" || section === "keychain"));
   return html`
-    <div class="list-page-head">
-      <h1 class="pane-title">Settings</h1>
-    </div>
+    <a
+      class="settings-nav-item ${active ? "active" : ""}"
+      href=${view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`}
+      aria-current=${active ? "page" : nothing}
+      @click=${(e: MouseEvent) => {
+        if (!isPlainLeftClick(e)) return;
+        e.preventDefault();
+        showSection(view);
+      }}
+      >${VIEW_TITLE[view] ?? view}</a
+    >
+  `;
+}
+
+function settingsNav(): TemplateResult {
+  return html`
+    <nav class="settings-nav" aria-label="Settings sections">
+      ${navItem("general")}
+      ${ADMIN_SECTIONS.map(
+        (group) => html`
+          <div class="settings-nav-label">${group.label}</div>
+          ${group.views.map(navItem)}
+        `,
+      )}
+    </nav>
+  `;
+}
+
+function generalPane(): TemplateResult {
+  return html`
+    ${can("admin") ? html`<h2 class="settings-section-title">General</h2>` : nothing}
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -579,6 +652,20 @@ function settingsPane(): TemplateResult {
   `;
 }
 
+function settingsPane(): TemplateResult {
+  const general = section === "general";
+  if (adminHost) adminHost.hidden = general;
+  return html`
+    <div class="list-page-head">
+      <h1 class="pane-title">Settings</h1>
+    </div>
+    <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
+      ${can("admin") ? settingsNav() : nothing}
+      <div class="settings-content">${general || !adminHost ? generalPane() : nothing} ${adminHost ?? nothing}</div>
+    </div>
+  `;
+}
+
 function drawSettings(): void {
   if (appState.currentView !== "settings" || !appState.mainEl) return;
   if (!settingsHost || settingsHost.parentElement !== appState.mainEl) {
@@ -590,6 +677,11 @@ function drawSettings(): void {
 }
 
 export function renderSettings(): void {
+  const wanted = sectionFromUrl();
+  if (wanted !== "general" && !can("admin")) history.replaceState(null, "", SETTINGS_BASE);
+  section = can("admin") ? wanted : "general";
   drawSettings();
+  if (admin) admin.route();
+  else if (section !== "general") void loadAdmin();
   void loadAiStatus();
 }

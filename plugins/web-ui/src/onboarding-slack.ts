@@ -4,16 +4,18 @@ import { LitElement, html, nothing } from "lit";
 import { ArrowUpRight, Check } from "lucide";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
+import { UI_BASE } from "./deep-link";
+
+const INSTALLATION_API = `${UI_BASE}/api/admin/slack-installation`;
+const SLACK_SETTINGS = `${UI_BASE}/settings/slack-settings`;
 
 export class OnboardingSlack extends LitElement {
   static properties = {
     installAvailable: { state: true },
-    adminBase: {},
     connected: { state: true },
     busy: { state: true },
     error: { state: true },
   };
-  adminBase = "/admin";
   private connected = false;
   private installAvailable: boolean | undefined;
   private busy = false;
@@ -52,7 +54,7 @@ export class OnboardingSlack extends LitElement {
     this.request = controller;
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(`${this.adminBase}/api/slack-installation`, {
+      const response = await fetch(INSTALLATION_API, {
         signal: controller.signal,
         credentials: "same-origin",
         redirect: "error",
@@ -82,7 +84,7 @@ export class OnboardingSlack extends LitElement {
   private async install(): Promise<void> {
     if (this.busy || this.installAvailable === undefined) return;
     try {
-      if (await openDesktopBrowser(`${this.adminBase}/slack-settings?slack=install`)) {
+      if (await openDesktopBrowser(`${SLACK_SETTINGS}?slack=install`)) {
         this.pollUntil = Date.now() + 10 * 60_000;
         void this.refresh();
         return;
@@ -98,7 +100,7 @@ export class OnboardingSlack extends LitElement {
     }
     popup.opener = null;
     if (this.installAvailable === false) {
-      popup.location.href = `${this.adminBase}/slack-settings?setup=slack`;
+      popup.location.href = `${SLACK_SETTINGS}?setup=slack`;
       return;
     }
     popup.document.title = "Connecting Slack";
@@ -106,7 +108,7 @@ export class OnboardingSlack extends LitElement {
     this.busy = true;
     this.error = "";
     try {
-      const response = await fetch(`${this.adminBase}/api/slack-installation/start`, {
+      const response = await fetch(`${INSTALLATION_API}/start`, {
         method: "POST",
         credentials: "same-origin",
         redirect: "error",

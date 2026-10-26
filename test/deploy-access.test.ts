@@ -11,7 +11,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import {
   decideDeploymentAccess,
@@ -40,7 +40,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const acl = createAclStore();
   const auditLog = createAuditLog();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const identity = createIdentityService();
   const directory = createDirectoryStore();
   await directory.replace(
@@ -53,7 +53,7 @@ async function fixture(t: { after(fn: () => void): void }) {
   const deploy = createDeployService({
     ...singleProcessDeps(),
     canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
-    deliveries,
+    outbound,
     deployAppsDomain: "apps.example.com",
     deployStore: createDeployStore(),
     acl,
@@ -69,7 +69,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     deploy,
     acl,
     identity,
-    deliveries,
+    outbound,
     auditLog,
     directory,
     sessions: createMemorySessionStore(),
@@ -82,11 +82,11 @@ async function fixture(t: { after(fn: () => void): void }) {
   return {
     share,
     grants: () => app.deploymentGrantees(d.id),
-    notices: () => deliveries.pending("principal"),
+    notices: () => outbound.pending("principal"),
     app,
     deploy,
     identity,
-    deliveries,
+    outbound,
     directory,
     d,
     value,
@@ -199,8 +199,8 @@ test("direct share paths notify only after successful grants; org, self and revo
   assert.equal((await control.shareArtifact(request, cap(owner))).ok, true);
   await f.share("read");
   assert.equal((await f.notices()).length, 1);
-  f.deliveries.enqueue = async () => {
-    throw new Error("outbox unavailable");
+  f.outbound.send = async () => {
+    throw new Error("Slack unavailable");
   };
   assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
 });

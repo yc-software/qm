@@ -10,11 +10,8 @@
   "sandbox": {
     "app": "acme-sandboxes",
   },
-  "services": ["core", "slack", "admin", "web-ui", "portal", "egress-proxy"],
+  "services": ["core", "slack", "web-ui", "portal", "egress-proxy"],
   "env": {
-    "admin": {
-      "ADMIN_BASE_PATH": "/admin",
-    },
     "core": {
       "HARNESS": "pi",
       "SNAPSHOT_STORE": "s3",

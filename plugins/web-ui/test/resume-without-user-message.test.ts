@@ -1,18 +1,25 @@
+import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-web-ui";
-import { continuableMessages, entriesToMessages, resumeAnchor, runIsTerminal } from "../src/core-bridge.ts";
+import { continuableMessages, itemsToMessages, resumeAnchor, runIsTerminal } from "../src/core-bridge.ts";
 
 const assistant = (text: string): AgentMessage =>
   ({ role: "assistant", content: [{ type: "text", text }] }) as unknown as AgentMessage;
 const user = (text: string): AgentMessage => ({ role: "user", content: text }) as unknown as AgentMessage;
 
 test("approval continuation preserves the paused work without seeding its text into the new reply", () => {
-  const history = entriesToMessages([
-    { type: "user", seq: 0, createdAt: 10, payload: { text: "show help" } },
-    { type: "text", seq: 1, createdAt: 11, payload: { text: "Checking help", phase: "commentary" } },
-    { type: "tool_call", seq: 2, createdAt: 12, payload: { command: "help" } },
-    { type: "tool_result", seq: 3, parentSeq: 2, createdAt: 13, payload: { blocked: "needs_approval" } },
+  const history = itemsToMessages([
+    item("UserMessage", { seq: 0, createdAt: 10, text: "show help" }),
+    item("AgentMessage", {
+      seq: 1,
+      createdAt: 11,
+      variant: "narration",
+      text: "Checking help",
+      body: { phase: "commentary" },
+    }),
+    item("ToolCall", { seq: 2, createdAt: 12, body: { command: "help" } }),
+    item("ToolResult", { seq: 3, createdAt: 13, body: { blocked: "needs_approval" } }),
   ]);
   const resumed = continuableMessages(history);
   assert.deepEqual(resumed.messages.slice(0, history.length), history);
@@ -44,10 +51,16 @@ test("a pending run restores its input without consuming the previous reply", ()
 });
 
 test("a recorded input wins over an older pending snapshot without text-based deduplication", () => {
-  const messages = entriesToMessages([
-    { type: "user", seq: 0, createdAt: 20, payload: { text: "original", runId: "run" } },
-    { type: "text", seq: 1, createdAt: 21, payload: { text: "Working", phase: "commentary" } },
-    { type: "user", seq: 2, createdAt: 22, payload: { text: "steer", runId: "run", steered: true } },
+  const messages = itemsToMessages([
+    item("UserMessage", { seq: 0, createdAt: 20, text: "original", turnId: "run" }),
+    item("AgentMessage", {
+      seq: 1,
+      createdAt: 21,
+      variant: "narration",
+      text: "Working",
+      body: { phase: "commentary" },
+    }),
+    item("SteeringMessage", { seq: 2, createdAt: 22, text: "steer", turnId: "run" }),
   ]);
   const resumed = continuableMessages(messages, { runId: "run", seq: null, text: "stale", createdAt: 19 });
   assert.equal(resumed.messages.length, 2);
@@ -56,7 +69,7 @@ test("a recorded input wins over an older pending snapshot without text-based de
 });
 
 test("legacy run boundaries at sequence zero also identify the recorded input", () => {
-  const messages = entriesToMessages([{ type: "user", seq: 0, createdAt: 20, payload: { text: "recorded" } }]);
+  const messages = itemsToMessages([item("UserMessage", { seq: 0, createdAt: 20, text: "recorded" })]);
   const resumed = continuableMessages(messages, { runId: "legacy", seq: 0, text: "request", createdAt: 19 });
   assert.deepEqual(resumed.messages, messages);
 });

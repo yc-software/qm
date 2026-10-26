@@ -117,11 +117,11 @@ test("a failed turn surfaces a refusal whose admin link points at the real sessi
   const got = await app.getRun(run.id);
   assert.equal(got?.result?.sessionId, session!.id, "getRun resolved threadRef → real UUID");
   assert.notEqual(got?.result?.sessionId, threadRef);
-  assert.equal(got?.result?.adminUrl, `${ADMIN}/admin/history/s/${session!.id}`);
+  assert.equal(got?.result?.adminUrl, `${ADMIN}/settings/history/s/${session!.id}`);
 
   const note = refusalNote(got!.result!, "channel");
   console.log("\n  Slack would post:\n  " + note + "\n");
-  assert.equal(note.split("Full error: ")[1], `${ADMIN}/admin/history/s/${session!.id} Try again, or DM me.`);
+  assert.equal(note.split("Full error: ")[1], `${ADMIN}/settings/history/s/${session!.id} Try again, or DM me.`);
   assert.doesNotMatch(note, /ch:C_UUID_FIXTURE/, "the link must not contain the threadRef");
   assert.doesNotMatch(note, /fully-internal/, "a turn failure is not a boundary refusal");
 });

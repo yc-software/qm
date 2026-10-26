@@ -152,7 +152,7 @@ test("empty labels retain the generic fallback and native names cannot be relabe
 });
 
 test("Slack bot setup uses one same-origin checklist, not a personal connection card", () => {
-  const url = "https://agent.example.com/admin?slack=setup";
+  const url = "https://agent.example.com/settings/slack-settings?slack=setup";
   const text = `[Set up Slack](${url})`;
   const links = connectorLinksIn(text, "https://agent.example.com");
   assert.deepEqual(links, [{ provider: "slack-bot", url }]);

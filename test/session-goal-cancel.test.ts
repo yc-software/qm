@@ -64,10 +64,11 @@ for (const status of ["active", "paused"] as const) {
 
     assert.deepEqual(await built.app.cancelSessionGoal(session.id, "U1"), { cancelled: true });
 
-    const entries = await built.sessions.getEntries(session.id);
-    assert.deepEqual(entries.at(-1)?.payload, {
+    const items = await built.sessions.getItems(session.id);
+    assert.equal(items.at(-1)?.kind, "Wake");
+    assert.equal(items.at(-1)?.wakeCause, "system");
+    assert.deepEqual(items.at(-1)?.body, {
       kind: "goal_cancelled",
-      cause: "system",
       objective: "old outreach goal",
       cancelledBy: "U1",
     });
@@ -76,7 +77,7 @@ for (const status of ["active", "paused"] as const) {
     assert.equal(goal?.completionNote, undefined, "cancelling is not completing");
     assert.equal(openGoal(goal), null, "later turns start with no goal to enforce");
     assert.match(
-      JSON.stringify(reconstructMessagesFromHistory(entries)),
+      JSON.stringify(reconstructMessagesFromHistory(items)),
       /The user cancelled this goal/,
       "the model is told the goal was cancelled",
     );
@@ -122,7 +123,7 @@ for (const status of ["active", "paused"] as const) {
     assert.equal(goal?.status, "cancelled");
     assert.equal(goal?.tokensUsed, 77, "the cancel builds on the turn's final save");
     assert.deepEqual(
-      (await built.sessions.getEntries(session.id)).map((e) => (e.payload as { kind?: string }).kind),
+      (await built.sessions.getItems(session.id)).map((e) => e.body.kind),
       ["goal_cancelled"],
     );
   });

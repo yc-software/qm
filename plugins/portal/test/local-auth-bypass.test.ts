@@ -4,12 +4,6 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 const upstream = createServer((req: IncomingMessage, res) => {
-  if (req.url === "/api/whoami") {
-    const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
-    const sub = m ? decodeURIComponent(m[1] ?? "") : "";
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: sub === "local-admin" }));
-  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url, cookie: req.headers.cookie ?? null }));
 });
@@ -20,7 +14,6 @@ process.env.PORTAL_PUBLIC_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "local-auth-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "local-auth-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "local-admin";
@@ -35,9 +28,9 @@ test.after(() => {
 });
 
 test("local auth bypass signs in loopback portal requests without OIDC", async () => {
-  const login = await fetch(`${base}/auth/login?returnTo=/admin/`, { redirect: "manual" });
+  const login = await fetch(`${base}/auth/login?returnTo=/settings/`, { redirect: "manual" });
   assert.equal(login.status, 302);
-  assert.equal(login.headers.get("location"), "/admin/");
+  assert.equal(login.headers.get("location"), "/settings/");
   assert.match(login.headers.get("set-cookie") ?? "", /portal_session=[^,]*Max-Age=604800\b/);
   const session = login.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_session="));
   const twin = login.headers.getSetCookie().find((cookie) => cookie.startsWith("portal_session_x="));
@@ -46,11 +39,11 @@ test("local auth bypass signs in loopback portal requests without OIDC", async (
   assert.match(twin, /SameSite=Lax/);
   assert.doesNotMatch(twin, /Secure/);
 
-  const admin = await fetch(`${base}/admin/api/me`);
-  assert.equal(admin.status, 200);
-  const body = (await admin.json()) as { url: string; cookie: string };
-  assert.equal(body.url, "/api/me");
-  assert.equal(body.cookie, "admin=local-admin");
+  const settings = await fetch(`${base}/settings/users`);
+  assert.equal(settings.status, 200);
+  const body = (await settings.json()) as { url: string; cookie: string };
+  assert.equal(body.url, "/settings/users");
+  assert.equal(body.cookie, "webuiuser=local-admin");
 });
 
 test("local auth bypass only treats loopback client addresses as local", () => {
@@ -80,13 +73,13 @@ test("local auth bypass respects logout until explicit login", async () => {
   assert.equal(landing.status, 200);
   assert.match(await landing.text(), /You have signed out of this portal/);
 
-  const loggedOut = await fetch(`${base}/admin/api/me`, {
+  const loggedOut = await fetch(`${base}/settings/users`, {
     headers: { cookie: "portal_local_logout=1" },
     redirect: "manual",
   });
   assert.equal(loggedOut.status, 401);
 
-  const login = await fetch(`${base}/auth/login?returnTo=/admin/`, {
+  const login = await fetch(`${base}/auth/login?returnTo=/settings/`, {
     headers: { cookie: "portal_local_logout=1" },
     redirect: "manual",
   });

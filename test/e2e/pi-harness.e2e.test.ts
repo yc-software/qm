@@ -70,9 +70,9 @@ test("the turn is recorded in the session log (user + assistant entries)", opts,
   const r = await app.turn(dm("Say hi in one word."));
   assert.equal(r.status, "ok");
   const found = await app.getSession(r.sessionId!);
-  const types = found!.entries.map((e) => e.type);
-  assert.ok(types.includes("user"));
-  assert.ok(types.includes("assistant"));
+  const kinds = found!.items.map((e) => e.kind);
+  assert.ok(kinds.includes("UserMessage"));
+  assert.ok(kinds.includes("AgentMessage"));
 });
 
 test("internal-only still refuses a guest even with the real harness", opts, async () => {

@@ -13,7 +13,7 @@ import { normalizeInboundExpiresAt } from "../expiry.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
-import { swallowAs } from "../../util/errors.ts";
+import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 
 async function resolveScopeNames(
@@ -272,11 +272,9 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   });
   const cardDestination = approvalCardDestination(ask);
   if (cardDestination)
-    await deps.deliveries?.enqueue({
-      destination: cardDestination,
-      text: notice,
-      idempotencyKey: `ask:${ask.id}:notice`,
-    });
+    await deps.outbound
+      ?.send({ destination: cardDestination, text: notice, idempotencyKey: `ask:${ask.id}:notice` })
+      .catch((error: unknown) => reportFailure("keychain: post credential request card", error, `ask=${ask.id}`));
   if (!existing) {
     audit(deps, {
       principalId: actorId,

@@ -123,7 +123,7 @@ test("live and shadow default search cannot source mirror data", async () => {
     let cacheReads = 0;
     const tools = createSurfaceToolDeps({
       deps: {
-        deliveries: {},
+        outbound: {},
         slackContextSource: source,
         surfaceCache: {
           containerState: async () => null,

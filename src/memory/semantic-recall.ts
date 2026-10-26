@@ -1,18 +1,17 @@
-import type { SessionEntry } from "../types.ts";
+import { isReply, isUserMessage, type Item } from "../sessions/items.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { factCandidate, factHash, recentCandidates, type MemoryCandidate } from "./facts.ts";
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
 
-export function memoryRecallQuery(message: string, visibleEntries: readonly SessionEntry[]): string {
-  const recent = visibleEntries
-    .filter((entry) => entry.type === "user" || entry.type === "assistant")
+export function memoryRecallQuery(message: string, visibleItems: readonly Item[]): string {
+  const recent = visibleItems
+    .filter((item) => isUserMessage(item) || isReply(item))
     .slice(-4)
-    .map((entry) => {
-      const text = (entry.payload as { text?: unknown } | null)?.text;
-      return typeof text === "string" ? `${entry.type}: ${text.slice(-1000)}` : "";
-    })
+    .map((item) =>
+      item.text === null ? "" : `${isUserMessage(item) ? "user" : "assistant"}: ${item.text.slice(-1000)}`,
+    )
     .filter(Boolean)
     .join("\n")
     .slice(-2000);

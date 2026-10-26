@@ -12,11 +12,9 @@ const upstream = createServer((req: IncomingMessage, res) => {
       JSON.stringify({ webuiModels: [], baseModel: "m", harnessId: "pi", modelProviderConfigured: providerConfigured }),
     );
   }
-  if (req.url === "/api/whoami") {
-    const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
-    const sub = m ? decodeURIComponent(m[1] ?? "") : "";
+  if (req.url?.startsWith("/v1/admin/whoami")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: sub === "U-admin" }));
+    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
   }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url }));
@@ -28,7 +26,6 @@ process.env.PORTAL_PUBLIC_URL = "http://portal.test";
 process.env.PORTAL_SESSION_SECRET = "onboarding-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "onboarding-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
 const { server } = await import("../src/index.ts");
@@ -47,13 +44,13 @@ test.after(() => {
   upstream.close();
 });
 
-test("unconfigured deployment: admin HTML navigation to web-ui redirects to admin onboarding", async () => {
+test("unconfigured deployment: admin HTML navigation redirects to settings onboarding", async () => {
   const r = await fetch(`${base}/`, {
     headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
     redirect: "manual",
   });
   assert.equal(r.status, 302);
-  assert.equal(r.headers.get("location"), "/admin/onboarding");
+  assert.equal(r.headers.get("location"), "/settings/onboarding");
 });
 
 test("unconfigured deployment: non-admin HTML navigation gets a not-set-up page, not a bare 403", async () => {
@@ -71,13 +68,15 @@ test("unconfigured deployment: web-ui JSON requests still proxy through untouche
   assert.equal(((await r.json()) as { url: string }).url, "/api/sessions");
 });
 
-test("unconfigured deployment: the admin surface itself is reachable, so onboarding never loops", async () => {
-  const r = await fetch(`${base}/admin/onboarding`, {
-    headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
-    redirect: "manual",
-  });
-  assert.equal(r.status, 200);
-  assert.equal(((await r.json()) as { url: string }).url, "/onboarding");
+test("unconfigured deployment: settings and legacy admin pages reach web-ui, so onboarding never loops", async () => {
+  for (const path of ["/settings/onboarding", "/settings", "/admin/onboarding"]) {
+    const r = await fetch(`${base}${path}`, {
+      headers: { accept: "text/html", cookie: sessionCookie("U-admin") },
+      redirect: "manual",
+    });
+    assert.equal(r.status, 200, path);
+    assert.equal(((await r.json()) as { url: string }).url, path);
+  }
 });
 
 test("once a provider is configured, admin HTML navigation proxies to web-ui again", async () => {

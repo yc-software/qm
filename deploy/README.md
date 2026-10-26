@@ -27,7 +27,7 @@ Do not deploy the example names in these templates directly.
 ## Topology
 
 The public portal is the only Internet-facing service. It authenticates users
-over OIDC and proxies the private Web UI and admin surfaces. Core, Postgres, and
+over OIDC and proxies the private Web UI, including its administrator settings. Core, Postgres, and
 agent computers stay private. The optional Slack surface runs inside core over
 outbound Socket Mode.
 
@@ -40,7 +40,7 @@ The self-hoster supplies an admin address, a verified sender, and a Resend key
 or SMTP credentials; the CLI generates the broker's signing key and the portal's
 client credentials and wires both sides. Core receives the same `RESEND_API_KEY`
 and `AUTH_EMAIL_FROM`, which let admins email invitations to external users from
-the admin Users tab or by chatting with QM; both are optional on core, and
+the Users settings page or by chatting with QM; both are optional on core, and
 without them the invitation is still created and the sign-in link is shared by
 hand. Dropping `"auth"` from `services` hands
 sign-in back to an external identity provider, which then has to register the

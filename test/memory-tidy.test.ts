@@ -5,7 +5,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
@@ -38,7 +38,7 @@ function fixture() {
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     identity: createIdentityService(),
     idempotency: createIdempotencyStore(),
     skipFire: (cron) => service.skipFire(cron),

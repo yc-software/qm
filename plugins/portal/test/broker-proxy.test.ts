@@ -44,7 +44,6 @@ process.env.PORTAL_IDENTITY_SECRET = "broker-proxy-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "broker-proxy-test-core-secret";
 process.env.CORE_ORG_ID = "acme";
 process.env.WEB_UI_UPSTREAM = surfaceUrl;
-process.env.ADMIN_UPSTREAM = surfaceUrl;
 process.env.CORE_API_URL = surfaceUrl;
 process.env.AUTH_BROKER_UPSTREAM = brokerUrl;
 

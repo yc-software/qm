@@ -590,6 +590,8 @@ function validate(raw: unknown, path: string): QmConfig {
     }
   }
 
+  rejectRetiredAdminService(o, path);
+
   const target = o["target"];
   if (!isTarget(target)) throw new CliError(`${path}: "target" must be ${hostingProviderChoices()}`);
 
@@ -611,9 +613,6 @@ function validate(raw: unknown, path: string): QmConfig {
     );
   }
 
-  if (services.includes("admin") && !services.includes("portal") && target === "aws") {
-    throw new CliError(`${path}: admin requires the authenticated portal`);
-  }
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
   const env = validateServiceMap(o["env"], path, "env", (v, k) => validateStringMap(v, path, `env.${k}`));
@@ -681,15 +680,6 @@ function validate(raw: unknown, path: string): QmConfig {
         `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
       );
     }
-  }
-  const portalMountsAdmin = services.includes("portal") && services.includes("admin");
-  if (portalMountsAdmin && env.admin?.ADMIN_BASE_PATH !== undefined && env.admin.ADMIN_BASE_PATH !== "/admin") {
-    throw new CliError(`${path}: env.admin.ADMIN_BASE_PATH must be "/admin" when portal and admin are enabled`);
-  }
-  if (portalMountsAdmin && secretEnv.admin?.ADMIN_BASE_PATH !== undefined) {
-    throw new CliError(
-      `${path}: secretEnv.admin.ADMIN_BASE_PATH is managed by the deployment target and cannot be overridden`,
-    );
   }
   for (const [i, plugin] of plugins.entries()) {
     if (plugin.env?.PORT !== undefined) {
@@ -1012,9 +1002,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(
       `${path}: AWS web-ui requires the authenticated portal; a portal-free ALB must never expose the Web UI`,
     );
-  }
-  if (config.services.includes("admin") && !hasPortal) {
-    throw new CliError(`${path}: AWS admin requires the authenticated portal`);
   }
   if (hasPortal && !hasWebUi) {
     throw new CliError(`${path}: AWS portal requires web-ui`);
@@ -1607,6 +1594,21 @@ function validateStringMap(raw: unknown, path: string, field: string): Record<st
     out[k] = v;
   }
   return out;
+}
+
+function rejectRetiredAdminService(o: Record<string, unknown>, path: string): void {
+  const hasAdmin = (v: unknown): boolean => isPlainObject(v) && Object.hasOwn(v, "admin");
+  const aws = o["aws"];
+  const found = [
+    ...(Array.isArray(o["services"]) && o["services"].includes("admin") ? ['"admin" from services'] : []),
+    ...["env", "secretEnv", "imageOverrides"].filter((field) => hasAdmin(o[field])).map((field) => `${field}.admin`),
+    ...(isPlainObject(aws) && hasAdmin(aws["services"]) ? ["aws.services.admin"] : []),
+  ];
+  if (found.length) {
+    throw new CliError(
+      `${path}: the admin service no longer exists; admin settings are part of web-ui at /settings. Remove ${found.join(", ")}`,
+    );
+  }
 }
 
 function validateServiceMap<T>(

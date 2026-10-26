@@ -56,7 +56,6 @@ const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: str
     orgId: config.orgId,
     deployAppPrefix,
     publicUrl: config.publicUrl,
-    hasPortal: config.services.includes("portal"),
     hasAuth: config.services.includes("auth"),
     ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
       ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
@@ -762,7 +761,7 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "auth"]);
+const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "auth"]);
 
 export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
   const phases: ServiceName[][] = [];
@@ -948,14 +947,13 @@ function pluginTomlContent(
   flyOrg: string,
   orgId: string,
   publicUrl: string,
-  hasPortal: boolean,
   region: string,
   plugin: ResolvedPlugin,
   brand?: BrandEnv,
 ): string {
   const env: Record<string, string> = {
     ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
+    ...orgEnv(plugin.name, orgId, publicUrl, brand),
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
@@ -981,7 +979,6 @@ export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): 
     config.flyOrg ?? "",
     config.orgId,
     config.publicUrl,
-    config.services.includes("portal"),
     config.region ?? "",
     plugin,
     brandEnvOf(config),
@@ -998,7 +995,6 @@ function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
       ctx.flyOrg,
       ctx.orgId,
       ctx.config.publicUrl,
-      ctx.config.services.includes("portal"),
       ctx.region,
       plugin,
       brandEnvOf(ctx.config),
@@ -1662,7 +1658,6 @@ export async function flyCheckLive(
             ctx.flyOrg,
             ctx.orgId,
             config.publicUrl,
-            config.services.includes("portal"),
             ctx.region,
             plugin!,
             brandEnvOf(config),

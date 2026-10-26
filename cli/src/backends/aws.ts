@@ -388,7 +388,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }
       : {};
   const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
     ...(service === "core"
       ? {}
       : {
@@ -431,7 +431,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
   }
   if (service === "portal") {
     env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
-    env.ADMIN_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080/admin`;
     env.PORTAL_XFF_TRUSTED_HOPS = "1";
   }
   if (config.services.includes("auth")) {
@@ -446,7 +445,7 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       }),
     );
   }
-  if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
+  if (config.services.includes("portal") && service === "web-ui") {
     env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
   }
   env[def.docker.portEnv] = String(def.docker.internalPort);
@@ -473,7 +472,7 @@ function workloadEnvironment(
       ...(plugin?.coreAccess === false
         ? {}
         : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      ...orgEnv(workload, config.orgId, config.publicUrl, brandEnvOf(config)),
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -916,7 +915,10 @@ async function runAwsCandidateMigration(
       throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
     }
     step(`migration task: ${taskArn}`);
-    await awaitEcsTaskExit(aws, taskArn, "migration");
+    await awaitEcsTaskExit(aws, taskArn, "migration", {
+      deadlineMs: envNum("QM_AWS_MIGRATION_DEADLINE_MS", envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000)),
+      stopOnTimeout: true,
+    });
     ok(`candidate ${label} migrations applied`);
   } finally {
     if (taskDefinition && !existingTaskDefinition) {
@@ -1242,9 +1244,14 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
   await awaitEcsTaskExit(aws, taskArn, "canary");
 }
 
-async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): Promise<void> {
+async function awaitEcsTaskExit(
+  aws: AwsConfig,
+  taskArn: string,
+  kind: string,
+  options: { deadlineMs?: number; stopOnTimeout?: boolean } = {},
+): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 5_000);
-  const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+  const deadline = Date.now() + (options.deadlineMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000));
   for (;;) {
     const described = awsJson<{
       tasks?: Array<{
@@ -1267,6 +1274,27 @@ async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): 
       );
     }
     if (Date.now() > deadline) {
+      if (options.stopOnTimeout && task) {
+        try {
+          awsText(aws, [
+            "ecs",
+            "stop-task",
+            "--cluster",
+            aws.cluster,
+            "--task",
+            taskArn,
+            "--reason",
+            `qm deploy stopped waiting for the ${kind} task`,
+          ]);
+        } catch (stopError) {
+          warn(`could not stop ${kind} task ${taskArn}: ${errMessage(stopError)}`);
+        }
+        throw new CliError(
+          `AWS ${kind} task did not finish before the deadline and was stopped. A migration task usually waits on the ` +
+            "qm:schema-migrations advisory lock; check pg_locks for another session holding it (for example an " +
+            "operator index build) before redeploying.",
+        );
+      }
       throw new CliError(
         task
           ? `timed out waiting for the AWS ${kind} task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`
@@ -1949,7 +1977,7 @@ function unchangedWebRouting(
         definition,
       ]).taskDefinition;
       const next = desired.find((item) => item.service === workload)!.task;
-      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM", "ADMIN_UPSTREAM"] : ["ADMIN_ENABLED"];
+      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM"] : [];
       const settings = (task: Record<string, unknown> | undefined): string[] | undefined => {
         const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
         const matches = containers?.filter((container) => container.name === workload);
@@ -3549,11 +3577,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         );
         affected.splice(affected.indexOf("core"), 1);
       }
-      for (const [component, host, marker, expected] of [
-        ["admin", "web-ui", "ADMIN_ENABLED", "1"],
-        ["auth", "portal", "AUTH_EMBEDDED", "1"],
-        ["admin", "portal", "ADMIN_UPSTREAM", serviceEnvironment(config, "portal").ADMIN_UPSTREAM],
-      ] as const) {
+      for (const [component, host, marker, expected] of [["auth", "portal", "AUTH_EMBEDDED", "1"]] as const) {
         if (!config.services.includes(component) || !workloads.includes(host)) continue;
         const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
           "ecs",

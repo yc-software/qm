@@ -10,7 +10,7 @@ import {
 } from "../src/slack/external-access.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv } from "../src/slack/config.ts";
 import { continueInPrivate, PRIVATE_CONTINUATION_ACK } from "../src/slack/private-continuation.ts";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { createSlackSender } from "../src/slack/sender.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createDirectory } from "../src/slack/directory.ts";
@@ -279,10 +279,8 @@ test("handoff fails closed on revoked identity, wrong workspace, and missing DM"
   }
 });
 
-test("delivery recovery routes private result only through its originating account", async () => {
+test("a recovered private result posts only through its originating account", async () => {
   const posts: unknown[] = [];
-  const acks: string[] = [];
-  let pending = true;
   const client = {
     conversations: { history: async () => ({ messages: [] }) },
     chat: {
@@ -292,32 +290,8 @@ test("delivery recovery routes private result only through its originating accou
       },
     },
   };
-  const core = {
-    holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-    claimDeliveries: async (type: string) => {
-      if (type !== "slack" || !pending) return [];
-      pending = false;
-      return [
-        {
-          id: "delivery",
-          idempotencyKey: "run:dm-run",
-          text: "Synthetic private result",
-          createdAt: Date.now() - 30_000,
-          destination: {
-            type: "slack",
-            target: "DPRIVATE",
-            slackAccountId: "partner",
-            slackPolicyNamespace: externalSlackNamespace("TPARTNER", policy),
-          },
-        },
-      ];
-    },
-    ackDelivery: async (id: string) => {
-      acks.push(id);
-    },
-  };
-  const poller = createDeliveryPoller({
-    core: core as never,
+  const send = createSlackSender({
+    core: {} as never,
     flow: { inFlightRuns: new Set() } as never,
     threads: { mark: () => {} } as never,
     clientForIdentity: () => {
@@ -328,47 +302,36 @@ test("delivery recovery routes private result only through its originating accou
       return client;
     },
     externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
-  });
-  await poller.pollDeliveries({
-    chat: {
-      postMessage: () => {
-        throw new Error("default account used");
+    defaultClient: {
+      chat: {
+        postMessage: () => {
+          throw new Error("default account used");
+        },
       },
+    },
+  });
+  await send({
+    idempotencyKey: "run:dm-run",
+    text: "Synthetic private result",
+    createdAt: Date.now() - 30_000,
+    destination: {
+      type: "slack",
+      target: "DPRIVATE",
+      slackAccountId: "partner",
+      slackPolicyNamespace: externalSlackNamespace("TPARTNER", policy),
     },
   });
   assert.equal(posts.length, 1);
   assert.equal((posts[0] as { channel: string }).channel, "DPRIVATE");
-  assert.deepEqual(acks, ["delivery"]);
 });
 
-test("external account poller neither claims default identity nor releases pre-policy answers", async () => {
+test("an external account's sender neither borrows a missing default identity nor releases pre-policy answers", async () => {
   for (const [hasDefault, target, slackPolicyNamespace] of [
     [false, "CSHARED", undefined],
     [true, "CSHARED", undefined],
     [true, "DPRIVATE", undefined],
     [true, "DPRIVATE", externalSlackNamespace("TPARTNER", { ...policy, companyTeamIds: ["TOTHER"] })],
   ] as const) {
-    let pending = true;
-    const acks: string[] = [];
-    const core = {
-      holdDeliveryDispatch: (fn: (lost: Promise<void>) => Promise<unknown>) => fn(new Promise<void>(() => {})),
-      claimDeliveries: async (type: string) => {
-        if (type !== "slack" || !pending) return [];
-        pending = false;
-        return [
-          {
-            id: "legacy",
-            idempotencyKey: "run:legacy",
-            text: "Synthetic pre-policy private answer",
-            createdAt: 1,
-            destination: { type: "slack", target, slackPolicyNamespace },
-          },
-        ];
-      },
-      ackDelivery: async (id: string) => {
-        acks.push(id);
-      },
-    };
     const client = {
       chat: {
         postMessage: () => {
@@ -376,8 +339,8 @@ test("external account poller neither claims default identity nor releases pre-p
         },
       },
     };
-    const poller = createDeliveryPoller({
-      core: core as never,
+    const send = createSlackSender({
+      core: {} as never,
       flow: { inFlightRuns: new Set() } as never,
       threads: {} as never,
       clientForIdentity: () => client,
@@ -387,8 +350,14 @@ test("external account poller neither claims default identity nor releases pre-p
       },
       externalNamespace: () => externalSlackNamespace("TPARTNER", policy),
     });
-    await poller.pollDeliveries(client);
-    assert.deepEqual(acks, hasDefault ? ["legacy"] : []);
+    const post = send({
+      idempotencyKey: "run:legacy",
+      text: "Synthetic pre-policy private answer",
+      createdAt: 1,
+      destination: { type: "slack", target, ...(slackPolicyNamespace ? { slackPolicyNamespace } : {}) },
+    });
+    if (hasDefault) assert.equal(await post, undefined);
+    else await assert.rejects(post, /Slack account default is not connected/);
   }
 });
 

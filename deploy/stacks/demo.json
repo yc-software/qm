@@ -10,7 +10,7 @@
   "sandbox": {
     "app": "demo-agent-sandboxes"
   },
-  "services": ["core", "admin", "web-ui", "portal"],
+  "services": ["core", "web-ui", "portal"],
   "vms": {
     "core": { "size": "shared-cpu-2x", "memory": "4gb" }
   },
@@ -23,7 +23,6 @@
       "S3_BUCKET": "demo-agent-data",
       "S3_REGION": "auto"
     },
-    "admin": { "ADMIN_BASE_PATH": "/admin" },
     "web-ui": {
       "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui"
     },

@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
 let whoamiProbes = 0;
+let lastWhoamiActor: string | null = null;
+let lastWhoamiSigned = false;
 let lastConsentClicker: string | null = null;
 let lastImpersonateIdentity: string | null = null;
 let agentApiRequests = 0;
@@ -61,12 +63,13 @@ const upstream = createServer((req: IncomingMessage, res) => {
     res.writeHead(500, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ error: "boom" }));
   }
-  if (req.url === "/api/whoami") {
+  if (req.url?.startsWith("/v1/admin/whoami")) {
     whoamiProbes++;
-    const m = (req.headers.cookie ?? "").match(/admin=([^;]+)/);
-    const sub = m ? decodeURIComponent(m[1] ?? "") : "";
+    lastWhoamiActor = typeof req.headers["x-admin-actor"] === "string" ? req.headers["x-admin-actor"] : null;
+    lastWhoamiSigned = typeof req.headers["x-signature"] === "string" && typeof req.headers["x-timestamp"] === "string";
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: sub === "U-admin" }));
+    const canonicalActor = lastWhoamiActor === "U-admin-alias@acme" ? "U-admin@acme" : lastWhoamiActor;
+    return void res.end(JSON.stringify({ isAdmin: canonicalActor === "U-admin@acme" }));
   }
   if (typeof req.url === "string" && req.url.startsWith("/v1/admin/impersonate")) {
     lastImpersonateIdentity =
@@ -109,7 +112,6 @@ process.env.PORTAL_PUBLIC_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "router-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "router-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
@@ -235,22 +237,16 @@ test("a surface that declares frame-ancestors keeps it; the blanket DENY stays o
   assert.equal(normal.headers.get("x-frame-options"), "DENY");
 });
 
-test("admin tier (derived gate): non-admin sub is 403 before the upstream; admin sub gets admin=<sub>", async () => {
-  const denied = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(denied.status, 403);
-  const deniedHtml = await fetch(`${base}/admin/`, { headers: { cookie: sessionCookie("U1"), accept: "text/html" } });
-  assert.equal(deniedHtml.status, 403);
-  assert.match(await deniedHtml.text(), /admin access/i);
-
-  const ok = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-admin") } });
-  assert.equal(ok.status, 200);
-  const body = (await ok.json()) as { cookie: string };
-  assert.equal(body.cookie, "admin=U-admin");
-});
-
-test("admin gate fails closed for an unknown sub (whoami false ⇒ 403)", async () => {
-  const r = await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-ghost") } });
-  assert.equal(r.status, 403);
+test("/admin and /settings reach the web UI as the signed-in user without an admin probe", async () => {
+  const before = whoamiProbes;
+  for (const path of ["/admin/api/me", "/settings/users"]) {
+    const r = await fetch(`${base}${path}`, { headers: { cookie: `${sessionCookie("U1")}; admin=EVIL` } });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as { url: string; cookie: string };
+    assert.equal(body.url, path);
+    assert.equal(body.cookie, "webuiuser=U1");
+  }
+  assert.equal(whoamiProbes, before);
 });
 
 test("an unclaimed prefix falls through to the web UI surface (its SPA owns unknown paths)", async () => {
@@ -268,13 +264,14 @@ test("an unmatched /v1 path is a hard 404, never the SPA shell", async () => {
   }
 });
 
-test("tier-escape: encoded separators are rejected, and a normalized traversal cannot reach a higher tier", async () => {
+test("path confusion: encoded separators are rejected, and a normalized traversal reaches only the web UI as the signed-in user", async () => {
   for (const p of ["/web-ui/..%2fadmin/x", "//admin/x", "/web-ui/%2e%2e%2fadmin", "/web-ui/%5cadmin"]) {
     const r = await fetch(`${base}${p}`, { headers: { cookie: sessionCookie("U1") }, redirect: "manual" });
     assert.equal(r.status, 400, `expected 400 for ${p}, got ${r.status}`);
   }
   const collapsed = await fetch(`${base}/web-ui/%2e%2e/admin/api/me`, { headers: { cookie: sessionCookie("U1") } });
-  assert.equal(collapsed.status, 403);
+  assert.equal(collapsed.status, 200);
+  assert.equal(((await collapsed.json()) as { cookie: string }).cookie, "webuiuser=U1");
 });
 
 test("CSRF: a non-GET without a same-origin Origin is refused", async () => {
@@ -642,11 +639,18 @@ test("sliding renewal: a fresh session is NOT re-stamped, an aged one is re-issu
   );
 });
 
-test("admin-status probe is memoized within the TTL (one round-trip per sub)", async () => {
+test("admin status comes from a signed core whoami for the session subject, memoized within the TTL", async () => {
   const before = whoamiProbes;
-  await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-fresh-ttl") } });
-  await fetch(`${base}/admin/api/me`, { headers: { cookie: sessionCookie("U-fresh-ttl") } });
+  for (let i = 0; i < 2; i++) {
+    const r = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
+      method: "POST",
+      headers: { cookie: sessionCookie("U-fresh-ttl"), origin: PUBLIC },
+    });
+    assert.equal(r.status, 403);
+  }
   assert.equal(whoamiProbes - before, 1, "the sub is probed once then served from the 60s cache");
+  assert.equal(lastWhoamiActor, "U-fresh-ttl@acme");
+  assert.equal(lastWhoamiSigned, true);
 });
 
 test("impersonate start: non-admin is refused; cross-origin is refused; self-target is rejected", async () => {
@@ -667,7 +671,7 @@ test("impersonate start: non-admin is refused; cross-origin is refused; self-tar
   assert.equal(self.status, 400);
 });
 
-test("impersonate: an admin starts it; the web-ui hop carries target + impersonator; admin plane is untouched; cookie is bound to the admin", async () => {
+test("impersonate: an admin starts it; the web-ui hop carries target + impersonator; cookie is bound to the admin", async () => {
   const start = await fetch(`${base}/auth/impersonate?target=alice@acme`, {
     method: "POST",
     headers: { cookie: sessionCookie("U-admin"), origin: PUBLIC, accept: "application/json" },
@@ -683,11 +687,6 @@ test("impersonate: an admin starts it; the web-ui hop carries target + impersona
 
   const web = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: `${sessionCookie("U-admin")}; ${impCookie}` } });
   assert.equal(((await web.json()) as { cookie: string }).cookie, "webuiuser=alice%40acme; webui_impersonator=U-admin");
-
-  const adminHop = await fetch(`${base}/admin/api/me`, {
-    headers: { cookie: `${sessionCookie("U-admin")}; ${impCookie}` },
-  });
-  assert.equal(((await adminHop.json()) as { cookie: string }).cookie, "admin=U-admin");
 
   const other = await fetch(`${base}/web-ui/api/x`, { headers: { cookie: `${sessionCookie("U1")}; ${impCookie}` } });
   assert.equal(((await other.json()) as { cookie: string }).cookie, "webuiuser=U1");

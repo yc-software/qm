@@ -24,7 +24,6 @@ process.env.CORE_SIGNING_SECRET = "managed-test-core-secret";
 process.env.CORE_ORG_ID = "test";
 process.env.CORE_API_URL = `http://127.0.0.1:${(core.address() as AddressInfo).port}`;
 process.env.WEB_UI_UPSTREAM = process.env.CORE_API_URL;
-process.env.ADMIN_UPSTREAM = process.env.CORE_API_URL;
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

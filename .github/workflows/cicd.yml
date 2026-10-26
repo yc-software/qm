@@ -322,37 +322,6 @@ jobs:
           npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
           node --test test/e2e/memorable-cli.e2e.test.ts
 
-  admin-plugin:
-    name: Admin plugin
-    needs: reuse
-    if: always() && !cancelled()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reuse the exact successful PR tree
-        if: needs.reuse.outputs.reusable == 'true'
-        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true'
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true'
-        with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: |
-            plugins/admin/package-lock.json
-            plugins/web-ui/package-lock.json
-      - name: Install, typecheck, test
-        if: needs.reuse.outputs.reusable != 'true'
-        working-directory: plugins/admin
-        run: |
-          npm ci
-          npm ci --prefix ../web-ui
-          npm run typecheck
-          npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh admin
-
   web-ui-plugin:
     name: Web UI plugin
     needs: reuse
@@ -372,12 +341,9 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             plugins/web-ui/package-lock.json
-            plugins/admin/package-lock.json
-      - name: Install core and mounted admin dependencies
+      - name: Install core dependencies
         if: needs.reuse.outputs.reusable != 'true'
-        run: |
-          npm ci
-          npm ci --prefix plugins/admin
+        run: npm ci
       - name: Install, typecheck, test, build
         if: needs.reuse.outputs.reusable != 'true'
         working-directory: plugins/web-ui
@@ -454,7 +420,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'pull_request'
-    needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
+    needs: [core, cli, lint, core-postgres, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -466,7 +432,7 @@ jobs:
         run: |
           test -n "$PR_REPOSITORY_ID"
           test "$PR_REPOSITORY_ID" = "$GITHUB_REPOSITORY_ID"
-          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "admin-plugin", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
+          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
       - name: Checkout tested commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -484,7 +450,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]
+    needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

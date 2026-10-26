@@ -1,4 +1,5 @@
 import { html, LitElement, nothing } from "lit";
+import { UI_BASE } from "./deep-link.ts";
 
 // This is a bot installation, not a personal Slack account connection.
 class SlackSetup extends LitElement {
@@ -42,7 +43,7 @@ class SlackSetup extends LitElement {
     this.request = controller;
     const timeout = setTimeout(() => controller.abort(), 8_000);
     try {
-      const response = await fetch("/admin/api/slack-installation", {
+      const response = await fetch(`${UI_BASE}/api/admin/slack-installation`, {
         signal: controller.signal,
         credentials: "same-origin",
         redirect: "error",
@@ -54,8 +55,8 @@ class SlackSetup extends LitElement {
       const { tokenUrl, submitUrl, installUrl } = data.setup;
       if (
         tokenUrl !== "https://api.slack.com/apps" ||
-        submitUrl !== `${location.origin}/admin?slack=setup` ||
-        installUrl !== `${location.origin}/admin?slack=install`
+        submitUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=setup` ||
+        installUrl !== `${location.origin}${UI_BASE}/settings/slack-settings?slack=install`
       )
         throw new Error("Invalid setup links");
       this.links = { tokenUrl, submitUrl, installUrl };

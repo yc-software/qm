@@ -150,11 +150,7 @@ setSigninRequiredHandler((detail) => {
 
 onExitCanvas(() => exitSplitIfActive());
 
-export const ADMIN_BASE = (() => {
-  const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
-  return base ? base.replace(/\/[^/]+$/, "/admin") : "/admin";
-})();
-export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
+export const ADMIN_HOME_URL = `${UI_BASE}/settings/history`;
 
 export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
@@ -163,6 +159,7 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const sessionId = splitState.active ? singlePaneSessionId() : fromState;
   let next = deepLinkPath(UI_BASE, appState.currentView, sessionId, contextsState.selected);
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
+  if (appState.currentView === "settings" && linked.view === "settings") return;
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
   if (`${location.pathname}${location.search}` !== next) history.replaceState(null, "", next);
@@ -1089,7 +1086,7 @@ export async function boot(): Promise<void> {
       transcriptUnavailable = !(error instanceof ApiError && (error.status === 404 || error.status === 403));
       return null;
     });
-  const entriesPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
+  const transcriptPrefetch = linkedId ? loadLinkedTranscript(linkedId) : null;
   const approvalsPrefetch = linkedId ? fetchSessionApprovals(linkedId) : null;
   const runtimeConfigFetch = fetchRuntimeConfig();
   const remoteSplitFetch = fetchRemoteSplit();
@@ -1159,7 +1156,7 @@ export async function boot(): Promise<void> {
   if (restoreLast && bareEntry && !restoredCanvasNeedsSessionList()) mountRestoredCanvas(true);
 
   if (wantedSession && !viewIntent && wanted !== "app-edit") {
-    const transcript = entriesPrefetch ?? loadLinkedTranscript(wantedSession);
+    const transcript = transcriptPrefetch ?? loadLinkedTranscript(wantedSession);
     const linked = (await transcript)?.session;
     if (linked) {
       exitSplitIfActive();

@@ -39,7 +39,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       grants,
       trigger: {
         identity: built.identity,
-        deliveries: built.deliveries,
+        outbound: built.outbound,
         idempotency: createIdempotencyStore(),
         run: async (req) => {
           const stage = /^\[Loop (\w+)\]/.exec(req.text ?? "")?.[1];

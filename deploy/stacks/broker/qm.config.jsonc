@@ -14,11 +14,8 @@
   "sandbox": {
     "app": "acme-sandboxes",
   },
-  "services": ["core", "slack", "admin", "web-ui", "portal", "auth"],
+  "services": ["core", "slack", "web-ui", "portal", "auth"],
   "env": {
-    "admin": {
-      "ADMIN_BASE_PATH": "/admin",
-    },
     "core": {
       "HARNESS": "pi",
       "PI_DETECT_MODEL": "claude-opus-4-8",

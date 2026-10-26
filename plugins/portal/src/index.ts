@@ -146,11 +146,7 @@ async function fetchSurfaceConfig(): Promise<void> {
   }
 }
 
-const UPSTREAMS: Record<string, string> = {
-  "web-ui": (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, ""),
-  admin: (process.env.ADMIN_UPSTREAM ?? "http://localhost:8090").replace(/\/$/, ""),
-};
-const COOKIE_FOR: Record<string, string> = { "web-ui": "webuiuser", admin: "admin" };
+const WEB_UI_UPSTREAM = (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, "");
 
 function isSlackIssuer(issuer: string): boolean {
   try {
@@ -270,8 +266,13 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
-    const headers = { cookie: `admin=${encodeURIComponent(sub)}`, ...portalIdentityHeaders(sub) };
-    const r = await fetch(`${UPSTREAMS.admin}/api/whoami`, { headers, signal: ctrl.signal });
+    const path = withSourceAuthNonce("/v1/admin/whoami", CORE_SIGNING_SECRET);
+    const headers = {
+      ...signedHeaders(CORE_SIGNING_SECRET, "GET", path),
+      "x-admin-actor": `${sub}@${ORG}`,
+      ...portalIdentityHeaders(sub),
+    };
+    const r = await fetch(`${CORE}${path}`, { headers, signal: ctrl.signal });
     if (!r.ok) {
       console.warn(`[portal] admin probe returned HTTP ${r.status}`);
       return null;
@@ -290,9 +291,9 @@ async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   }
 }
 
-async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: boolean }> {
+async function isAdmin(sub: string): Promise<boolean> {
   const hit = adminCache.get(sub);
-  if (hit !== undefined) return { isAdmin: hit, failed: false };
+  if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
     if (isAdmin === null) {
@@ -301,13 +302,9 @@ async function adminProbe(sub: string): Promise<{ isAdmin: boolean; failed: bool
       continue;
     }
     adminCache.set(sub, isAdmin);
-    return { isAdmin, failed: false };
+    return isAdmin;
   }
-  return { isAdmin: false, failed: true };
-}
-
-async function isAdmin(sub: string): Promise<boolean> {
-  return (await adminProbe(sub)).isAdmin;
+  return false;
 }
 
 const CANONICAL_TTL_MS = 60_000;
@@ -568,24 +565,6 @@ export function signInErrorHtml(
   });
 }
 
-export function nonAdminDeniedHtml(o: { sub: string; org: string }): string {
-  return cardPage({
-    title: "No admin access",
-    heading: "You don't have admin access",
-    msg: "The Admin area is limited to governance admins. Your account is signed in and verified. It just isn't granted admin rights.",
-    icon: LOCK_ICON,
-    wide: true,
-    extra: `<div class="note">
-        <span class="who">Signed in as <b>${escapeHtml(o.sub)}</b> &middot; ${escapeHtml(o.org)}</span>
-        <p>Admin rights come from your organization's admin grants. If you need access, ask an existing admin to grant it.</p>
-      </div>`,
-    actions: `<a class="btn primary" href="/">Back to your surfaces</a>
-        <a class="btn ghost" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Open the assistant instead</a>`,
-    help: "You can keep using every surface available to your account.",
-  });
-}
-
 export function notConfiguredHtml(): string {
   return cardPage({
     title: "Not set up yet",
@@ -594,20 +573,7 @@ export function notConfiguredHtml(): string {
     icon: ALERT_ICON,
     warn: true,
     actions: `<a class="btn primary" href="/">Try again</a>`,
-    help: "Ask your admin to complete onboarding in the Admin area.",
-  });
-}
-
-export function adminUnavailableHtml(): string {
-  return cardPage({
-    title: "Admin temporarily unavailable",
-    heading: "Admin is temporarily unavailable",
-    msg: "We couldn't check your admin access right now. This is usually temporary. Trying again resolves most cases.",
-    icon: ALERT_ICON,
-    warn: true,
-    actions: `<a class="btn primary" href="/admin/">Try again</a>
-        <a class="btn ghost" href="/">Back to your surfaces</a>`,
-    help: "If this keeps happening, the admin service may be down. Contact your admin.",
+    help: "Ask your admin to complete onboarding in Settings.",
   });
 }
 
@@ -1281,14 +1247,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
   if (!DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments")) return json(res, 404, { error: "not_found" });
   const isDeployment = DEPLOYMENTS_ENABLED && (seg === "d" || seg === "deployments");
-  const surfaceKey = Object.hasOwn(UPSTREAMS, seg) && seg !== "web-ui" ? seg : "web-ui";
 
   if (
     method === "GET" &&
     (/^\/share\/external\/[a-f0-9-]{36}(?:\/files\/[a-f0-9-]{36})?$/.test(pathname) ||
       /^\/assets\/[a-zA-Z0-9_.-]+$/.test(pathname))
   ) {
-    return proxyToUpstream(req, res, { baseUrl: UPSTREAMS["web-ui"]!, path: pathname, search: url.search }, [
+    return proxyToUpstream(req, res, { baseUrl: WEB_UI_UPSTREAM, path: pathname, search: url.search }, [
       "accept",
       "accept-encoding",
     ]);
@@ -1331,27 +1296,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     });
   }
 
-  const key = surfaceKey as string;
-  if (key === "admin") {
-    if (session.anon) {
-      if (wantsHtml(req)) return sendHtml(res, 403, nonAdminDeniedHtml({ sub: session.sub, org: session.org }));
-      return json(res, 403, { error: "forbidden", message: "admin access required" });
-    }
-    const probe = await adminProbe(session.sub);
-    if (!probe.isAdmin) {
-      if (wantsHtml(req)) {
-        const page = probe.failed ? adminUnavailableHtml() : nonAdminDeniedHtml({ sub: session.sub, org: session.org });
-        return sendHtml(res, 403, page);
-      }
-      return json(res, 403, { error: "forbidden", message: "admin access required" });
-    }
-  }
-
-  if (key === "web-ui" && method === "GET" && wantsHtml(req)) {
+  const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/") || seg === "admin";
+  if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
     if (modelProviderConfigured === false) {
       if (await isAdmin(session.sub)) {
-        res.writeHead(302, { location: "/admin/onboarding", "cache-control": "no-store" });
+        res.writeHead(302, { location: "/settings/onboarding", "cache-control": "no-store" });
         return void res.end();
       }
       return sendHtml(res, 503, notConfiguredHtml());
@@ -1360,7 +1310,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   let principal = session.sub;
   let impersonator: string | undefined;
-  if (key === "web-ui" && !crossOrigin) {
+  if (!crossOrigin) {
     const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
     if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
       principal = imp.target;
@@ -1368,12 +1318,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
   }
 
-  const forwardPath = key === "web-ui" ? pathname : pathname.slice(`/${key}`.length) || "/";
   return proxyToSurface(req, res, {
-    upstreamBase: UPSTREAMS[key]!,
-    forwardPath,
+    upstreamBase: WEB_UI_UPSTREAM,
+    forwardPath: pathname,
     search: url.search,
-    cookieName: COOKIE_FOR[key]!,
+    cookieName: "webuiuser",
     principal,
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
@@ -1580,7 +1529,7 @@ async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<vo
     throw error;
   }
   setAuthenticatedSession(res, claims.email);
-  res.writeHead(303, { location: "/admin/", "cache-control": "no-store" });
+  res.writeHead(303, { location: "/settings/history", "cache-control": "no-store" });
   res.end();
 }
 
@@ -1922,7 +1871,7 @@ export async function startServer(): Promise<void> {
     server.listen(PORT, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui/admin over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui over 6PN (org ${ORG})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
       if (!SECURE_COOKIES)
@@ -1939,9 +1888,6 @@ export async function startServer(): Promise<void> {
         console.warn(
           "[portal] playground mint limits key on the socket address — set PORTAL_XFF_TRUSTED_HOPS when behind a reverse proxy, or every visitor shares one bucket",
         );
-      console.log(
-        "[portal] /admin access is derived (portal → admin surface /api/whoami over 6PN → core canAdminister); the core's ADMIN_GRANTS is the one source of admin identity",
-      );
     });
   });
 }

@@ -1,5 +1,5 @@
-import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-result-delivery.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { wireRunResultPosts, runResultPost } from "../src/runs/run-results.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
 import { createMemoryMap, jsonbStringify } from "../src/persistence/durable-map.ts";
@@ -260,7 +260,7 @@ test("read lists children with status and renders a child's recent transcript", 
   const child = await freshSession(r.sessions, opened.sessionId);
   const { lease } = await r.sessions.acquireLease(child.id, "turn");
   assert.ok(lease);
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "found 3 call sites" }, scopeLabel: scope });
+  await r.sessions.append(lease!, { kind: "AgentMessage", text: "found 3 call sites" });
   await r.sessions.releaseLease(lease!);
 
   const list = await syscalls.read({});
@@ -315,7 +315,7 @@ test("a silent child mails a completed-without-reply notice without borrowing tr
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const { lease } = await r.sessions.acquireLease(child.id, "turn");
-  await r.sessions.append(lease!, { type: "assistant", payload: { text: "halfway there" }, scopeLabel: scope });
+  await r.sessions.append(lease!, { kind: "AgentMessage", text: "halfway there" });
   await r.sessions.releaseLease(lease!);
   const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
   const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
@@ -391,11 +391,7 @@ test("session reads hide history outside the viewer's participant tenure", async
   const target = await r.sessions.getOrCreateByThread("web:private-old", "dm", scope);
   const { lease } = await r.sessions.acquireLease(target.id);
   assert.ok(lease);
-  await r.sessions.append(lease, {
-    type: "assistant",
-    payload: { text: "hidden-before-membership" },
-    scopeLabel: scope,
-  });
+  await r.sessions.append(lease, { kind: "AgentMessage", text: "hidden-before-membership" });
   await r.sessions.releaseLease(lease);
   await r.sessions.addParticipant(target.id, actor.id);
   const view = await r.syscallsFor(r.room).read({ target: target.id });
@@ -894,11 +890,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
   const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
+  const entry = await r.sessions.append(lease!, { kind: "AgentMessage", text: "OLD_PRIVATE_RESULT" });
   await r.sessions.releaseLease(lease!);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
@@ -914,7 +906,7 @@ test("queued results recheck source-entry visibility after participant tenure ch
   assert.equal((await api.receive!()).length, 1);
   await r.sessions.removeParticipant(child.id, other.id);
   await r.sessions.addParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
+  assert.equal((await r.sessions.visibleItems(child.id, other.id)).length, 0);
   assert.deepEqual(await api.receive!(), []);
   assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
@@ -1503,9 +1495,9 @@ test("nested delegated work retains the reminder destination without exposing su
 });
 
 for (const status of ["ok", "pending_approval"] as const) {
-  test(`child ${status} forwards files once without creating approval deliveries`, async () => {
+  test(`child ${status} forwards files once without creating approval outbound`, async () => {
     const r = await rig();
-    const deliveries = createDeliveryStore();
+    const outbound = recordingOutbound();
     const out = await r.syscallsFor(r.room).open({ task: "prepare the report" });
     assert.ok(out.ok);
     const child = await freshSession(r.sessions, out.sessionId);
@@ -1518,14 +1510,14 @@ for (const status of ["ok", "pending_approval"] as const) {
       pendingApprovals: [{ requestId: "approve-report", command: "publish", reason: "needs consent" }],
     });
     const completed = (await r.runs.get(run.id))!;
-    const deps = { ...r, maxAttempts: 3, deliveries };
+    const deps = { ...r, maxAttempts: 3, outbound };
     await deliverSubagentMail(deps, completed);
     await deliverSubagentMail(deps, completed);
-    const files = await deliveries.pending("slack");
+    const files = await outbound.pending("slack");
     assert.equal(files.length, 1);
     assert.deepEqual(files[0]!.attachments, [attachment]);
     assert.equal(files[0]!.destination.target, "D1");
-    const approvals = await deliveries.pending("principal");
+    const approvals = await outbound.pending("principal");
     assert.equal(approvals.length, 0);
     assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /awaiting_input/);
   });
@@ -1533,7 +1525,7 @@ for (const status of ["ok", "pending_approval"] as const) {
 
 test("file-only child completion is a result", async () => {
   const r = await rig();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const out = await r.syscallsFor(r.room).open({ task: "make a chart" });
   assert.ok(out.ok);
   const child = await freshSession(r.sessions, out.sessionId);
@@ -1543,7 +1535,7 @@ test("file-only child completion is a result", async () => {
     status: "ok",
     attachments: [{ name: "chart.png", blobId: "chart", mimetype: "image/png", sizeBytes: 1 }],
   });
-  await deliverSubagentMail({ ...r, maxAttempts: 3, deliveries }, (await r.runs.get(run.id))!);
+  await deliverSubagentMail({ ...r, maxAttempts: 3, outbound }, (await r.runs.get(run.id))!);
   assert.match((await r.mailbox.pending(r.room.id))[0]!.text, /Produced chart.png/);
 });
 
@@ -1602,8 +1594,8 @@ for (const surface of ["slack", "web"] as const) {
   for (const nested of [false, true]) {
     test(`${surface}: ${nested ? "nested child" : "child"} results stay internal while files and parent replies deliver once`, async () => {
       const r = await rig();
-      const deliveries = createDeliveryStore();
-      wireRunResultDeliveries(r.runs, deliveries);
+      const outbound = recordingOutbound();
+      wireRunResultPosts(r.runs, outbound, { graceMs: 0 });
       const request: OrchestratorInput = {
         surface,
         actor,
@@ -1636,17 +1628,17 @@ for (const surface of ["slack", "web"] as const) {
       });
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.deepEqual(
-        await deliveries.pending(surface),
+        await outbound.pending(surface),
         [],
         "terminal listener must not publish child results or files",
       );
       const completed = (await r.runs.get(queued.id))!;
       assert.equal(
-        runResultDelivery(JSON.parse(JSON.stringify(completed))),
+        runResultPost(JSON.parse(JSON.stringify(completed))),
         null,
         "serialized terminal runs remain internal",
       );
-      const deps = { ...r, maxAttempts: 3, deliveries };
+      const deps = { ...r, maxAttempts: 3, outbound };
       await deliverSubagentMail(deps, completed);
       await deliverSubagentMail(deps, completed);
       const mail = await r.mailbox.pending(parent.id);
@@ -1654,7 +1646,7 @@ for (const surface of ["slack", "web"] as const) {
       assert.match(mail[0]!.text, /INTERNAL_CHILD_REPORT/);
       await r.mailbox.acknowledge(parent.id, [mail[0]!.id]);
       await deliverSubagentMail(deps, completed);
-      const files = await deliveries.pending(surface);
+      const files = await outbound.pending(surface);
       assert.equal(files.length, 1);
       assert.equal(files[0]!.text, "");
       assert.deepEqual(files[0]!.attachments, [attachment]);
@@ -1662,8 +1654,8 @@ for (const surface of ["slack", "web"] as const) {
       const parentRun = (await r.runs.enqueue({ sessionId: r.room.threadRef, request })).run;
       const parentClaim = await r.runs.claimById(parentRun.id, "parent", 60_000);
       await r.runs.complete(parentRun.id, parentClaim!.leaseToken!, { status: "ok", reply: "PUBLIC_PARENT_ANSWER" });
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      const publicResults = await deliveries.pending(surface);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      const publicResults = await outbound.pending(surface);
       assert.deepEqual(publicResults.map((item) => item.text).filter(Boolean), ["PUBLIC_PARENT_ANSWER"]);
       assert.equal(publicResults.filter((item) => item.attachments?.length).length, 1);
     });

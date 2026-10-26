@@ -54,7 +54,6 @@ Object.assign(process.env, {
   CORE_ORG_ID: browser.org,
   CORE_API_URL: coreUrl,
   WEB_UI_UPSTREAM: coreUrl,
-  ADMIN_UPSTREAM: coreUrl,
   PORTAL_LOCAL_AUTH_BYPASS: "0",
   PORTAL_PLAYGROUND: "0",
 });

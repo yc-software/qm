@@ -6,10 +6,10 @@ fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspac
 is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
 surfaces, which all stay **private** (no public `[http_service]` of their own):
 
-| Path        | → upstream        | Notes                                                                         |
-| ----------- | ----------------- | ----------------------------------------------------------------------------- |
-| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links) |
-| `/admin/*`  | `<prefix>-admin`  | governance — admin access derived from the core (`canAdminister`)             |
+| Path        | → upstream        | Notes                                                                                     |
+| ----------- | ----------------- | ----------------------------------------------------------------------------------------- |
+| `/*` (root) | `<prefix>-web-ui` | Pi web UI SPA, root-mounted (`/web-ui/*` 308-redirects to root for old links)             |
+| `/settings` | `<prefix>-web-ui` | Administrator settings; web-ui redirects old `/admin/*` links here, and core checks admin |
 
 User deployments are never served on this authenticated origin; they use the dedicated apps domain.
 
@@ -101,7 +101,8 @@ signs in until the user submits that same-origin form. `POST /auth/admin-login`
 verifies the token's purpose, portal origin, signature and lifetime, checks the
 account's current admin status, and consumes its unique ID through core's
 durable Postgres replay store. It then issues the ordinary portal session and
-clears any old impersonation cookie. No account or role is created.
+clears any old impersonation cookie, then redirects to `/settings/history`. No
+account or role is created.
 
 This is an operator capability: keep deployment secrets and generated URLs
 private. It does not prove an email inbox, replace another user's login, or
@@ -109,7 +110,7 @@ depend on a hosting provider. Leave the built-in broker's sender and selected
 email credentials unset to run without email; configure them later and restart
 to enable ordinary email sign-in. Existing external OIDC login is unchanged.
 
-Live integration checks require a running core, Postgres, admin, portal and
+Live integration checks require a running core, Postgres, web-ui, portal and
 built-in auth broker with email unset. Set `QM_ADMIN_LOGIN_ENV_FILE` to a private
 JSON file containing that deployment's environment and run
 `node --test test/integration/admin-login.test.ts` from the repository root. Use a
@@ -121,18 +122,20 @@ disposable test deployment: the test redeems real links for its configured admin
   upstream request is built **from scratch** — an _allowlist_ of safe headers
   (`content-type`/`accept`/`user-agent`/…) plus the one synthesized cookie. The client's
   headers and cookies are **never** forwarded, so a browser can't smuggle a forged
-  `admin=`/`x-as-principal` into a 6PN-trusting upstream, and there's no CL/TE desync surface
+  `webuiuser=`/`x-as-principal` into a 6PN-trusting upstream, and there's no CL/TE desync surface
   (`node:http` frames the piped body itself).
 - **Routing decides once.** The router rejects pathologically-encoded targets (`%2f`, `%5c`,
-  `%2e%2e`, `\`, `//`, NUL → 400), selects the upstream by exact segment, and derives the
-  `/admin` gate from that _selected_ key — never a second `startsWith` that could disagree
-  (tier-escape guard).
-- **Admin is derived from ONE source — the core's `admin_grants`.** The portal asks the admin
-  surface (`GET /api/whoami` over 6PN, **no signing secret**), which asks the core
-  (`GET /v1/admin/whoami` → `canAdminister`). The portal caches the boolean ~60s and **fails
-  closed** (admin surface down ⇒ no Admin link on the landing, `/admin` 403). `canAdminister` is
-  re-checked **per action** at the core — the live boundary. There is **no portal/admin id list**
-  anymore; the only place an admin is named is the core's `ADMIN_GRANTS`.
+  `%2e%2e`, `\`, `//`, NUL → 400) and selects the upstream by exact segment. Every path that is
+  not a deployment, auth or core passthrough goes to web-ui as the signed-in user, so no path
+  spelling reaches a more privileged upstream.
+- **Admin is derived from ONE source — the core's `admin_grants`.** Settings pages live in web-ui
+  under `/settings`, and every admin action is checked **per action** at the core — the live
+  boundary. The portal itself needs admin status only for impersonation, operator admin login
+  and the unconfigured-deployment redirect to `/settings/onboarding`. For those it calls core
+  `GET /v1/admin/whoami` with source-auth signed headers, `x-admin-actor: <sub>@<org>` and the
+  signed portal identity. It caches the answer ~60s, retries once, and **fails closed**: an
+  outage or malformed answer counts as not-admin and is not cached. There is **no portal id
+  list**; the only place an admin is named is the core's `ADMIN_GRANTS`.
 - **Non-admin users need no per-id config.** `PORTAL_EXPECTED_TEAM_ID` pins the workspace, so any
   verified member is a valid user (`WEB_UI_PRINCIPALS` empty = any verified principal).
 - **CSRF / open-redirect.** Every non-GET requires a same-origin `Origin`; `returnTo` is reduced
@@ -156,7 +159,7 @@ disposable test deployment: the test redeems real links for its configured admin
 
 - **Surface isolation.** The private surface hop carries a signed portal identity; core verifies
   it independently, so a synthesized cookie alone confers no user authority. User deployments
-  stay on a dedicated apps hostname and are never proxied through the portal or admin origin.
+  stay on a dedicated apps hostname and are never proxied through the portal origin.
 - **Local logout.** `POST /auth/logout` clears the portal cookies and returns
   `redirectTo`; browsers follow it to `/auth/signed-out`, a terminal page that
   never redirects to the provider. Sign-out is local to this portal: it does not
@@ -181,7 +184,7 @@ the cookie from the first page load and bare `curl` never mints.
 
 What playground mode does **not** change: `/auth/login` still runs the full OIDC
 flow (that's how the one admin signs in — production still demands the usual OIDC
-config), `/admin` refuses anonymous sessions outright, and admin identity remains
+config), anonymous sessions never pass the core's admin checks, and admin identity remains
 the core's `ADMIN_GRANTS`. Signing out of an anonymous session just clears the
 cookie; the next visit starts a fresh playground identity.
 
@@ -231,7 +234,7 @@ garbage-collects an abandoned visitor's scope yet.
 ## Env
 
 Non-secret (`[env]`): `PORT` (8097 local / 8080 image), `PORTAL_PUBLIC_URL`, `CORE_API_URL`,
-`CORE_ORG_ID`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`,
+`CORE_ORG_ID`, `WEB_UI_UPSTREAM`,
 `OIDC_AUTH_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_USERINFO_ENDPOINT` / `OIDC_ISSUER` /
 `OIDC_JWKS_URI` / `OIDC_SCOPES` / `OIDC_CLIENT_ID`, `PORTAL_EXPECTED_TEAM_ID`,
 `PORTAL_SESSION_TTL_S`, `PORTAL_SESSION_MAX_TTL_S`. `PORTAL_SESSION_MAX_TTL_S` caps a session's total life from authentication; it defaults to the larger of 30 days and `PORTAL_SESSION_TTL_S`, and boot fails if it is set below the TTL.

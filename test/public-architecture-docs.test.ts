@@ -8,7 +8,6 @@ const readme = read("README.md");
 const index = read("src/index.ts");
 const server = read("src/api/server.ts");
 const agentTools = read("src/harness/agent-tools.ts");
-const adminUi = read("plugins/admin/public/index.html");
 const rootPackage = JSON.parse(read("package.json")) as { dependencies: Record<string, string> };
 const webPackage = JSON.parse(read("plugins/web-ui/package.json")) as {
   scripts: Record<string, string>;
@@ -54,5 +53,4 @@ test("README names the frameworks the shipped surfaces use", () => {
 test("Strict posture describes its approval gate, exemptions, and direct-mutation boundary", () => {
   assert.match(agentTools, /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently"\]\)/);
   assert.doesNotMatch(server, /Strict posture permits observation only/);
-  assert.doesNotMatch(adminUi, /every tool call/i);
 });

@@ -101,8 +101,8 @@ confirmed absent, send one short message:
   shows.
 
 Links: the web origin is the origin of the Connection page URL in the Connected apps
-block (`<web origin>/keychain`). Link `<web origin>/admin/credentials` and
-`<web origin>/admin/connectors`. If that line is absent, name the pages without links and
+block (`<web origin>/keychain`). Link `<web origin>/settings/credentials` and
+`<web origin>/settings/connectors`. If that line is absent, name the pages without links and
 offer the drop link. Never invent URLs or ask for keys or client secrets in chat. Never
 ask regular users to configure a source.
 

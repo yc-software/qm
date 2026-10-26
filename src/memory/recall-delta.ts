@@ -1,5 +1,5 @@
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import { renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 
@@ -27,12 +27,12 @@ const keyOf = ({ scope, id, hash }: Shown) => JSON.stringify([scope, id ?? null,
 
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
-  history: readonly SessionEntry[],
+  history: readonly Item[],
   held: ReadonlyMap<string, ReadonlyMap<string, string>>,
   labels: ReadonlyMap<string, string> = new Map(),
 ): { text: string; record: RecallRecord } {
   const { previous, anchorSeq } = retainedSnapshot(history, (entry) => {
-    const record = (entry.payload as { memoryRecall?: RecallRecord } | null)?.memoryRecall;
+    const record = entry.body.memoryRecall as RecallRecord | undefined;
     return record?.shown ? record : undefined;
   });
   const current = recalled.map(shownOf);

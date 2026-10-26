@@ -48,7 +48,6 @@ test("deployed API smoke proves the production portal-identity boundary", async 
 test("deployed staging smoke reaches every Fly service and the public portal", () => {
   assert.deepEqual(deployedHealthUrls("qm-core", "https://qm-portal.fly.dev"), [
     "http://127.0.0.1:8080/healthz",
-    "http://qm-admin.internal:8080/healthz",
     "http://qm-web-ui.flycast/healthz",
     "http://qm-portal.internal:8080/healthz",
     "https://qm-portal.fly.dev/healthz",
@@ -109,7 +108,7 @@ test("live session smoke proves a model turn, persistence, title, error log, and
     if (method === "POST") return Response.json({ session: { id: "sess-1", archived: true } });
     return Response.json({
       session: { id: "sess-1", title: "Deployment canary" },
-      entries: [{ type: "user" }, { type: "assistant" }],
+      items: [{ kind: "UserMessage" }, { kind: "AgentMessage", variant: null }],
     });
   });
   assert.deepEqual(
@@ -140,7 +139,10 @@ test("live session smoke proves a model turn, persistence, title, error log, and
         if (path === "/v1/turns")
           return Response.json({ status: "ok", sessionId: "sess-2", reply: "QM deployment canary passed." });
         if (path === "/v1/sessions/sess-2" && init?.method === "POST") archivedFailedSession = true;
-        return Response.json({ session: { id: "sess-2" }, entries: [{ type: "user" }, { type: "assistant" }] });
+        return Response.json({
+          session: { id: "sess-2" },
+          items: [{ kind: "UserMessage" }, { kind: "AgentMessage", variant: null }],
+        });
       },
       {
         now: () => titleWait,
@@ -214,7 +216,7 @@ test("live session smoke waits for a background worker title before checking err
       reads += 1;
       return Response.json({
         session: { id: "delayed-title", ...(reads >= 3 ? { title: "Verify deployment canary" } : {}) },
-        entries: [{ type: "user" }, { type: "assistant" }],
+        items: [{ kind: "UserMessage" }, { kind: "AgentMessage", variant: null }],
       });
     },
     {
@@ -296,7 +298,10 @@ test("live session smoke rejects a title returned after the deadline", async () 
         }
         assert.equal(path, "/v1/sessions/late-title");
         elapsed = 60_001;
-        return Response.json({ session: { title: "Late title" }, entries: [{ type: "user" }, { type: "assistant" }] });
+        return Response.json({
+          session: { title: "Late title" },
+          items: [{ kind: "UserMessage" }, { kind: "AgentMessage", variant: null }],
+        });
       },
       {
         now: () => elapsed,

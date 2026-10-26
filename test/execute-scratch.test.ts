@@ -1,3 +1,4 @@
+import type { NewItem } from "../src/sessions/items.ts";
 import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
@@ -157,12 +158,12 @@ test("flag ON: unsupported scope/durable pairings return a crisp [error] without
 });
 
 test("flag ON: the tool_call/tool_result entries record which box ran the command", async () => {
-  const emitted: Array<{ type: string; payload: { tool?: string; scope?: string } }> = [];
+  const emitted: NewItem[] = [];
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
     current: tc,
     emit: (e) => {
-      emitted.push(e as never);
+      emitted.push(e);
     },
     scopeLabel: scopeId("personal", "U1"),
   };
@@ -170,8 +171,8 @@ test("flag ON: the tool_call/tool_result entries record which box ran the comman
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
-    emitted.map((e) => `${e.type}:${e.payload.scope}`),
-    ["tool_call:scratch", "tool_result:scratch", "tool_call:scoped", "tool_result:scoped"],
+    emitted.map((e) => `${e.kind}:${e.body?.scope}`),
+    ["ToolCall:scratch", "ToolResult:scratch", "ToolCall:scoped", "ToolResult:scoped"],
   );
 });
 
@@ -394,8 +395,8 @@ test("execute masks credential output before model delivery, screening, and tran
   assert.equal(screened.length, 1);
   assert.ok(
     emitted.some((entry) => {
-      const e = entry as { type?: string; payload?: { isError?: boolean; code?: number } };
-      return e.type === "tool_result" && e.payload?.isError === false && e.payload?.code === 0;
+      const e = entry as NewItem;
+      return e.kind === "ToolResult" && e.isError === false && e.body?.code === 0;
     }),
   );
 });
@@ -459,7 +460,7 @@ test("execute records a safe provider-error result for native replay", async () 
   const result = await call(execute, { command: "diagnose", purpose: "Run test command" });
   assert.match(textOf(result), /<redacted:credential>/);
   assert.ok(!JSON.stringify({ result, entries }).includes(secret));
-  assert.ok(entries.some((entry) => (entry as { type?: string }).type === "tool_result"));
+  assert.ok(entries.some((entry) => (entry as NewItem).kind === "ToolResult"));
 });
 
 test("execute respects secret metadata even for configuration-named credentials", async () => {

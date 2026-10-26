@@ -1,4 +1,5 @@
-import type { ScopeId, SessionEntry } from "../../types.ts";
+import type { ScopeId } from "../../types.ts";
+import type { Item } from "../../sessions/items.ts";
 import type { MemoryService } from "../memory-service.ts";
 import { captureSession, type MemorableCapture, type MemorableToolCall } from "./capture.ts";
 import { memorableInject } from "./inject.ts";
@@ -7,8 +8,7 @@ import { relayRecord } from "./relay.ts";
 export interface MemorableProviderDeps {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
-  /** Loads the session entries a capture should be derived from. */
-  loadEntries: (sessionId: string) => Promise<SessionEntry[]>;
+  loadItems: (sessionId: string) => Promise<Item[]>;
   /** Redacts secret values before anything leaves the process. */
   mask?: (text: string) => string;
   injectTimeoutMs?: number;
@@ -65,9 +65,8 @@ export function createMemorableMemoryProvider(deps: MemorableProviderDeps): Memo
 
     async capture(scopeId: ScopeId, _facts, _at, _author, context) {
       if (context?.mode !== "automatic" || !context.sessionId) return 0;
-      const entries = await deps.loadEntries(context.sessionId);
-      const raw = captureSession(context.sessionId, entries);
-      const capture = redactCapture({ ...raw, scope_id: scopeId }, mask);
+      const items = await deps.loadItems(context.sessionId);
+      const capture = redactCapture(captureSession(context.sessionId, scopeId, items), mask);
       if (!capture.workflows.length) return 0;
       const outcome = await relay(deps.argv, capture, deps.recordTimeoutMs, spawnOpts);
       if (!outcome.ok) throw new Error(`memorable record refused: ${outcome.reason}`);

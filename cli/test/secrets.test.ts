@@ -311,7 +311,7 @@ test("secretEnv for a service the config does not enable is ignored", () => {
 });
 
 test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a portal identity", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin", "portal"] });
+  const config = makeConfig({ services: ["core", "web-ui", "portal"] });
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.deepEqual(
     [...secretDestinations(secret).keys()].sort(),
@@ -320,15 +320,14 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   );
 });
 
-test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
-  const config = makeConfig({ services: ["core", "web-ui", "admin"] });
+test("INBOX_USERS is an optional web-ui secret", () => {
+  const config = makeConfig({ services: ["core", "web-ui"] });
   const allowlist = secretByName(config, "INBOX_USERS");
   assert.equal(allowlist.required, false);
-  assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
+  assert.deepEqual(allowlist.services, ["web-ui"]);
   assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
   assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
-  assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
-  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
+  assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(web-ui\)/);
   assert.match(renderEnvExample(config), /^# INBOX_USERS=\s{2}# optional$/m);
 });
 
@@ -337,7 +336,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     const alone = secretByName(makeConfig(), name);
     assert.equal(alone.required, false);
     assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
-    assert.match(alone.description, /admin Users tab or by chatting with QM/);
+    assert.match(alone.description, /Users settings page or by chatting with QM/);
     assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
 
     const broker = makeConfig({

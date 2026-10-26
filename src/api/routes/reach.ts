@@ -238,7 +238,6 @@ async function reachNow(ctx: ApiCtx): Promise<void> {
   }
   return sendJson(res, 200, {
     ok: true,
-    deliveryId: result.delivery.id,
     ...(result.recipient ? { recipient: result.recipient } : {}),
     ...(result.channel ? { channel: result.channel } : {}),
     ...(result.group ? { group: result.group } : {}),

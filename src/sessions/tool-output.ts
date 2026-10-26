@@ -4,7 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "./items.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -154,7 +154,7 @@ export function createPostgresToolOutputStore(opts: {
 }
 
 export function createMemoryToolOutputStore(
-  opts: { inlineTokens?: number; sessions?: { getEntries(sessionId: string): Promise<SessionEntry[]> } } = {},
+  opts: { inlineTokens?: number; sessions?: { getItems(sessionId: string): Promise<Item[]> } } = {},
 ): ToolOutputStore & { setInlineTokens(n: number): void; parked: Map<string, string> } {
   let cap = opts.inlineTokens ?? DEFAULT_INLINE_TOKENS;
   const parked = new Map<string, string>();
@@ -172,19 +172,17 @@ export function createMemoryToolOutputStore(
       return sha;
     },
     async read(sessionId, ref) {
-      const entries = (await opts.sessions?.getEntries(sessionId)) ?? [];
-      const results = entries.filter((e) => {
-        const callId = (e.payload as { callId?: unknown } | null)?.callId;
-        return (
-          e.type === "tool_result" &&
-          typeof callId === "string" &&
-          md5Hex(callId) === ref.digest &&
-          (ref.callId === undefined || callId === ref.callId)
-        );
-      });
+      const items = (await opts.sessions?.getItems(sessionId)) ?? [];
+      const results = items.filter(
+        (e) =>
+          e.kind === "ToolResult" &&
+          e.callId !== null &&
+          md5Hex(e.callId) === ref.digest &&
+          (ref.callId === undefined || e.callId === ref.callId),
+      );
       if (results.length > 1) throw new Error(`tool output ${ref.digest}: more than one call matches`);
-      const blob = (results[0]?.payload as { output?: { blob?: unknown } } | undefined)?.output?.blob;
-      if (typeof blob !== "string") return null;
+      const blob = results[0]?.blobSha;
+      if (!blob) return null;
       const text = parked.get(blob);
       if (text === undefined) throw new Error(`tool output ${ref.digest}: parked blob ${blob} is missing`);
       return { text };

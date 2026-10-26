@@ -51,9 +51,9 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
         setup = {
           ...progress,
           tokenUrl: "https://api.slack.com/apps",
-          submitUrl: new URL("/admin?slack=setup", origin).href,
-          installUrl: new URL("/admin?slack=install", origin).href,
-          statusUrl: new URL("/admin/api/slack-installation", origin).href,
+          submitUrl: new URL("/settings/slack-settings?slack=setup", origin).href,
+          installUrl: new URL("/settings/slack-settings?slack=install", origin).href,
+          statusUrl: new URL("/api/admin/slack-installation", origin).href,
         };
       }
     } catch {

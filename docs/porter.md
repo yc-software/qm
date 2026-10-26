@@ -85,7 +85,7 @@ any other way.
    lands on the second pass), then wire the service URLs per the table below. In the
    v2 app YAML, `env` belongs at the app level: nested under a service it is silently
    dropped, and the app boots without its configuration. Verify by signing in as the
-   admin and opening the Admin tab.
+   admin and opening Settings.
 
 ## Hosting the qm surfaces
 
@@ -124,24 +124,22 @@ latest environment with provided name`, because `porter env create` makes a
 Nothing generates the inter-service wiring for you — `cli/src/services.ts` has `fly` and
 `docker` targets but no Porter one — so set it by hand on each app:
 
-| Service      | Wiring                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all          | `CORE_ORG_ID`/`ORG_ID`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`                                                                                                                                                                                                                                                                           |
-| all but core | `CORE_API_URL=http://qm-core-core.<namespace>.svc.cluster.local:8080`                                                                                                                                                                                                                                                                             |
-| core         | `MODEL_PROVIDER`, `HARNESS`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL` (the portal's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DATABASE_URL` and `SESSION_STORE=postgres` — production refuses to boot without them                                                                          |
-| portal       | `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`, `AUTH_BROKER_UPSTREAM`, `AUTH_BROKER_PREFIX=/idp`, the `OIDC_*` set from `brokerWiring` in `cli/src/services.ts` (including `OIDC_CLIENT_SECRET`), and `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_EMAIL_DOMAIN` — production refuses to boot without an allow-list |
-| admin        | `ADMIN_BASE_PATH=/admin`                                                                                                                                                                                                                                                                                                                          |
-| auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in                            |
+| Service      | Wiring                                                                                                                                                                                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| all          | `CORE_ORG_ID`/`ORG_ID`, `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`                                                                                                                                                                                                                                                         |
+| all but core | `CORE_API_URL=http://qm-core-core.<namespace>.svc.cluster.local:8080`                                                                                                                                                                                                                                                           |
+| core         | `MODEL_PROVIDER`, `HARNESS`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL` (the portal's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DATABASE_URL` and `SESSION_STORE=postgres` — production refuses to boot without them                                                        |
+| portal       | `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, `WEB_UI_UPSTREAM`, `AUTH_BROKER_UPSTREAM`, `AUTH_BROKER_PREFIX=/idp`, the `OIDC_*` set from `brokerWiring` in `cli/src/services.ts` (including `OIDC_CLIENT_SECRET`), and `OIDC_ALLOWED_EMAILS` or `OIDC_ALLOWED_EMAIL_DOMAIN` — production refuses to boot without an allow-list |
+| auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in          |
 
 Core also reads `RESEND_API_KEY` and `AUTH_EMAIL_FROM` when they are set — optional there,
-they let admins email external-user invitations from the admin Users tab or by chatting
+they let admins email external-user invitations from the Users settings page or by chatting
 with QM.
 
-The admin module runs in web-ui at `/admin`; its environment belongs to web-ui.
+Administrator settings are part of web-ui at `/settings` and need no separate app.
 The auth module runs inside portal: move its environment and secrets to portal,
 set `AUTH_EMBEDDED=1`, and use `http://127.0.0.1:8099` for
 `AUTH_BROKER_UPSTREAM` and the OIDC token, userinfo, and JWKS endpoint base.
-Set `ADMIN_UPSTREAM` to the web-ui service URL followed by `/admin`.
 See [the combined-service migration](combined-services.md) before upgrading existing apps.
 
 `src/deployment/secret-schema.ts` is the authoritative list of what each service

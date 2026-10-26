@@ -138,7 +138,7 @@ test("the broker signing key is a fresh P-256 private JWK", () => {
 });
 
 test("the broker's operator secrets replace the external-IdP ones", () => {
-  const external = configFor(["core", "web-ui", "admin", "portal"]);
+  const external = configFor(["core", "web-ui", "portal"]);
   const externalNames = pendingSecrets(external, new Map()).todo.map((secret) => secret.name);
   assert.ok(externalNames.includes("OIDC_CLIENT_SECRET"));
   for (const name of ["AUTH_EMAIL_FROM", "RESEND_API_KEY"]) {
@@ -146,7 +146,7 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   }
 
   const broker = configFor(
-    ["core", "web-ui", "admin", "portal", "auth"],
+    ["core", "web-ui", "portal", "auth"],
     "",
     `{ "core": { "HARNESS": "pi" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
   );
@@ -178,7 +178,7 @@ test("runSetup refuses to run without a TTY", async () => {
 
 test("email setup uses declared secret names and does not reprompt for direct config values", () => {
   const aliased = configFor(
-    ["core", "web-ui", "admin", "portal", "auth"],
+    ["core", "web-ui", "portal", "auth"],
     `, "secretEnv": { "auth": { "AUTH_EMAIL_FROM": "AUTH_SENDER", "RESEND_API_KEY": "MAIL_KEY" } }`,
     `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
   );

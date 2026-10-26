@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-service.ts";
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
-import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
+import { runResultPost } from "../src/runs/run-results.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
@@ -480,7 +480,7 @@ test("initial pool creates durable ordinary sessions with distinct blank Modal d
     assert.equal(run.request.deliveryTarget, undefined);
     assert.equal(run.request.origin.kind === "automation" && run.request.origin.useOwnerKeychain, undefined);
     assert.equal(
-      runResultDelivery({
+      runResultPost({
         ...run,
         request: { ...run.request, surface: "slack", deliveryTarget: "dm" },
         status: "done",

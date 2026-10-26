@@ -130,29 +130,6 @@ export interface Session {
   subagents?: { running: number; waiting: number };
 }
 
-export type EntryType =
-  | "user"
-  | "assistant"
-  | "thinking"
-  | "text_start"
-  | "text"
-  | "tool_call"
-  | "tool_result"
-  | "system"
-  | "delivery"
-  | "approval_request"
-  | "approval_resolved";
-
-export interface SessionEntry {
-  sessionId: string;
-  seq: number;
-  parentSeq: number | null;
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  createdAt: number;
-}
-
 type LayerMode = "ro" | "rw";
 
 export interface WorkspaceLayer {
@@ -223,10 +200,7 @@ export interface Destination {
   pin?: { messageTs: string; remove?: boolean };
   identity?: string;
   debugFooter?: string;
-  webTranscript?:
-    | { kind: "reply" }
-    | { kind: "slack_reply"; sessionId: string; ts: string; name: string }
-    | { kind: "turn_failure"; notBefore: number; runId?: string };
+  webTranscript?: { kind: "reply" };
 }
 
 export interface CandidateDestination extends Destination {
@@ -501,22 +475,6 @@ export interface ShipGrant {
   revokedAt?: number;
   revokedBy?: string;
   revocationHistory?: Array<{ revokedAt: number; revokedBy: string }>;
-}
-
-export interface Delivery {
-  id: string;
-  destination: Destination;
-  text: string;
-  attachments?: OutgoingAttachment[];
-  provenance?: DeliveryProvenance;
-  idempotencyKey: string;
-  createdAt: number;
-  deliveredAt: number | null;
-  expiredAt?: number;
-  shadow?: boolean;
-  recipientThreadRef?: string;
-  deliverLatencyMs?: number;
-  slackApiMs?: number;
 }
 
 export interface SurfaceContextQuery {

@@ -79,7 +79,7 @@ flowchart LR
 
 For durability, set `DATABASE_URL` and `SESSION_STORE=postgres` — without it, sessions
 live in process memory and vanish on restart. To exercise a branch against a real model and real Postgres, run
-`npm run dev-instance:web` for web/admin or `npm run dev-instance:slack` for Slack.
+`npm run dev-instance:web` for the web UI and settings or `npm run dev-instance:slack` for Slack.
 Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface
 on reload. Switch an existing instance with an explicit surface command.
@@ -90,7 +90,7 @@ Every turn runs through a central core, which can use a variety of models and ha
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI and admin panel share one service; the portal and optional built-in
+where installed tools stay installed. The web UI, including its administrator settings, is one service; the portal and optional built-in
 auth broker share another. These modules communicate with core over its HTTP API.
 See [combined services](docs/combined-services.md) for configuration and migration;
 Slack is an optional in-process plugin that core starts
@@ -245,7 +245,7 @@ upstream source history to merge.
 - [`.env.example`](./.env.example) — every knob, documented in place
 - [`docs/swarms.md`](./docs/swarms.md) — durable agent pools, scoped messages, and blank Modal workers
 - [`docs/model-gateway.md`](./docs/model-gateway.md) — discover and route models through a gateway
-- [`plugins/`](./plugins) — the surfaces (Slack, web UI, admin, portal)
+- [`plugins/`](./plugins) — the surfaces (Slack, web UI, portal)
 
 ## License
 
