@@ -108,16 +108,17 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
     Object.keys(routes),
   );
 
-  const embeddings = await fetch(`${base}/v1/embeddings`, {
+  const embeddings = await fetch(`${base}/v1/embeddings?encoding_format=float`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ model: "gpt-6-luna", input: "x" }),
   });
-  assert.equal(embeddings.status, 404);
-  assert.match(await embeddings.text(), /chat\/completions/);
+  assert.equal(embeddings.status, 200);
+  assert.equal(calls[2]!.url, "/v1/embeddings?encoding_format=float");
+  assert.deepEqual(calls[2]!.body, { model: "openai/gpt-6-luna", input: "x", user: endUser });
 
   assert.equal((await openai({ ...chat, model: "gpt-4o" })).status, 400);
-  assert.equal((await openai({ messages: [] })).status, 400);
+  assert.equal((await openai({ model: 7, messages: [] })).status, 400);
   assert.equal(
     (await openai(chat, await mintCapabilityToken({ ...claims, aud: CONTROL_PLANE_AUD }, TEST_CAPABILITY_SECRET)))
       .status,
@@ -128,7 +129,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
     401,
   );
   assert.equal((await openai(chat, "not-a-token")).status, 401);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 
   status = 429;
   const limited = await openai(chat);
@@ -146,7 +147,7 @@ test("sandbox SDK calls reach the company gateway with the sandbox token as thei
   overBudget = false;
   await built.config.setSecurityPosture("personal:U1", "strict");
   assert.equal((await openai(chat)).status, 403);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 7);
 });
 
 test("a sandbox-model token is refused on every other route", async (t) => {
@@ -176,7 +177,7 @@ test("a sandbox-model token is refused on every other route", async (t) => {
   assert.equal(admin.status, 403);
 });
 
-test("gateway deployments point sandbox SDKs at core without exposing the gateway key", async () => {
+test("gateway deployments hand the sandbox a gateway URL and turn token, never the gateway key", async () => {
   const config = testConfig({
     signingSecret: "ingress-secret".repeat(3),
     apiBaseUrl: "https://core.example.test/",
@@ -190,25 +191,31 @@ test("gateway deployments point sandbox SDKs at core without exposing the gatewa
     captured = opts;
     return provision(layers, opts);
   };
-  const result = await built.app.turn({
-    surface: "test",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "dm:U1:sandbox-model" },
-    text: "!run echo models",
-  });
-  assert.equal(result.status, "ok");
+  const turn = (text: string, thread: string) =>
+    built.app.turn({
+      surface: "test",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: `dm:U1:${thread}` },
+      text,
+    });
+  assert.equal((await turn("!run echo models", "run")).status, "ok");
   const env = captured!.env!;
-  assert.equal(env.OPENAI_BASE_URL, "https://core.example.test/v1/sandbox-model/v1");
-  assert.equal(env.ANTHROPIC_BASE_URL, "https://core.example.test/v1/sandbox-model");
-  assert.equal(env.OPENAI_API_KEY, env.ANTHROPIC_API_KEY);
+  assert.equal(env.MODEL_GATEWAY_URL, "https://core.example.test/v1/sandbox-model");
   assert.ok(!Object.values(env).includes(key));
-  const claims = await verifyCapabilityToken(env.OPENAI_API_KEY!, TEST_CAPABILITY_SECRET);
+  const claims = await verifyCapabilityToken(env.MODEL_GATEWAY_TOKEN!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.aud, SANDBOX_MODEL_AUD);
   assert.equal(claims?.actorId, "U1");
   assert.equal(claims?.scopeId, "personal:U1");
+  assert.match(
+    (await turn("!sysprompt", "prompt")).reply ?? "",
+    /## Model access\n[^\n]*\$MODEL_GATEWAY_URL\/v1\/models/,
+  );
+
+  await built.config.setSecurityPosture("personal:U1", "strict");
+  assert.doesNotMatch((await turn("!sysprompt", "strict-prompt")).reply ?? "", /Model access/);
 });
 
-test("deployments without a gateway leave sandbox provider variables unset", async () => {
+test("deployments without a gateway leave the sandbox gateway variables unset", async () => {
   const config = testConfig({ signingSecret: "ingress-secret".repeat(3), apiBaseUrl: "https://core.example.test" });
   const built = buildApp(config);
   await selectDefaultSandbox(built, "U1", "personal:U1");
@@ -224,6 +231,5 @@ test("deployments without a gateway leave sandbox provider variables unset", asy
     conversation: { kind: "dm", threadRef: "dm:U1:no-gateway" },
     text: "!run echo none",
   });
-  for (const name of ["OPENAI_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"])
-    assert.equal(captured?.env?.[name], undefined, name);
+  for (const name of ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_TOKEN"]) assert.equal(captured?.env?.[name], undefined, name);
 });

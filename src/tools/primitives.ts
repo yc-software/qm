@@ -83,7 +83,6 @@ import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
-import { withProviderBaseUrls } from "../model/provider-endpoints.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -761,7 +760,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       }
     }
     return {
-      commandEnv: withProviderBaseUrls(commandEnv, handle.env),
+      commandEnv,
       secretValues: prepared.flatMap((credential) => credential.env),
       fileExecution,
       fileCredentials,

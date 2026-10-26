@@ -66,45 +66,6 @@ test("credential resolution follows command policy and successful provisioning",
   assert.deepEqual(runs[0]?.env, { TOKEN: "synthetic" });
 });
 
-test("a provider key credential reaches that provider, not the sandbox gateway endpoint", async () => {
-  const events: string[] = [];
-  const gatewayEnv = {
-    OPENAI_BASE_URL: "https://core.example.test/v1/sandbox-model/v1",
-    OPENAI_API_KEY: "sandbox-token",
-    ANTHROPIC_BASE_URL: "https://core.example.test/v1/sandbox-model",
-    ANTHROPIC_API_KEY: "sandbox-token",
-  };
-  const run = async (sandboxEnv: Record<string, string> | undefined) => {
-    const { ctx, runs } = context(
-      events,
-      [
-        credential(events, "openai", { env: [{ key: "OPENAI_API_KEY", value: "sk-personal" }] }),
-        credential(events, "anthropic", {
-          env: [
-            { key: "ANTHROPIC_API_KEY", value: "sk-ant-personal" },
-            { key: "ANTHROPIC_BASE_URL", value: "https://proxy.example.test" },
-          ],
-        }),
-      ],
-      { provision: async () => ({ ...handle, ...(sandboxEnv ? { env: sandboxEnv } : {}) }) },
-    );
-    await ctx.execute("echo ready", { credentials: ["openai", "anthropic"] });
-    return runs[0]?.env;
-  };
-  assert.deepEqual(await run(gatewayEnv), {
-    OPENAI_BASE_URL: "https://api.openai.com/v1",
-    OPENAI_API_KEY: "sk-personal",
-    ANTHROPIC_BASE_URL: "https://proxy.example.test",
-    ANTHROPIC_API_KEY: "sk-ant-personal",
-  });
-  assert.deepEqual(await run({ OPENAI_BASE_URL: "https://compatible.example.test/v1" }), {
-    OPENAI_BASE_URL: "https://compatible.example.test/v1",
-    OPENAI_API_KEY: "sk-personal",
-    ANTHROPIC_API_KEY: "sk-ant-personal",
-    ANTHROPIC_BASE_URL: "https://proxy.example.test",
-  });
-});
-
 for (const stop of ["policy", "provision"] as const) {
   test(`${stop} rejection never resolves or commits requested credentials`, async () => {
     const events: string[] = [];

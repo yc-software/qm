@@ -80,7 +80,6 @@ import {
 } from "./environment-facts.ts";
 import { PROVIDERS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
-import { sandboxGatewayEnv } from "../model/provider-endpoints.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import {
   mintCapabilityToken,
@@ -1711,18 +1710,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             deps.capabilitySecret ?? deps.signingSecret,
           );
         }
-        if (deps.sandboxModels && allInternal) {
-          const sandboxModelToken = await mintCapabilityToken(
+        if (deps.sandboxModels && allInternal && securityPolicy.posture !== "strict") {
+          connectorEnv.MODEL_GATEWAY_URL = `${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`;
+          connectorEnv.MODEL_GATEWAY_TOKEN = await mintCapabilityToken(
             { ...scopeAttestation, aud: SANDBOX_MODEL_AUD, exp: sandboxTokenExpiry },
             deps.capabilitySecret ?? deps.signingSecret,
             deps.capabilityTokenCompression,
           );
-          Object.assign(
-            connectorEnv,
-            sandboxGatewayEnv(`${deps.apiBaseUrl.replace(/\/+$/, "")}${SANDBOX_MODEL_PREFIX}`, sandboxModelToken),
-          );
           turnContextBlocks["Model access"] =
-            'Code in the sandbox can call the company model gateway with the OpenAI or Anthropic SDKs: `OPENAI_BASE_URL`/`OPENAI_API_KEY` and `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` are already set. List usable model IDs with `curl -H "Authorization: Bearer $OPENAI_API_KEY" $OPENAI_BASE_URL/models`. These keys are QM tokens, not provider keys: send them only to those base URLs, never to api.openai.com or api.anthropic.com.';
+            "## Model access\nAn OpenAI-compatible model gateway is at `$MODEL_GATEWAY_URL` in the sandbox; authenticate with `Authorization: Bearer $MODEL_GATEWAY_TOKEN`. `GET $MODEL_GATEWAY_URL/v1/models` lists the usable models. The token is bound to this turn and expires with it; never send it anywhere but the gateway.";
         }
         connectorEnv.AGENT_OAUTH_CONSENT_TOKEN = await mintCapabilityToken(
           {

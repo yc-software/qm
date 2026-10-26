@@ -51,27 +51,26 @@ credentials or falls back to them on account or gateway errors.
 ## Sandbox code
 
 When a gateway is configured, code the agent runs in its sandbox reaches the gateway through core instead of
-holding a provider key. Internal, non-strict turns get `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`
-and `ANTHROPIC_API_KEY`, so the OpenAI and Anthropic SDKs, and tools built on them, work unchanged, and the
-agent is told they are set. Both keys are the same capability token, bound to the turn's actor and conversation
-scope and expiring with the turn's other sandbox tokens. The gateway key never enters the sandbox.
+holding a provider key. Internal turns outside strict posture get `MODEL_GATEWAY_URL`, which points at core's
+`/v1/sandbox-model` prefix, and `MODEL_GATEWAY_TOKEN`, a capability token bound to the turn's actor and
+conversation scope that expires with the turn's other sandbox tokens. The agent is told both are set. Scheduled and
+other unattended turns get them too, without a grant: the token authorizes gateway inference, it is not a secret.
+Strict posture issues neither. The gateway key never enters the sandbox.
 
-Core serves `POST /v1/sandbox-model/v1/chat/completions`, `/v1/responses` and `/v1/messages`, and
-`GET /v1/sandbox-model/v1/models`; other paths under the prefix return 404 naming these. Core accepts the token
-as `Authorization: Bearer`, `x-api-key`, or `x-agent-capability`, only on these routes. A request must name a
-model the gateway currently offers, by the same ID the model picker uses. Core rewrites it to the gateway's
-upstream ID, sets the end user (`user`, or `metadata.user_id` for Messages) to a keyed hash of the actor so the
-gateway can attribute spend without receiving identities, adds the gateway key, and streams the response back.
-Strict posture and an exhausted per-actor budget refuse requests. Upstream 401, 403 and 5xx responses are
-reported as 502; other errors keep their status and `retry-after`, with the gateway key redacted.
+Core forwards any JSON request under the prefix to the same path on the gateway, so `$MODEL_GATEWAY_URL/v1/...`
+behaves as an OpenAI-compatible base URL. It accepts the token as `Authorization: Bearer`, `x-api-key`, or
+`x-agent-capability`, only on these routes, and passes on `accept`, `content-type`, `anthropic-version` and
+`anthropic-beta`. `GET /v1/models` lists the models the gateway offers by the same IDs the model picker uses.
+A body naming a `model` must use one of those IDs; core rewrites it to the gateway's upstream ID and sets the end
+user (`user`, or `metadata.user_id` for `/v1/messages`) to a keyed hash of the actor, so the gateway can attribute
+spend without receiving identities. Core adds the gateway key and streams the response back; a client disconnect
+cancels the upstream call. Strict posture and an exhausted per-actor QM budget refuse requests; the budget is
+checked but not charged, since the gateway meters spend. Upstream 401, 403 and 5xx responses are reported as 502;
+other errors keep their status and `retry-after`, with the gateway key redacted.
 
-Other request fields reach the gateway unchanged. The gateway key's permissions are the control: keep
-client-side credentials and endpoint overrides disabled on it (LiteLLM's default).
-
-While the sandbox points at the gateway endpoint, a command run with a credential that supplies
-`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` but no matching base URL gets the provider's public base URL, so that key
-goes to its provider rather than to core. Without a gateway, none of these variables are set, and sandbox code
-needs its own credential.
+The gateway key's permissions are the control over which endpoints and models sandbox code can reach: keep
+client-side credentials and endpoint overrides disabled on it (LiteLLM's default). Without a gateway, neither
+variable is set and sandbox code needs its own credential.
 
 ## Ultrafast
 

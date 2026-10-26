@@ -7,10 +7,7 @@ import { SANDBOX_MODEL_PREFIX } from "../contract.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
-const ENDPOINTS = ["chat/completions", "responses", "messages"] as const;
-type Endpoint = (typeof ENDPOINTS)[number];
-
-const FORWARDED_HEADERS = ["accept", "anthropic-version", "anthropic-beta"];
+const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];
 const MAX_ERROR_BYTES = 64 * 1024;
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
@@ -23,8 +20,8 @@ function endUser(actorId: string, secret: string): string {
   return createHmac("sha256", secret).update(actorId).digest("hex").slice(0, 32);
 }
 
-function attributed(endpoint: Endpoint, input: Record<string, unknown>, user: string): Record<string, unknown> {
-  return endpoint === "messages" ? { ...input, metadata: { user_id: user } } : { ...input, user };
+function attributed(path: string, input: Record<string, unknown>, user: string): Record<string, unknown> {
+  return path === "/v1/messages" ? { ...input, metadata: { user_id: user } } : { ...input, user };
 }
 
 async function denied(ctx: ApiCtx): Promise<boolean> {
@@ -48,103 +45,77 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
   return false;
 }
 
-async function listModels(ctx: ApiCtx): Promise<void> {
+async function proxy(ctx: ApiCtx): Promise<void> {
   if (await denied(ctx)) return;
-  const gateway = ctx.deps.modelGatewayTransport!;
+  const { deps, body, req, res, capability, secret, url, pathname, method } = ctx;
+  const gateway = deps.modelGatewayTransport!;
+  const path = pathname.slice(SANDBOX_MODEL_PREFIX.length);
   await gateway.refresh?.();
-  sendJson(ctx.res, 200, {
-    object: "list",
-    data: Object.keys(gateway.models).map((id) => ({ id, object: "model", owned_by: "gateway" })),
-  });
-}
-
-function forward(endpoint: Endpoint) {
-  return async (ctx: ApiCtx): Promise<void> => {
-    if (await denied(ctx)) return;
-    const { deps, body, req, res, capability, secret } = ctx;
-    const gateway = deps.modelGatewayTransport!;
-    if (
-      !body ||
-      typeof body !== "object" ||
-      Array.isArray(body) ||
-      typeof (body as { model?: unknown }).model !== "string"
-    )
-      return sendJson(res, 400, { error: { message: "request body must be a JSON object with a model" } });
-    const input = body as Record<string, unknown> & { model: string };
-    await gateway.refresh?.();
-    const target = gateway.models[input.model];
+  if (method === "GET" && path === "/v1/models")
+    return sendJson(res, 200, {
+      object: "list",
+      data: Object.keys(gateway.models).map((id) => ({ id, object: "model", owned_by: "gateway" })),
+    });
+  let payload = body;
+  if (body && typeof body === "object" && !Array.isArray(body) && "model" in body) {
+    const input = body as Record<string, unknown>;
+    const target = typeof input.model === "string" ? gateway.models[input.model] : undefined;
     if (!target)
       return sendJson(res, 400, {
         error: {
-          message: `model "${input.model}" is not available; choose one of: ${Object.keys(gateway.models).join(", ")}`,
+          message: `model ${JSON.stringify(input.model)} is not available; choose one of: ${Object.keys(gateway.models).join(", ")}`,
         },
       });
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      [gateway.apiKeyHeader]: gateway.apiKey,
-    };
-    for (const name of FORWARDED_HEADERS) {
-      const value = req.headers[name];
-      if (typeof value === "string") headers[name] = value;
-    }
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    res.once("close", abort);
-    try {
-      const response = await fetch(`${gatewayRoot(gateway.url)}/v1/${endpoint}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(
-          attributed(
-            endpoint,
-            { ...input, model: target },
-            endUser(capability!.actorId, deps.capabilitySecret ?? secret ?? ""),
-          ),
-        ),
-        signal: controller.signal,
-        redirect: "error",
-      });
-      const contentType = response.headers.get("content-type") ?? "application/json";
-      if (!response.ok || !response.body) {
-        const text = redact(await response.text(), gateway.apiKey).slice(0, MAX_ERROR_BYTES);
-        const retryAfter = response.headers.get("retry-after");
-        const status =
-          response.status >= 500 || response.status === 401 || response.status === 403 ? 502 : response.status;
-        res.writeHead(status, { "content-type": contentType, ...(retryAfter ? { "retry-after": retryAfter } : {}) });
-        return void res.end(text);
-      }
-      res.writeHead(200, { "content-type": contentType, "cache-control": "no-store" });
-      pipeToResponse(res, Readable.fromWeb(response.body as WebReadableStream), "model stream failed");
-    } catch {
-      if (!res.headersSent)
-        sendJson(res, 502, { error: { message: "the model gateway could not complete the request" } });
-      else res.destroy();
-    } finally {
-      res.off("close", abort);
-    }
+    payload = attributed(
+      path,
+      { ...input, model: target },
+      endUser(capability!.actorId, deps.capabilitySecret ?? secret ?? ""),
+    );
+  }
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    [gateway.apiKeyHeader]: gateway.apiKey,
   };
-}
-
-async function unsupported(ctx: ApiCtx): Promise<void> {
-  sendJson(ctx.res, 404, {
-    error: {
-      message: `unsupported model endpoint; supported: GET /v1/models, ${ENDPOINTS.map((e) => `POST /v1/${e}`).join(", ")}`,
-    },
-  });
+  for (const name of FORWARDED_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string") headers[name] = value;
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  res.once("close", abort);
+  try {
+    const response = await fetch(`${gatewayRoot(gateway.url)}${path}${url.search}`, {
+      method,
+      headers,
+      ...(method === "GET" || method === "HEAD" ? {} : { body: JSON.stringify(payload) }),
+      signal: controller.signal,
+      redirect: "error",
+    });
+    const contentType = response.headers.get("content-type") ?? "application/json";
+    if (!response.ok || !response.body) {
+      const text = redact(await response.text(), gateway.apiKey).slice(0, MAX_ERROR_BYTES);
+      const retryAfter = response.headers.get("retry-after");
+      const status =
+        response.status >= 500 || response.status === 401 || response.status === 403 ? 502 : response.status;
+      res.writeHead(status, { "content-type": contentType, ...(retryAfter ? { "retry-after": retryAfter } : {}) });
+      return void res.end(text);
+    }
+    res.writeHead(response.status, { "content-type": contentType, "cache-control": "no-store" });
+    pipeToResponse(res, Readable.fromWeb(response.body as WebReadableStream), "model stream failed");
+  } catch {
+    if (!res.headersSent)
+      sendJson(res, 502, { error: { message: "the model gateway could not complete the request" } });
+    else res.destroy();
+  } finally {
+    res.off("close", abort);
+  }
 }
 
 export const sandboxModelRoutes: Route[] = [
-  { method: "GET", path: `${SANDBOX_MODEL_PREFIX}/v1/models`, auth: { aud: SANDBOX_MODEL_AUD }, handle: listModels },
-  ...ENDPOINTS.map((endpoint) => ({
-    method: "POST",
-    path: `${SANDBOX_MODEL_PREFIX}/v1/${endpoint}`,
-    auth: { aud: SANDBOX_MODEL_AUD },
-    maxBodyBytes: MAX_BODY_BYTES,
-    handle: forward(endpoint),
-  })),
   {
     match: (_method, pathname) => pathname.startsWith(`${SANDBOX_MODEL_PREFIX}/`),
     auth: { aud: SANDBOX_MODEL_AUD },
-    handle: unsupported,
+    maxBodyBytes: MAX_BODY_BYTES,
+    handle: proxy,
   },
 ];
