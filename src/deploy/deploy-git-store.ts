@@ -22,12 +22,6 @@ export interface DeployGitTreeFile {
   mode: "100644";
 }
 
-export interface DeployGitDiff {
-  added: DeployGitTreeFile[];
-  modified: DeployGitTreeFile[];
-  deleted: DeployGitTreeFile[];
-}
-
 export interface DeployGitStore {
   commit(input: {
     deploymentId: string;
@@ -38,7 +32,6 @@ export interface DeployGitStore {
   }): Promise<string>;
   treeOf(deploymentId: string, commitSha: string): Promise<DeployGitTreeFile[]>;
   filesOf(deploymentId: string, commitSha: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  diff(deploymentId: string, fromCommit: string | undefined, toCommit: string): Promise<DeployGitDiff>;
   bundle(deploymentId: string, commitSha: string): Promise<Uint8Array>;
   setRef(deploymentId: string, ref: string, sha: string): Promise<void>;
   deleteRef(deploymentId: string, ref: string): Promise<void>;
@@ -278,43 +271,6 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
         files.push({ path: entry.path, data });
       }
       return files;
-    },
-    async diff(deploymentId, fromCommit, toCommit) {
-      const toFiles = new Map((await treeOf(deploymentId, toCommit)).map((f) => [f.path, f]));
-      if (!fromCommit) {
-        return { added: [...toFiles.values()].sort(byPath), modified: [], deleted: [] };
-      }
-      const out = await git([
-        "--git-dir",
-        await ensureRepo(deploymentId),
-        "diff",
-        "--name-status",
-        "-z",
-        fromCommit,
-        toCommit,
-      ]);
-      const parts = out.toString("utf8").split("\0").filter(Boolean);
-      const added: DeployGitTreeFile[] = [];
-      const modified: DeployGitTreeFile[] = [];
-      const deleted: DeployGitTreeFile[] = [];
-      for (let i = 0; i < parts.length;) {
-        const status = parts[i++]!;
-        const code = status[0]!;
-        const path = normalizeRelPath(parts[i++]!);
-        if (code === "D") {
-          deleted.push({ path, sha: "", size: 0, mode: "100644" });
-          continue;
-        }
-        const nextPath = code === "R" || code === "C" ? normalizeRelPath(parts[i++]!) : path;
-        const file = toFiles.get(nextPath);
-        if (!file) continue;
-        if (code === "A" || code === "C") added.push(file);
-        else if (code === "R") {
-          deleted.push({ path, sha: "", size: 0, mode: "100644" });
-          added.push(file);
-        } else modified.push(file);
-      }
-      return { added: added.sort(byPath), modified: modified.sort(byPath), deleted: deleted.sort(byPath) };
     },
     async bundle(deploymentId, commitSha) {
       const repo = await ensureRepo(deploymentId);

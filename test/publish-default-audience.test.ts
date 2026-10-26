@@ -25,6 +25,8 @@ function svc() {
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 20000 }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

@@ -534,36 +534,6 @@ export function createFlyDeployProvider(opts: FlyDeployProviderOptions): DeployP
       return appLogs(execIn(appNameFor(d), machines[0]!.id), logOpts.tailLines);
     },
 
-    async setAlwaysOn(d, alwaysOn): Promise<void> {
-      ensureConfigured();
-      const appName = appNameFor(d);
-      if (!(await api.assertOwnedApp(appName, opts.org))) throw new Error(`fly app ${appName} is missing`);
-      const machines = await deploymentMachines(d);
-      if (machines.length !== 1) throw new Error(`fly app ${appName} requires one machine to change always-on`);
-      const machine = await api.getMachine(appName, machines[0]!.id);
-      if (!machine?.config) throw new Error(`fly app ${appName} has no machine configuration`);
-      const accepted = machine.config.mounts?.length
-        ? ((await opts.configStore?.get(d.id)) ?? machine.config)
-        : machine.config;
-      const config = {
-        ...accepted,
-        services: accepted.services.map((service) => ({ ...service, min_machines_running: alwaysOn ? 1 : 0 })),
-      };
-      try {
-        await api.updateMachine(appName, machine.id, config);
-        await waitStarted(appName, machine.id);
-        await waitServing(d, config.env, appName, machine.id);
-        await api.setCordon(appName, machine.id, false);
-        if (opts.configStore) await opts.configStore.put(d.id, config);
-      } catch (error) {
-        await api.updateMachine(appName, machine.id, accepted);
-        await waitStarted(appName, machine.id);
-        await waitServing(d, accepted.env, appName, machine.id);
-        if (opts.configStore) await opts.configStore.put(d.id, accepted);
-        throw error;
-      }
-    },
-
     async apply(d: Deployment, version: DeploymentVersion): Promise<DeployEndpoint> {
       ensureConfigured();
       const appName = appNameFor(d);

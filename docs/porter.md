@@ -387,15 +387,15 @@ grep for that line rather than assuming the container's own metadata block is in
 
 ## Other knobs
 
-| Variable                                           | Meaning                                                                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `PORTER_DEPLOY_URL`                                | Porter API host, when it isn't `https://dashboard.porter.run`                                                  |
-| `PORTER_SANDBOX_IMAGE`                             | Image agent computers boot from                                                                                |
-| `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                 |
-| `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
-| `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
-| `PORTER_DEPLOY_VISIBILITY`                         | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
-| `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |
+| Variable                          | Meaning                                                                                                        |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `PORTER_DEPLOY_URL`               | Porter API host, when it isn't `https://dashboard.porter.run`                                                  |
+| `PORTER_SANDBOX_IMAGE`            | Image agent computers boot from                                                                                |
+| `PORTER_DEPLOY_RUNNER_IMAGE`      | Image published apps boot from (defaults to the sandbox image)                                                 |
+| `PORTER_SANDBOX_EGRESS_PROXY_URL` | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
+| `PORTER_SANDBOX_NAME_PREFIX`      | Prefix for sandbox and app names on the cluster                                                                |
+| `PORTER_DEPLOY_VISIBILITY`        | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
+| `PORTER_SANDBOX_TTL_SEC`          | Reap agent computers after this long; idle published apps stop after `DEPLOY_IDLE_TTL_MS`                      |
 
 To QA a branch against a real Porter cluster before deploying it, the dev instance takes
 the same backend:

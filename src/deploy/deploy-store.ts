@@ -5,7 +5,6 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { swallow } from "../util/errors.ts";
 import {
   createDeployGitStore,
-  type DeployGitDiff,
   type DeployGitInputFile,
   type DeployGitStore,
   type DeployGitStoreOptions,
@@ -33,6 +32,7 @@ export interface DeployEndpoint {
   httpVersion?: "1.1" | "2";
   proxyHeaders?: Record<string, string>;
   socksProxyPort?: number;
+  renewAt?: number;
 }
 
 export function publicUrlOf(endpoint: DeployEndpoint | null | undefined): string | undefined {
@@ -120,7 +120,6 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, version: number, paths?: string[]): Promise<DeployGitInputFile[] | null>;
-  diffVersions(id: string, fromVersion: number | undefined, toVersion: number): Promise<DeployGitDiff | null>;
   bundleOf(id: string, version: number): Promise<Uint8Array | null>;
   refOf(id: string, ref: string): Promise<string | null>;
   repoUrl(id: string): Promise<string>;
@@ -475,13 +474,6 @@ export function createDeployStore(backing?: DurableMap<Deployment> | DeployStore
     async filesOf(id, version, paths) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);
       return v?.commit ? git.filesOf(id, v.commit, paths) : null;
-    },
-    async diffVersions(id, fromVersion, toVersion) {
-      const d = await backingMap.get(id);
-      if (!d) return null;
-      const from = fromVersion === undefined ? undefined : d.versions.find((v) => v.version === fromVersion)?.commit;
-      const to = d.versions.find((v) => v.version === toVersion)?.commit;
-      return to ? git.diff(id, from, to) : null;
     },
     async bundleOf(id, version) {
       const v = (await backingMap.get(id))?.versions.find((x) => x.version === version);

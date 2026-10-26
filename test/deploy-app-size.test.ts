@@ -23,6 +23,8 @@ function service(maxAppBytes?: number) {
         applies++;
         return { host: "127.0.0.1", port: 1 };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

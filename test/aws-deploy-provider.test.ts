@@ -262,22 +262,17 @@ test("apply: env framework keys are authoritative — PORT/HOME are set by the r
   assert.ok(start.includes("export API_KEY='secret'"), "published env still applies");
 });
 
-test("reconcile (git bundle): checks the commit out via git, writes home, no file-by-file app writes", async () => {
+test("apply (git bundle): checks the commit out via git, writes home, no file-by-file app writes", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs, writes } = fakeDaemon();
   const d = deployment(ID, "mysite");
-  const endpoint = await provider(api, fetchImpl).reconcile!(
+  const endpoint = await provider(api, fetchImpl).apply(
     d,
     version(localSnapshot(".aws/credentials", "[default]"), {
       commit: "a".repeat(40),
       homeDir: localSnapshot(".ssh/id", "KEY"),
     }),
-    {
-      gitBundle: Buffer.from("bundle"),
-      allPaths: ["server.js"],
-      changedPaths: ["server.js"],
-      deletedPaths: [],
-    },
+    Buffer.from("bundle"),
   );
   assert.ok(
     execs.some((c) => c.includes("git fetch --force") && c.includes("refs/deploy-commits/")),
@@ -288,7 +283,7 @@ test("reconcile (git bundle): checks the commit out via git, writes home, no fil
   assert.equal(endpoint.publicUrl, "https://mysite.apps.example.com/", "the URL carries no capability token");
 });
 
-test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated — app restored from the git bundle, no ENOENT", async () => {
+test("apply (relaunch): a missing ephemeral snapshot/home dir is tolerated — app restored from the git bundle, no ENOENT", async () => {
   const { api } = fakeApi();
   const { fetchImpl, execs } = fakeDaemon();
   const d = deployment(ID);
@@ -296,12 +291,7 @@ test("reconcile (relaunch): a missing ephemeral snapshot/home dir is tolerated �
     commit: "a".repeat(40),
     homeDir: "/data/deployments/also-gone",
   });
-  const endpoint = await provider(api, fetchImpl).reconcile!(d, ver, {
-    gitBundle: Buffer.from("bundle"),
-    allPaths: ["server.js"],
-    changedPaths: ["server.js"],
-    deletedPaths: [],
-  });
+  const endpoint = await provider(api, fetchImpl).apply(d, ver, Buffer.from("bundle"));
   assert.equal(endpoint.tls, true, "endpoint returned despite the missing local dirs");
   assert.ok(
     execs.some((c) => c.includes("git fetch --force")),
@@ -381,19 +371,20 @@ test("rotation: the replacement body is launched before the old one is terminate
   const store = createMemoryMap<StoredDeployBody>();
   const p = provider(api, fetchImpl, store);
   const d = deployment(ID);
-  await p.apply(d, version(localSnapshot("a", "1")));
+  const placed = await p.apply(d, version(localSnapshot("a", "1")));
   const first = (await store.get(ID))!;
-  assert.equal(await p.rotationDue!(d), false);
+  assert.ok(placed.renewAt! > Date.now() + 6 * 3600_000, "renewal is due an hour before the 8h lifetime");
   await store.put(ID, { ...first, createdAtMs: Date.now() - 7 * 3600_000 - 60_000 });
   vms.get(first.microvmId)!.state = "SUSPENDED";
-  assert.equal(await p.rotationDue!(d), true, "due 30 minutes before the visit-path rotation");
-  assert.ok(await p.resolveEndpoint!(d, version("/unused")), "visits still reach the old body meanwhile");
+  const due = await p.resolveEndpoint(d, version("/unused"));
+  assert.ok(due, "visits still reach the old body meanwhile");
+  assert.ok(due.renewAt! <= Date.now(), "the endpoint reports the placement as due for renewal");
 
-  await p.apply(d, version(localSnapshot("a", "1")));
+  const renewed = await p.apply(d, version(localSnapshot("a", "1")));
   const second = (await store.get(ID))!;
   assert.notEqual(second.microvmId, first.microvmId);
   assert.deepEqual(order.slice(-2), [`run ${second.microvmId}`, `terminate ${first.microvmId}`]);
-  assert.equal(await p.rotationDue!(d), false);
+  assert.ok(renewed.renewAt! > Date.now());
 });
 
 test("rotation: a replacement left behind by a crash mid-rotation is terminated on the next attempt", async () => {
@@ -469,20 +460,6 @@ test("resolveEndpoint: after the idle window the visit waits for a real check, s
   const resumesBefore = counts.resume;
   assert.ok(await p.resolveEndpoint!(d, version("/unused")));
   assert.equal(counts.resume, resumesBefore + 1, "the suspended machine is resumed before the visit is served");
-});
-
-test("park: suspends the app's machine unless it is always-on", async () => {
-  const { api, vms } = fakeApi();
-  const { fetchImpl } = fakeDaemon();
-  const store = createMemoryMap<StoredDeployBody>();
-  const p = provider(api, fetchImpl, store);
-  const d = deployment(ID);
-  await p.apply(d, version(localSnapshot("a", "1")));
-  const body = (await store.get(ID))!;
-  await p.park!({ ...d, alwaysOn: true });
-  assert.equal(vms.get(body.microvmId)!.state, "RUNNING");
-  await p.park!(d);
-  assert.equal(vms.get(body.microvmId)!.state, "SUSPENDED");
 });
 
 test("resolveEndpoint: concurrent misses coalesce into one control-plane pass", async () => {
@@ -618,7 +595,7 @@ test("resolveEndpoint (gone): a terminated body returns null (signal to re-apply
   assert.equal(await store.get(ID), null, "the dead body pointer is cleared");
 });
 
-test("resolveEndpoint (near the 8h cap): a stale-but-alive body returns null so the caller rotates to a fresh one", async () => {
+test("resolveEndpoint (near the 8h cap): a stale-but-alive body keeps serving and reports itself due for renewal", async () => {
   const { api, vms } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const store = createMemoryMap<StoredDeployBody>();
@@ -632,8 +609,9 @@ test("resolveEndpoint (near the 8h cap): a stale-but-alive body returns null so 
     createdAtMs: 0,
   });
 
-  const resolved = await p.resolveEndpoint!(d, version("/unused"));
-  assert.equal(resolved, null, "a body past the rotate window resolves to null");
+  const resolved = await p.resolveEndpoint(d, version("/unused"));
+  assert.ok(resolved, "the old body still serves visits");
+  assert.ok(resolved.renewAt! <= Date.now(), "the endpoint asks the caller to renew the placement");
 });
 
 const readinessProbe = (cmd: string): boolean => cmd.includes("127.0.0.1:8081") && cmd.includes("exit 1");
@@ -683,7 +661,7 @@ test("apply: a port still held by a process the PID file lost fails the deploy �
   );
 });
 
-test("reconcile: a reused body whose port stays held fails the deploy — it never lands on stale code", async () => {
+test("apply: a reused body whose port stays held fails the deploy — it never lands on stale code", async () => {
   const { api } = fakeApi();
   let wedged = false;
   const { fetchImpl } = fakeDaemon({
@@ -695,12 +673,7 @@ test("reconcile: a reused body whose port stays held fails the deploy — it nev
 
   wedged = true;
   await assert.rejects(
-    () =>
-      p.reconcile!(d, version(localSnapshot("a", "v2"), { version: 2 }), {
-        changedPaths: ["a"],
-        deletedPaths: [],
-        allPaths: ["a"],
-      }),
+    () => p.apply(d, version(localSnapshot("a", "v2"), { version: 2 })),
     /still held by a process this body cannot account for/,
     "a body already running the old code must not be reported as carrying the new version",
   );
@@ -740,12 +713,12 @@ test("destroy: terminates the body and clears its pointer", async () => {
   assert.equal(await store.get(ID), null, "the pointer is cleared");
 });
 
-test("profile: scale-to-zero is platform-managed and reconcile is in place", () => {
+test("profile: scale-to-zero is platform-managed and versions apply from git bundles", () => {
   const { api } = fakeApi();
   const { fetchImpl } = fakeDaemon();
   const p = provider(api, fetchImpl);
   assert.equal(p.profile.managedScaleToZero, true);
-  assert.equal(p.profile.inPlaceReconcile, true);
+  assert.equal(p.profile.appliesGitBundle, true);
 });
 
 test("app data: a fresh body hydrates /data from the S3 snapshot before the app starts", async () => {
@@ -903,6 +876,7 @@ test("app data: a deferred rotation serves the stale body from resolveEndpoint i
   const runsAfterDeferral = counts.run;
   const resolved = await p.resolveEndpoint!(d, version("/unused"));
   assert.ok(resolved, "stale-but-deferred body keeps serving");
+  assert.ok(resolved.renewAt! > Date.now(), "renewal is pushed past the deferral");
   assert.equal(counts.run, runsAfterDeferral, "no replacement launched during the deferral");
 });
 

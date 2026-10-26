@@ -149,6 +149,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
         resolveCache.delete(d.id);
         const existing = await connectStored(d);
         if (existing) {
+          await existing.session.keepAlive(d.alwaysOn ? ALWAYS_ON_TIMEOUT_MS : idleTimeoutMs);
           await install(d, existing.session, version);
           await killStrays(d, existing.stored.sandboxId);
           return endpointOf(existing.stored);
@@ -176,10 +177,6 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
           throw e;
         }
       }),
-
-    async setAlwaysOn(d, alwaysOn): Promise<void> {
-      if (alwaysOn) await (await connectStored(d))?.session.keepAlive(ALWAYS_ON_TIMEOUT_MS);
-    },
 
     async resolveEndpoint(d): Promise<DeployEndpoint | null> {
       const cached = resolveCache.get(d.id);

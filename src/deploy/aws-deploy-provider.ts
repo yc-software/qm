@@ -2,7 +2,7 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3
 import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
-import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
+import type { DeployEndpoint, DeployProvider } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
@@ -49,7 +49,7 @@ const EXIT_APP_PORT_HELD = 97;
 const LIVE_REPLICATOR_PIDS = `ls_pids() { for p in /proc/[0-9]*; do c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null); case "\${c%% *}" in litestream|*/litestream) case "$c" in *${LITESTREAM_CONFIG}*) echo "\${p#/proc/}";; esac;; esac; done; }`;
 const ENDPOINT_PORT = 443;
 const RESOLVE_CACHE_MS = 15_000;
-const ROTATE_AHEAD_MS = 30 * 60_000;
+const RENEW_AHEAD_MS = 60 * 60_000;
 
 const DEFAULT_INGRESS = (region: string): string =>
   `arn:aws:lambda:${region}:aws:network-connector:aws-network-connector:ALL_INGRESS`;
@@ -79,7 +79,6 @@ export interface AwsDeployProviderOptions {
   agentPort?: number;
   appPort?: number;
   maximumDurationInSeconds?: number;
-  rotateAfterSeconds?: number;
   maxIdleDurationSeconds?: number;
   suspendedDurationSeconds?: number;
   appsDomain?: string;
@@ -131,11 +130,9 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
   const agentPort = opts.agentPort ?? AGENT_PORT_DEFAULT;
   const appPort = opts.appPort ?? APP_PORT_DEFAULT;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
-  const rotateAfterMs = (opts.rotateAfterSeconds ?? 27_000) * 1000;
-  const rotateDueMs = Math.max(0, rotateAfterMs - ROTATE_AHEAD_MS);
-  const rotationDue = (stored: StoredDeployBody): boolean =>
-    Date.now() - stored.createdAtMs > rotateDueMs &&
-    !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs);
+  const lifetimeMs = maximumDurationInSeconds * 1000;
+  const renewAtOf = (stored: StoredDeployBody): number =>
+    Math.max(stored.createdAtMs + Math.max(lifetimeMs / 2, lifetimeMs - RENEW_AHEAD_MS), stored.rotateNotBeforeMs ?? 0);
   const maxIdleDurationSeconds = opts.maxIdleDurationSeconds ?? 900;
   const awakeForMs = Math.max(0, maxIdleDurationSeconds * 1000 - 60_000);
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
@@ -374,7 +371,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       if (stored) {
         const desc = await api.tryGetMicrovm(stored.microvmId);
         const alive = desc && desc.state !== "TERMINATED" && desc.state !== "TERMINATING";
-        if (alive && !rotationDue(stored)) {
+        if (alive && Date.now() < renewAtOf(stored)) {
           await ensureRunning(stored.microvmId, stored.endpoint, desc);
           return { id: stored.microvmId, endpoint: stored.endpoint, fresh: false };
         }
@@ -493,10 +490,10 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     endpoint: string,
     fresh: boolean,
     version: DeploymentVersion,
-    input?: DeployReconcileInput,
+    gitBundle?: Uint8Array,
   ): Promise<void> {
-    if (input?.gitBundle && version.commit) {
-      await checkoutBundle(id, endpoint, input.gitBundle, version.commit);
+    if (gitBundle && version.commit) {
+      await checkoutBundle(id, endpoint, gitBundle, version.commit);
     } else {
       await writeFiles(id, endpoint, APP_DIR, await readTree(version.snapshotDir, { tolerateMissing: true }));
     }
@@ -540,14 +537,15 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     await startApp(d, id, endpoint, version);
   }
 
-  async function endpointFor(d: Deployment, microvmId: string, endpoint: string): Promise<DeployEndpoint> {
-    const token = await tokenFor(microvmId);
+  async function endpointFor(d: Deployment, stored: StoredDeployBody): Promise<DeployEndpoint> {
+    const token = await tokenFor(stored.microvmId);
     const result: DeployEndpoint = {
-      host: endpoint,
+      host: stored.endpoint,
       port: ENDPOINT_PORT,
       tls: true,
       httpVersion: "2",
       proxyHeaders: { "X-aws-proxy-auth": token, "X-aws-proxy-port": String(appPort) },
+      renewAt: renewAtOf(stored),
     };
     if (appsDomain) {
       result.publicUrl = `https://${d.name ?? d.id}.${appsDomain}/`;
@@ -571,11 +569,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         }
         return null;
       }
-      if (
-        Date.now() - stored.createdAtMs > rotateAfterMs &&
-        !(stored.rotateNotBeforeMs && Date.now() < stored.rotateNotBeforeMs)
-      )
-        return null;
       await ensureRunning(stored.microvmId, stored.endpoint, desc);
       const exec = (script: string, timeoutSec: number) =>
         execRaw(stored.microvmId, stored.endpoint, script, timeoutSec);
@@ -624,41 +617,32 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         }
       }).catch((e) => swallow("aws-deploy: litestream creds refresh", e));
     }
-    return endpointFor(d, stored.microvmId, stored.endpoint);
+    return endpointFor(d, stored);
   };
 
-  const place = async (
-    d: Deployment,
-    version: DeploymentVersion,
-    input?: DeployReconcileInput,
-  ): Promise<DeployEndpoint> => {
+  const place = async (d: Deployment, version: DeploymentVersion, gitBundle?: Uint8Array): Promise<DeployEndpoint> => {
     ensureConfigured();
     if (litestream && Date.now() < binariesMissingUntilMs)
       throw new Error(
         "litestream/aws binaries missing from the MicroVM image (rechecking every 10 min) — roll AWS_DEPLOY_IMAGE",
       );
     const body = await ensureBody(d);
-    await materialize(d, body.id, body.endpoint, body.fresh, version, input);
+    await materialize(d, body.id, body.endpoint, body.fresh, version, gitBundle);
     bumpResolveGen(d.id);
-    return endpointFor(d, body.id, body.endpoint);
+    const stored = await store.get(d.id);
+    if (stored?.microvmId !== body.id) throw new Error(`aws deploy: microVM ${body.id} lost its placement record`);
+    return endpointFor(d, stored);
   };
 
   return {
     profile: {
       managedScaleToZero: true,
-      inPlaceReconcile: true,
+      appliesGitBundle: true,
       maxAppBytes: MAX_APP_BYTES,
       ...(s3 ? { dataDir: DATA_DIR } : {}),
     },
 
-    apply: (d, version) => place(d, version),
-
-    async rotationDue(d): Promise<boolean> {
-      const stored = await store.get(d.id);
-      return !!stored && rotationDue(stored);
-    },
-
-    reconcile: (d, version, input) => place(d, version, input),
+    apply: (d, version, gitBundle) => place(d, version, gitBundle),
 
     async resolveEndpoint(d, version): Promise<DeployEndpoint | null> {
       const gen = resolveGens.get(d.id) ?? 0;
@@ -694,14 +678,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         return cached.endpoint;
       }
       return revalidate();
-    },
-
-    async park(d): Promise<void> {
-      if (d.alwaysOn) return;
-      const stored = await store.get(d.id);
-      if (!stored) return;
-      resolveCache.delete(d.id);
-      await api.suspend(stored.microvmId);
     },
 
     async logs(d, opts): Promise<string | null> {

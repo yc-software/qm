@@ -98,6 +98,8 @@ test("a provider without reconcile receives durable Git contents after a push", 
         applied.push(readFileSync(join(version.snapshotDir, "server.js"), "utf8"));
         return { host: "127.0.0.1", port: 8080 };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     deployDir: join(root, "snapshots"),
@@ -279,20 +281,6 @@ test("deploy versions carry git commits for app files and rollback moves the cur
   assert.ok(
     !tree?.some((f) => f.path.includes(".aws") || f.path.startsWith("../")),
     "resident home files are not part of app git history",
-  );
-
-  const diff = await s2.diffVersions(d.id, 1, 2);
-  assert.deepEqual(
-    diff?.added.map((f) => f.path),
-    ["public/index.html"],
-  );
-  assert.deepEqual(
-    diff?.modified.map((f) => f.path),
-    ["data.json"],
-  );
-  assert.deepEqual(
-    diff?.deleted.map((f) => f.path),
-    [],
   );
 
   const bundle = await s2.bundleOf(d.id, 2);
@@ -575,6 +563,8 @@ test("resident home files are held to the same path rules as app files", async (
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 20000 }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

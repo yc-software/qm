@@ -627,44 +627,6 @@ test("durable rollback uses the accepted configuration after a provider restart"
   assert.deepEqual(fake.configs.get("machine-1"), accepted);
 });
 
-test("always-on toggles update an existing machine without replacing its data", async () => {
-  const fake = fakeFly();
-  const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID);
-  await deploy.apply(d, version(snapshot({ "server.js": "app" })));
-  for (const alwaysOn of [true, false]) {
-    await deploy.setAlwaysOn!(d, alwaysOn);
-    assert.equal(fake.configs.get("machine-1")!.services[0]!.min_machines_running, alwaysOn ? 1 : 0);
-    assert.deepEqual(fake.configs.get("machine-1")!.mounts, [{ volume: "volume-1", path: "/data" }]);
-    assert.equal(fake.machines.size, 1);
-  }
-});
-
-test("always-on toggles preserve the latest ephemeral publication after a prior toggle", async () => {
-  const fake = fakeFly();
-  const deploy = provider(fake.fetchImpl);
-  const d = deployment(ID);
-  await deploy.apply(d, version(snapshot({ "server.js": "first" })));
-  await deploy.setAlwaysOn!(d, true);
-  await deploy.apply({ ...d, alwaysOn: true }, version(snapshot({ "server.js": "second" }), { version: 2 }));
-  const current = structuredClone(fake.configs.get("machine-2")!);
-  await deploy.setAlwaysOn!(d, false);
-  assert.deepEqual(fake.configs.get("machine-2"), {
-    ...current,
-    services: current.services.map((service) => ({ ...service, min_machines_running: 0 })),
-  });
-});
-
-test("an update that leaves the machine stopped explicitly starts it", async () => {
-  const fake = fakeFly({ updateLeavesStopped: true });
-  const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID),
-    v = version(snapshot({ "server.js": "app" }));
-  await deploy.apply(d, v);
-  await deploy.setAlwaysOn!(d, true);
-  assert.ok(fake.calls.some((c) => c.method === "POST" && c.path.endsWith("/machines/machine-1/start")));
-});
-
 test("configuration-store failure rolls back an updated machine", async () => {
   const fake = fakeFly();
   const configStore = createMemoryMap<FlyMachineConfig>();
@@ -684,17 +646,6 @@ test("configuration-store failure rolls back an updated machine", async () => {
   assert.deepEqual(await configStore.get(d.id), accepted);
 });
 
-test("always-on uses the accepted configuration after an interrupted update", async () => {
-  const fake = fakeFly();
-  const deploy = provider(fake.fetchImpl, { dataVolumeSizeGb: 1 });
-  const d = deployment(ID);
-  await deploy.apply(d, version(snapshot({ "server.js": "good" })));
-  const accepted = structuredClone(fake.configs.get("machine-1")!);
-  fake.configs.set("machine-1", { ...accepted, env: { BROKEN: "1" } });
-  await deploy.setAlwaysOn!(d, true);
-  assert.deepEqual(fake.configs.get("machine-1")!.env, accepted.env);
-});
-
 test("shared app updates and archives only the owning deployment", async () => {
   const fake = fakeFly({
     existingApp: { name: "company-app", network: "company-app", organization: { slug: ORG } },
@@ -712,10 +663,7 @@ test("shared app updates and archives only the owning deployment", async () => {
   assert.equal(ea.host, eb.host);
   assert.notEqual(ea.port, eb.port);
   assert.equal(fake.volumes.length, 2);
-  const sibling = structuredClone(fake.configs.get("machine-2"));
   assert.deepEqual(await provider(fake.fetchImpl, options).apply(a, v), ea);
-  await deploy.setAlwaysOn!(a, true);
-  assert.deepEqual(fake.configs.get("machine-2"), sibling);
   await deploy.destroy(a);
   assert.deepEqual([...fake.machines.keys()], ["machine-2"]);
   assert.equal(fake.volumes.length, 2);

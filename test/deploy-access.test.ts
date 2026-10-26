@@ -62,6 +62,8 @@ async function fixture(t: { after(fn: () => void): void }) {
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "h", port: 1 }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });

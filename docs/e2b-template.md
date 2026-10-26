@@ -123,8 +123,9 @@ the same `E2B_API_KEY`.
 - A new version replaces `/home/user/app` in the running sandbox and restarts the
   entrypoint. `/home/user/data` (`$DATA_DIR`) survives redeploys and pauses; deleting the
   app kills the sandbox and its data.
-- An always-on app is created with a 24 hour timeout. E2B still pauses it when that
-  window ends, and the next request resumes it.
+- An always-on app gets a 24 hour timeout each time a version is applied, so turning
+  always-on on or off takes effect at the next publish or relaunch. E2B still pauses it
+  when that window ends, and the next request resumes it.
 - Apps served at `/d/<app>/` always require sign-in, so "anyone with the link" sharing
   needs an apps domain (`DEPLOY_APPS_DOMAIN` plus `AWS_DEPLOY_GATE_SECRET`) with a
   wildcard DNS record routed to the portal. `e2b.app` cannot carry per-app subdomains, so

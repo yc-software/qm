@@ -597,7 +597,6 @@ interface PorterDeployEnv {
   appsDomain?: string;
   visibility?: "public" | "private" | "internal";
   namePrefix?: string;
-  ttlSec?: number;
 }
 
 function porterApiBaseUrl(env: NodeJS.ProcessEnv): string | undefined {
@@ -631,7 +630,6 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
       "PORTER_DEPLOY_VISIBILITY=internal serves apps inside the cluster only, so it takes no PORTER_DEPLOY_APPS_DOMAIN — unset one of them.",
     );
   }
-  const ttlSec = numEnvStrict("PORTER_DEPLOY_TTL_SEC", env.PORTER_DEPLOY_TTL_SEC);
   const runnerImage = env.PORTER_DEPLOY_RUNNER_IMAGE ?? env.PORTER_SANDBOX_IMAGE;
   return {
     ...(token ? { token } : {}),
@@ -640,7 +638,6 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
     ...(env.PORTER_DEPLOY_APPS_DOMAIN ? { appsDomain: env.PORTER_DEPLOY_APPS_DOMAIN } : {}),
     ...(visibility ? { visibility } : {}),
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
   };
 }
 
@@ -759,7 +756,6 @@ interface AwsDeployEnv {
   agentPort?: number;
   appPort?: number;
   maximumDurationInSeconds?: number;
-  rotateAfterSeconds?: number;
   maxIdleDurationSeconds?: number;
   suspendedDurationSeconds?: number;
   appsDomain?: string;
@@ -877,9 +873,6 @@ function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
       : {}),
     ...(numEnvStrict("AWS_DEPLOY_MAX_DURATION_SEC", env.AWS_DEPLOY_MAX_DURATION_SEC) !== undefined
       ? { maximumDurationInSeconds: numEnvStrict("AWS_DEPLOY_MAX_DURATION_SEC", env.AWS_DEPLOY_MAX_DURATION_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_DEPLOY_ROTATE_AFTER_SEC", env.AWS_DEPLOY_ROTATE_AFTER_SEC) !== undefined
-      ? { rotateAfterSeconds: numEnvStrict("AWS_DEPLOY_ROTATE_AFTER_SEC", env.AWS_DEPLOY_ROTATE_AFTER_SEC) }
       : {}),
     ...(numEnvStrict("AWS_DEPLOY_MAX_IDLE_SEC", env.AWS_DEPLOY_MAX_IDLE_SEC) !== undefined
       ? { maxIdleDurationSeconds: numEnvStrict("AWS_DEPLOY_MAX_IDLE_SEC", env.AWS_DEPLOY_MAX_IDLE_SEC) }

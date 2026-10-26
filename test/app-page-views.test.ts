@@ -63,6 +63,8 @@ async function harness(log: AppPageViewLog) {
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: upstreamPort }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     auditLog,

@@ -22,6 +22,8 @@ function harness(failRestore = false) {
         if (failRestore && applies > 1) throw new Error("runtime unavailable");
         return { host: "127.0.0.1", port: 20200 + applies };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {
         destroys++;
       },
@@ -57,6 +59,8 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 20300, image: `image:${++applies}` }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {
         destroys++;
       },

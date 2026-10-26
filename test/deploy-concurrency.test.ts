@@ -24,6 +24,8 @@ function svc(opts: { lease?: LeaderLease; lock?: AdvisoryLock; managed?: boolean
   const provider: DeployProvider = {
     profile: { managedScaleToZero: opts.managed ?? false },
     apply: async () => ({ host: "127.0.0.1", port: 5000 }),
+    resolveEndpoint: async (d) => d.endpoint,
+    logs: async () => null,
     destroy: async () => {
       destroys++;
     },
@@ -120,6 +122,8 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
       active--;
       return { host: "127.0.0.1", port: 5000 };
     },
+    resolveEndpoint: async (d) => d.endpoint,
+    logs: async () => null,
     destroy: async () => {},
   };
   const deploy = createDeployService({

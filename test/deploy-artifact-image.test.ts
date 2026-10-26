@@ -10,7 +10,6 @@ import {
   type DeploymentVersion,
 } from "../src/deploy/deploy-store.ts";
 import { createDeployService, type DeployService } from "../src/deploy/deploy-service.ts";
-import type { DeployReconcileInput } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -35,6 +34,8 @@ function flyLikeService(): { deploy: DeployService; deployStore: DeployStore; pr
         const image = version.image ?? `registry.fly.io/app:v${version.version}`;
         return { host: "app.flycast", port: 80, image };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });
@@ -103,6 +104,8 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 9200 }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });
@@ -119,9 +122,9 @@ test("a runtime-mount provider (no image) leaves versions image-less — Docker 
   );
 });
 
-test("a reconcile-capable provider receives the git diff and marks the applied version", async () => {
+test("a git-bundle provider receives each version's bundle on apply and marks the applied version", async () => {
   const deployStore = createDeployStore();
-  const reconciles: DeployReconcileInput[] = [];
+  const bundles: Array<Uint8Array | undefined> = [];
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,
@@ -129,14 +132,13 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
     deployDir: mkdtempSync(join(tmpdir(), "deploy-reconcile-")),
     provider: {
-      profile: { managedScaleToZero: true, inPlaceReconcile: true },
-      apply: async () => {
-        throw new Error("image path should not be used for git-backed versions");
-      },
-      reconcile: async (_d, _version, input) => {
-        reconciles.push(input);
+      profile: { managedScaleToZero: true, appliesGitBundle: true },
+      apply: async (_d, _version, gitBundle) => {
+        bundles.push(gitBundle);
         return { host: "app.flycast", port: 80 };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });
@@ -158,10 +160,9 @@ test("a reconcile-capable provider receives the git diff and marks the applied v
     ],
   });
 
-  assert.deepEqual([...reconciles[0]!.changedPaths].sort(), ["data.json", "s.js"]);
-  assert.ok((reconciles[0]!.gitBundle?.byteLength ?? 0) > 0, "v1 reconcile receives a git bundle");
-  assert.deepEqual(reconciles[1]!.changedPaths, ["data.json"], "only the changed file is sent on redeploy");
-  assert.ok((reconciles[1]!.gitBundle?.byteLength ?? 0) > 0, "v2 reconcile receives a git bundle");
+  assert.equal(bundles.length, 2);
+  assert.ok((bundles[0]?.byteLength ?? 0) > 0, "v1 apply receives a git bundle");
+  assert.ok((bundles[1]?.byteLength ?? 0) > 0, "v2 apply receives a git bundle");
   assert.equal((await deployStore.get(d.id))!.appliedVersion, 2);
 });
 
@@ -182,6 +183,8 @@ test("applied version is marked only after endpoint metadata is persisted", asyn
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: 9200 }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });
@@ -216,6 +219,8 @@ test("a failed redeploy does not move the hosted git current ref", async () => {
         if (applies > 1) throw new Error("apply failed");
         return { host: "127.0.0.1", port: 9200 };
       },
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
   });

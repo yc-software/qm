@@ -66,7 +66,6 @@ export interface PorterDeployProviderOptions {
   runnerImage?: string;
   visibility?: "public" | "private" | "internal";
   namePrefix?: string;
-  ttlSec?: number;
   appPort?: number;
   readyWindowSec?: number;
   resolveCacheMs?: number;
@@ -220,7 +219,6 @@ export function createPorterDeployProvider(opts: PorterDeployProviderOptions): D
             visibility === "internal"
               ? [{ port: appPort, internal: true }]
               : [{ port: appPort, ...(domainOf(d) ? { domains: [{ domain: domainOf(d), visibility }] } : {}) }],
-          ...(opts.ttlSec ? { ttl_seconds: opts.ttlSec } : {}),
         });
         try {
           await waitPorterRunning(name, sb);

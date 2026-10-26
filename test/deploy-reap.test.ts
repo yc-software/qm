@@ -16,6 +16,8 @@ function svc(managedScaleToZero: boolean) {
   const provider: DeployProvider = {
     profile: { managedScaleToZero },
     apply: async () => ({ host: "127.0.0.1", port: 5000 }),
+    resolveEndpoint: async (d) => d.endpoint,
+    logs: async () => null,
     destroy: async () => {
       destroys++;
     },

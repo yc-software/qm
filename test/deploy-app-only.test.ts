@@ -52,6 +52,8 @@ test("app-only gateway checks exact current personal read grants without inherit
     provider: {
       profile: { managedScaleToZero: false },
       apply: async () => ({ host: "127.0.0.1", port: (upstream.address() as AddressInfo).port }),
+      resolveEndpoint: async (d) => d.endpoint,
+      logs: async () => null,
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },

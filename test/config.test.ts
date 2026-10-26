@@ -581,7 +581,6 @@ test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its en
     PORTER_DEPLOY_APPS_DOMAIN: "apps.example.com",
     PORTER_DEPLOY_RUNNER_IMAGE: "ghcr.io/x/runner:1",
     PORTER_DEPLOY_VISIBILITY: "private",
-    PORTER_DEPLOY_TTL_SEC: "3600",
   });
   assert.equal(config.deployProvider, "porter");
   assert.deepEqual(config.porterDeploy, {
@@ -590,7 +589,6 @@ test("DEPLOY_PROVIDER=porter selects the Porter deploy provider and reads its en
     runnerImage: "ghcr.io/x/runner:1",
     appsDomain: "apps.example.com",
     visibility: "private",
-    ttlSec: 3600,
   });
 });
 
