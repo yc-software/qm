@@ -958,37 +958,6 @@ test("durable worker rejects excessive swarm claims before calling the harness",
   assert.equal((await runs.get(claimed.id))!.status, "failed");
 });
 
-test("swarm work cancellation has a hard worker deadline independent of the harness", async (context) => {
-  const { service, caller, runs } = await swarmFixture();
-  await service.spawn(caller, { requestId: "one", text: "Work" });
-  await service.sweep();
-  const pending = (await runs.list()).find((item) => item.request.swarm)!;
-  const claimed = (await runs.claimById(pending.id, "test", 60_000))!;
-  context.mock.timers.enable({ apis: ["setTimeout"] });
-  let cancelled = false;
-  const orchestrator = {
-    async handleTurn(input: import("../src/core/orchestrator.ts").OrchestratorInput) {
-      await new Promise<void>((resolve) =>
-        input.cancel!.addEventListener(
-          "abort",
-          () => {
-            cancelled = true;
-            resolve();
-          },
-          { once: true },
-        ),
-      );
-      return { status: "silent" as const };
-    },
-  } as unknown as Orchestrator;
-  const work = processRun({ runs, orchestrator, leaseTtlMs: 60_000 }, claimed);
-  context.mock.timers.tick(SWARM_DEFAULTS.turnMs - 1);
-  assert.equal(cancelled, false);
-  context.mock.timers.tick(1);
-  await work;
-  assert.equal(cancelled, true);
-});
-
 for (const action of ["spawn", "send", "context"] as const) {
   test(`a replaced run cannot commit ${action} after admission`, async () => {
     const fixture = await swarmFixture();

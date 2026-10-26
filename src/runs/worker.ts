@@ -19,7 +19,6 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
-import { resolveSwarmSettings } from "../swarms/swarm-settings.ts";
 import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
@@ -70,7 +69,6 @@ async function attemptRun(
   const onShutdown = (): void => cancel.abort();
   if (opts?.shutdown?.aborted) onShutdown();
   else opts?.shutdown?.addEventListener("abort", onShutdown, { once: true });
-  let workDeadline: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let consecutiveLost = 0;
   let leaseLost = false;
@@ -105,10 +103,6 @@ async function attemptRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    if (run.request.swarm && !run.request.swarmGoal) {
-      const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
-      workDeadline = setTimeout(() => cancel.abort(), turnMs);
-    }
     if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
     started = true;
     const result = await deps.orchestrator.handleTurn({
@@ -151,7 +145,6 @@ async function attemptRun(
     });
     throw err;
   } finally {
-    clearTimeout(workDeadline);
     stopBeat();
     opts?.shutdown?.removeEventListener("abort", onShutdown);
     if (opts?.shutdown?.aborted)
